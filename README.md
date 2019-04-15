@@ -1,8 +1,8 @@
 # officeParser
 A Node.js library to parse text out of any office file. 
 
-## Currently supports docx
-*Support for pptx and xlsx coming soon
+## Install via npm
+*Currently supports docx. Support for pptx and xlsx coming soon
 
 ```
 npm install officeParser
