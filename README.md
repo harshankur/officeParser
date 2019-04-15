@@ -5,14 +5,14 @@ A Node.js library to parse text out of any office file.
 *Currently supports docx. Support for pptx and xlsx coming soon
 
 ```
-npm install officeParser
+npm install officeparser
 ```
 
 ----------
 
 **Example**
 ```
-var officeParser = require('officeParser');
+var officeParser = require('officeparser');
 
 officeParser.parseWord("/path/to/word.docx", function(data){
         // process data
