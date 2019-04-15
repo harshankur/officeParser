@@ -1,0 +1,31 @@
+{
+  "name": "officeparser",
+  "version": "1.0.0",
+  "description": "A Node.js library to parse text out of any office file. Currently supports docx, pptx and xlsx.",
+  "main": "officeParser.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harshankur/officeParser.git"
+  },
+  "keywords": [
+    "office",
+    "docx",
+    "pptx",
+    "xlsx",
+    "parser",
+    "text"
+  ],
+  "author": "Harsh Ankur",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/harshankur/officeParser/issues"
+  },
+  "homepage": "https://github.com/harshankur/officeParser#readme",
+  "dependencies": {
+    "decompress": "^4.2.0",
+    "xml2js": "^0.4.19"
+  }
+}

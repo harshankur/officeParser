@@ -1,0 +1,4 @@
+node_modules/
+dist/
+files/
+officeParser.bk.js
