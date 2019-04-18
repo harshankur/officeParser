@@ -1,6 +1,7 @@
 const decompress = require('decompress');
 const xml2js = require('xml2js')
 const fs = require('fs')
+const util = require('util');
 
 // #region textFetchFromWord
 
