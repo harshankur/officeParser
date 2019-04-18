@@ -2,21 +2,42 @@
 A Node.js library to parse text out of any office file. 
 
 ## Install via npm
-*Currently supports docx. Support for pptx and xlsx coming soon
+~~Currently supports docx. Support for pptx and xlsx coming soon~~
+*Currently supports docx and pptx. xlsx support coming soon.*
 
 ```
-npm install officeparser
+npm i officeparser
 ```
 
 ----------
 
-**Example**
+**Usage**
 ```
-var officeParser = require('officeparser');
+const officeParser = require('officeparser');
 
 officeParser.parseWord("/path/to/word.docx", function(data){
-        // process data
+        // "data" string in the callback here is the text parsed from the word file passed in the first argument above
         console.log(data)
+})
+
+officeParser.parsePowerPoint("/path/to/powerpoint.pptx", function(data){
+        // "data" string in the callback here is the text parsed from the powerpoint file passed in the first argument above
+        console.log(data)
+})
+```
+
+**Example**
+```
+const officeParser = require('officeparser');
+
+officeParser.parseWord("C:\\files\\myText.docx", function(data){
+        var newText = data + "look, I can parse a word file"
+        callSomeOtherFunction(newText);
+})
+
+officeParser.parsePowerPoint("/path/to/powerpoint.pptx", function(data){
+        var newText = data + "look, I can parse a powerpoint file"
+        callSomeOtherFunction(newText);
 })
 ```
 
