@@ -301,9 +301,37 @@ function validateFileExtension(filename, extension) {
 
 // #endregion validate file names
 
+// #region parse office
+
+function parseOffice(filename, callback) {
+    var extension = filename.split(".").pop();
+
+    if (extension == "docx") {
+        parseWord(filename, function (data) {
+            callback(data);
+        })
+    }
+    else if (extension == "pptx") {
+        parsePowerPoint(filename, function (data) {
+            callback(data);
+        })
+    }
+    else if (extension == "xlsx") {
+        parseExcel(filename, function (data) {
+            callback(data);
+        })
+    }
+    else {
+        console.log(`Sorry, we currently support docx, pptx and xlsx files only. Stay tuned for further updates.`);
+    }
+    
+}
+
+// #endregion parse office
 
 
 
 module.exports.parseWord = parseWord;
 module.exports.parsePowerPoint = parsePowerPoint;
 module.exports.parseExcel = parseExcel;
+module.exports.parseOffice = parseOffice;
