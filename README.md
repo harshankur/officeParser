@@ -1,11 +1,12 @@
 # officeParser
 A Node.js library to parse text out of any office file. 
+Currenty supports docx, pptx and xlsx files.
 
-~~Currently supports docx. Support for pptx and xlsx coming soon~~
-~~Currently supports docx and pptx. xlsx support coming soon.~~
 
-##### Update
-*Supports docx, pptx and xlsx files. Investigating possibilities of fetching text from doc, ppt, pps, xls files.*
+#### Update
+* 2019/04/22 - Added file extension validations. Removed errors for excel files with no drawing elements.
+* 2019/04/19 - Support added for xlsx files.
+* 2019/04/18 - Support added for pptx files.
 
 
 
