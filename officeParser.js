@@ -2,6 +2,7 @@ const decompress = require('decompress');
 const xml2js = require('xml2js')
 const fs = require('fs')
 const util = require('util');
+const rimraf = require('rimraf');
 
 // #region textFetchFromWord
 
@@ -37,22 +38,30 @@ async function scanForTextWord(result) {
     }
 }
 
-var parseWord = async function(filename, callback) {
+var parseWord = async function(filename, callback, deleteOfficeDist = true) {
     if (validateFileExtension(filename, "docx")) {
-        decompress(filename, 'dist').then(files => {
+        decompress(filename, 'officeDist').then(files => {
             myTextWord = [];
-            if (fs.existsSync("dist/word/document.xml")) {
-                fs.readFile('dist/word/document.xml', 'utf8', function (err,data) {
+            if (fs.existsSync("officeDist/word/document.xml")) {
+                fs.readFile('officeDist/word/document.xml', 'utf8', function (err,data) {
                     if (err) {
                        return console.log(err);
                      }
                      
                      xml2js.parseString(data, async function (err, result) {
-                         await scanForTextWord(result);
-         
-                         callback(myTextWord.join(" "));
+                        await scanForTextWord(result);
+        
+                        callback(myTextWord.join(" "));
+                        if (deleteOfficeDist == true) {
+                            rimraf("officeDist", function () {});
+                        }
                      });
                  });
+            }
+            else {
+                if (deleteOfficeDist == true) {
+                    rimraf("officeDist", function () {});
+                }
             }
         });
     }
@@ -101,35 +110,44 @@ async function scanForTextPowerPoint(result) {
 }
 
 
-var parsePowerPoint = function(filename, callback) {
+var parsePowerPoint = function(filename, callback, deleteOfficeDist = true) {
     if (validateFileExtension(filename, "pptx")) {
-        decompress(filename, 'dist').then(async files => {
+        decompress(filename, 'officeDist').then(async files => {
             myTextPowerPoint = [];
 
-            if (fs.existsSync('dist/ppt/slides')) {
-                var slidesNum = await fs.readdirSync('dist/ppt/slides').length;
+            if (fs.existsSync('officeDist/ppt/slides')) {
+                var slidesNum = await fs.readdirSync('officeDist/ppt/slides').length;
                 
 
                 for (var i=0; i<slidesNum-1; i++) {
                     var parser = new xml2js.Parser();
 
-                    var myData = await util.promisify(fs.readFile)(`dist/ppt/slides/slide${i+1}.xml`, 'utf8');
+                    var myData = await util.promisify(fs.readFile)(`officeDist/ppt/slides/slide${i+1}.xml`, 'utf8');
                     var result = await util.promisify(parser.parseString.bind(parser))(myData);
                     await scanForTextPowerPoint(result);
                 }
 
-                if (fs.existsSync('dist/ppt/notesSlides')) {
-                    var notesSlidesNum = await fs.readdirSync('dist/ppt/notesSlides').length;
+                if (fs.existsSync('officeDist/ppt/notesSlides')) {
+                    var notesSlidesNum = await fs.readdirSync('officeDist/ppt/notesSlides').length;
                     for (var i=0; i<notesSlidesNum-1; i++) {
                         var parser = new xml2js.Parser();
     
-                        var myData = await util.promisify(fs.readFile)(`dist/ppt/notesSlides/notesSlide${i+1}.xml`, 'utf8');
+                        var myData = await util.promisify(fs.readFile)(`officeDist/ppt/notesSlides/notesSlide${i+1}.xml`, 'utf8');
                         var result = await util.promisify(parser.parseString.bind(parser))(myData);
                         await scanForTextPowerPoint(result);
                     }
                 }
                 
                 callback(myTextPowerPoint.join(" "));
+                    
+                if (deleteOfficeDist == true) {
+                    rimraf("officeDist", function () {});
+                }
+            }
+            else {
+                if (deleteOfficeDist == true) {
+                    rimraf("officeDist", function () {});
+                }
             }
         });
     }
@@ -242,43 +260,52 @@ async function scanForTextExcelWorkSheet(result) {
     }
 }
 
-var parseExcel = function(filename, callback) {
+var parseExcel = function(filename, callback, deleteOfficeDist = true) {
     if (validateFileExtension(filename, "xlsx")) {
-        decompress(filename, 'dist').then(async files => {
+        decompress(filename, 'officeDist').then(async files => {
             myTextExcel = [];
 
 
-            if (fs.existsSync('dist/xl/worksheets')) {
-                var workSheetsNum = await fs.readdirSync('dist/xl/worksheets').length;
+            if (fs.existsSync('officeDist/xl/worksheets')) {
+                var workSheetsNum = await fs.readdirSync('officeDist/xl/worksheets').length;
                 for (var i=0; i<workSheetsNum-1; i++) {
                     var parser = new xml2js.Parser();
 
-                    var myData = await util.promisify(fs.readFile)(`dist/xl/worksheets/sheet${i+1}.xml`, 'utf8');
+                    var myData = await util.promisify(fs.readFile)(`officeDist/xl/worksheets/sheet${i+1}.xml`, 'utf8');
                     var result = await util.promisify(parser.parseString.bind(parser))(myData);
                     await scanForTextExcelWorkSheet(result);
                 }
 
-                if (fs.existsSync('dist/xl/sharedStrings.xml')) {
+                if (fs.existsSync('officeDist/xl/sharedStrings.xml')) {
                     var parser = new xml2js.Parser();
 
-                    var myData = await util.promisify(fs.readFile)(`dist/xl/sharedStrings.xml`, 'utf8');
+                    var myData = await util.promisify(fs.readFile)(`officeDist/xl/sharedStrings.xml`, 'utf8');
                     var result = await util.promisify(parser.parseString.bind(parser))(myData);
                     await scanForTextExcelSharedStrings(result);
                 }
             
-                if (fs.existsSync('dist/xl/drawings')) {
-                    var drawingsNum = await fs.readdirSync('dist/xl/drawings').length;
+                if (fs.existsSync('officeDist/xl/drawings')) {
+                    var drawingsNum = await fs.readdirSync('officeDist/xl/drawings').length;
 
                     for (var i=0; i<drawingsNum; i++) {
                         var parser = new xml2js.Parser();
 
-                        var myData = await util.promisify(fs.readFile)(`dist/xl/drawings/drawing${i+1}.xml`, 'utf8');
+                        var myData = await util.promisify(fs.readFile)(`officeDist/xl/drawings/drawing${i+1}.xml`, 'utf8');
                         var result = await util.promisify(parser.parseString.bind(parser))(myData);
                         await scanForTextExcelDrawing(result);
                     }
                 }
 
                 callback(myTextExcel.join(" "));
+                
+                if (deleteOfficeDist == true) {
+                    rimraf("officeDist", function () {});
+                }
+            }
+            else {
+                if (deleteOfficeDist == true) {
+                    rimraf("officeDist", function () {});
+                }
             }
         });
     }
@@ -294,7 +321,7 @@ function validateFileExtension(filename, extension) {
         return true;
     }
     else {
-        console.log(`Sorry, we support docx, pptx and xlsx files only. Stay tuned for further support.`);
+        console.log(`Sorry, we support docx, pptx and xlsx files only. Make sure you pass appropriate file with the parsing functions.`);
     }
     return false;
 }
@@ -303,23 +330,23 @@ function validateFileExtension(filename, extension) {
 
 // #region parse office
 
-function parseOffice(filename, callback) {
+function parseOffice(filename, callback, deleteOfficeDist = true) {
     var extension = filename.split(".").pop();
 
     if (extension == "docx") {
         parseWord(filename, function (data) {
             callback(data);
-        })
+        }, deleteOfficeDist);
     }
     else if (extension == "pptx") {
         parsePowerPoint(filename, function (data) {
             callback(data);
-        })
+        }, deleteOfficeDist);
     }
     else if (extension == "xlsx") {
         parseExcel(filename, function (data) {
             callback(data);
-        })
+        }, deleteOfficeDist);
     }
     else {
         console.log(`Sorry, we currently support docx, pptx and xlsx files only. Stay tuned for further updates.`);
