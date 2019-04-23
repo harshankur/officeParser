@@ -24,7 +24,7 @@ async function scanForTextWord(result) {
         for (var property in result) {
             if (result.hasOwnProperty(property)) {
                 if (typeof(result[property]) == "string"){
-                    if ((property == "w:t" || property == "_" ) && result[i] != "") {
+                    if ((property == "w:t" || property == "_" ) && result[property] != "") {
                         await myTextWord.push(result[property]);
                     }
                 }
@@ -39,7 +39,7 @@ async function scanForTextWord(result) {
 }
 
 var parseWord = async function(filename, callback, deleteOfficeDist = true) {
-    if (validateFileExtension(filename, "docx")) {
+    if (validateFileExtension(filename, ["docx"])) {
         decompress(filename, 'officeDist').then(files => {
             myTextWord = [];
             if (fs.existsSync("officeDist/word/document.xml")) {
@@ -111,7 +111,7 @@ async function scanForTextPowerPoint(result) {
 
 
 var parsePowerPoint = function(filename, callback, deleteOfficeDist = true) {
-    if (validateFileExtension(filename, "pptx")) {
+    if (validateFileExtension(filename, ["pptx"])) {
         decompress(filename, 'officeDist').then(async files => {
             myTextPowerPoint = [];
 
@@ -261,7 +261,7 @@ async function scanForTextExcelWorkSheet(result) {
 }
 
 var parseExcel = function(filename, callback, deleteOfficeDist = true) {
-    if (validateFileExtension(filename, "xlsx")) {
+    if (validateFileExtension(filename, ["xlsx"])) {
         decompress(filename, 'officeDist').then(async files => {
             myTextExcel = [];
 
@@ -314,15 +314,84 @@ var parseExcel = function(filename, callback, deleteOfficeDist = true) {
 // #endregion textFetchFromExcel
 
 
+
+// #region textFetchFromOpenOffice
+
+var myTextOpenOffice = [];
+
+async function scanForTextOpenOffice(result) {
+    if (Array.isArray(result)) {
+        for (var i = 0; i < result.length; i++) {
+            if (typeof(result[i]) == "string" && result[i] != "") {
+                await myTextOpenOffice.push(result[i]);
+            }
+            else {
+                await scanForTextOpenOffice(result[i]);
+            }
+        }
+        return;
+    }
+    else if(typeof(result) == "object") {
+        for (var property in result) {
+            if (result.hasOwnProperty(property)) {
+                if (typeof(result[property]) == "string"){
+                    if (result[property] != "") {
+                        await myTextOpenOffice.push(result[property]);
+                    }
+                }
+                else {
+                    await scanForTextOpenOffice(result[property]);
+                }
+                
+            }
+        }
+        return;
+    }
+}
+
+var parseOpenOffice = async function(filename, callback, deleteOfficeDist = true) {
+    if (validateFileExtension(filename, ["odt", "odp", "ods"])) {
+        decompress(filename, 'officeDist').then(files => {
+            myTextOpenOffice = [];
+            if (fs.existsSync("officeDist/content.xml")) {
+                fs.readFile('officeDist/content.xml', 'utf8', function (err,data) {
+                    if (err) {
+                       return console.log(err);
+                     }
+                     
+                     xml2js.parseString(data, {"ignoreAttrs": true}, async function (err, result) {
+                        await scanForTextOpenOffice(result);
+        
+                        callback(myTextOpenOffice.join(" "));
+                        if (deleteOfficeDist == true) {
+                            rimraf("officeDist", function () {});
+                        }
+                     });
+                 });
+            }
+            else {
+                if (deleteOfficeDist == true) {
+                    rimraf("officeDist", function () {});
+                }
+            }
+        });
+    }
+}
+
+// #endregion textFetchFromOpenOffice
+
+
+
+
 // #region validate file names
 
 function validateFileExtension(filename, extension) {
-    if (extension == filename.split(".").pop()) {
-        return true;
+    for (var extensionIterator = 0; extensionIterator < extension.length; extensionIterator++) {
+        if (extension[extensionIterator] == filename.split(".").pop()) {
+            return true;
+        }
     }
-    else {
-        console.log(`Sorry, we support docx, pptx and xlsx files only. Make sure you pass appropriate file with the parsing functions.`);
-    }
+    console.log(`Sorry, we currently support docx, pptx, xlsx, odt, odp, ods files only. Make sure you pass appropriate file with the parsing functions.`);
     return false;
 }
 
@@ -348,8 +417,13 @@ function parseOffice(filename, callback, deleteOfficeDist = true) {
             callback(data);
         }, deleteOfficeDist);
     }
+    else if (extension == "odt" || extension == "odp" || extension == "ods") {
+        parseOpenOffice(filename, function (data) {
+            callback(data);
+        }, deleteOfficeDist);
+    }
     else {
-        console.log(`Sorry, we currently support docx, pptx and xlsx files only. Stay tuned for further updates.`);
+        console.log(`Sorry, we currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${extension} files. Stay tuned for further updates.`);
     }
     
 }
@@ -361,4 +435,5 @@ function parseOffice(filename, callback, deleteOfficeDist = true) {
 module.exports.parseWord = parseWord;
 module.exports.parsePowerPoint = parsePowerPoint;
 module.exports.parseExcel = parseExcel;
+module.exports.parseOpenOffice = parseOpenOffice;
 module.exports.parseOffice = parseOffice;

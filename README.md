@@ -1,14 +1,15 @@
 # officeParser
 A Node.js library to parse text out of any office file. 
-Currenty supports docx, pptx and xlsx files.
+Currenty supports docx, pptx, xlsx, odt, odp, ods files.
 
 
 #### Update
+* 2019/04/23 - Added support for open office files *.odt, *.odp, *.ods through parseOffice function. Created a new method parseOpenOffice for those who prefer targetted functions. 
 * 2019/04/23 - Added feature to delete the generated dist folder after function callback
 * 2019/04/22 - Added parseOffice method to avoid confusion between type of file and their extension
 * 2019/04/22 - Added file extension validations. Removed errors for excel files with no drawing elements.
-* 2019/04/19 - Support added for xlsx files.
-* 2019/04/18 - Support added for pptx files.
+* 2019/04/19 - Support added for *.xlsx files.
+* 2019/04/18 - Support added for *.pptx files.
 
 
 
@@ -56,7 +57,7 @@ officeParser.parseOffice("/Users/harsh/Desktop/files/mySlides.pptx", function(da
 })
 
 // Using relative path for file is also fine
-officeParser.parseOffice("files/myWorkSheet.xlsx", function(data){
+officeParser.parseOffice("files/myWorkSheet.ods", function(data){
         var newText = data + "look, I can parse an excel file"
         callSomeOtherFunction(newText);
 })
@@ -86,6 +87,11 @@ officeParser.parseExcel("/path/to/excel.xlsx", function(data){
         // "data" string in the callback here is the text parsed from the excel file passed in the first argument above
         console.log(data)
 })
+
+officeParser.parseOpenOffice("/path/to/writer.odt", function(data){
+        // "data" string in the callback here is the text parsed from the writer file passed in the first argument above
+        console.log(data)
+})
 ```
 
 **Example**
@@ -105,6 +111,11 @@ officeParser.parsePowerPoint("/Users/harsh/Desktop/files/mySlides.pptx", functio
 // Using relative path for file is also fine
 officeParser.parseExcel("files/myWorkSheet.xlsx", function(data){
         var newText = data + "look, I can parse an excel file"
+        callSomeOtherFunction(newText);
+})
+
+officeParser.parseOpenOffice("files/myDocument.odt", function(data){
+        var newText = data + "look, I can parse an OpenOffice file"
         callSomeOtherFunction(newText);
 })
 ```
