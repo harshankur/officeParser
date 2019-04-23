@@ -4,6 +4,7 @@ Currenty supports docx, pptx and xlsx files.
 
 
 #### Update
+* 2019/04/23 - Added feature to delete the generated dist folder after function callback
 * 2019/04/22 - Added parseOffice method to avoid confusion between type of file and their extension
 * 2019/04/22 - Added file extension validations. Removed errors for excel files with no drawing elements.
 * 2019/04/19 - Support added for xlsx files.
@@ -28,6 +29,16 @@ officeParser.parseOffice("/path/to/officeFile", function(data){
         // "data" string in the callback here is the text parsed from the office file passed in the first argument above
         console.log(data)
 })
+
+```
+
+*Optionally add false as 3rd variable to parseOffice to not delete the generated officeDist folder*
+
+```
+officeParser.parseOffice("/path/to/officeFile", function(data){
+        // "data" string in the callback here is the text parsed from the office file passed in the first argument above
+        console.log(data)
+}, false)
 ```
 
 **Example**
