@@ -12,6 +12,7 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
+* 2019/04/30 - Removed case sensitive file extension bug. File names with capital lettered extensions now supported.
 * 2019/04/23 - Added support for open office files *.odt, *.odp, *.ods through parseOffice function. Created a new method parseOpenOffice for those who prefer targetted functions. 
 * 2019/04/23 - Added feature to delete the generated dist folder after function callback
 * 2019/04/22 - Added parseOffice method to avoid confusion between type of file and their extension

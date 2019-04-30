@@ -387,7 +387,7 @@ var parseOpenOffice = async function(filename, callback, deleteOfficeDist = true
 
 function validateFileExtension(filename, extension) {
     for (var extensionIterator = 0; extensionIterator < extension.length; extensionIterator++) {
-        if (extension[extensionIterator] == filename.split(".").pop()) {
+        if (extension[extensionIterator] == filename.split(".").pop().toLowerCase()) {
             return true;
         }
     }
@@ -400,7 +400,7 @@ function validateFileExtension(filename, extension) {
 // #region parse office
 
 function parseOffice(filename, callback, deleteOfficeDist = true) {
-    var extension = filename.split(".").pop();
+    var extension = filename.split(".").pop().toLowerCase();
 
     if (extension == "docx") {
         parseWord(filename, function (data) {
