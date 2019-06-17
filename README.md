@@ -36,6 +36,18 @@ npm i officeparser
 ```
 const officeParser = require('officeparser');
 
+officeParser.parseOffice("/path/to/officeFile", function(data){
+        // "data" string in the callback here is the text parsed from the office file passed in the first argument above
+        console.log(data)
+})
+
+```
+
+*Optionally change decompression location for office Files at persionalised locations for environments with restricted write access*
+
+```
+const officeParser = require('officeparser');
+
 // Default decompress location for office Files is "officeDist" in the directory where Node is started. 
 // Put this file before parseOffice method to take effect.
 officeParser.setDecompressionLocation("/tmp");  // New decompression location would be "/tmp/officeDist"
@@ -48,7 +60,6 @@ officeParser.parseOffice("/path/to/officeFile", function(data){
         // "data" string in the callback here is the text parsed from the office file passed in the first argument above
         console.log(data)
 })
-
 ```
 
 *Optionally add false as 3rd variable to parseOffice to not delete the generated officeDist folder*
