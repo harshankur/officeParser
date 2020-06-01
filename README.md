@@ -12,7 +12,7 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
-* 2020/06/01 - Added error handling and console.log enable/disable methods. Also added a method to reset decompressLocation. Everything backward compatible.
+* 2020/06/01 - Added error handling and console.log enable/disable methods. Default is set at enabled. Everything backward compatible.
 * 2019/06/17 - Added method to change location for decompressing office files in places with restricted write access.
 * 2019/04/30 - Removed case sensitive file extension bug. File names with capital lettered extensions now supported.
 * 2019/04/23 - Added support for open office files *.odt, *.odp, *.ods through parseOffice function. Created a new method parseOpenOffice for those who prefer targetted functions. 
@@ -60,7 +60,7 @@ officeParser.setDecompressionLocation("/tmp");  // New decompression location wo
 officeParser.setDecompressionLocation("C:\\tmp");  // New decompression location would be "C:\tmp\officeDist"
 
 
-officeParser.parseOffice("/path/to/officeFile", function(data){
+officeParser.parseOffice("/path/to/officeFile", function(data, err){
         // "data" string in the callback here is the text parsed from the office file passed in the first argument above
         if (err) return console.log(err);
         console.log(data)
@@ -70,7 +70,7 @@ officeParser.parseOffice("/path/to/officeFile", function(data){
 *Optionally add false as 3rd variable to parseOffice to not delete the generated officeDist folder*
 
 ```
-officeParser.parseOffice("/path/to/officeFile", function(data){
+officeParser.parseOffice("/path/to/officeFile", function(data, err){
         // "data" string in the callback here is the text parsed from the office file passed in the first argument above
         if (err) return console.log(err);
         console.log(data)
