@@ -8,6 +8,7 @@ const rimraf = require('rimraf');
 
 var myTextWord = [];
 var decompressLocation = "officeDist";
+var outputToConsoleWhenRequired = true;     // Default is set to true to let the user identify source of an error in node terminal
 
 async function scanForTextWord(result) {
     if (Array.isArray(result)) {
@@ -40,29 +41,40 @@ async function scanForTextWord(result) {
 
 var parseWord = async function (filename, callback, deleteOfficeDist = true) {
     if (validateFileExtension(filename, ["docx"])) {
-        decompress(filename, decompressLocation).then(files => {
-            myTextWord = [];
-            if (fs.existsSync(decompressLocation + "/word/document.xml")) {
-                fs.readFile(decompressLocation + '/word/document.xml', 'utf8', function (err,data) {
-                    if (err) {
-                        return console.log(err);
-                    }
-                    xml2js.parseString(data, async function (err, result) {
-                        await scanForTextWord(result);
-
-                        callback(myTextWord.join(" "));
-                        if (deleteOfficeDist == true) {
-                            rimraf(decompressLocation, function () {});
+        try {
+            decompress(filename, decompressLocation).then(files => {
+                myTextWord = [];
+                if (fs.existsSync(decompressLocation + "/word/document.xml")) {
+                    fs.readFile(decompressLocation + '/word/document.xml', 'utf8', function (err,data) {
+                        if (err) {
+                            if (outputToConsoleWhenRequired) console.log(err);
+                            return callback(undefined, err);
                         }
+                        xml2js.parseString(data, async function (err, result) {
+                            await scanForTextWord(result);
+    
+                            callback(myTextWord.join(" "), undefined);
+                            if (deleteOfficeDist == true) {
+                                rimraf(decompressLocation, function () {});
+                            }
+                        });
                     });
-                });
-            }
-            else {
-                if (deleteOfficeDist == true) {
-                    rimraf(decompressLocation, function () {});
                 }
-            }
-        });
+                else {
+                    if (deleteOfficeDist == true) {
+                        rimraf(decompressLocation, function () {});
+                    }
+                }
+            })
+            .catch(function (err) {
+                if (outputToConsoleWhenRequired) console.log(err);
+                return callback(undefined, err);
+            });
+        }
+        catch(err) {
+            if (outputToConsoleWhenRequired) console.log(err);
+            return callback(undefined, err);
+        }
     }
 }
 
@@ -110,43 +122,53 @@ async function scanForTextPowerPoint(result) {
 
 var parsePowerPoint = function (filename, callback, deleteOfficeDist = true) {
     if (validateFileExtension(filename, ["pptx"])) {
-        decompress(filename, decompressLocation).then(async files => {
-            myTextPowerPoint = [];
-
-            if (fs.existsSync(decompressLocation + '/ppt/slides')) {
-                var slidesNum = await fs.readdirSync(decompressLocation + '/ppt/slides').length;
-
-                for (var i = 0; i < slidesNum - 1; i++) {
-                    var parser = new xml2js.Parser();
-
-                    var myData = await util.promisify(fs.readFile)(`${decompressLocation}/ppt/slides/slide${i + 1}.xml`, 'utf8');
-                    var result = await util.promisify(parser.parseString.bind(parser))(myData);
-                    await scanForTextPowerPoint(result);
-                }
-
-                if (fs.existsSync(decompressLocation + '/ppt/notesSlides')) {
-                    var notesSlidesNum = await fs.readdirSync(decompressLocation + '/ppt/notesSlides').length;
-                    for (var i = 0; i < notesSlidesNum - 1; i++) {
+        try {
+            decompress(filename, decompressLocation).then(async files => {
+                myTextPowerPoint = [];
+    
+                if (fs.existsSync(decompressLocation + '/ppt/slides')) {
+                    var slidesNum = await fs.readdirSync(decompressLocation + '/ppt/slides').length;
+    
+                    for (var i = 0; i < slidesNum - 1; i++) {
                         var parser = new xml2js.Parser();
     
-                        var myData = await util.promisify(fs.readFile)(`${decompressLocation}/ppt/notesSlides/notesSlide${i + 1}.xml`, 'utf8');
+                        var myData = await util.promisify(fs.readFile)(`${decompressLocation}/ppt/slides/slide${i + 1}.xml`, 'utf8');
                         var result = await util.promisify(parser.parseString.bind(parser))(myData);
                         await scanForTextPowerPoint(result);
                     }
+    
+                    if (fs.existsSync(decompressLocation + '/ppt/notesSlides')) {
+                        var notesSlidesNum = await fs.readdirSync(decompressLocation + '/ppt/notesSlides').length;
+                        for (var i = 0; i < notesSlidesNum - 1; i++) {
+                            var parser = new xml2js.Parser();
+        
+                            var myData = await util.promisify(fs.readFile)(`${decompressLocation}/ppt/notesSlides/notesSlide${i + 1}.xml`, 'utf8');
+                            var result = await util.promisify(parser.parseString.bind(parser))(myData);
+                            await scanForTextPowerPoint(result);
+                        }
+                    }
+                    
+                    callback(myTextPowerPoint.join(" "), undefined);
+    
+                    if (deleteOfficeDist == true) {
+                        rimraf(decompressLocation, function () {});
+                    }
                 }
-                
-                callback(myTextPowerPoint.join(" "));
-
-                if (deleteOfficeDist == true) {
-                    rimraf(decompressLocation, function () {});
+                else {
+                    if (deleteOfficeDist == true) {
+                        rimraf(decompressLocation, function () {});
+                    }
                 }
-            }
-            else {
-                if (deleteOfficeDist == true) {
-                    rimraf(decompressLocation, function () {});
-                }
-            }
-        });
+            })
+            .catch(function (err) {
+                if (outputToConsoleWhenRequired) console.log(err);
+                return callback(undefined, err);
+            });
+        }
+        catch (err) {
+            if (outputToConsoleWhenRequired) console.log(err);
+            return callback(undefined, err);
+        }
     }
 } 
 
@@ -259,52 +281,62 @@ async function scanForTextExcelWorkSheet(result) {
 
 var parseExcel = function (filename, callback, deleteOfficeDist = true) {
     if (validateFileExtension(filename, ["xlsx"])) {
-        decompress(filename, decompressLocation).then(async files => {
-            myTextExcel = [];
-
-
-            if (fs.existsSync(decompressLocation + '/xl/worksheets')) {
-                var workSheetsNum = await fs.readdirSync(decompressLocation + '/xl/worksheets').length;
-                for (var i = 0; i < workSheetsNum - 1; i++) {
-                    var parser = new xml2js.Parser();
-
-                    var myData = await util.promisify(fs.readFile)(`${decompressLocation}/xl/worksheets/sheet${i + 1}.xml`, 'utf8');
-                    var result = await util.promisify(parser.parseString.bind(parser))(myData);
-                    await scanForTextExcelWorkSheet(result);
-                }
-
-                if (fs.existsSync(decompressLocation + '/xl/sharedStrings.xml')) {
-                    var parser = new xml2js.Parser();
-
-                    var myData = await util.promisify(fs.readFile)(`${decompressLocation}/xl/sharedStrings.xml`, 'utf8');
-                    var result = await util.promisify(parser.parseString.bind(parser))(myData);
-                    await scanForTextExcelSharedStrings(result);
-                }
-
-                if (fs.existsSync(decompressLocation + '/xl/drawings')) {
-                    var drawingsNum = await fs.readdirSync(decompressLocation + '/xl/drawings').length;
-
-                    for (var i = 0; i < drawingsNum; i++) {
+        try {
+            decompress(filename, decompressLocation).then(async files => {
+                myTextExcel = [];
+    
+    
+                if (fs.existsSync(decompressLocation + '/xl/worksheets')) {
+                    var workSheetsNum = await fs.readdirSync(decompressLocation + '/xl/worksheets').length;
+                    for (var i = 0; i < workSheetsNum - 1; i++) {
                         var parser = new xml2js.Parser();
-
-                        var myData = await util.promisify(fs.readFile)(`${decompressLocation}/xl/drawings/drawing${i + 1}.xml`, 'utf8');
+    
+                        var myData = await util.promisify(fs.readFile)(`${decompressLocation}/xl/worksheets/sheet${i + 1}.xml`, 'utf8');
                         var result = await util.promisify(parser.parseString.bind(parser))(myData);
-                        await scanForTextExcelDrawing(result);
+                        await scanForTextExcelWorkSheet(result);
+                    }
+    
+                    if (fs.existsSync(decompressLocation + '/xl/sharedStrings.xml')) {
+                        var parser = new xml2js.Parser();
+    
+                        var myData = await util.promisify(fs.readFile)(`${decompressLocation}/xl/sharedStrings.xml`, 'utf8');
+                        var result = await util.promisify(parser.parseString.bind(parser))(myData);
+                        await scanForTextExcelSharedStrings(result);
+                    }
+    
+                    if (fs.existsSync(decompressLocation + '/xl/drawings')) {
+                        var drawingsNum = await fs.readdirSync(decompressLocation + '/xl/drawings').length;
+    
+                        for (var i = 0; i < drawingsNum; i++) {
+                            var parser = new xml2js.Parser();
+    
+                            var myData = await util.promisify(fs.readFile)(`${decompressLocation}/xl/drawings/drawing${i + 1}.xml`, 'utf8');
+                            var result = await util.promisify(parser.parseString.bind(parser))(myData);
+                            await scanForTextExcelDrawing(result);
+                        }
+                    }
+    
+                    callback(myTextExcel.join(" "), undefined);
+                    
+                    if (deleteOfficeDist == true) {
+                        rimraf(decompressLocation, function () {});
                     }
                 }
-
-                callback(myTextExcel.join(" "));
-                
-                if (deleteOfficeDist == true) {
-                    rimraf(decompressLocation, function () {});
+                else {
+                    if (deleteOfficeDist == true) {
+                        rimraf(decompressLocation, function () {});
+                    }
                 }
-            }
-            else {
-                if (deleteOfficeDist == true) {
-                    rimraf(decompressLocation, function () {});
-                }
-            }
-        });
+            })
+            .catch(function (err) {
+                if (outputToConsoleWhenRequired) console.log(err);
+                return callback(undefined, err);
+            });
+        }
+        catch (err) {
+            if (outputToConsoleWhenRequired) console.log(err);
+            return callback(undefined, err);
+        }
     }
 } 
 
@@ -348,30 +380,41 @@ async function scanForTextOpenOffice(result) {
 
 var parseOpenOffice = async function (filename, callback, deleteOfficeDist = true) {
     if (validateFileExtension(filename, ["odt", "odp", "ods"])) {
-        decompress(filename, decompressLocation).then(files => {
-            myTextOpenOffice = [];
-            if (fs.existsSync(decompressLocation + "/content.xml")) {
-                fs.readFile(decompressLocation + '/content.xml', 'utf8', function (err,data) {
-                    if (err) {
-                       return console.log(err);
-                    }
-                     
-                    xml2js.parseString(data, {"ignoreAttrs": true}, async function (err, result) {
-                        await scanForTextOpenOffice(result);
-                        
-                        callback(myTextOpenOffice.join(" "));
-                        if (deleteOfficeDist == true) {
-                            rimraf(decompressLocation, function () {});
+        try {
+            decompress(filename, decompressLocation).then(files => {
+                myTextOpenOffice = [];
+                if (fs.existsSync(decompressLocation + "/content.xml")) {
+                    fs.readFile(decompressLocation + '/content.xml', 'utf8', function (err,data) {
+                        if (err) {
+                            if (outputToConsoleWhenRequired) console.log(err);
+                            return callback(undefined, err);
                         }
+                         
+                        xml2js.parseString(data, {"ignoreAttrs": true}, async function (err, result) {
+                            await scanForTextOpenOffice(result);
+    
+                            callback(myTextOpenOffice.join(" "), undefined);
+                            if (deleteOfficeDist == true) {
+                                rimraf(decompressLocation, function () {});
+                            }
+                        });
                     });
-                });
-            }
-            else {
-                if (deleteOfficeDist == true) {
-                    rimraf(decompressLocation, function () {});
                 }
-            }
-        });
+                else {
+                    if (deleteOfficeDist == true) {
+                        rimraf(decompressLocation, function () {});
+                    }
+                }
+            })
+            .catch(function (err) {
+                if (outputToConsoleWhenRequired) console.log(err);
+                return callback(undefined, err);
+            });
+        }
+        catch (err) {
+            if (outputToConsoleWhenRequired) console.log(err);
+            return callback(undefined, err);
+        }
     }
 }
 
@@ -382,13 +425,18 @@ var parseOpenOffice = async function (filename, callback, deleteOfficeDist = tru
 
 // #region validate file names
 
+/**
+ * Legacy method to check whether file functions called are indeed applicable with files provided
+ * @param {*} filename file path
+ * @param {*} extension extensions of supported files
+ */
 function validateFileExtension(filename, extension) {
     for (var extensionIterator = 0; extensionIterator < extension.length; extensionIterator++) {
         if (extension[extensionIterator] == filename.split(".").pop().toLowerCase()) {
             return true;
         }
     }
-    console.log(`Sorry, we currently support docx, pptx, xlsx, odt, odp, ods files only. Make sure you pass appropriate file with the parsing functions.`);
+    console.log(`[OfficeParser]: Sorry, we currently support docx, pptx, xlsx, odt, odp, ods files only. Make sure you pass appropriate file with the parsing functions.`);
     return false;
 }
 
@@ -420,7 +468,9 @@ function parseOffice(filename, callback, deleteOfficeDist = true) {
         }, deleteOfficeDist);
     }
     else {
-        console.log(`Sorry, we currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${extension} files. Stay tuned for further updates.`);
+        var errMessage = `[OfficeParser]: Sorry, we currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${extension} files. Stay tuned for further updates.`;
+        if (outputToConsoleWhenRequired) console.log(errMessage);
+        return callback(undefined, errMessage);
     }
     
 }
@@ -430,10 +480,26 @@ function parseOffice(filename, callback, deleteOfficeDist = true) {
 
 // #region setDecompressionLocation
 function setDecompressionLocation(newLocation) {
-    decompressLocation = newLocation + "/officeDist";
+    if (newLocation != undefined) {
+        decompressLocation = newLocation + "/officeDist";
+    }
+    else {
+        decompressLocation = "officeDist";
+    }
 }
 
 // #endregion setDecompressionLocation
+
+// #region setConsoleOutput
+function enableConsoleOutput() {
+    outputToConsoleWhenRequired = true;
+}
+
+function disableConsoleOutput() {
+    outputToConsoleWhenRequired = false;
+}
+
+// #endregion setConsoleOutput
 
 
 
@@ -443,3 +509,5 @@ module.exports.parseExcel = parseExcel;
 module.exports.parseOpenOffice = parseOpenOffice;
 module.exports.parseOffice = parseOffice;
 module.exports.setDecompressionLocation = setDecompressionLocation;
+module.exports.enableConsoleOutput = enableConsoleOutput;
+module.exports.disableConsoleOutput = disableConsoleOutput;

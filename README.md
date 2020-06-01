@@ -12,6 +12,7 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
+* 2020/06/01 - Added error handling and console.log enable/disable methods. Also added a method to reset decompressLocation. Everything backward compatible.
 * 2019/06/17 - Added method to change location for decompressing office files in places with restricted write access.
 * 2019/04/30 - Removed case sensitive file extension bug. File names with capital lettered extensions now supported.
 * 2019/04/23 - Added support for open office files *.odt, *.odp, *.ods through parseOffice function. Created a new method parseOpenOffice for those who prefer targetted functions. 
@@ -36,14 +37,17 @@ npm i officeparser
 ```
 const officeParser = require('officeparser');
 
-officeParser.parseOffice("/path/to/officeFile", function(data){
+officeParser.parseOffice("/path/to/officeFile", function(data, err){
         // "data" string in the callback here is the text parsed from the office file passed in the first argument above
+        if (err) return console.log(err);
         console.log(data)
 })
 
 ```
 
-*Optionally change decompression location for office Files at persionalised locations for environments with restricted write access*
+**Please take note: I have breached convention in placing err as second argument in my callback but please understand that I had to do it to not break other people's existing modules.**
+
+*Optionally change decompression location for office Files at personalised locations for environments with restricted write access*
 
 ```
 const officeParser = require('officeparser');
@@ -58,6 +62,7 @@ officeParser.setDecompressionLocation("C:\\tmp");  // New decompression location
 
 officeParser.parseOffice("/path/to/officeFile", function(data){
         // "data" string in the callback here is the text parsed from the office file passed in the first argument above
+        if (err) return console.log(err);
         console.log(data)
 })
 ```
@@ -67,6 +72,7 @@ officeParser.parseOffice("/path/to/officeFile", function(data){
 ```
 officeParser.parseOffice("/path/to/officeFile", function(data){
         // "data" string in the callback here is the text parsed from the office file passed in the first argument above
+        if (err) return console.log(err);
         console.log(data)
 }, false)
 ```
@@ -75,18 +81,21 @@ officeParser.parseOffice("/path/to/officeFile", function(data){
 ```
 const officeParser = require('officeparser');
 
-officeParser.parseOffice("C:\\files\\myText.docx", function(data){
+officeParser.parseOffice("C:\\files\\myText.docx", function(data, err){
+        if (err) return console.log(err);
         var newText = data + "look, I can parse a word file"
         callSomeOtherFunction(newText);
 })
 
-officeParser.parseOffice("/Users/harsh/Desktop/files/mySlides.pptx", function(data){
+officeParser.parseOffice("/Users/harsh/Desktop/files/mySlides.pptx", function(data, err){
+        if (err) return console.log(err);
         var newText = data + "look, I can parse a powerpoint file"
         callSomeOtherFunction(newText);
 })
 
 // Using relative path for file is also fine
-officeParser.parseOffice("files/myWorkSheet.ods", function(data){
+officeParser.parseOffice("files/myWorkSheet.ods", function(data, err){
+        if (err) return console.log(err);
         var newText = data + "look, I can parse an excel file"
         callSomeOtherFunction(newText);
 })
@@ -102,23 +111,27 @@ officeParser.parseOffice("files/myWorkSheet.ods", function(data){
 ```
 const officeParser = require('officeparser');
 
-officeParser.parseWord("/path/to/word.docx", function(data){
+officeParser.parseWord("/path/to/word.docx", function(data, err){
         // "data" string in the callback here is the text parsed from the word file passed in the first argument above
+        if (err) return console.log(err);
         console.log(data)
 })
 
-officeParser.parsePowerPoint("/path/to/powerpoint.pptx", function(data){
+officeParser.parsePowerPoint("/path/to/powerpoint.pptx", function(data, err){
         // "data" string in the callback here is the text parsed from the powerpoint file passed in the first argument above
+        if (err) return console.log(err);
         console.log(data)
 })
 
-officeParser.parseExcel("/path/to/excel.xlsx", function(data){
+officeParser.parseExcel("/path/to/excel.xlsx", function(data, err){
         // "data" string in the callback here is the text parsed from the excel file passed in the first argument above
+        if (err) return console.log(err);
         console.log(data)
 })
 
-officeParser.parseOpenOffice("/path/to/writer.odt", function(data){
+officeParser.parseOpenOffice("/path/to/writer.odt", function(data, err){
         // "data" string in the callback here is the text parsed from the writer file passed in the first argument above
+        if (err) return console.log(err);
         console.log(data)
 })
 ```
@@ -127,23 +140,27 @@ officeParser.parseOpenOffice("/path/to/writer.odt", function(data){
 ```
 const officeParser = require('officeparser');
 
-officeParser.parseWord("C:\\files\\myText.docx", function(data){
+officeParser.parseWord("C:\\files\\myText.docx", function(data, err){
+        if (err) return console.log(err);
         var newText = data + "look, I can parse a word file"
         callSomeOtherFunction(newText);
 })
 
-officeParser.parsePowerPoint("/Users/harsh/Desktop/files/mySlides.pptx", function(data){
+officeParser.parsePowerPoint("/Users/harsh/Desktop/files/mySlides.pptx", function(data, err){
+        if (err) return console.log(err);
         var newText = data + "look, I can parse a powerpoint file"
         callSomeOtherFunction(newText);
 })
 
 // Using relative path for file is also fine
-officeParser.parseExcel("files/myWorkSheet.xlsx", function(data){
+officeParser.parseExcel("files/myWorkSheet.xlsx", function(data, err){
+        if (err) return console.log(err);
         var newText = data + "look, I can parse an excel file"
         callSomeOtherFunction(newText);
 })
 
-officeParser.parseOpenOffice("files/myDocument.odt", function(data){
+officeParser.parseOpenOffice("files/myDocument.odt", function(data, err){
+        if (err) return console.log(err);
         var newText = data + "look, I can parse an OpenOffice file"
         callSomeOtherFunction(newText);
 })
