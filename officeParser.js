@@ -502,12 +502,17 @@ function disableConsoleOutput() {
 // #endregion setConsoleOutput
 
 
-
+const { parseWordAsync, parsePowerPointAsync, parseExcelAsync, parseOpenOfficeAsync, parseOfficeAsync } = require('./promise')
 module.exports.parseWord = parseWord;
 module.exports.parsePowerPoint = parsePowerPoint;
 module.exports.parseExcel = parseExcel;
 module.exports.parseOpenOffice = parseOpenOffice;
 module.exports.parseOffice = parseOffice;
+module.exports.parseWordAsync = parseWordAsync;
+module.exports.parsePowerPointAsync = parsePowerPointAsync;
+module.exports.parseExcelAsync = parseExcelAsync;
+module.exports.parseOpenOfficeAsync = parseOpenOfficeAsync;
+module.exports.parseOfficeAsync = parseOfficeAsync;
 module.exports.setDecompressionLocation = setDecompressionLocation;
 module.exports.enableConsoleOutput = enableConsoleOutput;
 module.exports.disableConsoleOutput = disableConsoleOutput;
