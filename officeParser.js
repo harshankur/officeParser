@@ -501,8 +501,99 @@ function disableConsoleOutput() {
 
 // #endregion setConsoleOutput
 
+// #region Async Versions
+var parseWordAsync = function (filename, deleteOfficeDist = true) {
+    return new Promise((resolve, reject) => {
+        try {
+            parseWord(filename, function (data, err) {
+                if (err) return reject(err);
+                return resolve(data);
+            },deleteOfficeDist);
+        } catch (error) {
+            return reject(error);
+        }
+    })
+}
 
-const { parseWordAsync, parsePowerPointAsync, parseExcelAsync, parseOpenOfficeAsync, parseOfficeAsync } = require('./promise')
+var parsePowerPointAsync = function (filename, deleteOfficeDist = true) {
+    return new Promise((resolve, reject) => {
+        try {
+            parsePowerPoint(filename, function (data, err) {
+                if (err) return reject(err);
+                return resolve(data);
+            },deleteOfficeDist);
+        } catch (error) {
+            return reject(error);
+        }
+    })
+}
+
+var parseExcelAsync = function (filename, deleteOfficeDist = true) {
+    return new Promise((resolve, reject) => {
+        try {
+            parseExcel(filename, function (data, err) {
+                if (err) return reject(err);
+                return resolve(data);
+            },deleteOfficeDist);
+        } catch (error) {
+            return reject(error);
+        }
+    })
+}
+
+var parseExcelAsync = function (filename, deleteOfficeDist = true) {
+    return new Promise((resolve, reject) => {
+        try {
+            parseExcel(filename, function (data, err) {
+                if (err) return reject(err);
+                return resolve(data);
+            },deleteOfficeDist);
+        } catch (error) {
+            return reject(error);
+        }
+    })
+}
+
+var parseExcelAsync = function (filename, deleteOfficeDist = true) {
+    return new Promise((resolve, reject) => {
+        try {
+            parseExcel(filename, function (data, err) {
+                if (err) return reject(err);
+                return resolve(data);
+            },deleteOfficeDist);
+        } catch (error) {
+            return reject(error);
+        }
+    })
+}
+
+var parseOpenOfficeAsync = function (filename, deleteOfficeDist = true) {
+    return new Promise((resolve, reject) => {
+        try {
+            parseOpenOffice(filename, function (data, err) {
+                if (err) return reject(err);
+                return resolve(data);
+            },deleteOfficeDist);
+        } catch (error) {
+            return reject(error);
+        }
+    })
+}
+
+var parseOfficeAsync = function (filename, deleteOfficeDist = true) {
+    return new Promise((resolve, reject) => {
+        try {
+            parseOffice(filename, function (data, err) {
+                if (err) return reject(err);
+                return resolve(data);
+            },deleteOfficeDist);
+        } catch (error) {
+            return reject(error);
+        }
+    })
+}
+// #endregion Async Versions
+
 module.exports.parseWord = parseWord;
 module.exports.parsePowerPoint = parsePowerPoint;
 module.exports.parseExcel = parseExcel;
