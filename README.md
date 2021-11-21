@@ -34,29 +34,39 @@ npm i officeparser
 ----------
 
 **Usage**
-```
+```js
 const officeParser = require('officeparser');
 
+// callback
 officeParser.parseOffice("/path/to/officeFile", function(data, err){
         // "data" string in the callback here is the text parsed from the office file passed in the first argument above
         if (err) return console.log(err);
         console.log(data)
 })
 
+// async/await
+try {
+        // "data" string returned from promise here is the text parsed from the office file passed in the first argument
+        const data = await officeParser.parseOfficeAsync("/path/to/officeFile");
+        console.log(data);
+} catch (err) {
+        // resolve error
+        console.log(err);
+}
 ```
 
 **Please take note: I have breached convention in placing err as second argument in my callback but please understand that I had to do it to not break other people's existing modules.**
 
 *Optionally change decompression location for office Files at personalised locations for environments with restricted write access*
 
-```
+```js
 const officeParser = require('officeparser');
 
 // Default decompress location for office Files is "officeDist" in the directory where Node is started. 
 // Put this file before parseOffice method to take effect.
 officeParser.setDecompressionLocation("/tmp");  // New decompression location would be "/tmp/officeDist"
 
-// P.S.: Setting location on a Windows environment with '\' heirarchy requires to be entered twice '\\'
+// P.S.: Setting location on a Windows environment with '\' hierarchy requires to be entered twice '\\'
 officeParser.setDecompressionLocation("C:\\tmp");  // New decompression location would be "C:\tmp\officeDist"
 
 
@@ -69,18 +79,29 @@ officeParser.parseOffice("/path/to/officeFile", function(data, err){
 
 *Optionally add false as 3rd variable to parseOffice to not delete the generated officeDist folder*
 
-```
+```js
+// callback
 officeParser.parseOffice("/path/to/officeFile", function(data, err){
         // "data" string in the callback here is the text parsed from the office file passed in the first argument above
         if (err) return console.log(err);
         console.log(data)
 }, false)
+
+// async/await
+try {
+        const data = await officeParser.parseOfficeAsync("/path/to/officeFile", false);
+        console.log(data);
+} catch (err) {
+        // resolve error
+        console.log(err);
+}
 ```
 
 **Example**
-```
+```js
 const officeParser = require('officeparser');
 
+// callback
 officeParser.parseOffice("C:\\files\\myText.docx", function(data, err){
         if (err) return console.log(err);
         var newText = data + "look, I can parse a word file"
@@ -99,6 +120,25 @@ officeParser.parseOffice("files/myWorkSheet.ods", function(data, err){
         var newText = data + "look, I can parse an excel file"
         callSomeOtherFunction(newText);
 })
+
+// async/await
+try {
+        const data1 = await officeParser.parseOfficeAsync("C:\\files\\myText.docx");
+        let newText1 = data1 + "look, I can parse a word file";
+        await callSomeOtherFunction(newText1);
+
+        const data2 = await officeParser.parseOfficeAsync("/Users/harsh/Desktop/files/mySlides.pptx");
+        let newText2 = data2 + "look, I can parse a powerpoint file";
+        await callSomeOtherFunction(newText2);
+
+        // Using relative path for file is also fine
+        const data3 = await officeParser.parseOfficeAsync("files/myWorkSheet.ods");
+        let newText3 = data3 + "look, I can parse an excel file";
+        await callSomeOtherFunction(newText3);
+} catch (err) {
+        // resolve error
+        console.log(err);
+}
 ```
 
 
@@ -108,9 +148,10 @@ officeParser.parseOffice("files/myWorkSheet.ods", function(data, err){
 *These were the initial methods of parsing text till parseOffice method came into existence. These still exist and form the skeleton to this module as parseOffice redirects the below functions anyway. These functions will forever remain available to guarantee long-term usage of this module. I will ensure backward-compatibility with all previous versions.*
 
 **Usage**
-```
+```js
 const officeParser = require('officeparser');
 
+// callback
 officeParser.parseWord("/path/to/word.docx", function(data, err){
         // "data" string in the callback here is the text parsed from the word file passed in the first argument above
         if (err) return console.log(err);
@@ -134,12 +175,28 @@ officeParser.parseOpenOffice("/path/to/writer.odt", function(data, err){
         if (err) return console.log(err);
         console.log(data)
 })
+
+// async/await
+try {
+        // "data" string returned from promise here is the text parsed from the office file passed in the first argument
+        const data1 = await officeParser.parseWordAsync("/path/to/word.docx");
+
+        const data2 = await officeParser.parsePowerPointAsync("/path/to/powerpoint.pptx");
+
+        const data3 = await officeParser.parseExcelAsync("/path/to/excel.xlsx");
+
+        const data3 = await officeParser.parseOpenOfficeAsync("/path/to/writer.odt");
+} catch (err) {
+        // resolve error
+        console.log(err);
+}
 ```
 
 **Example**
-```
+```js
 const officeParser = require('officeparser');
 
+// callback
 officeParser.parseWord("C:\\files\\myText.docx", function(data, err){
         if (err) return console.log(err);
         var newText = data + "look, I can parse a word file"
@@ -164,6 +221,29 @@ officeParser.parseOpenOffice("files/myDocument.odt", function(data, err){
         var newText = data + "look, I can parse an OpenOffice file"
         callSomeOtherFunction(newText);
 })
+
+// async/await
+try {
+        const data1 = await officeParser.parseWordAsync("C:\\files\\myText.docx");
+        let newText1 = data1 + "look, I can parse a word file";
+        await callSomeOtherFunction(newText1);
+
+        const data2 = await officeParser.parsePowerPointAsync("/Users/harsh/Desktop/files/mySlides.pptx");
+        let newText2 = data2 + "look, I can parse a powerpoint file";
+        await callSomeOtherFunction(newText2);
+
+        // Using relative path for file is also fine
+        const data3 = await officeParser.parseExcelAsync("files/myWorkSheet.xlsx");
+        let newText3 = data3 + "look, I can parse an excel file";
+        await callSomeOtherFunction(newText3);
+
+        const data4 = await officeParser.parseOpenOfficeAsync("files/myDocument.odt");
+        let newText4 = data4 + "look, I can parse an OpenOffice file";
+        await callSomeOtherFunction(newText4);
+} catch (err) {
+        // resolve error
+        console.log(err);
+}
 ```
 
 ----------
