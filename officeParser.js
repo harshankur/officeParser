@@ -541,32 +541,6 @@ var parseExcelAsync = function (filename, deleteOfficeDist = true) {
     })
 }
 
-var parseExcelAsync = function (filename, deleteOfficeDist = true) {
-    return new Promise((resolve, reject) => {
-        try {
-            parseExcel(filename, function (data, err) {
-                if (err) return reject(err);
-                return resolve(data);
-            },deleteOfficeDist);
-        } catch (error) {
-            return reject(error);
-        }
-    })
-}
-
-var parseExcelAsync = function (filename, deleteOfficeDist = true) {
-    return new Promise((resolve, reject) => {
-        try {
-            parseExcel(filename, function (data, err) {
-                if (err) return reject(err);
-                return resolve(data);
-            },deleteOfficeDist);
-        } catch (error) {
-            return reject(error);
-        }
-    })
-}
-
 var parseOpenOfficeAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
         try {
