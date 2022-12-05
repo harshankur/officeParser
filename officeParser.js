@@ -4,81 +4,94 @@ const fs = require('fs')
 const util = require('util');
 const rimraf = require('rimraf');
 
+/** Header for error messages */
+const ERRORHEADER = "[OfficeParser]: ";
+/** Error messages */
+const ERRORMSG = {
+    extensionUnsupported: (ext) => `${ERRORHEADER}Sorry, we currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
+    fileCorrupted: (filename) => `${ERRORHEADER}Your file ${filename} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
+    fileDoesNotExist: (filename) => `${ERRORHEADER}File ${filename} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
+}
+/** Location for decompressing files. Default is "officeDist" */
+let decompressLocation = "officeDist";
+/** Flag to output errors to console other than normal error handling. Default is false as we anyway push the message for error handling. */
+let outputErrorToConsole = false;
+
+/** Store all the text content to respond */
+const responseText = [];
+
+/** Console error if allowed */
+function consoleError(error) {
+    if (outputErrorToConsole)
+        console.error(error);
+}
+
+/** Custom parseString promise as the native has bugs */
+const parseStringPromise = xml => new Promise((resolve, reject) => {
+    xml2js.parseString(xml, (err, result) => {
+        if (err)
+            reject(err);
+        resolve(result);
+    });
+});
+
 // #region textFetchFromWord
 
-var myTextWord = [];
-var decompressLocation = "officeDist";
-var outputToConsoleWhenRequired = true;     // Default is set to true to let the user identify source of an error in node terminal
-
-async function scanForTextWord(result) {
-    if (Array.isArray(result)) {
-        for (var i = 0; i < result.length; i++) {
-            if (typeof(result[i]) == "string" && result[i] != "") {
-                await myTextWord.push(result[i]);
-            }
-            else {
-                await scanForTextWord(result[i]);
-            }
-        }
-        return;
+/** Extracting text from Word files xml objects converted to js */
+function extractTextFromWordXmlObjects(xmlObjects) {
+    // specifically for Arrays
+    if (Array.isArray(xmlObjects)) {
+        xmlObjects.forEach(item =>
+            (typeof item == "string") && (item != "")
+                ? responseText.push(item)
+                : extractTextFromWordXmlObjects(item))
     }
-    else if (typeof(result) == "object") {
-        for (var property in result) {
-            if (result.hasOwnProperty(property)) {
-                if (typeof(result[property]) == "string") {
-                    if ((property == "w:t" || property == "_") && result[property] != "") {
-                        await myTextWord.push(result[property]);
-                    }
-                }
-                else {
-                    await scanForTextWord(result[property]);
-                }
-            }
-        }
-        return;
-    }
-}
-
-var parseWord = async function (filename, callback, deleteOfficeDist = true) {
-    if (validateFileExtension(filename, ["docx"])) {
-        try {
-            decompress(filename, decompressLocation).then(files => {
-                myTextWord = [];
-                if (fs.existsSync(decompressLocation + "/word/document.xml")) {
-                    fs.readFile(decompressLocation + '/word/document.xml', 'utf8', function (err,data) {
-                        if (err) {
-                            if (outputToConsoleWhenRequired) console.log(err);
-                            return callback(undefined, err);
-                        }
-                        xml2js.parseString(data, async function (err, result) {
-                            await scanForTextWord(result);
-    
-                            callback(myTextWord.join(" "), undefined);
-                            if (deleteOfficeDist == true) {
-                                rimraf(decompressLocation, function () {});
-                            }
-                        });
-                    });
-                }
-                else {
-                    if (deleteOfficeDist == true) {
-                        rimraf(decompressLocation, function () {});
-                    }
-                }
-            })
-            .catch(function (err) {
-                if (outputToConsoleWhenRequired) console.log(err);
-                return callback(undefined, err);
-            });
-        }
-        catch(err) {
-            if (outputToConsoleWhenRequired) console.log(err);
-            return callback(undefined, err);
+    // for other JS Object
+    else if (typeof xmlObjects == "object") {
+        for (const [key, value] of Object.entries(xmlObjects)) {
+            typeof value == "string"
+                ? (key == "w:t" || key == "_") && value != ""
+                    ? responseText.push(value)
+                    : undefined
+                : extractTextFromWordXmlObjects(value);
         }
     }
 }
 
-// #endregion textFetchFromWord
+/** Main function for parsing text from word files */
+function parseWord(filename, callback, deleteOfficeDist = true) {
+    if (!fs.existsSync(filename))
+        return callback(undefined, ERRORMSG.fileDoesNotExist(filename))
+    const ext = filename.split(".").pop().toLowerCase();
+    if (ext != 'docx')
+        return callback(undefined, ERRORMSG.extensionUnsupported(ext));
+
+    const contentFile = 'word/document.xml';
+    decompress(filename,
+        decompressLocation,
+        { filter: x => x.path == contentFile }
+    )
+    .then(files => {
+        if (files.length != 1)
+            return callback(undefined, ERRORMSG.fileCorrupted(filename));
+
+        return fs.readFileSync(`${decompressLocation}/${contentFile}`, 'utf8');
+    })
+    .then(xmlContent => parseStringPromise(xmlContent))
+    .then(xmlObjects => {
+        extractTextFromWordXmlObjects(xmlObjects);
+        callback(responseText.join(" "), undefined)
+
+        if (deleteOfficeDist)
+            rimraf(decompressLocation, err => consoleError(err));
+    })
+    .catch(error => {
+        consoleError(error)
+        return callback(undefined, error);
+    });
+}
+
+// #endregion
 
 
 
@@ -161,12 +174,12 @@ var parsePowerPoint = function (filename, callback, deleteOfficeDist = true) {
                 }
             })
             .catch(function (err) {
-                if (outputToConsoleWhenRequired) console.log(err);
+                if (outputErrorToConsole) console.log(err);
                 return callback(undefined, err);
             });
         }
         catch (err) {
-            if (outputToConsoleWhenRequired) console.log(err);
+            if (outputErrorToConsole) console.log(err);
             return callback(undefined, err);
         }
     }
@@ -329,12 +342,12 @@ var parseExcel = function (filename, callback, deleteOfficeDist = true) {
                 }
             })
             .catch(function (err) {
-                if (outputToConsoleWhenRequired) console.log(err);
+                if (outputErrorToConsole) console.log(err);
                 return callback(undefined, err);
             });
         }
         catch (err) {
-            if (outputToConsoleWhenRequired) console.log(err);
+            if (outputErrorToConsole) console.log(err);
             return callback(undefined, err);
         }
     }
@@ -381,12 +394,15 @@ async function scanForTextOpenOffice(result) {
 var parseOpenOffice = async function (filename, callback, deleteOfficeDist = true) {
     if (validateFileExtension(filename, ["odt", "odp", "ods"])) {
         try {
-            decompress(filename, decompressLocation).then(files => {
+            decompress(filename,
+                decompressLocation,
+                { filter: x => x.path == 'content.xml' }
+            ).then(files => {
                 myTextOpenOffice = [];
                 if (fs.existsSync(decompressLocation + "/content.xml")) {
                     fs.readFile(decompressLocation + '/content.xml', 'utf8', function (err,data) {
                         if (err) {
-                            if (outputToConsoleWhenRequired) console.log(err);
+                            if (outputErrorToConsole) console.log(err);
                             return callback(undefined, err);
                         }
                          
@@ -407,12 +423,12 @@ var parseOpenOffice = async function (filename, callback, deleteOfficeDist = tru
                 }
             })
             .catch(function (err) {
-                if (outputToConsoleWhenRequired) console.log(err);
+                if (outputErrorToConsole) console.log(err);
                 return callback(undefined, err);
             });
         }
         catch (err) {
-            if (outputToConsoleWhenRequired) console.log(err);
+            if (outputErrorToConsole) console.log(err);
             return callback(undefined, err);
         }
     }
@@ -469,7 +485,7 @@ function parseOffice(filename, callback, deleteOfficeDist = true) {
     }
     else {
         var errMessage = `[OfficeParser]: Sorry, we currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${extension} files. Stay tuned for further updates.`;
-        if (outputToConsoleWhenRequired) console.log(errMessage);
+        if (outputErrorToConsole) console.log(errMessage);
         return callback(undefined, errMessage);
     }
     
@@ -492,11 +508,11 @@ function setDecompressionLocation(newLocation) {
 
 // #region setConsoleOutput
 function enableConsoleOutput() {
-    outputToConsoleWhenRequired = true;
+    outputErrorToConsole = true;
 }
 
 function disableConsoleOutput() {
-    outputToConsoleWhenRequired = false;
+    outputErrorToConsole = false;
 }
 
 // #endregion setConsoleOutput
@@ -504,14 +520,11 @@ function disableConsoleOutput() {
 // #region Async Versions
 var parseWordAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
-        try {
-            parseWord(filename, function (data, err) {
-                if (err) return reject(err);
-                return resolve(data);
-            },deleteOfficeDist);
-        } catch (error) {
-            return reject(error);
-        }
+        parseWord(filename, function (data, error) {
+            if (error)
+                return reject(error);
+            return resolve(data);
+        }, deleteOfficeDist);
     })
 }
 
