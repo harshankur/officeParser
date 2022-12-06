@@ -52,6 +52,17 @@ function runTest(ext) {
     )
 }
 
+async function runAllTests() {
+    for (let i = 0; i < supportedExtensionTests.length; i++)
+    {
+        const test = supportedExtensionTests[i];
+        if (test.testAvailable)
+            await runTest(test.ext)
+        else
+            console.log(`[${test.ext}]=> Skipped`);
+    }
+}
+
 // Run all test files with test content if no argument passed.
 if (process.argv.length == 2)
 {
@@ -67,7 +78,7 @@ if (process.argv.length == 2)
         ? console.log("All extensions in primary supportedExtensions.js file found in test file")
         : console.warn("Extension in primary supportedExtensions.js file missing from test file");
 
-    supportedExtensionTests.forEach(test => test.testAvailable ? runTest(test.ext) : console.log(`[${test.ext}]=> Skipped`));
+    runAllTests();
 }
 else if (process.argv.length == 3)
 {
