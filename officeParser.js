@@ -43,7 +43,10 @@ function parseWord(filename, callback, deleteOfficeDist = true) {
         return callback(undefined, ERRORMSG.fileDoesNotExist(filename))
     const ext = filename.split(".").pop().toLowerCase();
     if (ext != 'docx')
+    {
+        consoleError(ERRORMSG.extensionUnsupported(extension));
         return callback(undefined, ERRORMSG.extensionUnsupported(ext));
+    }
 
     /** Store all the text content to respond */
     let responseText = [];
@@ -107,7 +110,10 @@ function parsePowerPoint(filename, callback, deleteOfficeDist = true) {
         return callback(undefined, ERRORMSG.fileDoesNotExist(filename))
     const ext = filename.split(".").pop().toLowerCase();
     if (ext != 'pptx')
+    {
+        consoleError(ERRORMSG.extensionUnsupported(extension));
         return callback(undefined, ERRORMSG.extensionUnsupported(ext));
+    }
 
     /** Store all the text content to respond */
     let responseText = [];
@@ -366,7 +372,10 @@ function parseOpenOffice(filename, callback, deleteOfficeDist = true) {
         return callback(undefined, ERRORMSG.fileDoesNotExist(filename))
     const ext = filename.split(".").pop().toLowerCase();
     if (!["odt", "odp", "ods"].includes(ext))
+    {
+        consoleError(ERRORMSG.extensionUnsupported(extension));
         return callback(undefined, ERRORMSG.extensionUnsupported(ext));
+    }
 
     /** Store all the text content to respond */
     let responseText = [];
@@ -449,32 +458,27 @@ function validateFileExtension(filename, extension) {
 function parseOffice(filename, callback, deleteOfficeDist = true) {
     var extension = filename.split(".").pop().toLowerCase();
 
-    if (extension == "docx") {
-        parseWord(filename, function (data) {
-            callback(data);
-        }, deleteOfficeDist);
+    switch(extension)
+    {
+        case "docx":
+            parseWord(filename, data => callback(data), deleteOfficeDist);
+            return;
+        case "pptx":
+            parsePowerPoint(filename, data => callback(data), deleteOfficeDist);
+            return;
+        case "xlsx":
+            parseExcel(filename, data => callback(data), deleteOfficeDist);
+            return;
+        case "odt":
+        case "odp":
+        case "ods":
+            parseOpenOffice(filename, data => callback(data), deleteOfficeDist);
+            return;
+
+        default:
+            consoleError(ERRORMSG.extensionUnsupported(extension));
+            callback(undefined, ERRORMSG.extensionUnsupported(extension));
     }
-    else if (extension == "pptx") {
-        parsePowerPoint(filename, function (data) {
-            callback(data);
-        }, deleteOfficeDist);
-    }
-    else if (extension == "xlsx") {
-        parseExcel(filename, function (data) {
-            callback(data);
-        }, deleteOfficeDist);
-    }
-    else if (extension == "odt" || extension == "odp" || extension == "ods") {
-        parseOpenOffice(filename, function (data) {
-            callback(data);
-        }, deleteOfficeDist);
-    }
-    else {
-        var errMessage = `[OfficeParser]: Sorry, we currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${extension} files. Stay tuned for further updates.`;
-        if (outputErrorToConsole) console.log(errMessage);
-        return callback(undefined, errMessage);
-    }
-    
 }
 
 // #endregion parse office
