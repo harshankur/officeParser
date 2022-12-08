@@ -32,6 +32,9 @@ const parseStringPromise = xml => new Promise((resolve, reject) => {
     });
 });
 
+
+
+
 /** Main function for parsing text from word files */
 function parseWord(filename, callback, deleteOfficeDist = true) {
     if (!fs.existsSync(filename))
@@ -96,98 +99,94 @@ function parseWord(filename, callback, deleteOfficeDist = true) {
     });
 }
 
+/** Main function for parsing text from PowerPoint files */
+function parsePowerPoint(filename, callback, deleteOfficeDist = true) {
+    if (!fs.existsSync(filename))
+        return callback(undefined, ERRORMSG.fileDoesNotExist(filename))
+    const ext = filename.split(".").pop().toLowerCase();
+    if (ext != 'pptx')
+        return callback(undefined, ERRORMSG.extensionUnsupported(ext));
 
-// #region textFetchFromPowerPoint
+    /** Store all the text content to respond */
+    let responseText = [];
 
-var myTextPowerPoint = [];
-
-async function scanForTextPowerPoint(result) {
-    if (Array.isArray(result)) {
-        for (var i = 0; i < result.length; i++) {
-            if (typeof(result[i]) == "string" && result[i] != "") {
-                await myTextPowerPoint.push(result[i]);
-            }
-            else {
-                await scanForTextPowerPoint(result[i]);
+    /** Extracting text from powerpoint files xml objects converted to js */
+    function extractTextFromPowerPointXmlObjects(xmlObjects) {
+        // specifically for Arrays
+        if (Array.isArray(xmlObjects)) {
+            xmlObjects.forEach(item =>
+                (typeof item == "string") && (item != "")
+                    ? responseText.push(item)
+                    : extractTextFromPowerPointXmlObjects(item))
+        }
+        // for other JS Object
+        else if (typeof xmlObjects == "object") {
+            for (const [key, value] of Object.entries(xmlObjects)) {
+                typeof value == "string"
+                    ? (key == "a:t" || key == "_") && value != ""
+                        ? responseText.push(value)
+                        : undefined
+                    : extractTextFromPowerPointXmlObjects(value);
             }
         }
-        return;
     }
-    else if (typeof(result) == "object") {
-        for (var property in result) {
-            if (result.hasOwnProperty(property)) {
-                if (typeof(result[property]) == "string") {
-                    if ((property == "a:t" || property == "_") && result[property] != "") {
-                        await myTextPowerPoint.push(result[property]);
-                    }
-                }
-                else if (typeof(result[property][0]) == "string") {
-                    if ((property == "a:t" || property == "_") && result[property] != "") {
-                        await myTextPowerPoint.push(result[property]);
-                    }
-                }
-                else {
-                    await scanForTextPowerPoint(result[property]);
-                }
-            }
+
+    // Files that hold our content of interest
+    const contentFiles = [
+        {
+            folder: "ppt/slides",
+            fileExtension: "xml"
+        },
+        {
+            folder: "ppt/notesSlides",
+            fileExtension: "xml"
         }
-        return;
-    }
+    ];
+
+    decompress(filename,
+        decompressLocation,
+        // We are looking for files that have same folder (starting substring) as our content files and have same fileExtensions
+        { filter: x => contentFiles.findIndex(file => x.path.indexOf(file.folder) == 0 && x.path.split('.').pop() == file.fileExtension) > -1 }
+    )
+    .then(files => {
+        // Sort files according to previous order of taking text out of ppt/slides followed by ppt/notesSlides
+        files.sort((a,b) => contentFiles.findIndex(file => a.path.indexOf(file.folder) == 0) -  contentFiles.findIndex(file => b.path.indexOf(file.folder) == 0))
+
+        if (files.length == 0)
+            return callback(undefined, ERRORMSG.fileCorrupted(filename));
+
+        // Returning a promise that resolves after all the xml contents have been read using fs.readFileSync
+        return allTextReadPromise = new Promise((resolve, reject) =>
+        {
+            let xmlContentArray = [];
+            for (let file of files)
+            {
+                xmlContentArray.push(fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8'))
+            }
+            resolve(xmlContentArray);
+        })
+    })
+    .then(xmlContentArray => Promise.all(xmlContentArray.map(xmlContent => parseStringPromise(xmlContent))))    // Returning an array of all parseStringPromise responses
+    .then(xmlObjectsArray => {
+        xmlObjectsArray.forEach(xmlObjects => extractTextFromPowerPointXmlObjects(xmlObjects)); // Extracting text from all xml js objects with our conditions
+
+        const returnCallbackPromise = new Promise((res, rej) =>
+        {
+            if (deleteOfficeDist)
+                rimraf(decompressLocation, err => res(consoleError(err)));
+            else
+                res();
+        })
+
+        returnCallbackPromise
+        .then(() => callback(responseText.join(" "), undefined));
+
+    })
+    .catch(error => {
+        consoleError(error)
+        return callback(undefined, error);
+    });
 }
-
-var parsePowerPoint = function (filename, callback, deleteOfficeDist = true) {
-    if (validateFileExtension(filename, ["pptx"])) {
-        try {
-            decompress(filename, decompressLocation).then(async files => {
-                myTextPowerPoint = [];
-    
-                if (fs.existsSync(decompressLocation + '/ppt/slides')) {
-                    var slidesNum = await fs.readdirSync(decompressLocation + '/ppt/slides').length;
-    
-                    for (var i = 0; i < slidesNum - 1; i++) {
-                        var parser = new xml2js.Parser();
-    
-                        var myData = await util.promisify(fs.readFile)(`${decompressLocation}/ppt/slides/slide${i + 1}.xml`, 'utf8');
-                        var result = await util.promisify(parser.parseString.bind(parser))(myData);
-                        await scanForTextPowerPoint(result);
-                    }
-    
-                    if (fs.existsSync(decompressLocation + '/ppt/notesSlides')) {
-                        var notesSlidesNum = await fs.readdirSync(decompressLocation + '/ppt/notesSlides').length;
-                        for (var i = 0; i < notesSlidesNum - 1; i++) {
-                            var parser = new xml2js.Parser();
-        
-                            var myData = await util.promisify(fs.readFile)(`${decompressLocation}/ppt/notesSlides/notesSlide${i + 1}.xml`, 'utf8');
-                            var result = await util.promisify(parser.parseString.bind(parser))(myData);
-                            await scanForTextPowerPoint(result);
-                        }
-                    }
-                    
-                    callback(myTextPowerPoint.join(" "), undefined);
-    
-                    if (deleteOfficeDist == true) {
-                        rimraf(decompressLocation, function () {});
-                    }
-                }
-                else {
-                    if (deleteOfficeDist == true) {
-                        rimraf(decompressLocation, function () {});
-                    }
-                }
-            })
-            .catch(function (err) {
-                if (outputErrorToConsole) console.log(err);
-                return callback(undefined, err);
-            });
-        }
-        catch (err) {
-            if (outputErrorToConsole) console.log(err);
-            return callback(undefined, err);
-        }
-    }
-} 
-
-// #endregion textFetchFromPowerPoint
 
 
 // #region textFetchFromExcel
@@ -369,7 +368,7 @@ function parseOpenOffice(filename, callback, deleteOfficeDist = true) {
 
     /** Store all the text content to respond */
     let responseText = [];
-    /** Extracting text from Word files xml objects converted to js */
+    /** Extracting text from Open Office files xml objects converted to js */
     function extractTextFromOpenOfficeXmlObjects(xmlObjects) {
         // specifically for Arrays
         if (Array.isArray(xmlObjects)) {
