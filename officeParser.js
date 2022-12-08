@@ -8,19 +8,21 @@ const rimraf = require('rimraf');
 const ERRORHEADER = "[OfficeParser]: ";
 /** Error messages */
 const ERRORMSG = {
-    extensionUnsupported: (ext) => `${ERRORHEADER}Sorry, we currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
+    extensionUnsupported: (ext) => `${ERRORHEADER}Sorry, OfficeParser currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
     fileCorrupted: (filename) => `${ERRORHEADER}Your file ${filename} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
     fileDoesNotExist: (filename) => `${ERRORHEADER}File ${filename} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
+    locationNotFound: (location) => `${ERRORHEADER}Entered location ${location} is not valid! Check relative paths and reenter. OfficeParser will use root directory as decompress location.`
 }
 /** Location for decompressing files. Default is "officeDist" */
+const DECOMPRESSSUBLOCATION = "officeDist"
 let decompressLocation = "officeDist";
 /** Flag to output errors to console other than normal error handling. Default is false as we anyway push the message for error handling. */
 let outputErrorToConsole = false;
 
 /** Console error if allowed */
-function consoleError(error) {
+function consoleError(errorMessage) {
     if (outputErrorToConsole)
-        console.error(error);
+        console.error(errorMessage);
 }
 
 /** Custom parseString promise as the native has bugs */
@@ -479,13 +481,20 @@ function parseOffice(filename, callback, deleteOfficeDist = true) {
 
 
 // #region setDecompressionLocation
+/**
+ * Set decompression directory. The final decompressed data will be put inside officeDist folder within your directory
+ * @param {string} newLocation Relative path to the directory that will contain officeDist folder with decompressed data
+ */
 function setDecompressionLocation(newLocation) {
     if (newLocation != undefined) {
-        decompressLocation = newLocation + "/officeDist";
+        newLocation = `${newLocation}${newLocation.endsWith('/') ? '' : '/'}${DECOMPRESSSUBLOCATION}`
+
+        if (fs.existsSync(newLocation))
+            decompressLocation = newLocation;
+        return;
     }
-    else {
-        decompressLocation = "officeDist";
-    }
+    consoleError(ERRORMSG.locationNotFound(newLocation));
+    decompressLocation = DECOMPRESSSUBLOCATION;
 }
 
 // #endregion setDecompressionLocation
