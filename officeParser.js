@@ -39,11 +39,12 @@ const parseStringPromise = xml => new Promise((resolve, reject) => {
 
 /** Main function for parsing text from word files */
 function parseWord(filename, callback, deleteOfficeDist = true) {
-    if (!fs.existsSync(filename))
-        return callback(undefined, ERRORMSG.fileDoesNotExist(filename))
+    if (!fs.existsSync(filename)) {
+        consoleError(ERRORMSG.fileDoesNotExist(filename));
+        return callback(undefined, ERRORMSG.fileDoesNotExist(filename));
+    }
     const ext = filename.split(".").pop().toLowerCase();
-    if (ext != 'docx')
-    {
+    if (ext != 'docx') {
         consoleError(ERRORMSG.extensionUnsupported(extension));
         return callback(undefined, ERRORMSG.extensionUnsupported(ext));
     }
@@ -78,16 +79,17 @@ function parseWord(filename, callback, deleteOfficeDist = true) {
         { filter: x => x.path == contentFile }
     )
     .then(files => {
-        if (files.length != 1)
+        if (files.length != 1) {
+            consoleError(ERRORMSG.fileCorrupted(filename));
             return callback(undefined, ERRORMSG.fileCorrupted(filename));
+        }
 
         return fs.readFileSync(`${decompressLocation}/${contentFile}`, 'utf8');
     })
     .then(xmlContent => parseStringPromise(xmlContent))
     .then(xmlObjects => {
         extractTextFromWordXmlObjects(xmlObjects);
-        const returnCallbackPromise = new Promise((res, rej) =>
-        {
+        const returnCallbackPromise = new Promise((res, rej) => {
             if (deleteOfficeDist)
                 rimraf(decompressLocation, err => res(consoleError(err)));
             else
@@ -106,11 +108,12 @@ function parseWord(filename, callback, deleteOfficeDist = true) {
 
 /** Main function for parsing text from PowerPoint files */
 function parsePowerPoint(filename, callback, deleteOfficeDist = true) {
-    if (!fs.existsSync(filename))
-        return callback(undefined, ERRORMSG.fileDoesNotExist(filename))
+    if (!fs.existsSync(filename)) {
+        consoleError(ERRORMSG.fileDoesNotExist(filename));
+        return callback(undefined, ERRORMSG.fileDoesNotExist(filename));
+    }
     const ext = filename.split(".").pop().toLowerCase();
-    if (ext != 'pptx')
-    {
+    if (ext != 'pptx') {
         consoleError(ERRORMSG.extensionUnsupported(extension));
         return callback(undefined, ERRORMSG.extensionUnsupported(ext));
     }
@@ -160,8 +163,10 @@ function parsePowerPoint(filename, callback, deleteOfficeDist = true) {
         // Sort files according to previous order of taking text out of ppt/slides followed by ppt/notesSlides
         files.sort((a,b) => contentFiles.findIndex(file => a.path.indexOf(file.folder) == 0) -  contentFiles.findIndex(file => b.path.indexOf(file.folder) == 0))
 
-        if (files.length == 0)
+        if (files.length == 0) {
+            consoleError(ERRORMSG.fileCorrupted(filename));
             return callback(undefined, ERRORMSG.fileCorrupted(filename));
+        }
 
         // Returning a promise that resolves after all the xml contents have been read using fs.readFileSync
         return allTextReadPromise = new Promise((resolve, reject) =>
@@ -368,11 +373,12 @@ var parseExcel = function (filename, callback, deleteOfficeDist = true) {
 
 /** Main function for parsing text from open office files */
 function parseOpenOffice(filename, callback, deleteOfficeDist = true) {
-    if (!fs.existsSync(filename))
-        return callback(undefined, ERRORMSG.fileDoesNotExist(filename))
+    if (!fs.existsSync(filename)) {
+        consoleError(ERRORMSG.fileDoesNotExist(filename));
+        return callback(undefined, ERRORMSG.fileDoesNotExist(filename));
+    }
     const ext = filename.split(".").pop().toLowerCase();
-    if (!["odt", "odp", "ods"].includes(ext))
-    {
+    if (!["odt", "odp", "ods"].includes(ext)) {
         consoleError(ERRORMSG.extensionUnsupported(extension));
         return callback(undefined, ERRORMSG.extensionUnsupported(ext));
     }
@@ -406,8 +412,10 @@ function parseOpenOffice(filename, callback, deleteOfficeDist = true) {
         { filter: x => x.path == contentFile }
     )
     .then(files => {
-        if (files.length != 1)
+        if (files.length != 1) {
+            consoleError(ERRORMSG.fileCorrupted(filename));
             return callback(undefined, ERRORMSG.fileCorrupted(filename));
+        }
 
         return fs.readFileSync(`${decompressLocation}/${contentFile}`, 'utf8');
     })
@@ -517,11 +525,16 @@ function disableConsoleOutput() {
 // #region Async Versions
 var parseWordAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
-        parseWord(filename, function (data, error) {
-            if (error)
-                return reject(error);
-            return resolve(data);
-        }, deleteOfficeDist);
+        try {
+            parseWord(filename, function (data, error) {
+                if (error)
+                    return reject(error);
+                return resolve(data);
+            }, deleteOfficeDist);
+        }
+        catch (error) {
+            return reject(error);
+        }
     })
 }
 
@@ -529,10 +542,12 @@ var parsePowerPointAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
         try {
             parsePowerPoint(filename, function (data, err) {
-                if (err) return reject(err);
+                if (err)
+                    return reject(err);
                 return resolve(data);
             },deleteOfficeDist);
-        } catch (error) {
+        }
+        catch (error) {
             return reject(error);
         }
     })
@@ -542,10 +557,12 @@ var parseExcelAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
         try {
             parseExcel(filename, function (data, err) {
-                if (err) return reject(err);
+                if (err)
+                    return reject(err);
                 return resolve(data);
             },deleteOfficeDist);
-        } catch (error) {
+        }
+        catch (error) {
             return reject(error);
         }
     })
@@ -555,10 +572,12 @@ var parseOpenOfficeAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
         try {
             parseOpenOffice(filename, function (data, err) {
-                if (err) return reject(err);
+                if (err)
+                    return reject(err);
                 return resolve(data);
             },deleteOfficeDist);
-        } catch (error) {
+        }
+        catch (error) {
             return reject(error);
         }
     })
@@ -568,10 +587,12 @@ var parseOfficeAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
         try {
             parseOffice(filename, function (data, err) {
-                if (err) return reject(err);
+                if (err)
+                    return reject(err);
                 return resolve(data);
             },deleteOfficeDist);
-        } catch (error) {
+        }
+        catch (error) {
             return reject(error);
         }
     })
