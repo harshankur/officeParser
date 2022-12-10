@@ -3,3 +3,4 @@ officeDist/
 officeParser.bk.js
 .DS_Store
 test/.DS_Store
+.vscode/
