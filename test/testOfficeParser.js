@@ -50,6 +50,7 @@ function runTest(ext) {
             ? console.log(`[${ext}]=> Passed`)
             : console.log(`[${ext}]=> Failed`)
     )
+    .catch(error => console.log("ERROR: " + error))
 }
 
 async function runAllTests() {
@@ -62,6 +63,9 @@ async function runAllTests() {
             console.log(`[${test.ext}]=> Skipped`);
     }
 }
+
+// Enable console output in case something fails
+// officeParser.enableConsoleOutput();
 
 // Run all test files with test content if no argument passed.
 if (process.argv.length == 2)
@@ -85,6 +89,7 @@ else if (process.argv.length == 3)
     if (localSupportedExtensionsList.includes(process.argv[2]))
         officeParser.parseOfficeAsync(getFilename(process.argv[2]))
         .then(text => console.log(text))
+        .catch(error => console.log("ERROR: " + error))
     else
         console.error("The requested extension test is not currently available.");
 }
