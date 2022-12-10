@@ -1,4 +1,5 @@
 node_modules/
-dist/
-files/
+officeDist/
 officeParser.bk.js
+.DS_Store
+test/.DS_Store

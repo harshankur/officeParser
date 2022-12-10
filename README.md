@@ -12,6 +12,7 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
+* 2022/12/10 - Fixed memory leak issues, bugs related to parsing open document files and improved error handling
 * 2021/11/21 - Added promise way to existing callback functions
 * 2020/06/01 - Added error handling and console.log enable/disable methods. Default is set at enabled. Everything backward compatible.
 * 2019/06/17 - Added method to change location for decompressing office files in places with restricted write access.

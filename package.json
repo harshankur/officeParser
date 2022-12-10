@@ -1,10 +1,10 @@
 {
   "name": "officeparser",
-  "version": "2.3.0",
+  "version": "3.0.0",
   "description": "A Node.js library to parse text out of any office file. Currently supports docx, pptx, xlsx, odt, odp and ods files.",
   "main": "officeParser.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test/testOfficeParser.js"
   },
   "repository": {
     "type": "git",
