@@ -12,14 +12,15 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
-* 2022/12/10 - Fixed memory leak issues, bugs related to parsing open document files and improved error handling
-* 2021/11/21 - Added promise way to existing callback functions
+* 2022/12/24 - Added command line method to use officeParser with or without installing it and instantly get parsed content on the console.
+* 2022/12/10 - Fixed memory leak issues, bugs related to parsing open document files and improved error handling.
+* 2021/11/21 - Added promise way to existing callback functions.
 * 2020/06/01 - Added error handling and console.log enable/disable methods. Default is set at enabled. Everything backward compatible.
 * 2019/06/17 - Added method to change location for decompressing office files in places with restricted write access.
 * 2019/04/30 - Removed case sensitive file extension bug. File names with capital lettered extensions now supported.
 * 2019/04/23 - Added support for open office files *.odt, *.odp, *.ods through parseOffice function. Created a new method parseOpenOffice for those who prefer targetted functions. 
-* 2019/04/23 - Added feature to delete the generated dist folder after function callback
-* 2019/04/22 - Added parseOffice method to avoid confusion between type of file and their extension
+* 2019/04/23 - Added feature to delete the generated dist folder after function callback.
+* 2019/04/22 - Added parseOffice method to avoid confusion between type of file and their extension.
 * 2019/04/22 - Added file extension validations. Removed errors for excel files with no drawing elements.
 * 2019/04/19 - Support added for *.xlsx files.
 * 2019/04/18 - Support added for *.pptx files.
@@ -33,9 +34,21 @@ A Node.js library to parse text out of any office file.
 npm i officeparser
 ```
 
+## Command Line usage
+If you have already installed officeParser, then follow below command
+for extracting content from a file sampleFile
+```
+node officeParser.js <fileName>
+```
+
+If you have not installed the library, you can use npx to instantly extract parsed data.
+```
+npx officeparser <fileName>
+```
+
 ----------
 
-**Usage**
+**Library Usage**
 ```js
 const officeParser = require('officeparser');
 

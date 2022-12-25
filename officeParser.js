@@ -10,11 +10,13 @@ const ERRORMSG = {
     extensionUnsupported: (ext) => `${ERRORHEADER}Sorry, OfficeParser currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
     fileCorrupted: (filename) => `${ERRORHEADER}Your file ${filename} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
     fileDoesNotExist: (filename) => `${ERRORHEADER}File ${filename} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
-    locationNotFound: (location) => `${ERRORHEADER}Entered location ${location} is not valid! Check relative paths and reenter. OfficeParser will use root directory as decompress location.`
+    locationNotFound: (location) => `${ERRORHEADER}Entered location ${location} is not valid! Check relative paths and reenter. OfficeParser will use root directory as decompress location.`,
+    improperArguments: `${ERRORHEADER}Improper arguments`
 }
+/** Default sublocation for decompressing files under the current directory. */
+const DEFAULTDECOMPRESSSUBLOCATION = "officeDist";
 /** Location for decompressing files. Default is "officeDist" */
-const DECOMPRESSSUBLOCATION = "officeDist"
-let decompressLocation = DECOMPRESSSUBLOCATION;
+let decompressSubLocation = DEFAULTDECOMPRESSSUBLOCATION;
 /** Flag to output errors to console other than normal error handling. Default is false as we anyway push the message for error handling. */
 let outputErrorToConsole = false;
 
@@ -74,7 +76,7 @@ function parseWord(filename, callback, deleteOfficeDist = true) {
 
     const contentFile = 'word/document.xml';
     decompress(filename,
-        decompressLocation,
+        decompressSubLocation,
         { filter: x => x.path == contentFile }
     )
     .then(files => {
@@ -83,14 +85,14 @@ function parseWord(filename, callback, deleteOfficeDist = true) {
             return callback(undefined, ERRORMSG.fileCorrupted(filename));
         }
 
-        return fs.readFileSync(`${decompressLocation}/${contentFile}`, 'utf8');
+        return fs.readFileSync(`${decompressSubLocation}/${contentFile}`, 'utf8');
     })
     .then(xmlContent => parseStringPromise(xmlContent))
     .then(xmlObjects => {
         extractTextFromWordXmlObjects(xmlObjects);
         const returnCallbackPromise = new Promise((res, rej) => {
             if (deleteOfficeDist)
-                rimraf(decompressLocation, err => {
+                rimraf(decompressSubLocation, err => {
                     if (err)
                         consoleError(err);
                     res();
@@ -152,7 +154,7 @@ function parsePowerPoint(filename, callback, deleteOfficeDist = true) {
     ]
 
     decompress(filename,
-        decompressLocation,
+        decompressSubLocation,
         { filter: x => contentFiles.findIndex(fileRegex => x.path.match(fileRegex)) > -1 }
     )
     .then(files => {
@@ -165,7 +167,7 @@ function parsePowerPoint(filename, callback, deleteOfficeDist = true) {
         }
 
         // Returning an array of all the xml contents read using fs.readFileSync
-        return files.map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8'))
+        return files.map(file => fs.readFileSync(`${decompressSubLocation}/${file.path}`, 'utf8'))
     })
     .then(xmlContentArray => Promise.all(xmlContentArray.map(xmlContent => parseStringPromise(xmlContent))))    // Returning an array of all parseStringPromise responses
     .then(xmlObjectsArray => {
@@ -173,7 +175,7 @@ function parsePowerPoint(filename, callback, deleteOfficeDist = true) {
 
         const returnCallbackPromise = new Promise((res, rej) => {
             if (deleteOfficeDist)
-                rimraf(decompressLocation, err => {
+                rimraf(decompressSubLocation, err => {
                     if (err)
                         consoleError(err);
                     res();
@@ -289,7 +291,7 @@ function parseExcel(filename, callback, deleteOfficeDist = true) {
     ]
 
     decompress(filename,
-        decompressLocation,
+        decompressSubLocation,
         { filter: x => contentFiles.findIndex(fileRegex => x.path.match(fileRegex)) > -1 }
     )
     .then(files => {
@@ -303,7 +305,7 @@ function parseExcel(filename, callback, deleteOfficeDist = true) {
         }
 
         // Returning a 2dArray of all the xml contents read using fs.readFileSync and separated by array elements
-        return files2dArray.map(files => files.map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8')))
+        return files2dArray.map(files => files.map(file => fs.readFileSync(`${decompressSubLocation}/${file.path}`, 'utf8')))
     })
     .then(xmlContent2dArray => Promise.all(xmlContent2dArray.map(xmlContentArray => Promise.all(xmlContentArray.map(xmlContent => parseStringPromise(xmlContent, false))))))    // Returning a 2dArray of all parseStringPromise responses
     .then(xmlObjects2dArray => {
@@ -311,7 +313,7 @@ function parseExcel(filename, callback, deleteOfficeDist = true) {
 
         const returnCallbackPromise = new Promise((res, rej) => {
             if (deleteOfficeDist)
-                rimraf(decompressLocation, err => {
+                rimraf(decompressSubLocation, err => {
                     if (err)
                         consoleError(err);
                     res();
@@ -368,7 +370,7 @@ function parseOpenOffice(filename, callback, deleteOfficeDist = true) {
 
     const contentFile = 'content.xml';
     decompress(filename,
-        decompressLocation,
+        decompressSubLocation,
         { filter: x => x.path == contentFile }
     )
     .then(files => {
@@ -377,14 +379,14 @@ function parseOpenOffice(filename, callback, deleteOfficeDist = true) {
             return callback(undefined, ERRORMSG.fileCorrupted(filename));
         }
 
-        return fs.readFileSync(`${decompressLocation}/${contentFile}`, 'utf8');
+        return fs.readFileSync(`${decompressSubLocation}/${contentFile}`, 'utf8');
     })
     .then(xmlContent => parseStringPromise(xmlContent))
     .then(xmlObjects => {
         extractTextFromOpenOfficeXmlObjects(xmlObjects);
         const returnCallbackPromise = new Promise((res, rej) => {
             if (deleteOfficeDist)
-                rimraf(decompressLocation, err => {
+                rimraf(decompressSubLocation, err => {
                     if (err)
                         consoleError(err);
                     res();
@@ -406,6 +408,10 @@ function parseOpenOffice(filename, callback, deleteOfficeDist = true) {
 
 /** Main async function with callback to execute parseOffice for supported files */
 function parseOffice(filename, callback, deleteOfficeDist = true) {
+    if (!fs.existsSync(filename)) {
+        consoleError(ERRORMSG.fileDoesNotExist(filename));
+        return callback(undefined, ERRORMSG.fileDoesNotExist(filename));
+    }
     var extension = filename.split(".").pop().toLowerCase();
 
     switch(extension)
@@ -437,14 +443,14 @@ function parseOffice(filename, callback, deleteOfficeDist = true) {
  */
 function setDecompressionLocation(newLocation) {
     if (newLocation != undefined) {
-        newLocation = `${newLocation}${newLocation.endsWith('/') ? '' : '/'}${DECOMPRESSSUBLOCATION}`
+        newLocation = `${newLocation}${newLocation.endsWith('/') ? '' : '/'}${DEFAULTDECOMPRESSSUBLOCATION}`
 
         if (fs.existsSync(newLocation))
-            decompressLocation = newLocation;
+            decompressSubLocation = newLocation;
         return;
     }
     consoleError(ERRORMSG.locationNotFound(newLocation));
-    decompressLocation = DECOMPRESSSUBLOCATION;
+    decompressSubLocation = DEFAULTDECOMPRESSSUBLOCATION;
 }
 
 /** Enable console output */
@@ -548,3 +554,15 @@ module.exports.parseOfficeAsync = parseOfficeAsync;
 module.exports.setDecompressionLocation = setDecompressionLocation;
 module.exports.enableConsoleOutput = enableConsoleOutput;
 module.exports.disableConsoleOutput = disableConsoleOutput;
+
+if ((process.argv[0].split('/').pop() == "node" || process.argv[0].split('/').pop() == "npx") && (process.argv[1].split('/').pop() == "officeParser.js" || process.argv[1].split('/').pop() == "officeparser")) {
+    if (process.argv.length == 2) {
+        // continue
+    }
+    else if (process.argv.length == 3)
+        parseOfficeAsync(process.argv[2])
+        .then(text => console.log(text))
+        .catch(error => console.error(error))
+    else
+        console.error(ERRORMSG.improperArguments)
+}
