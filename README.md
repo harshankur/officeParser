@@ -35,13 +35,12 @@ npm i officeparser
 ```
 
 ## Command Line usage
-If you have already installed officeParser, then follow below command
-for extracting content from a file sampleFile
+If you want to call the installed officeParser.js file, use below command
 ```
-node officeParser.js <fileName>
+node </path/to/officeParser.js> <fileName>
 ```
 
-If you have not installed the library, you can use npx to instantly extract parsed data.
+Otherwise, you can simply use npx to instantly extract parsed data.
 ```
 npx officeparser <fileName>
 ```
