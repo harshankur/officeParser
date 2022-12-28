@@ -12,7 +12,7 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
-* 2022/12/24 - Added command line method to use officeParser with or without installing it and instantly get parsed content on the console.
+* 2022/12/28 - Added command line method to use officeParser with or without installing it and instantly get parsed content on the console.
 * 2022/12/10 - Fixed memory leak issues, bugs related to parsing open document files and improved error handling.
 * 2021/11/21 - Added promise way to existing callback functions.
 * 2020/06/01 - Added error handling and console.log enable/disable methods. Default is set at enabled. Everything backward compatible.
