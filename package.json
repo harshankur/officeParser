@@ -7,7 +7,7 @@
     "officeParser.js",
     "typings/officeParser.d.ts"
   ],
-  "typings": "typings/officeParser.d.ts",
+  "types": "typings/officeParser.d.ts",
   "scripts": {
     "test": "node test/testOfficeParser.js"
   },

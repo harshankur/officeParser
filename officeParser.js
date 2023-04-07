@@ -9,11 +9,11 @@ const rimraf = require('rimraf');
 const ERRORHEADER = "[OfficeParser]: ";
 /** Error messages */
 const ERRORMSG = {
-    extensionUnsupported: (ext) => `${ERRORHEADER}Sorry, OfficeParser currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
-    fileCorrupted: (filename) => `${ERRORHEADER}Your file ${filename} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
-    fileDoesNotExist: (filename) => `${ERRORHEADER}File ${filename} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
-    locationNotFound: (location) => `${ERRORHEADER}Entered location ${location} is not valid! Check relative paths and reenter. OfficeParser will use root directory as decompress location.`,
-    improperArguments: `${ERRORHEADER}Improper arguments`
+    extensionUnsupported: (ext) =>      `${ERRORHEADER}Sorry, OfficeParser currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
+    fileCorrupted:        (filename) => `${ERRORHEADER}Your file ${filename} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
+    fileDoesNotExist:     (filename) => `${ERRORHEADER}File ${filename} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
+    locationNotFound:     (location) => `${ERRORHEADER}Entered location ${location} is not valid! Check relative paths and reenter. OfficeParser will use root directory as decompress location.`,
+    improperArguments:                  `${ERRORHEADER}Improper arguments`
 }
 /** Default sublocation for decompressing files under the current directory. */
 const DEFAULTDECOMPRESSSUBLOCATION = "officeDist";
@@ -43,8 +43,6 @@ const parseStringPromise = (xml, ignoreAttrs = true) => new Promise((resolve, re
         resolve(result);
     });
 });
-
-
 
 
 /** Main function for parsing text from word files
@@ -537,7 +535,7 @@ var parsePowerPointAsync = function (filename, deleteOfficeDist = true) {
                 if (err)
                     return reject(err);
                 return resolve(data);
-            },deleteOfficeDist);
+            }, deleteOfficeDist);
         }
         catch (error) {
             return reject(error);
@@ -557,7 +555,7 @@ var parseExcelAsync = function (filename, deleteOfficeDist = true) {
                 if (err)
                     return reject(err);
                 return resolve(data);
-            },deleteOfficeDist);
+            }, deleteOfficeDist);
         }
         catch (error) {
             return reject(error);
@@ -577,7 +575,7 @@ var parseOpenOfficeAsync = function (filename, deleteOfficeDist = true) {
                 if (err)
                     return reject(err);
                 return resolve(data);
-            },deleteOfficeDist);
+            }, deleteOfficeDist);
         }
         catch (error) {
             return reject(error);
@@ -598,7 +596,7 @@ var parseOfficeAsync = function (filename, deleteOfficeDist = true) {
                 if (err)
                     return reject(err);
                 return resolve(data);
-            },deleteOfficeDist);
+            }, deleteOfficeDist);
         }
         catch (error) {
             return reject(error);
