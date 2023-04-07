@@ -22,13 +22,20 @@ let decompressSubLocation = DEFAULTDECOMPRESSSUBLOCATION;
 /** Flag to output errors to console other than normal error handling. Default is false as we anyway push the message for error handling. */
 let outputErrorToConsole = false;
 
-/** Console error if allowed */
+/** Console error if allowed
+ * @param {string} errorMessage Error message to show on the console
+ * @returns {void}
+ */
 function consoleError(errorMessage) {
     if (outputErrorToConsole)
         console.error(errorMessage);
 }
 
-/** Custom parseString promise as the native has bugs */
+/** Custom parseString promise as the native has bugs
+ * @param {string} xml The xml string from the doc file
+ * @param {boolean} [ignoreAttrs=true] Optional: Ignore attributes part of xml and focus only on the content.
+ * @returns {Promise<string>}
+ */
 const parseStringPromise = (xml, ignoreAttrs = true) => new Promise((resolve, reject) => {
     xml2js.parseString(xml, { "ignoreAttrs": ignoreAttrs }, (err, result) => {
         if (err)
@@ -40,7 +47,12 @@ const parseStringPromise = (xml, ignoreAttrs = true) => new Promise((resolve, re
 
 
 
-/** Main function for parsing text from word files */
+/** Main function for parsing text from word files
+ * @param {string} filename File path
+ * @param {function} callback Callback function that returns value or error
+ * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @returns {void}
+ */
 function parseWord(filename, callback, deleteOfficeDist = true) {
     if (!fs.existsSync(filename)) {
         consoleError(ERRORMSG.fileDoesNotExist(filename));
@@ -113,7 +125,12 @@ function parseWord(filename, callback, deleteOfficeDist = true) {
     });
 }
 
-/** Main function for parsing text from PowerPoint files */
+/** Main function for parsing text from PowerPoint files
+ * @param {string} filename File path
+ * @param {function} callback Callback function that returns value or error
+ * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @returns {void}
+ */
 function parsePowerPoint(filename, callback, deleteOfficeDist = true) {
     if (!fs.existsSync(filename)) {
         consoleError(ERRORMSG.fileDoesNotExist(filename));
@@ -196,7 +213,12 @@ function parsePowerPoint(filename, callback, deleteOfficeDist = true) {
     });
 }
 
-/** Main function for parsing text from Excel files */
+/** Main function for parsing text from Excel files
+ * @param {string} filename File path
+ * @param {function} callback Callback function that returns value or error
+ * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @returns {void}
+ */
 function parseExcel(filename, callback, deleteOfficeDist = true) {
     if (!fs.existsSync(filename)) {
         consoleError(ERRORMSG.fileDoesNotExist(filename));
@@ -335,7 +357,12 @@ function parseExcel(filename, callback, deleteOfficeDist = true) {
 }
 
 
-/** Main function for parsing text from open office files */
+/** Main function for parsing text from open office files
+ * @param {string} filename File path
+ * @param {function} callback Callback function that returns value or error
+ * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @returns {void}
+ */
 function parseOpenOffice(filename, callback, deleteOfficeDist = true) {
     if (!fs.existsSync(filename)) {
         consoleError(ERRORMSG.fileDoesNotExist(filename));
@@ -408,7 +435,12 @@ function parseOpenOffice(filename, callback, deleteOfficeDist = true) {
 }
 
 
-/** Main async function with callback to execute parseOffice for supported files */
+/** Main async function with callback to execute parseOffice for supported files
+ * @param {string} filename File path
+ * @param {function} callback Callback function that returns value or error
+ * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @returns {void}
+ */
 function parseOffice(filename, callback, deleteOfficeDist = true) {
     if (!fs.existsSync(filename)) {
         consoleError(ERRORMSG.fileDoesNotExist(filename));
@@ -442,6 +474,7 @@ function parseOffice(filename, callback, deleteOfficeDist = true) {
 /**
  * Set decompression directory. The final decompressed data will be put inside officeDist folder within your directory
  * @param {string} newLocation Relative path to the directory that will contain officeDist folder with decompressed data
+ * @returns {void}
  */
 function setDecompressionLocation(newLocation) {
     if (newLocation != undefined) {
@@ -455,18 +488,28 @@ function setDecompressionLocation(newLocation) {
     decompressSubLocation = DEFAULTDECOMPRESSSUBLOCATION;
 }
 
-/** Enable console output */
+/** Enable console output
+ * @returns {void}
+ */
 function enableConsoleOutput() {
     outputErrorToConsole = true;
 }
 
-/** Disabled console output */
+/** Disabled console output
+ * @returns {void}
+ */
 function disableConsoleOutput() {
     outputErrorToConsole = false;
 }
 
 
 // #region Promise versions of above functions
+
+/** Async function that can be used with await to execute parseWord. Or it can be used with promises.
+ * @param {string} filename File path
+ * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @returns {void}
+ */
 var parseWordAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
         try {
@@ -482,6 +525,11 @@ var parseWordAsync = function (filename, deleteOfficeDist = true) {
     })
 }
 
+/** Async function that can be used with await to execute parsePowerPoint. Or it can be used with promises.
+ * @param {string} filename File path
+ * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @returns {void}
+ */
 var parsePowerPointAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
         try {
@@ -497,6 +545,11 @@ var parsePowerPointAsync = function (filename, deleteOfficeDist = true) {
     })
 }
 
+/** Async function that can be used with await to execute parseExcel. Or it can be used with promises.
+ * @param {string} filename File path
+ * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @returns {void}
+ */
 var parseExcelAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
         try {
@@ -512,6 +565,11 @@ var parseExcelAsync = function (filename, deleteOfficeDist = true) {
     })
 }
 
+/** Async function that can be used with await to execute parseOpenOffice. Or it can be used with promises.
+ * @param {string} filename File path
+ * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @returns {void}
+ */
 var parseOpenOfficeAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
         try {
@@ -527,6 +585,12 @@ var parseOpenOfficeAsync = function (filename, deleteOfficeDist = true) {
     })
 }
 
+/**
+ * Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
+ * @param {string} filename File path
+ * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @returns {void}
+ */
 var parseOfficeAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
         try {
@@ -557,6 +621,8 @@ module.exports.setDecompressionLocation = setDecompressionLocation;
 module.exports.enableConsoleOutput = enableConsoleOutput;
 module.exports.disableConsoleOutput = disableConsoleOutput;
 
+
+// Run this library on CLI
 if ((process.argv[0].split('/').pop() == "node" || process.argv[0].split('/').pop() == "npx") && (process.argv[1].split('/').pop() == "officeParser.js" || process.argv[1].split('/').pop() == "officeparser")) {
     if (process.argv.length == 2) {
         // continue
