@@ -506,7 +506,7 @@ function disableConsoleOutput() {
 /** Async function that can be used with await to execute parseWord. Or it can be used with promises.
  * @param {string} filename File path
  * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
- * @returns {void}
+ * @returns {Promise<string>}
  */
 var parseWordAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
@@ -526,7 +526,7 @@ var parseWordAsync = function (filename, deleteOfficeDist = true) {
 /** Async function that can be used with await to execute parsePowerPoint. Or it can be used with promises.
  * @param {string} filename File path
  * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
- * @returns {void}
+ * @returns {Promise<string>}
  */
 var parsePowerPointAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
@@ -546,7 +546,7 @@ var parsePowerPointAsync = function (filename, deleteOfficeDist = true) {
 /** Async function that can be used with await to execute parseExcel. Or it can be used with promises.
  * @param {string} filename File path
  * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
- * @returns {void}
+ * @returns {Promise<string>}
  */
 var parseExcelAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
@@ -566,7 +566,7 @@ var parseExcelAsync = function (filename, deleteOfficeDist = true) {
 /** Async function that can be used with await to execute parseOpenOffice. Or it can be used with promises.
  * @param {string} filename File path
  * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
- * @returns {void}
+ * @returns {Promise<string>}
  */
 var parseOpenOfficeAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
@@ -587,7 +587,7 @@ var parseOpenOfficeAsync = function (filename, deleteOfficeDist = true) {
  * Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
  * @param {string} filename File path
  * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
- * @returns {void}
+ * @returns {Promise<string>}
  */
 var parseOfficeAsync = function (filename, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
