@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-const decompress = require('decompress');
-const xml2js = require('xml2js')
-const fs = require('fs')
-const rimraf = require('rimraf');
+const decompress            = require('decompress');
+const xml2js                = require('xml2js')
+const fs                    = require('fs')
+const rimraf                = require('rimraf');
+const fileType              = require('file-type');
 
 /** Header for error messages */
 const ERRORHEADER = "[OfficeParser]: ";
@@ -13,7 +14,8 @@ const ERRORMSG = {
     fileCorrupted:        (filename) => `${ERRORHEADER}Your file ${filename} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
     fileDoesNotExist:     (filename) => `${ERRORHEADER}File ${filename} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
     locationNotFound:     (location) => `${ERRORHEADER}Entered location ${location} is not valid! Check relative paths and reenter. OfficeParser will use root directory as decompress location.`,
-    improperArguments:                  `${ERRORHEADER}Improper arguments`
+    improperArguments:                  `${ERRORHEADER}Improper arguments`,
+    improperBuffers:                    `${ERRORHEADER}Error occured while reading the file buffers`
 }
 /** Default sublocation for decompressing files under the current directory. */
 const DEFAULTDECOMPRESSSUBLOCATION = "officeDist";
@@ -434,39 +436,82 @@ function parseOpenOffice(filename, callback, deleteOfficeDist = true) {
 
 
 /** Main async function with callback to execute parseOffice for supported files
- * @param {string} filename File path
+ * @param {string | Buffer} file File path or file buffers
  * @param {function} callback Callback function that returns value or error
  * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
  * @returns {void}
  */
-function parseOffice(filename, callback, deleteOfficeDist = true) {
-    if (!fs.existsSync(filename)) {
-        consoleError(ERRORMSG.fileDoesNotExist(filename));
-        return callback(undefined, ERRORMSG.fileDoesNotExist(filename));
-    }
-    var extension = filename.split(".").pop().toLowerCase();
+function parseOffice(file, callback, deleteOfficeDist = true) {
+    // filename that is to be filled below depending on file input from argument
+    let filename = "";
+    // Prepare file for processing
+    const filePreparedPromise = new Promise((res, rej) =>
+        {
+            // Check if buffer
+            if (Buffer.isBuffer(file))
+            {
+                // Guess file type from buffer
+                fileType.fromBuffer(file)
+                    .then(data =>
+                    {
+                        // temp file name
+                        filename = `${decompressSubLocation}/tempfiles/${Math.floor(Math.random()*100000000)}.${data.ext}`;
+                        // create directory if it does not exist
+                        fs.mkdirSync(`${decompressSubLocation}/tempfiles`, { recursive: true });
+                        // write new file
+                        fs.writeFileSync(filename, file);
+                        // resolve promise
+                        res();
+                    })
+                    .catch(() => rej());
+                return;
+            }
 
-    switch(extension)
-    {
-        case "docx":
-            parseWord(filename, (data, err) => callback(data, err), deleteOfficeDist);
-            return;
-        case "pptx":
-            parsePowerPoint(filename, (data, err) => callback(data, err), deleteOfficeDist);
-            return;
-        case "xlsx":
-            parseExcel(filename, (data, err) => callback(data, err), deleteOfficeDist);
-            return;
-        case "odt":
-        case "odp":
-        case "ods":
-            parseOpenOffice(filename, (data, err) => callback(data, err), deleteOfficeDist);
-            return;
+            // Treat as filepath
+            filename = file;
+            // resolve promise
+            res();
+        })
 
-        default:
-            consoleError(ERRORMSG.extensionUnsupported(extension));
-            callback(undefined, ERRORMSG.extensionUnsupported(extension));
-    }
+    // Process filePreparedPromise resolution.
+    filePreparedPromise
+        .then(() =>
+        {
+            // Check if file exists
+            if (!fs.existsSync(filename)) {
+                consoleError(ERRORMSG.fileDoesNotExist(filename));
+                return callback(undefined, ERRORMSG.fileDoesNotExist(filename));
+            }
+            var extension = filename.split(".").pop().toLowerCase();
+
+            // Switch between parsing functions depending on extension.
+            switch(extension)
+            {
+                case "docx":
+                    parseWord(filename, (data, err) => callback(data, err), deleteOfficeDist);
+                    return;
+                case "pptx":
+                    parsePowerPoint(filename, (data, err) => callback(data, err), deleteOfficeDist);
+                    return;
+                case "xlsx":
+                    parseExcel(filename, (data, err) => callback(data, err), deleteOfficeDist);
+                    return;
+                case "odt":
+                case "odp":
+                case "ods":
+                    parseOpenOffice(filename, (data, err) => callback(data, err), deleteOfficeDist);
+                    return;
+        
+                default:
+                    consoleError(ERRORMSG.extensionUnsupported(extension));
+                    callback(undefined, ERRORMSG.extensionUnsupported(extension));
+            }
+        })
+        .catch(() =>
+        {
+            consoleError(ERRORMSG.improperBuffers);
+            callback(undefined, ERRORMSG.improperBuffers);
+        })
 }
 
 /**
@@ -585,14 +630,14 @@ var parseOpenOfficeAsync = function (filename, deleteOfficeDist = true) {
 
 /**
  * Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
- * @param {string} filename File path
+ * @param {string | Buffer} file File path or file buffers
  * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
  * @returns {Promise<string>}
  */
-var parseOfficeAsync = function (filename, deleteOfficeDist = true) {
+var parseOfficeAsync = function (file, deleteOfficeDist = true) {
     return new Promise((resolve, reject) => {
         try {
-            parseOffice(filename, function (data, err) {
+            parseOffice(file, function (data, err) {
                 if (err)
                     return reject(err);
                 return resolve(data);

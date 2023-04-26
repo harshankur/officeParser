@@ -28,12 +28,12 @@ export function parseExcel(filename: string, callback: Function, deleteOfficeDis
  */
 export function parseOpenOffice(filename: string, callback: Function, deleteOfficeDist?: boolean): void;
 /** Main async function with callback to execute parseOffice for supported files
- * @param {string} filename File path
+ * @param {string | Buffer} file File path or file buffers
  * @param {function} callback Callback function that returns value or error
  * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
  * @returns {void}
  */
-export function parseOffice(filename: string, callback: Function, deleteOfficeDist?: boolean): void;
+export function parseOffice(file: string | Buffer, callback: Function, deleteOfficeDist?: boolean): void;
 /** Async function that can be used with await to execute parseWord. Or it can be used with promises.
  * @param {string} filename File path
  * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
@@ -60,11 +60,11 @@ export function parseExcelAsync(filename: string, deleteOfficeDist?: boolean): P
 export function parseOpenOfficeAsync(filename: string, deleteOfficeDist?: boolean): Promise<string>;
 /**
  * Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
- * @param {string} filename File path
+ * @param {string | Buffer} file File path or file buffers
  * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
  * @returns {Promise<string>}
  */
-export function parseOfficeAsync(filename: string, deleteOfficeDist?: boolean): Promise<string>;
+export function parseOfficeAsync(file: string | Buffer, deleteOfficeDist?: boolean): Promise<string>;
 /**
  * Set decompression directory. The final decompressed data will be put inside officeDist folder within your directory
  * @param {string} newLocation Relative path to the directory that will contain officeDist folder with decompressed data

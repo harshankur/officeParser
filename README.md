@@ -12,6 +12,7 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
+* 2023/04/26 - Added support for file buffers as argument for filepath for parseOffice and parseOfficeAsync
 * 2023/04/07 - Added typings to methods to help with Typescript projects.
 * 2022/12/28 - Added command line method to use officeParser with or without installing it and instantly get parsed content on the console.
 * 2022/12/10 - Fixed memory leak issues, bugs related to parsing open document files and improved error handling.
@@ -62,12 +63,8 @@ officeParser.parseOffice("/path/to/officeFile", function(data, err){
 // promise
 officeParser.parseOfficeAsync("/path/to/officeFile");
 // "data" string in the promise here is the text parsed from the office file passed in the argument above
-.then((data) => {
-    console.log(data)
-})
-.catch(err) => {
-    console.log(err)
-}
+.then((data) => console.log(data))
+.catch((err) => console.error(err))
 
 // async/await
 try {
@@ -78,6 +75,18 @@ try {
     // resolve error
     console.log(err);
 }
+
+// USING FILE BUFFERS
+// instead of file path, you can also pass file buffers of one of the supported files
+// on parseOffice or parseOfficeAsync functions.
+
+// get file buffers
+const fileBuffers = fs.readFileAsync("/path/to/officeFile");
+// get parsed text from officeParser
+// NOTE: Only works with parseOffice. Old functions are not supported.
+officeParser.parseOfficeAsync(fileBuffers);
+.then((data) => console.log(data))
+.catch((err) => console.error(err))
 ```
 
 **Please take note: I have breached convention in placing err as second argument in my callback but please understand that I had to do it to not break other people's existing modules.**
@@ -113,12 +122,8 @@ officeParser.parseOffice("/path/to/officeFile", function(data, err){
 
 // promise
 officeParser.parseOfficeAsync("/path/to/officeFile", false);
-.then((data) => {
-    console.log(data)
-})
-.catch(err) => {
-    console.log(err)
-}
+.then((data) => console.log(data))
+.catch((err) => console.error(err))
 
 // async/await
 try {
@@ -148,9 +153,7 @@ officeParser.parseOfficeAsync("/Users/harsh/Desktop/files/mySlides.pptx");
     var newText = data + "look, I can parse a powerpoint file"
     callSomeOtherFunction(newText);
 })
-.catch(err) => {
-    console.log(err)
-}
+.catch((err) => console.error(err))
 
 // Using relative path for file is also fine
 officeParser.parseOffice("files/myWorkSheet.ods", function(data, err){
@@ -275,36 +278,28 @@ officeParser.parseWordAsync("C:\\files\\myText.docx");
     let newText1 = data1 + "look, I can parse a word file";
     callSomeOtherFunction(newText1);
 })
-.catch(err) => {
-    console.log(err)
-}
+.catch((err) => console.error(err))
 
 officeParser.parsePowerPointAsync("/Users/harsh/Desktop/files/mySlides.pptx");
 .then((data) => {
     let newText2 = data2 + "look, I can parse a powerpoint file";
     callSomeOtherFunction(newText2);
 })
-.catch(err) => {
-    console.log(err)
-}
+.catch((err) => console.error(err))
 
 officeParser.parseExcelAsync("files/myWorkSheet.xlsx");
 .then((data) => {
     let newText3 = data3 + "look, I can parse an excel file";
     callSomeOtherFunction(newText3);
 })
-.catch(err) => {
-    console.log(err)
-}
+.catch((err) => console.error(err))
 
 officeParser.parseOpenOfficeAsync("files/myDocument.odt");
 .then((data) => {
     let newText4 = data4 + "look, I can parse an OpenOffice file";
     callSomeOtherFunction(newText4);
 })
-.catch(err) => {
-    console.log(err)
-}
+.catch((err) => console.error(err))
 
 
 // async/await
