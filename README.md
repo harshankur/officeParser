@@ -97,6 +97,7 @@ officeParser.parseOfficeAsync(fileBuffers);
 *Optionally add a config object as 3rd variable to parseOffice for the following configurations*
 | flag                 | datatype | explanation                                                                                                                                                                                                                                     |
 |----------------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| tempFilesLocation    | string   | The directory where officeparser stores the temp files . The final decompressed data will be put inside officeParserTemp folder within your directory. **Please ensure that this directory actually exists.** Default is officeParsertemp.      |
 | preserveTempFiles    | boolean  | Flag to not delete the internal content files and the possible duplicate temp files that it uses after unzipping office files. Default is false. It always deletes all of those files.                                                          |
 | outputErrorToConsole | boolean  | Flag to show all the logs to console in case of an error.                                                                                                                                                                                       |
 | newlineDelimiter     | string   | The delimiter used for every new line in places that allow multiline text like word. Default is \n.                                                                                                                                             |
@@ -172,34 +173,9 @@ function searchForTermInOfficeFile(searchterm, filepath): Promise<boolean> {
         .then(data => data.indexOf(searchterm) != -1)
 }
 ```
-
-
-\
 \
 **Please take note: I have breached convention in placing err as second argument in my callback but please understand that I had to do it to not break other people's existing modules.**
 
-*Optionally change decompression location for office Files at personalised locations for environments with restricted write access*
-
-```js
-const officeParser = require('officeparser');
-
-// Default decompress location for office Files is "officeDist" in the directory where Node is started. 
-// Put this file before parseOffice method to take effect.
-officeParser.setDecompressionLocation("/tmp");  // New decompression location would be "/tmp/officeDist"
-
-// P.S.: Setting location on a Windows environment with '\' hierarchy requires to be entered twice '\\'
-officeParser.setDecompressionLocation("C:\\tmp");  // New decompression location would be "C:\tmp\officeDist"
-
-
-officeParser.parseOffice("/path/to/officeFile", function(data, err){
-    // "data" string in the callback here is the text parsed from the office file passed in the first argument above
-    if (err) {
-        console.log(err);
-        return;
-    }
-    console.log(data);
-})
-```
 
 ## Known Bugs
 1. Inconsistency and incorrectness in the positioning of footnotes and endnotes in .docx files where the footnotes and endnotes would end up at the end of the parsed text whereas it would be positioned exactly after the referenced word in .odt files.

@@ -14,14 +14,12 @@ const ERRORMSG = {
     extensionUnsupported: (ext) =>      `Sorry, OfficeParser currently support docx, pptx, xlsx, odt, odp, ods, pdf files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
     fileCorrupted:        (filepath) => `Your file ${filepath} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
     fileDoesNotExist:     (filepath) => `File ${filepath} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
-    locationNotFound:     (location) => `Entered location ${location} is not valid! Check relative paths and reenter. OfficeParser will use root directory as decompress location.`,
+    locationNotFound:     (location) => `Entered location ${location} is not reachable! Please make sure that the entered directory location exists. Check relative paths and reenter.`,
     improperArguments:                  `Improper arguments`,
     improperBuffers:                    `Error occured while reading the file buffers`
 }
 /** Default sublocation for decompressing files under the current directory. */
-const DEFAULTDECOMPRESSSUBLOCATION = "officeDist";
-/** Location for decompressing files. Default is "officeDist" */
-let decompressSubLocation = DEFAULTDECOMPRESSSUBLOCATION;
+const DEFAULTDECOMPRESSSUBLOCATION = "officeParserTemp";
 
 /** Console error if allowed
  * @param {string} errorMessage         Error message to show on the console
@@ -44,11 +42,12 @@ const parseString = (xml) => {
 };
 
 /** @typedef {Object} OfficeParserConfig
- * @property {boolean} preserveTempFiles    Flag to not delete the internal content files and the duplicate temp files that it uses after unzipping office files. Default is false. It deletes all of those files.
- * @property {boolean} outputErrorToConsole Flag to show all the logs to console in case of an error irrespective of your own handling.
- * @property {string}  newlineDelimiter     The delimiter used for every new line in places that allow multiline text like word. Default is \n.
- * @property {boolean} ignoreNotes          Flag to ignore notes from parsing in files like powerpoint. Default is false. It includes notes in the parsed text by default.
- * @property {boolean} putNotesAtLast       Flag, if set to true, will collectively put all the parsed text from notes at last in files like powerpoint. Default is false. It puts each notes right after its main slide content. If ignoreNotes is set to true, this flag is also ignored.
+ * @property {string}  [tempFilesLocation]    The directory where officeparser stores the temp files . The final decompressed data will be put inside officeParserTemp folder within your directory. Please ensure that this directory actually exists. Default is officeParsertemp.
+ * @property {boolean} [preserveTempFiles]    Flag to not delete the internal content files and the duplicate temp files that it uses after unzipping office files. Default is false. It deletes all of those files.
+ * @property {boolean} [outputErrorToConsole] Flag to show all the logs to console in case of an error irrespective of your own handling.
+ * @property {string}  [newlineDelimiter]     The delimiter used for every new line in places that allow multiline text like word. Default is \n.
+ * @property {boolean} [ignoreNotes]          Flag to ignore notes from parsing in files like powerpoint. Default is false. It includes notes in the parsed text by default.
+ * @property {boolean} [putNotesAtLast]       Flag, if set to true, will collectively put all the parsed text from notes at last in files like powerpoint. Default is false. It puts each notes right after its main slide content. If ignoreNotes is set to true, this flag is also ignored.
  */
 
 
@@ -64,7 +63,7 @@ function parseWord(filepath, callback, config) {
     const footnotesFile   = 'word/footnotes.xml';
     const endnotesFile    = 'word/endnotes.xml';
     /** The decompress location which contains the filename in it */
-    const decompressLocation = `${decompressSubLocation}/${filepath.split("/").pop()}`;
+    const decompressLocation = `${config.tempFilesLocation}/${filepath.split("/").pop()}`;
     decompress(filepath,
         decompressLocation,
         { filter: x => [mainContentFile, footnotesFile, endnotesFile].includes(x.path) }
@@ -127,7 +126,7 @@ function parsePowerPoint(filepath, callback, config) {
     const slidesRegex   = /ppt\/slides\/slide\d+.xml/g;
 
     /** The decompress location which contains the filename in it */
-    const decompressLocation = `${decompressSubLocation}/${filepath.split("/").pop()}`;
+    const decompressLocation = `${config.tempFilesLocation}/${filepath.split("/").pop()}`;
     decompress(filepath,
         decompressLocation,
         { filter: x => x.path.match(config.ignoreNotes ? slidesRegex : allFilesRegex) }
@@ -195,7 +194,7 @@ function parseExcel(filepath, callback, config) {
     const stringsFilePath = 'xl/sharedStrings.xml';
 
     /** The decompress location which contains the filename in it */
-    const decompressLocation = `${decompressSubLocation}/${filepath.split("/").pop()}`;
+    const decompressLocation = `${config.tempFilesLocation}/${filepath.split("/").pop()}`;
     decompress(filepath,
         decompressLocation,
         { filter: x => ([sheetsRegex, drawingsRegex, chartsRegex].findIndex(fileRegex => x.path.match(fileRegex)) > -1) || (x.path == stringsFilePath )}
@@ -306,7 +305,7 @@ function parseOpenOffice(filepath, callback, config) {
     const objectContentFilesRegex = /Object \d+\/content.xml/g;
 
     /** The decompress location which contains the filename in it */
-    const decompressLocation = `${decompressSubLocation}/${filepath.split("/").pop()}`;
+    const decompressLocation = `${config.tempFilesLocation}/${filepath.split("/").pop()}`;
     decompress(filepath,
         decompressLocation,
         { filter: x => x.path == mainContentFilePath || x.path.match(objectContentFilesRegex) }
@@ -442,16 +441,32 @@ function parsePdf(filepath, callback, config) {
 }
 
 /** Main async function with callback to execute parseOffice for supported files
- * @param {string | Buffer}    file     File path or file buffers
- * @param {function}           callback Callback function that returns value or error
- * @param {OfficeParserConfig} config   [OPTIONAL]: Config Object for officeParser
+ * @param {string | Buffer}    file        File path or file buffers
+ * @param {function}           callback    Callback function that returns value or error
+ * @param {OfficeParserConfig} [config={}] [OPTIONAL]: Config Object for officeParser
  * @returns {void}
  */
 function parseOffice(file, callback, config = {}) {
+    const internalConfig = { ...config };
+    // Check if decompress location in the config is present.
+    // If it is valid, we set the final decompression location in the config.
+    // If it is not valid, we reject the promise with appropriate error message.
+    if (!internalConfig.tempFilesLocation)
+        internalConfig.tempFilesLocation = DEFAULTDECOMPRESSSUBLOCATION;
+    else {
+        const tempFilesLocation = `${internalConfig.tempFilesLocation}${internalConfig.tempFilesLocation.endsWith('/') ? '' : '/'}${DEFAULTDECOMPRESSSUBLOCATION}`;
+        if (!fs.existsSync(internalConfig.tempFilesLocation))
+        {
+            callback(undefined, ERRORMSG.locationNotFound(internalConfig.tempFilesLocation));
+            return;
+        }
+        internalConfig.tempFilesLocation = tempFilesLocation;
+    }
+
     // Prepare file for processing
     const filePreparedPromise = new Promise((res, rej) => {
             // create temp file subdirectory if it does not exist
-            fs.mkdirSync(`${decompressSubLocation}/tempfiles`, { recursive: true });
+            fs.mkdirSync(`${internalConfig.tempFilesLocation}/tempfiles`, { recursive: true });
 
             // Check if buffer
             if (Buffer.isBuffer(file)) {
@@ -460,7 +475,7 @@ function parseOffice(file, callback, config = {}) {
                     .then(data =>
                     {
                         // temp file name
-                        const newfilepath = `${decompressSubLocation}/tempfiles/${new Date().getTime().toString()}.${data.ext.toLowerCase()}`;
+                        const newfilepath = `${internalConfig.tempFilesLocation}/tempfiles/${new Date().getTime().toString()}.${data.ext.toLowerCase()}`;
                         // write new file
                         fs.writeFileSync(newfilepath, file);
                         // resolve promise
@@ -477,7 +492,7 @@ function parseOffice(file, callback, config = {}) {
                 throw ERRORMSG.fileDoesNotExist(file);
 
             // temp file name
-            const newfilepath = `${decompressSubLocation}/tempfiles/${new Date().getTime().toString()}.${file.split(".").pop().toLowerCase()}`;
+            const newfilepath = `${internalConfig.tempFilesLocation}/tempfiles/${new Date().getTime().toString()}.${file.split(".").pop().toLowerCase()}`;
             // Copy the file into a temp location with the temp name
             fs.copyFileSync(file, newfilepath)
             // resolve promise
@@ -493,21 +508,21 @@ function parseOffice(file, callback, config = {}) {
             // Switch between parsing functions depending on extension.
             switch(extension) {
                 case "docx":
-                    parseWord(filepath, internalCallback, config);
+                    parseWord(filepath, internalCallback, internalConfig);
                     break;
                 case "pptx":
-                    parsePowerPoint(filepath, internalCallback, config);
+                    parsePowerPoint(filepath, internalCallback, internalConfig);
                     break;
                 case "xlsx":
-                    parseExcel(filepath, internalCallback, config);
+                    parseExcel(filepath, internalCallback, internalConfig);
                     break;
                 case "odt":
                 case "odp":
                 case "ods":
-                    parseOpenOffice(filepath, internalCallback, config);
+                    parseOpenOffice(filepath, internalCallback, internalConfig);
                     break;
                 case "pdf":
-                    parsePdf(filepath, internalCallback, config);
+                    parsePdf(filepath, internalCallback, internalConfig);
                     break;
 
                 default:
@@ -517,29 +532,29 @@ function parseOffice(file, callback, config = {}) {
             /** Internal callback function that calls the user's callback function passed in argument and removes the temp files if required */
             function internalCallback(data, err) {
                 if (err)
-                    consoleError(err, config.outputErrorToConsole)
+                    consoleError(err, internalConfig.outputErrorToConsole)
                 // Call the original callback
                 callback(data, err);
                 // Check if we need to preserve unzipped content files or delete them.
-                if (config.preserveTempFiles)
+                if (internalConfig.preserveTempFiles)
                     return;
                 // Delete decompress sublocation.
-                rimraf(decompressSubLocation, rimrafErr => consoleError(rimrafErr, config.outputErrorToConsole));
+                rimraf(internalConfig.tempFilesLocation, rimrafErr => consoleError(rimrafErr, internalConfig.outputErrorToConsole));
             }
         })
         .catch(error => {
-            consoleError(error, config.outputErrorToConsole);
+            consoleError(error, internalConfig.outputErrorToConsole);
             callback(undefined, error);
         });
 }
 
 /**
  * Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
- * @param {string | Buffer}    file   File path or file buffers
- * @param {OfficeParserConfig} config [OPTIONAL]: Config Object for officeParser
+ * @param {string | Buffer}    file        File path or file buffers
+ * @param {OfficeParserConfig} [config={}] [OPTIONAL]: Config Object for officeParser
  * @returns {Promise<string>}
  */
-function parseOfficeAsync (file, config) {
+function parseOfficeAsync (file, config = {}) {
     return new Promise((res, rej) => {
         parseOffice(file, function (data, err) {
             if (err)
@@ -549,26 +564,10 @@ function parseOfficeAsync (file, config) {
     });
 }
 
-/**
- * Set decompression directory. The final decompressed data will be put inside officeDist folder within your directory
- * @param {string} newLocation Relative path to the directory that will contain officeDist folder with decompressed data
- * @returns {void}
- */
-function setDecompressionLocation(newLocation) {
-    if (newLocation != undefined) {
-        newLocation = `${newLocation}${newLocation.endsWith('/') ? '' : '/'}${DEFAULTDECOMPRESSSUBLOCATION}`
-        if (fs.existsSync(newLocation))
-            decompressSubLocation = newLocation;
-        return;
-    }
-    consoleError(ERRORMSG.locationNotFound(newLocation), config.outputErrorToConsole);
-    decompressSubLocation = DEFAULTDECOMPRESSSUBLOCATION;
-}
 
 // Export functions
-module.exports.parseOffice              = parseOffice;
-module.exports.parseOfficeAsync         = parseOfficeAsync;
-module.exports.setDecompressionLocation = setDecompressionLocation;
+module.exports.parseOffice      = parseOffice;
+module.exports.parseOfficeAsync = parseOfficeAsync;
 
 
 // Run this library on CLI
