@@ -447,57 +447,57 @@ function parsePdf(filepath, callback, config) {
  * @returns {void}
  */
 function parseOffice(file, callback, config = {}) {
+    // Make a clone of the config.
     const internalConfig = { ...config };
-    // Check if decompress location in the config is present.
-    // If it is valid, we set the final decompression location in the config.
-    // If it is not valid, we reject the promise with appropriate error message.
-    if (!internalConfig.tempFilesLocation)
-        internalConfig.tempFilesLocation = DEFAULTDECOMPRESSSUBLOCATION;
-    else {
-        const tempFilesLocation = `${internalConfig.tempFilesLocation}${internalConfig.tempFilesLocation.endsWith('/') ? '' : '/'}${DEFAULTDECOMPRESSSUBLOCATION}`;
-        if (!fs.existsSync(internalConfig.tempFilesLocation))
-        {
-            callback(undefined, ERRORMSG.locationNotFound(internalConfig.tempFilesLocation));
-            return;
-        }
-        internalConfig.tempFilesLocation = tempFilesLocation;
-    }
-
     // Prepare file for processing
     const filePreparedPromise = new Promise((res, rej) => {
-            // create temp file subdirectory if it does not exist
-            fs.mkdirSync(`${internalConfig.tempFilesLocation}/tempfiles`, { recursive: true });
-
-            // Check if buffer
-            if (Buffer.isBuffer(file)) {
-                // Guess file type from buffer
-                fileType.fromBuffer(file)
-                    .then(data =>
-                    {
-                        // temp file name
-                        const newfilepath = `${internalConfig.tempFilesLocation}/tempfiles/${new Date().getTime().toString()}.${data.ext.toLowerCase()}`;
-                        // write new file
-                        fs.writeFileSync(newfilepath, file);
-                        // resolve promise
-                        res(newfilepath);
-                    })
-                    .catch(() => rej(ERRORMSG.improperBuffers));
+        // Check if decompress location in the config is present.
+        // If it is valid, we set the final decompression location in the config.
+        // If it is not valid, we reject the promise with appropriate error message.
+        if (!internalConfig.tempFilesLocation)
+            internalConfig.tempFilesLocation = DEFAULTDECOMPRESSSUBLOCATION;
+        else {
+            if (!fs.existsSync(internalConfig.tempFilesLocation))
+            {
+                rej(ERRORMSG.locationNotFound(internalConfig.tempFilesLocation));
                 return;
             }
+            internalConfig.tempFilesLocation = `${internalConfig.tempFilesLocation}${internalConfig.tempFilesLocation.endsWith('/') ? '' : '/'}${DEFAULTDECOMPRESSSUBLOCATION}`;
+        }
 
-            // Not buffers but real file path.
+        // create temp file subdirectory if it does not exist
+        fs.mkdirSync(`${internalConfig.tempFilesLocation}/tempfiles`, { recursive: true });
 
-            // Check if file exists
-            if (!fs.existsSync(file))
-                throw ERRORMSG.fileDoesNotExist(file);
+        // Check if buffer
+        if (Buffer.isBuffer(file)) {
+            // Guess file type from buffer
+            fileType.fromBuffer(file)
+                .then(data =>
+                {
+                    // temp file name
+                    const newfilepath = `${internalConfig.tempFilesLocation}/tempfiles/${new Date().getTime().toString()}.${data.ext.toLowerCase()}`;
+                    // write new file
+                    fs.writeFileSync(newfilepath, file);
+                    // resolve promise
+                    res(newfilepath);
+                })
+                .catch(() => rej(ERRORMSG.improperBuffers));
+            return;
+        }
 
-            // temp file name
-            const newfilepath = `${internalConfig.tempFilesLocation}/tempfiles/${new Date().getTime().toString()}.${file.split(".").pop().toLowerCase()}`;
-            // Copy the file into a temp location with the temp name
-            fs.copyFileSync(file, newfilepath)
-            // resolve promise
-            res(newfilepath);
-        });
+        // Not buffers but real file path.
+
+        // Check if file exists
+        if (!fs.existsSync(file))
+            throw ERRORMSG.fileDoesNotExist(file);
+
+        // temp file name
+        const newfilepath = `${internalConfig.tempFilesLocation}/tempfiles/${new Date().getTime().toString()}.${file.split(".").pop().toLowerCase()}`;
+        // Copy the file into a temp location with the temp name
+        fs.copyFileSync(file, newfilepath)
+        // resolve promise
+        res(newfilepath);
+    });
 
     // Process filePreparedPromise resolution.
     filePreparedPromise
@@ -531,20 +531,22 @@ function parseOffice(file, callback, config = {}) {
 
             /** Internal callback function that calls the user's callback function passed in argument and removes the temp files if required */
             function internalCallback(data, err) {
-                if (err)
-                    consoleError(err, internalConfig.outputErrorToConsole)
-                // Call the original callback
-                callback(data, err);
                 // Check if we need to preserve unzipped content files or delete them.
-                if (internalConfig.preserveTempFiles)
-                    return;
-                // Delete decompress sublocation.
-                rimraf(internalConfig.tempFilesLocation, rimrafErr => consoleError(rimrafErr, internalConfig.outputErrorToConsole));
+                if (!internalConfig.preserveTempFiles)
+                    // Delete decompress sublocation.
+                    rimraf(internalConfig.tempFilesLocation, rimrafErr => consoleError(rimrafErr, internalConfig.outputErrorToConsole));
+
+                // Check if there is an error. Throw if there is an error.
+                if (err)
+                    throw err;
+
+                // Call the original callback
+                callback(data, undefined);
             }
         })
         .catch(error => {
             consoleError(error, internalConfig.outputErrorToConsole);
-            callback(undefined, error);
+            callback(undefined, ERRORHEADER + error);
         });
 }
 
