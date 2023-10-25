@@ -32,6 +32,10 @@ const supportedExtensionTests = [
         ext: "ods",
         testAvailable: true,
     },
+    {
+        ext: "pdf",
+        testAvailable: true
+    }
 ];
 
 /** Local list of supported extensions in test file */
@@ -45,12 +49,12 @@ function getFilename(ext, isContentFile = false) {
 /** Run test for a passed extension */
 function runTest(ext) {
     return officeParser.parseOfficeAsync(getFilename(ext))
-    .then(text =>
-        fs.readFileSync(getFilename(ext, true), 'utf8') == text
-            ? console.log(`[${ext}]=> Passed`)
-            : console.log(`[${ext}]=> Failed`)
-    )
-    .catch(error => console.log("ERROR: " + error))
+        .then(text =>
+            fs.readFileSync(getFilename(ext, true), 'utf8') == text
+                ? console.log(`[${ext}]=> Passed`)
+                : console.log(`[${ext}]=> Failed`)
+        )
+        .catch(error => console.log("ERROR: " + error))
 }
 
 async function runAllTests() {
@@ -87,9 +91,9 @@ if (process.argv.length == 2)
 else if (process.argv.length == 3)
 {
     if (localSupportedExtensionsList.includes(process.argv[2]))
-        officeParser.parseOfficeAsync(getFilename(process.argv[2]))
-        .then(text => console.log(text))
-        .catch(error => console.log("ERROR: " + error))
+        officeParser.parseOfficeAsync(getFilename(process.argv[2]), { preserveTempFiles: true, outputErrorToConsole: true })
+            .then(text => console.log(text))
+            .catch(error => console.log("ERROR: " + error))
     else
         console.error("The requested extension test is not currently available.");
 }
