@@ -38,6 +38,12 @@ const supportedExtensionTests = [
     }
 ];
 
+/** Config file for performing tests */
+const config = {
+    preserveTempFiles: true,
+    outputErrorToConsole: true
+}
+
 /** Local list of supported extensions in test file */
 const localSupportedExtensionsList = supportedExtensionTests.map(test => test.ext);
 
@@ -48,7 +54,7 @@ function getFilename(ext, isContentFile = false) {
 
 /** Run test for a passed extension */
 function runTest(ext) {
-    return officeParser.parseOfficeAsync(getFilename(ext))
+    return officeParser.parseOfficeAsync(getFilename(ext), config)
         .then(text =>
             fs.readFileSync(getFilename(ext, true), 'utf8') == text
                 ? console.log(`[${ext}]=> Passed`)
@@ -91,7 +97,7 @@ if (process.argv.length == 2)
 else if (process.argv.length == 3)
 {
     if (localSupportedExtensionsList.includes(process.argv[2]))
-        officeParser.parseOfficeAsync(getFilename(process.argv[2]), { preserveTempFiles: true, outputErrorToConsole: true })
+        officeParser.parseOfficeAsync(getFilename(process.argv[2]), config)
             .then(text => console.log(text))
             .catch(error => console.log("ERROR: " + error))
     else

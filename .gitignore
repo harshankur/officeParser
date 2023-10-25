@@ -1,5 +1,5 @@
 node_modules/
-officeDist/
+officeParserTemp/
 officeParser.bk.js
 .DS_Store
 test/.DS_Store
