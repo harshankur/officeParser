@@ -1,517 +1,552 @@
 #!/usr/bin/env node
 
-const decompress            = require('decompress');
-const xml2js                = require('xml2js')
-const fs                    = require('fs')
-const rimraf                = require('rimraf');
-const fileType              = require('file-type');
+const decompress    = require('decompress');
+const fs            = require('fs');
+const rimraf        = require('rimraf');
+const fileType      = require('file-type');
+const pdfParse      = require('pdf-parse');
+const { DOMParser } = require('xmldom');
 
 /** Header for error messages */
 const ERRORHEADER = "[OfficeParser]: ";
 /** Error messages */
 const ERRORMSG = {
-    extensionUnsupported: (ext) =>      `${ERRORHEADER}Sorry, OfficeParser currently support docx, pptx, xlsx, odt, odp, ods files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
-    fileCorrupted:        (filename) => `${ERRORHEADER}Your file ${filename} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
-    fileDoesNotExist:     (filename) => `${ERRORHEADER}File ${filename} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
-    locationNotFound:     (location) => `${ERRORHEADER}Entered location ${location} is not valid! Check relative paths and reenter. OfficeParser will use root directory as decompress location.`,
-    improperArguments:                  `${ERRORHEADER}Improper arguments`,
-    improperBuffers:                    `${ERRORHEADER}Error occured while reading the file buffers`
+    extensionUnsupported: (ext) =>      `Sorry, OfficeParser currently support docx, pptx, xlsx, odt, odp, ods, pdf files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
+    fileCorrupted:        (filepath) => `Your file ${filepath} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
+    fileDoesNotExist:     (filepath) => `File ${filepath} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
+    locationNotFound:     (location) => `Entered location ${location} is not valid! Check relative paths and reenter. OfficeParser will use root directory as decompress location.`,
+    improperArguments:                  `Improper arguments`,
+    improperBuffers:                    `Error occured while reading the file buffers`
 }
 /** Default sublocation for decompressing files under the current directory. */
 const DEFAULTDECOMPRESSSUBLOCATION = "officeDist";
 /** Location for decompressing files. Default is "officeDist" */
 let decompressSubLocation = DEFAULTDECOMPRESSSUBLOCATION;
-/** Flag to output errors to console other than normal error handling. Default is false as we anyway push the message for error handling. */
-let outputErrorToConsole = false;
 
 /** Console error if allowed
- * @param {string} errorMessage Error message to show on the console
+ * @param {string} errorMessage         Error message to show on the console
+ * @param {string} outputErrorToConsole Flag to show log on console. Ignore if not true.
  * @returns {void}
  */
-function consoleError(errorMessage) {
-    if (outputErrorToConsole)
-        console.error(errorMessage);
+function consoleError(errorMessage, outputErrorToConsole) {
+    if (!errorMessage || !outputErrorToConsole)
+        return;
+    console.error(ERRORHEADER + errorMessage);
 }
 
-/** Custom parseString promise as the native has bugs
+/** Returns parsed xml document for a given xml text.
  * @param {string} xml The xml string from the doc file
- * @param {boolean} [ignoreAttrs=true] Optional: Ignore attributes part of xml and focus only on the content.
- * @returns {Promise<string>}
+ * @returns {XMLDocument}
  */
-const parseStringPromise = (xml, ignoreAttrs = true) => new Promise((resolve, reject) => {
-    xml2js.parseString(xml, { "ignoreAttrs": ignoreAttrs }, (err, result) => {
-        if (err)
-            reject(err);
-        resolve(result);
-    });
-});
+const parseString = (xml) => {
+    let parser = new DOMParser();
+    return parser.parseFromString(xml, "text/xml");
+};
+
+/** @typedef {Object} OfficeParserConfig
+ * @property {boolean} preserveTempFiles    Flag to not delete the internal content files and the duplicate temp files that it uses after unzipping office files. Default is false. It deletes all of those files.
+ * @property {boolean} outputErrorToConsole Flag to show all the logs to console in case of an error irrespective of your own handling.
+ * @property {string}  newlineDelimiter     The delimiter used for every new line in places that allow multiline text like word. Default is \n.
+ * @property {boolean} ignoreNotes          Flag to ignore notes from parsing in files like powerpoint. Default is false. It includes notes in the parsed text by default.
+ * @property {boolean} putNotesAtLast       Flag, if set to true, will collectively put all the parsed text from notes at last in files like powerpoint. Default is false. It puts each notes right after its main slide content. If ignoreNotes is set to true, this flag is also ignored.
+ */
 
 
 /** Main function for parsing text from word files
- * @param {string} filename File path
- * @param {function} callback Callback function that returns value or error
- * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @param {string}             filepath File path
+ * @param {function}           callback Callback function that returns value or error
+ * @param {OfficeParserConfig} config   Config Object for officeParser
  * @returns {void}
  */
-function parseWord(filename, callback, deleteOfficeDist = true) {
-    if (!fs.existsSync(filename)) {
-        consoleError(ERRORMSG.fileDoesNotExist(filename));
-        return callback(undefined, ERRORMSG.fileDoesNotExist(filename));
-    }
-    const ext = filename.split(".").pop().toLowerCase();
-    if (ext != 'docx') {
-        consoleError(ERRORMSG.extensionUnsupported(extension));
-        return callback(undefined, ERRORMSG.extensionUnsupported(ext));
-    }
-
-    /** Store all the text content to respond */
-    let responseText = [];
-
-    /** Extracting text from Word files xml objects converted to js */
-    function extractTextFromWordXmlObjects(xmlObjects) {
-        // specifically for Arrays
-        if (Array.isArray(xmlObjects)) {
-            xmlObjects.forEach(item =>
-                (typeof item == "string") && (item != "")
-                    ? responseText.push(item)
-                    : extractTextFromWordXmlObjects(item))
-        }
-        // for other JS Object
-        else if (typeof xmlObjects == "object") {
-            for (const [key, value] of Object.entries(xmlObjects)) {
-                (typeof value == "string") || (typeof value[0] == "string")
-                    ? (key == "w:t" || key == "_") && value != ""
-                        ? responseText.push(value)
-                        : undefined
-                    : extractTextFromWordXmlObjects(value);
-            }
-        }
-    }
-
-    const contentFile = 'word/document.xml';
-    decompress(filename,
-        decompressSubLocation,
-        { filter: x => x.path == contentFile }
+function parseWord(filepath, callback, config) {
+    /** The target content xml file for the docx file. */
+    const mainContentFile = 'word/document.xml';
+    const footnotesFile   = 'word/footnotes.xml';
+    const endnotesFile    = 'word/endnotes.xml';
+    /** The decompress location which contains the filename in it */
+    const decompressLocation = `${decompressSubLocation}/${filepath.split("/").pop()}`;
+    decompress(filepath,
+        decompressLocation,
+        { filter: x => [mainContentFile, footnotesFile, endnotesFile].includes(x.path) }
     )
     .then(files => {
-        if (files.length != 1) {
-            consoleError(ERRORMSG.fileCorrupted(filename));
-            return callback(undefined, ERRORMSG.fileCorrupted(filename));
-        }
+        if (files.length == 0)
+            throw ERRORMSG.fileCorrupted(filepath);
 
-        return fs.readFileSync(`${decompressSubLocation}/${contentFile}`, 'utf8');
+        return [...files.filter(file => file.path == mainContentFile), 
+                    ...files.filter(file => file.path == footnotesFile),
+                    ...files.filter(file => file.path == endnotesFile)
+                    ]
+                    .map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8'));
     })
-    .then(xmlContent => parseStringPromise(xmlContent))
-    .then(xmlObjects => {
-        extractTextFromWordXmlObjects(xmlObjects);
-        const returnCallbackPromise = new Promise((res, rej) => {
-            if (deleteOfficeDist)
-                rimraf(decompressSubLocation, err => {
-                    if (err)
-                        consoleError(err);
-                    res();
-                });
-            else
-                res();
+    // ************************************* word xml files explanation *************************************
+    // Structure of xmlContent of a word file is simple.
+    // All text nodes are within w:t tags and each of the text nodes that belong in one paragraph are clubbed together within a w:p tag.
+    // So, we will filter out all the empty w:p tags and then combine all the w:t tag text inside for creating our response text.
+    // ******************************************************************************************************
+    .then(xmlContentArray => {
+        /** Store all the text content to respond */
+        let responseText = [];
+
+        xmlContentArray.forEach(xmlContent => {
+            /** Find text nodes with w:p tags */
+            const xmlParagraphNodesList = parseString(xmlContent).getElementsByTagName("w:p");
+            /** Store all the text content to respond */
+            responseText.push(
+                Array.from(xmlParagraphNodesList)
+                    // Filter paragraph nodes than do not have any text nodes which are identifiable by w:t tag
+                    .filter(paragraphNode => paragraphNode.getElementsByTagName("w:t").length != 0)
+                    .map(paragraphNode => {
+                        // Find text nodes with w:t tags
+                        const xmlTextNodeList = paragraphNode.getElementsByTagName("w:t");
+                        // Join the texts within this paragraph node without any spaces or delimiters.
+                        return Array.from(xmlTextNodeList).map(textNode => textNode.childNodes[0].nodeValue).join("");
+                    })
+                    // Join each paragraph text with a new line delimiter.
+                    .join(config.newlineDelimiter ?? "\n")
+            );
         });
 
-        returnCallbackPromise
-        .then(() => callback(responseText.join(" "), undefined));
-
+        // Join all responseText array
+        responseText = responseText.join(config.newlineDelimiter ?? "\n");
+        // Respond by calling the Callback function.
+        callback(responseText, undefined);
     })
-    .catch(error => {
-        consoleError(error)
-        return callback(undefined, error);
-    });
+    .catch(e => callback(undefined, e));
 }
 
 /** Main function for parsing text from PowerPoint files
- * @param {string} filename File path
- * @param {function} callback Callback function that returns value or error
- * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @param {string}             filepath File path
+ * @param {function}           callback Callback function that returns value or error
+ * @param {OfficeParserConfig} config   Config Object for officeParser
  * @returns {void}
  */
-function parsePowerPoint(filename, callback, deleteOfficeDist = true) {
-    if (!fs.existsSync(filename)) {
-        consoleError(ERRORMSG.fileDoesNotExist(filename));
-        return callback(undefined, ERRORMSG.fileDoesNotExist(filename));
-    }
-    const ext = filename.split(".").pop().toLowerCase();
-    if (ext != 'pptx') {
-        consoleError(ERRORMSG.extensionUnsupported(extension));
-        return callback(undefined, ERRORMSG.extensionUnsupported(ext));
-    }
-
-    /** Store all the text content to respond */
-    let responseText = [];
-
-    /** Extracting text from powerpoint files xml objects converted to js */
-    function extractTextFromPowerPointXmlObjects(xmlObjects) {
-        // specifically for Arrays
-        if (Array.isArray(xmlObjects)) {
-            xmlObjects.forEach(item =>
-                (typeof item == "string") && (item != "")
-                    ? responseText.push(item)
-                    : extractTextFromPowerPointXmlObjects(item))
-        }
-        // for other JS Object
-        else if (typeof xmlObjects == "object") {
-            for (const [key, value] of Object.entries(xmlObjects)) {
-                (typeof value == "string") || (typeof value[0] == "string")
-                    ? (key == "a:t" || key == "_") && value != ""
-                        ? responseText.push(value)
-                        : undefined
-                    : extractTextFromPowerPointXmlObjects(value);
-            }
-        }
-    }
-
+function parsePowerPoint(filepath, callback, config) {
     // Files regex that hold our content of interest
-    const contentFiles = [
-        /ppt\/slides\/slide\d+.xml/g,
-        /ppt\/notesSlides\/notesSlide\d+.xml/g
-    ]
+    const allFilesRegex = /ppt\/(notesSlides|slides)\/(notesSlide|slide)\d+.xml/g;
+    const slidesRegex   = /ppt\/slides\/slide\d+.xml/g;
 
-    decompress(filename,
-        decompressSubLocation,
-        { filter: x => contentFiles.findIndex(fileRegex => x.path.match(fileRegex)) > -1 }
+    /** The decompress location which contains the filename in it */
+    const decompressLocation = `${decompressSubLocation}/${filepath.split("/").pop()}`;
+    decompress(filepath,
+        decompressLocation,
+        { filter: x => x.path.match(config.ignoreNotes ? slidesRegex : allFilesRegex) }
     )
     .then(files => {
-        // Sort files according to previous order of taking text out of ppt/slides followed by ppt/notesSlides
-        files.sort((a,b) => contentFiles.findIndex(fileRegex => a.path.match(fileRegex)) -  contentFiles.findIndex(fileRegex => b.path.match(fileRegex)))
+        // Check if files is corrupted
+        if (files.length == 0)
+            throw ERRORMSG.fileCorrupted(filepath);
 
-        if (files.length == 0) {
-            consoleError(ERRORMSG.fileCorrupted(filename));
-            return callback(undefined, ERRORMSG.fileCorrupted(filename));
-        }
+        // Check if any sorting is required.
+        if (!config.ignoreNotes && config.putNotesAtLast)
+            // Sort files according to previous order of taking text out of ppt/slides followed by ppt/notesSlides
+            // For this we are looking at the index of notes which results in -1 in the main slide file and exists at a certain index in notes file names.
+            files.sort((a,b) => a.path.indexOf("notes") - b.path.indexOf("notes"));
 
         // Returning an array of all the xml contents read using fs.readFileSync
-        return files.map(file => fs.readFileSync(`${decompressSubLocation}/${file.path}`, 'utf8'))
+        return files.map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8'));
     })
-    .then(xmlContentArray => Promise.all(xmlContentArray.map(xmlContent => parseStringPromise(xmlContent))))    // Returning an array of all parseStringPromise responses
-    .then(xmlObjectsArray => {
-        xmlObjectsArray.forEach(xmlObjects => extractTextFromPowerPointXmlObjects(xmlObjects)); // Extracting text from all xml js objects with our conditions
+    // ******************************** powerpoint xml files explanation ************************************
+    // Structure of xmlContent of a powerpoint file is simple.
+    // There are multiple xml files for each slide and correspondingly their notesSlide files.
+    // All text nodes are within a:t tags and each of the text nodes that belong in one paragraph are clubbed together within a a:p tag.
+    // So, we will filter out all the empty a:p tags and then combine all the a:t tag text inside for creating our response text.
+    // ******************************************************************************************************
+    .then(xmlContentArray => {
+        /** Store all the text content to respond */
+        let responseText = [];
 
-        const returnCallbackPromise = new Promise((res, rej) => {
-            if (deleteOfficeDist)
-                rimraf(decompressSubLocation, err => {
-                    if (err)
-                        consoleError(err);
-                    res();
-                });
-            else
-                res();
+        xmlContentArray.forEach(xmlContent => {
+            /** Find text nodes with a:p tags */
+            const xmlParagraphNodesList = parseString(xmlContent).getElementsByTagName("a:p");
+            /** Store all the text content to respond */
+            responseText.push(
+                Array.from(xmlParagraphNodesList)
+                    // Filter paragraph nodes than do not have any text nodes which are identifiable by a:t tag
+                    .filter(paragraphNode => paragraphNode.getElementsByTagName("a:t").length != 0)
+                    .map(paragraphNode => {
+                        /** Find text nodes with a:t tags */
+                        const xmlTextNodeList = paragraphNode.getElementsByTagName("a:t");
+                        return Array.from(xmlTextNodeList).map(textNode => textNode.childNodes[0].nodeValue).join("");
+                    })
+                    .join(config.newlineDelimiter ?? "\n")
+            );
         });
 
-        returnCallbackPromise
-        .then(() => callback(responseText.join(" "), undefined));
-
+        // Join all responseText array
+        responseText = responseText.join(config.newlineDelimiter ?? "\n");
+        // Respond by calling the Callback function.
+        callback(responseText, undefined);
     })
-    .catch(error => {
-        consoleError(error)
-        return callback(undefined, error);
-    });
+    .catch(e => callback(undefined, e));
 }
 
 /** Main function for parsing text from Excel files
- * @param {string} filename File path
- * @param {function} callback Callback function that returns value or error
- * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @param {string}             filepath File path
+ * @param {function}           callback Callback function that returns value or error
+ * @param {OfficeParserConfig} config   Config Object for officeParser
  * @returns {void}
  */
-function parseExcel(filename, callback, deleteOfficeDist = true) {
-    if (!fs.existsSync(filename)) {
-        consoleError(ERRORMSG.fileDoesNotExist(filename));
-        return callback(undefined, ERRORMSG.fileDoesNotExist(filename));
-    }
-    const ext = filename.split(".").pop().toLowerCase();
-    if (ext != 'xlsx') {
-        consoleError(ERRORMSG.extensionUnsupported(extension));
-        return callback(undefined, ERRORMSG.extensionUnsupported(ext));
-    }
-
-    /** Store all the text content to respond */
-    let responseText = [];
-
-    function extractTextFromExcelXmlObjects2dArray(xmlObjects2dArray) {
-        xmlObjects2dArray[0].map(xmlObjects => extractTextFromExcelXmlObjects(xmlObjects, 0));
-        xmlObjects2dArray[1].map(xmlObjects => extractTextFromExcelXmlObjects(xmlObjects, 1));
-        xmlObjects2dArray[2].map(xmlObjects => extractTextFromExcelXmlObjects(xmlObjects, 2));
-    }
-
-    /** Extracting text from Excel files xml objects converted to js */
-    function extractTextFromExcelXmlObjects(xmlObjects, contentFilesIndex) {
-        switch(contentFilesIndex) {
-            case 0: {       // worksheet
-                // specifically for Arrays
-                if (Array.isArray(xmlObjects)) {
-                    xmlObjects.forEach(item =>
-                        item["v"]
-                            ? ((item["$"]["t"] != "s"))
-                                ? responseText.push(item["v"][0])
-                                : undefined
-                            : extractTextFromExcelXmlObjects(item, contentFilesIndex))
-                }
-                // for other JS Object
-                else if (typeof xmlObjects == "object") {
-                    for (const [key, value] of Object.entries(xmlObjects)) {
-                        value["v"]
-                            ? ((value["$"]["t"] == "s"))
-                                ? responseText.push(value["v"][0])
-                                : undefined
-                            : extractTextFromExcelXmlObjects(value, contentFilesIndex);
-                    }
-                }
-                break;
-            }
-            case 1: {       // sharedStrings
-                // specifically for Arrays
-                if (Array.isArray(xmlObjects)) {
-                    xmlObjects.forEach(item =>
-                        (typeof item == "string") && (item != "")
-                            ? responseText.push(item)
-                            : extractTextFromExcelXmlObjects(item, contentFilesIndex))
-                }
-                // for other JS Object
-                else if (typeof xmlObjects == "object") {
-                    for (const [key, value] of Object.entries(xmlObjects)) {
-                        (typeof value == "string") || (typeof value[0] == "string")
-                            ? (key == "t" || key == "_") && (value != "")
-                                ? responseText.push(value)
-                                : undefined
-                            : extractTextFromExcelXmlObjects(value, contentFilesIndex);
-                    }
-                }
-                break;
-            }
-            case 2: {       // drawings
-                // specifically for Arrays
-                if (Array.isArray(xmlObjects)) {
-                    xmlObjects.forEach(item =>
-                        (typeof item == "string") && (item != "")
-                            ? responseText.push(item)
-                            : extractTextFromExcelXmlObjects(item, contentFilesIndex))
-                }
-                // for other JS Object
-                else if (typeof xmlObjects == "object") {
-                    for (const [key, value] of Object.entries(xmlObjects)) {
-                        (typeof value == "string") || (typeof value[0] == "string")
-                            ? (key == "a:t" || key == "_") && (value != "")
-                                ? responseText.push(value)
-                                : undefined
-                            : extractTextFromExcelXmlObjects(value, contentFilesIndex);
-                    }
-                }
-                break;
-            }
-        }
-    }
-
+function parseExcel(filepath, callback, config) {
     // Files regex that hold our content of interest
-    const contentFiles = [
-        /xl\/worksheets\/sheet\d+.xml/g,
-        /xl\/sharedStrings.xml/g,
-        /xl\/drawings\/drawing\d+.xml/g,
-    ]
+    const sheetsRegex     = /xl\/worksheets\/sheet\d+.xml/g;
+    const drawingsRegex   = /xl\/drawings\/drawing\d+.xml/g;
+    const chartsRegex     = /xl\/charts\/chart\d+.xml/g;
+    const stringsFilePath = 'xl/sharedStrings.xml';
 
-    decompress(filename,
-        decompressSubLocation,
-        { filter: x => contentFiles.findIndex(fileRegex => x.path.match(fileRegex)) > -1 }
+    /** The decompress location which contains the filename in it */
+    const decompressLocation = `${decompressSubLocation}/${filepath.split("/").pop()}`;
+    decompress(filepath,
+        decompressLocation,
+        { filter: x => ([sheetsRegex, drawingsRegex, chartsRegex].findIndex(fileRegex => x.path.match(fileRegex)) > -1) || (x.path == stringsFilePath )}
     )
     .then(files => {
-        // arrange files into 2d array of files organized in contentFiles order, separated by array elements
-        const files2dArray = [];
-        contentFiles.forEach(fileRegex => files2dArray.push(files.filter(file => file.path.match(fileRegex))))
+        if (files.length == 0)
+            throw ERRORMSG.fileCorrupted(filepath);
 
-        if (files.length == 0) {
-            consoleError(ERRORMSG.fileCorrupted(filename));
-            return callback(undefined, ERRORMSG.fileCorrupted(filename));
-        }
-
-        // Returning a 2dArray of all the xml contents read using fs.readFileSync and separated by array elements
-        return files2dArray.map(files => files.map(file => fs.readFileSync(`${decompressSubLocation}/${file.path}`, 'utf8')))
+        return {
+            sheetFiles:        files.filter(file => file.path.match(sheetsRegex)).map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8')),
+            drawingFiles:      files.filter(file => file.path.match(drawingsRegex)).map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8')),
+            chartFiles:        files.filter(file => file.path.match(chartsRegex)).map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8')),
+            sharedStringsFile: files.filter(file => file.path == stringsFilePath).map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8'))[0],
+        };
     })
-    .then(xmlContent2dArray => Promise.all(xmlContent2dArray.map(xmlContentArray => Promise.all(xmlContentArray.map(xmlContent => parseStringPromise(xmlContent, false))))))    // Returning a 2dArray of all parseStringPromise responses
-    .then(xmlObjects2dArray => {
-        extractTextFromExcelXmlObjects2dArray(xmlObjects2dArray); // Extracting text from all xml js objects with our conditions
+    // ********************************** excel xml files explanation ***************************************
+    // Structure of xmlContent of an excel file is a bit complex.
+    // We have a sharedStrings.xml file which has strings inside t tags
+    // Each sheet has an individual sheet xml file which has numbers in v tags (probably value) inside c tags (probably cell)
+    // Each value of v tag is to be used as it is if the "t" attribute (probably type) of c tag is not "s" (probably shared string)
+    // If the "t" attribute of c tag is "s", then we use the value to select value from sharedStrings array with the value as its index.
+    // Drawing files contain all text for each drawing and have text nodes in a:t and paragraph nodes in a:p.
+    // ******************************************************************************************************
+    .then(xmlContentFilesObject => {
+        /** Store all the text content to respond */
+        let responseText = [];
 
-        const returnCallbackPromise = new Promise((res, rej) => {
-            if (deleteOfficeDist)
-                rimraf(decompressSubLocation, err => {
-                    if (err)
-                        consoleError(err);
-                    res();
-                });
-            else
-                res();
+        /** Find text nodes with t tags in sharedStrings xml file */
+        const sharedStringsXmlTNodesList = parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName("t");
+        /** Create shared string array. This will be used as a map to get strings from within sheet files. */
+        const sharedStrings = Array.from(sharedStringsXmlTNodesList).map(tNode => tNode.childNodes[0].nodeValue);
+
+        // Parse Sheet files
+        xmlContentFilesObject.sheetFiles.forEach(sheetXmlContent => {
+            /** Find text nodes with c tags in sharedStrings xml file */
+            const sheetsXmlCNodesList = parseString(sheetXmlContent).getElementsByTagName("c");
+            // Traverse through the nodes list and fill responseText with either the number value in its v node or find a mapped string from sharedStrings.
+            responseText.push(
+                Array.from(sheetsXmlCNodesList)
+                    // Filter c nodes than do not have any v nodes
+                    .filter(cNode => cNode.getElementsByTagName("v").length != 0)
+                    .map(cNode => {
+                        /** Flag whether this node's value represents a string index */
+                        const isString = cNode.getAttribute("t") == "s";
+                        /** Find value nodes represented by v tags */
+                        const value = cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue;
+                        // Validate text
+                        if (isString && value >= sharedStrings.length)
+                            throw ERRORMSG.fileCorrupted(filepath);
+
+                        return isString
+                                ? sharedStrings[value]
+                                : value;
+                    })
+                    // Join each cell text within a sheet with a space.
+                    .join(config.newlineDelimiter ?? "\n")
+            );
         });
 
-        returnCallbackPromise
-        .then(() => callback(responseText.join(" "), undefined));
+        // Parse Drawing files
+        xmlContentFilesObject.drawingFiles.forEach(drawingXmlContent => {
+            /** Find text nodes with a:p tags */
+            const drawingsXmlParagraphNodesList = parseString(drawingXmlContent).getElementsByTagName("a:p");
+            /** Store all the text content to respond */
+            responseText.push(
+                Array.from(drawingsXmlParagraphNodesList)
+                    // Filter paragraph nodes than do not have any text nodes which are identifiable by a:t tag
+                    .filter(paragraphNode => paragraphNode.getElementsByTagName("a:t").length != 0)
+                    .map(paragraphNode => {
+                        /** Find text nodes with a:t tags */
+                        const xmlTextNodeList = paragraphNode.getElementsByTagName("a:t");
+                        return Array.from(xmlTextNodeList).map(textNode => textNode.childNodes[0].nodeValue).join("");
+                    })
+                    .join(config.newlineDelimiter ?? "\n")
+            );
+        });
 
+        // Parse Chart files
+        xmlContentFilesObject.chartFiles.forEach(chartXmlContent => {
+            /** Find text nodes with c:v tags */
+            const chartsXmlCVNodesList = parseString(chartXmlContent).getElementsByTagName("c:v");
+            /** Store all the text content to respond */
+            responseText.push(
+                Array.from(chartsXmlCVNodesList)
+                    .map(cVNode => cVNode.childNodes[0].nodeValue)
+                    .join(config.newlineDelimiter ?? "\n")
+            );
+        });
+
+        // Join all responseText array
+        responseText = responseText.join(config.newlineDelimiter ?? "\n");
+        // Respond by calling the Callback function.
+        callback(responseText, undefined);
     })
-    .catch(error => {
-        consoleError(error)
-        return callback(undefined, error);
-    });
+    .catch(e => callback(undefined, e));
 }
 
 
 /** Main function for parsing text from open office files
- * @param {string} filename File path
- * @param {function} callback Callback function that returns value or error
- * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+ * @param {string}             filepath File path
+ * @param {function}           callback Callback function that returns value or error
+ * @param {OfficeParserConfig} config   Config Object for officeParser
  * @returns {void}
  */
-function parseOpenOffice(filename, callback, deleteOfficeDist = true) {
-    if (!fs.existsSync(filename)) {
-        consoleError(ERRORMSG.fileDoesNotExist(filename));
-        return callback(undefined, ERRORMSG.fileDoesNotExist(filename));
-    }
-    const ext = filename.split(".").pop().toLowerCase();
-    if (!["odt", "odp", "ods"].includes(ext)) {
-        consoleError(ERRORMSG.extensionUnsupported(extension));
-        return callback(undefined, ERRORMSG.extensionUnsupported(ext));
-    }
+function parseOpenOffice(filepath, callback, config) {
+    /** The target content xml file for the openoffice file. */
+    const mainContentFilePath     = 'content.xml';
+    const objectContentFilesRegex = /Object \d+\/content.xml/g;
 
-    /** Store all the text content to respond */
-    let responseText = [];
-    /** Extracting text from Open Office files xml objects converted to js */
-    function extractTextFromOpenOfficeXmlObjects(xmlObjects) {
-        // specifically for Arrays
-        if (Array.isArray(xmlObjects)) {
-            xmlObjects.forEach(item =>
-                (typeof item == "string") && (item != "")
-                    ? responseText.push(item)
-                    : extractTextFromOpenOfficeXmlObjects(item))
-        }
-        // for other JS Object
-        else if (typeof xmlObjects == "object") {
-            for (const [key, value] of Object.entries(xmlObjects)) {
-                typeof value == "string"
-                    ? value != ""
-                        ? responseText.push(value)
-                        : undefined
-                    : extractTextFromOpenOfficeXmlObjects(value);
-            }
-        }
-    }
-
-    const contentFile = 'content.xml';
-    decompress(filename,
-        decompressSubLocation,
-        { filter: x => x.path == contentFile }
+    /** The decompress location which contains the filename in it */
+    const decompressLocation = `${decompressSubLocation}/${filepath.split("/").pop()}`;
+    decompress(filepath,
+        decompressLocation,
+        { filter: x => x.path == mainContentFilePath || x.path.match(objectContentFilesRegex) }
     )
     .then(files => {
-        if (files.length != 1) {
-            consoleError(ERRORMSG.fileCorrupted(filename));
-            return callback(undefined, ERRORMSG.fileCorrupted(filename));
+        if (files.length == 0)
+            throw ERRORMSG.fileCorrupted(filepath);
+
+        return {
+            mainContentFile:    files.filter(file => file.path == mainContentFilePath).map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8'))[0],
+            objectContentFiles: files.filter(file => file.path.match(objectContentFilesRegex)).map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8')),
+        }
+    })
+    // ********************************** openoffice xml files explanation **********************************
+    // Structure of xmlContent of openoffice files is simple.
+    // All text nodes are within text:h and text:p tags with all kinds of formatting within nested tags.
+    // All text in these tags are separated by new line delimiters.
+    // Objects like charts in ods files are in Object d+/content.xml with the same way as above.
+    // ******************************************************************************************************
+    .then(xmlContentFilesObject => {
+        /** Store all the notes text content to respond */
+        let notesText = [];
+        /** Store all the text content to respond */
+        let responseText = [];
+
+        /** List of allowed text tags */
+        const allowedTextTags = ["text:p", "text:h"];
+        /** List of notes tags */
+        const notesTag = "presentation:notes";
+
+        /** Main dfs traversal function that goes from one node to its children and returns the value out. */
+        function extractAllTextsFromNode(root) {
+            let xmlTextArray = []
+            for (let i = 0; i < root.childNodes.length; i++)
+                traversal(root.childNodes[i], xmlTextArray, true);
+            return xmlTextArray.join("");
+        }
+        /** Traversal function that gets recursive calling. */
+        function traversal(node, xmlTextArray, isFirstRecursion) {
+            if(!node.childNodes || node.childNodes.length == 0)
+            {
+                if (node.parentNode.tagName.indexOf('text') == 0 && node.nodeValue) {
+                    if (isNotesNode(node.parentNode) && (config.putNotesAtLast || config.ignoreNotes)) {
+                        notesText.push(node.nodeValue);
+                        if (allowedTextTags.includes(node.parentNode.tagName) && !isFirstRecursion)
+                            notesText.push(config.newlineDelimiter ?? "\n");
+                    }
+                    else {
+                        xmlTextArray.push(node.nodeValue);
+                        if (allowedTextTags.includes(node.parentNode.tagName) && !isFirstRecursion)
+                            xmlTextArray.push(config.newlineDelimiter ?? "\n");
+                    }
+                }
+                return;
+            }
+
+            for (let i = 0; i < node.childNodes.length; i++)
+                traversal(node.childNodes[i], xmlTextArray, false);
         }
 
-        return fs.readFileSync(`${decompressSubLocation}/${contentFile}`, 'utf8');
-    })
-    .then(xmlContent => parseStringPromise(xmlContent))
-    .then(xmlObjects => {
-        extractTextFromOpenOfficeXmlObjects(xmlObjects);
-        const returnCallbackPromise = new Promise((res, rej) => {
-            if (deleteOfficeDist)
-                rimraf(decompressSubLocation, err => {
-                    if (err)
-                        consoleError(err);
-                    res();
-                });
-            else
-                res();
+        /** Checks if the given node has an ancestor which is a notes tag. We use this information to put the notes in the response text and its position. */
+        function isNotesNode(node) {
+            if (node.tagName == notesTag)
+                return true;
+            if (node.parentNode)
+                return isNotesNode(node.parentNode);
+            return false;
+        }
+
+        /** Checks if the given node has an ancestor which is also an allowed text tag. In that case, we ignore the child text tag. */
+        function isInvalidTextNode(node) {
+            if (allowedTextTags.includes(node.tagName))
+                return true;
+            if (node.parentNode)
+                return isInvalidTextNode(node.parentNode);
+            return false;
+        }
+
+        /** The xml string parsed as xml array */
+        const xmlContentArray = [xmlContentFilesObject.mainContentFile, ...xmlContentFilesObject.objectContentFiles].map(xmlContent => parseString(xmlContent));
+        // Iterate over each xmlContent and extract text from them.
+        xmlContentArray.forEach(xmlContent => {
+            /** Find text nodes with text:h and text:p tags in xmlContent */
+            const xmlTextNodesList = [...Array.from(xmlContent
+                                            .getElementsByTagName("*"))
+                                            .filter(node => allowedTextTags.includes(node.tagName)
+                                                && !isInvalidTextNode(node.parentNode))
+                                        ];
+            /** Store all the text content to respond */
+            responseText.push(
+                xmlTextNodesList
+                    // Add every text information from within this textNode and combine them together.
+                    .map(textNode => extractAllTextsFromNode(textNode))
+                    .filter(text => text != "")
+                    .join(config.newlineDelimiter ?? "\n")
+            );
         });
 
-        returnCallbackPromise
-        .then(() => callback(responseText.join(" "), undefined));
+        // Add notes text at the end if the user config says so.
+        // Note that we already have pushed the text content to notesText array while extracting all texts from the nodes.
+        if (!config.ignoreNotes && config.putNotesAtLast)
+            responseText = [...responseText, ...notesText];
 
+        // Join all responseText array
+        responseText = responseText.join(config.newlineDelimiter ?? "\n");
+        // Respond by calling the Callback function.
+        callback(responseText, undefined);
     })
-    .catch(error => {
-        consoleError(error)
-        return callback(undefined, error);
-    });
+    .catch(e => callback(undefined, e));
 }
 
+/** Header for error messages */
+const PDFPARSEERRORHEADER = "[pdf-parse]: ";
 
-/** Main async function with callback to execute parseOffice for supported files
- * @param {string | Buffer} file File path or file buffers
- * @param {function} callback Callback function that returns value or error
- * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
+/** Main function for parsing text from pdf files
+ * @param {string}             filepath File path
+ * @param {function}           callback Callback function that returns value or error
+ * @param {OfficeParserConfig} config   Config Object for officeParser
  * @returns {void}
  */
-function parseOffice(file, callback, deleteOfficeDist = true) {
-    // filename that is to be filled below depending on file input from argument
-    let filename = "";
+function parsePdf(filepath, callback, config) {
+    // Get the data buffer for the given file path.
+    const dataBuffer = fs.readFileSync(filepath);
+
+    pdfParse(dataBuffer)
+        .then(data => {
+            let text = data.text;
+            if (!!config.newlineDelimiter && config.newlineDelimiter != "\n")
+                text = text.replaceAll("\n", config.newlineDelimiter)
+            callback(text, undefined);
+        })
+        .catch(e => callback(undefined, PDFPARSEERRORHEADER + e));
+}
+
+/** Main async function with callback to execute parseOffice for supported files
+ * @param {string | Buffer}    file     File path or file buffers
+ * @param {function}           callback Callback function that returns value or error
+ * @param {OfficeParserConfig} config   [OPTIONAL]: Config Object for officeParser
+ * @returns {void}
+ */
+function parseOffice(file, callback, config = {}) {
     // Prepare file for processing
-    const filePreparedPromise = new Promise((res, rej) =>
-        {
+    const filePreparedPromise = new Promise((res, rej) => {
+            // create temp file subdirectory if it does not exist
+            fs.mkdirSync(`${decompressSubLocation}/tempfiles`, { recursive: true });
+
             // Check if buffer
-            if (Buffer.isBuffer(file))
-            {
+            if (Buffer.isBuffer(file)) {
                 // Guess file type from buffer
                 fileType.fromBuffer(file)
                     .then(data =>
                     {
                         // temp file name
-                        filename = `${decompressSubLocation}/tempfiles/${Math.floor(Math.random()*100000000)}.${data.ext}`;
-                        // create directory if it does not exist
-                        fs.mkdirSync(`${decompressSubLocation}/tempfiles`, { recursive: true });
+                        const newfilepath = `${decompressSubLocation}/tempfiles/${new Date().getTime().toString()}.${data.ext.toLowerCase()}`;
                         // write new file
-                        fs.writeFileSync(filename, file);
+                        fs.writeFileSync(newfilepath, file);
                         // resolve promise
-                        res();
+                        res(newfilepath);
                     })
-                    .catch(() => rej());
+                    .catch(() => rej(ERRORMSG.improperBuffers));
                 return;
             }
 
-            // Treat as filepath
-            filename = file;
+            // Not buffers but real file path.
+
+            // Check if file exists
+            if (!fs.existsSync(file))
+                throw ERRORMSG.fileDoesNotExist(file);
+
+            // temp file name
+            const newfilepath = `${decompressSubLocation}/tempfiles/${new Date().getTime().toString()}.${file.split(".").pop().toLowerCase()}`;
+            // Copy the file into a temp location with the temp name
+            fs.copyFileSync(file, newfilepath)
             // resolve promise
-            res();
-        })
+            res(newfilepath);
+        });
 
     // Process filePreparedPromise resolution.
     filePreparedPromise
-        .then(() =>
-        {
-            // Check if file exists
-            if (!fs.existsSync(filename)) {
-                consoleError(ERRORMSG.fileDoesNotExist(filename));
-                return callback(undefined, ERRORMSG.fileDoesNotExist(filename));
-            }
-            var extension = filename.split(".").pop().toLowerCase();
+        .then(filepath => {
+            // File extension. Already in lowercase when we prepared the temp file above.
+            const extension = filepath.split(".").pop();
 
             // Switch between parsing functions depending on extension.
-            switch(extension)
-            {
+            switch(extension) {
                 case "docx":
-                    parseWord(filename, (data, err) => callback(data, err), deleteOfficeDist);
-                    return;
+                    parseWord(filepath, internalCallback, config);
+                    break;
                 case "pptx":
-                    parsePowerPoint(filename, (data, err) => callback(data, err), deleteOfficeDist);
-                    return;
+                    parsePowerPoint(filepath, internalCallback, config);
+                    break;
                 case "xlsx":
-                    parseExcel(filename, (data, err) => callback(data, err), deleteOfficeDist);
-                    return;
+                    parseExcel(filepath, internalCallback, config);
+                    break;
                 case "odt":
                 case "odp":
                 case "ods":
-                    parseOpenOffice(filename, (data, err) => callback(data, err), deleteOfficeDist);
-                    return;
-        
+                    parseOpenOffice(filepath, internalCallback, config);
+                    break;
+                case "pdf":
+                    parsePdf(filepath, internalCallback, config);
+                    break;
+
                 default:
-                    consoleError(ERRORMSG.extensionUnsupported(extension));
-                    callback(undefined, ERRORMSG.extensionUnsupported(extension));
+                    throw ERRORMSG.extensionUnsupported(extension);
+            }
+
+            /** Internal callback function that calls the user's callback function passed in argument and removes the temp files if required */
+            function internalCallback(data, err) {
+                if (err)
+                    consoleError(err, config.outputErrorToConsole)
+                // Call the original callback
+                callback(data, err);
+                // Check if we need to preserve unzipped content files or delete them.
+                if (config.preserveTempFiles)
+                    return;
+                // Delete decompress sublocation.
+                rimraf(decompressSubLocation, rimrafErr => consoleError(rimrafErr, config.outputErrorToConsole));
             }
         })
-        .catch(() =>
-        {
-            consoleError(ERRORMSG.improperBuffers);
-            callback(undefined, ERRORMSG.improperBuffers);
-        })
+        .catch(error => {
+            consoleError(error, config.outputErrorToConsole);
+            callback(undefined, error);
+        });
+}
+
+/**
+ * Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
+ * @param {string | Buffer}    file   File path or file buffers
+ * @param {OfficeParserConfig} config [OPTIONAL]: Config Object for officeParser
+ * @returns {Promise<string>}
+ */
+function parseOfficeAsync (file, config) {
+    return new Promise((res, rej) => {
+        parseOffice(file, function (data, err) {
+            if (err)
+                return rej(err);
+            return res(data);
+        }, config);
+    });
 }
 
 /**
@@ -522,147 +557,18 @@ function parseOffice(file, callback, deleteOfficeDist = true) {
 function setDecompressionLocation(newLocation) {
     if (newLocation != undefined) {
         newLocation = `${newLocation}${newLocation.endsWith('/') ? '' : '/'}${DEFAULTDECOMPRESSSUBLOCATION}`
-
         if (fs.existsSync(newLocation))
             decompressSubLocation = newLocation;
         return;
     }
-    consoleError(ERRORMSG.locationNotFound(newLocation));
+    consoleError(ERRORMSG.locationNotFound(newLocation), config.outputErrorToConsole);
     decompressSubLocation = DEFAULTDECOMPRESSSUBLOCATION;
 }
 
-/** Enable console output
- * @returns {void}
- */
-function enableConsoleOutput() {
-    outputErrorToConsole = true;
-}
-
-/** Disabled console output
- * @returns {void}
- */
-function disableConsoleOutput() {
-    outputErrorToConsole = false;
-}
-
-
-// #region Promise versions of above functions
-
-/** Async function that can be used with await to execute parseWord. Or it can be used with promises.
- * @param {string} filename File path
- * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
- * @returns {Promise<string>}
- */
-var parseWordAsync = function (filename, deleteOfficeDist = true) {
-    return new Promise((resolve, reject) => {
-        try {
-            parseWord(filename, function (data, error) {
-                if (error)
-                    return reject(error);
-                return resolve(data);
-            }, deleteOfficeDist);
-        }
-        catch (error) {
-            return reject(error);
-        }
-    })
-}
-
-/** Async function that can be used with await to execute parsePowerPoint. Or it can be used with promises.
- * @param {string} filename File path
- * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
- * @returns {Promise<string>}
- */
-var parsePowerPointAsync = function (filename, deleteOfficeDist = true) {
-    return new Promise((resolve, reject) => {
-        try {
-            parsePowerPoint(filename, function (data, err) {
-                if (err)
-                    return reject(err);
-                return resolve(data);
-            }, deleteOfficeDist);
-        }
-        catch (error) {
-            return reject(error);
-        }
-    })
-}
-
-/** Async function that can be used with await to execute parseExcel. Or it can be used with promises.
- * @param {string} filename File path
- * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
- * @returns {Promise<string>}
- */
-var parseExcelAsync = function (filename, deleteOfficeDist = true) {
-    return new Promise((resolve, reject) => {
-        try {
-            parseExcel(filename, function (data, err) {
-                if (err)
-                    return reject(err);
-                return resolve(data);
-            }, deleteOfficeDist);
-        }
-        catch (error) {
-            return reject(error);
-        }
-    })
-}
-
-/** Async function that can be used with await to execute parseOpenOffice. Or it can be used with promises.
- * @param {string} filename File path
- * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
- * @returns {Promise<string>}
- */
-var parseOpenOfficeAsync = function (filename, deleteOfficeDist = true) {
-    return new Promise((resolve, reject) => {
-        try {
-            parseOpenOffice(filename, function (data, err) {
-                if (err)
-                    return reject(err);
-                return resolve(data);
-            }, deleteOfficeDist);
-        }
-        catch (error) {
-            return reject(error);
-        }
-    })
-}
-
-/**
- * Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
- * @param {string | Buffer} file File path or file buffers
- * @param {boolean} [deleteOfficeDist=true] Optional: Delete the officeDist directory created while unarchiving the doc file to get its content underneath. By default, we delete those files after we are done reading them.
- * @returns {Promise<string>}
- */
-var parseOfficeAsync = function (file, deleteOfficeDist = true) {
-    return new Promise((resolve, reject) => {
-        try {
-            parseOffice(file, function (data, err) {
-                if (err)
-                    return reject(err);
-                return resolve(data);
-            }, deleteOfficeDist);
-        }
-        catch (error) {
-            return reject(error);
-        }
-    })
-}
-// #endregion Async Versions
-
-module.exports.parseWord = parseWord;
-module.exports.parsePowerPoint = parsePowerPoint;
-module.exports.parseExcel = parseExcel;
-module.exports.parseOpenOffice = parseOpenOffice;
-module.exports.parseOffice = parseOffice;
-module.exports.parseWordAsync = parseWordAsync;
-module.exports.parsePowerPointAsync = parsePowerPointAsync;
-module.exports.parseExcelAsync = parseExcelAsync;
-module.exports.parseOpenOfficeAsync = parseOpenOfficeAsync;
-module.exports.parseOfficeAsync = parseOfficeAsync;
+// Export functions
+module.exports.parseOffice              = parseOffice;
+module.exports.parseOfficeAsync         = parseOfficeAsync;
 module.exports.setDecompressionLocation = setDecompressionLocation;
-module.exports.enableConsoleOutput = enableConsoleOutput;
-module.exports.disableConsoleOutput = disableConsoleOutput;
 
 
 // Run this library on CLI
@@ -672,8 +578,8 @@ if ((process.argv[0].split('/').pop() == "node" || process.argv[0].split('/').po
     }
     else if (process.argv.length == 3)
         parseOfficeAsync(process.argv[2])
-        .then(text => console.log(text))
-        .catch(error => console.error(error))
+            .then(text => console.log(text))
+            .catch(error => console.error(ERRORHEADER + error))
     else
         console.error(ERRORMSG.improperArguments)
 }

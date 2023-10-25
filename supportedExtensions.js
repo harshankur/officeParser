@@ -5,6 +5,7 @@ const supportedExtensions = [
     "odt",
     "odp",
     "ods",
+    "pdf"
 ];
 
 module.exports = supportedExtensions;

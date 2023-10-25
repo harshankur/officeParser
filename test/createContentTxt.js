@@ -13,8 +13,8 @@ function getFilename(ext, isContentFile = false) {
 
 /** Create content file the test file with passed extension */
 function createContentFile(ext) {
-    return officeParser.parseOfficeAsync(getFilename(ext))
-    .then(text => fs.writeFileSync(getFilename(ext, true), text, 'utf8'))
+    return officeParser.parseOfficeAsync(getFilename(ext), { preserveTempFiles: true })
+        .then(text => fs.writeFileSync(getFilename(ext, true), text, 'utf8'))
 }
 
 

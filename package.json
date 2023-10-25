@@ -1,7 +1,7 @@
 {
   "name": "officeparser",
-  "version": "3.3.0",
-  "description": "A Node.js library to parse text out of any office file. Currently supports docx, pptx, xlsx, odt, odp and ods files.",
+  "version": "4.0.0",
+  "description": "A Node.js library to parse text out of any office file. Currently supports docx, pptx, xlsx, odt, odp, ods, pdf files.",
   "main": "officeParser.js",
   "files": [
     "officeParser.js",
@@ -24,6 +24,7 @@
     "odt",
     "odp",
     "ods",
+    "pdf",
     "parser",
     "text",
     "extract text",
@@ -44,10 +45,13 @@
     "decompress": "^4.2.0",
     "file-type": "^16.5.4",
     "rimraf": "^2.6.3",
-    "xml2js": "^0.5.0"
+    "xmldom": "^0.6.0",
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
+    "@types/decompress": "^4.2.6",
     "@types/node": "^18.16.1",
+    "@types/xmldom": "^0.1.33",
     "typescript": "^5.0.3"
   }
 }
