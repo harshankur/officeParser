@@ -5,7 +5,7 @@ const fs            = require('fs');
 const rimraf        = require('rimraf');
 const fileType      = require('file-type');
 const pdfParse      = require('pdf-parse');
-const { DOMParser } = require('xmldom');
+const { DOMParser } = require('@xmldom/xmldom');
 
 /** Header for error messages */
 const ERRORHEADER = "[OfficeParser]: ";
