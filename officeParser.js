@@ -72,7 +72,7 @@ function parseWord(filepath, callback, config) {
         if (files.length == 0)
             throw ERRORMSG.fileCorrupted(filepath);
 
-        return [...files.filter(file => file.path == mainContentFile), 
+        return [...files.filter(file => file.path == mainContentFile),
                     ...files.filter(file => file.path == footnotesFile),
                     ...files.filter(file => file.path == endnotesFile)
                     ]
@@ -538,7 +538,7 @@ function parseOffice(file, callback, config = {}) {
 
                 // Check if there is an error. Throw if there is an error.
                 if (err)
-                    throw err;
+                    return callback(undefined, err);
 
                 // Call the original callback
                 callback(data, undefined);
@@ -556,7 +556,7 @@ function parseOffice(file, callback, config = {}) {
  * @param {OfficeParserConfig} [config={}] [OPTIONAL]: Config Object for officeParser
  * @returns {Promise<string>}
  */
-function parseOfficeAsync (file, config = {}) {
+function parseOfficeAsync(file, config = {}) {
     return new Promise((res, rej) => {
         parseOffice(file, function (data, err) {
             if (err)
