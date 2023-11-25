@@ -475,7 +475,7 @@ function parseOffice(file, callback, config = {}) {
                 .then(data =>
                 {
                     // temp file name
-                    const newfilepath = `${internalConfig.tempFilesLocation}/tempfiles/${new Date().getTime().toString()}.${data.ext.toLowerCase()}`;
+                    const newfilepath = getNewFileName(internalConfig.tempFilesLocation, data.ext.toLowerCase());
                     // write new file
                     fs.writeFileSync(newfilepath, file);
                     // resolve promise
@@ -492,7 +492,7 @@ function parseOffice(file, callback, config = {}) {
             throw ERRORMSG.fileDoesNotExist(file);
 
         // temp file name
-        const newfilepath = `${internalConfig.tempFilesLocation}/tempfiles/${new Date().getTime().toString()}.${file.split(".").pop().toLowerCase()}`;
+        const newfilepath = getNewFileName(internalConfig.tempFilesLocation, file.split(".").pop().toLowerCase());
         // Copy the file into a temp location with the temp name
         fs.copyFileSync(file, newfilepath)
         // resolve promise
@@ -563,6 +563,26 @@ function parseOfficeAsync(file, config = {}) {
     });
 }
 
+/** Global file name iterator. */
+let globalFileNameIterator = 0;
+/**
+ * File Name generator that takes the extension as an input and returns a file name that comprises a timestamp and an incrementing number
+ * to allow the files to be sorted in chronological order
+ * @param {string} tempFilesLocation Directory whether this new file needs to be stored
+ * @param {string} ext               File extension for this new generated file name
+ * @returns {string} 
+ */
+function getNewFileName(tempFilesLocation, ext) {
+    // Get the iterator part of the file name
+    let iteratorPart = (globalFileNameIterator++).toString().padStart(5, '0');
+    // We want the iterator part of the file name to be of 5 digits.
+    // Therefore, when the iterator crosses into 6 digits, we reset it to 0.
+    if (globalFileNameIterator > 99999)
+        globalFileNameIterator = 0;
+
+    // Return the file name
+    return `${tempFilesLocation}/tempfiles/${new Date().getTime().toString() + iteratorPart}.${ext}`;
+}
 
 /**
  * Handle error by logging it to console if permitted by the config.
