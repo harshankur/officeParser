@@ -13,6 +13,7 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
+* 2023/11/25 - Fixed error catching when an error occurs within the parsing of a file, especially after decompressing it. Also fixed the problem with parallel parsing of files as we were using only timestamp in file names.
 * 2023/10/24 - Revamped content parsing code. Fixed order of content in files, especially in word files where table information would always land up at the end of the text. Added config object as argument for parseOffice which can be used to set new line delimiter and multiple other configurations. Added support for parsing pdf files using the popular npm library pdf-parse. Removed support for individual file parsing functions.
 * 2023/04/26 - Added support for file buffers as argument for filepath for parseOffice and parseOfficeAsync
 * 2023/04/07 - Added typings to methods to help with Typescript projects.
@@ -95,14 +96,15 @@ officeParser.parseOfficeAsync(fileBuffers);
 
 ### Configuration Object: OfficeParserConfig
 *Optionally add a config object as 3rd variable to parseOffice for the following configurations*
-| flag                 | datatype | explanation                                                                                                                                                                                                                                     |
-|----------------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| tempFilesLocation    | string   | The directory where officeparser stores the temp files . The final decompressed data will be put inside officeParserTemp folder within your directory. **Please ensure that this directory actually exists.** Default is officeParsertemp.      |
-| preserveTempFiles    | boolean  | Flag to not delete the internal content files and the possible duplicate temp files that it uses after unzipping office files. Default is false. It always deletes all of those files.                                                          |
-| outputErrorToConsole | boolean  | Flag to show all the logs to console in case of an error.                                                                                                                                                                                       |
-| newlineDelimiter     | string   | The delimiter used for every new line in places that allow multiline text like word. Default is \n.                                                                                                                                             |
-| ignoreNotes          | boolean  | Flag to ignore notes from parsing in files like powerpoint. Default is false. It includes notes in the parsed text by default.                                                                                                                  |
-| putNotesAtLast       | boolean  | Flag, if set to true, will collectively put all the parsed text from notes at last in files like powerpoint. Default is false. It puts each notes right after its main slide content. If ignoreNotes is set to true, this flag is also ignored. |
+| Flag                 | DataType | Default          | Explanation                                                                                                                                                                                                                                     |
+|----------------------|----------|------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| tempFilesLocation    | string   | officeParserTemp | The directory where officeparser stores the temp files . The final decompressed data will be put inside officeParserTemp folder within your directory. **Please ensure that this directory actually exists.** Default is officeParserTemp.      |
+| preserveTempFiles    | boolean  | false            | Flag to not delete the internal content files and the possible duplicate temp files that it uses after unzipping office files. Default is false. It always deletes all of those files.                                                          |
+| outputErrorToConsole | boolean  | false            | Flag to show all the logs to console in case of an error. Default is false.                                                                                                                                                                     |
+| newlineDelimiter     | string   | \n               | The delimiter used for every new line in places that allow multiline text like word. Default is \n.                                                                                                                                             |
+| ignoreNotes          | boolean  | false            | Flag to ignore notes from parsing in files like powerpoint. Default is false. It includes notes in the parsed text by default.                                                                                                                  |
+| putNotesAtLast       | boolean  | false            | Flag, if set to true, will collectively put all the parsed text from notes at last in files like powerpoint. Default is false. It puts each notes right after its main slide content. If ignoreNotes is set to true, this flag is also ignored. |
+<br>
 
 ```js
 const config = {
@@ -121,8 +123,8 @@ officeParser.parseOffice("/path/to/officeFile", function(data, err){
 
 // promise
 officeParser.parseOfficeAsync("/path/to/officeFile", config);
-    .then((data) => console.log(data))
-    .catch((err) => console.error(err))
+    .then(data => console.log(data))
+    .catch(err => console.error(err))
 ```
 
 **Example - JavaScript**
@@ -140,7 +142,7 @@ officeParser.parseOfficeAsync("/Users/harsh/Desktop/files/mySlides.pptx", config
         const newText = data + " look, I can parse a powerpoint file";
         callSomeOtherFunction(newText);
     })
-    .catch((err) => console.error(err));
+    .catch(err => console.error(err));
 
 // Search for a term in the parsed text.
 function searchForTermInOfficeFile(searchterm, filepath) {
@@ -165,10 +167,10 @@ officeParser.parseOfficeAsync("/Users/harsh/Desktop/files/mySlides.pptx", config
         const newText = data + " look, I can parse a powerpoint file";
         callSomeOtherFunction(newText);
     })
-    .catch((err) => console.error(err));
+    .catch(err => console.error(err));
 
 // Search for a term in the parsed text.
-function searchForTermInOfficeFile(searchterm, filepath): Promise<boolean> {
+function searchForTermInOfficeFile(searchterm: string, filepath: string): Promise<boolean> {
     return officeParser.parseOfficeAsync(filepath)
         .then(data => data.indexOf(searchterm) != -1)
 }
