@@ -538,16 +538,13 @@ function parseOffice(file, callback, config = {}) {
 
                 // Check if there is an error. Throw if there is an error.
                 if (err)
-                    return callback(undefined, err);
+                    return handleError(err, callback, internalConfig.outputErrorToConsole);
 
                 // Call the original callback
                 callback(data, undefined);
             }
         })
-        .catch(error => {
-            consoleError(error, internalConfig.outputErrorToConsole);
-            callback(undefined, ERRORHEADER + error);
-        });
+        .catch(error => handleError(error, callback, internalConfig.outputErrorToConsole));
 }
 
 /**
@@ -564,6 +561,20 @@ function parseOfficeAsync(file, config = {}) {
             return res(data);
         }, config);
     });
+}
+
+
+/**
+ * Handle error by logging it to console if permitted by the config.
+ * And after that, trigger the callback function with the error value.
+ * @param {string}   error                Error text
+ * @param {function} callback             Callback function provided by the caller
+ * @param {boolean}  outputErrorToConsole Flag to log error to console.
+ * @returns {void}
+ */
+function handleError(error, callback, outputErrorToConsole) {
+    consoleError(error, outputErrorToConsole);
+    callback(undefined, ERRORHEADER + error);
 }
 
 
