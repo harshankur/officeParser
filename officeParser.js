@@ -69,7 +69,8 @@ function parseWord(filepath, callback, config) {
         { filter: x => [mainContentFile, footnotesFile, endnotesFile].includes(x.path) }
     )
     .then(files => {
-        if (files.length == 0)
+        // Verify if atleast the document xml file exists in the extracted files list.
+        if (!files.map(file => file.path).includes(mainContentFile))
             throw ERRORMSG.fileCorrupted(filepath);
 
         return [...files.filter(file => file.path == mainContentFile),
@@ -99,7 +100,10 @@ function parseWord(filepath, callback, config) {
                         // Find text nodes with w:t tags
                         const xmlTextNodeList = paragraphNode.getElementsByTagName("w:t");
                         // Join the texts within this paragraph node without any spaces or delimiters.
-                        return Array.from(xmlTextNodeList).map(textNode => textNode.childNodes[0].nodeValue).join("");
+                        return Array.from(xmlTextNodeList)
+                                .filter(textNode => textNode.childNodes[0] && textNode.childNodes[0].nodeValue)
+                                .map(textNode => textNode.childNodes[0].nodeValue)
+                                .join("");
                     })
                     // Join each paragraph text with a new line delimiter.
                     .join(config.newlineDelimiter ?? "\n")
@@ -132,8 +136,8 @@ function parsePowerPoint(filepath, callback, config) {
         { filter: x => x.path.match(config.ignoreNotes ? slidesRegex : allFilesRegex) }
     )
     .then(files => {
-        // Check if files is corrupted
-        if (files.length == 0)
+        // Verify if atleast the slides xml files exist in the extracted files list.
+        if (files.length == 0 || !files.map(file => file.path).some(filename => filename.match(slidesRegex)))
             throw ERRORMSG.fileCorrupted(filepath);
 
         // Check if any sorting is required.
@@ -166,7 +170,10 @@ function parsePowerPoint(filepath, callback, config) {
                     .map(paragraphNode => {
                         /** Find text nodes with a:t tags */
                         const xmlTextNodeList = paragraphNode.getElementsByTagName("a:t");
-                        return Array.from(xmlTextNodeList).map(textNode => textNode.childNodes[0].nodeValue).join("");
+                        return Array.from(xmlTextNodeList)
+                                .filter(textNode => textNode.childNodes[0] && textNode.childNodes[0].nodeValue)
+                                .map(textNode => textNode.childNodes[0].nodeValue)
+                                .join("");
                     })
                     .join(config.newlineDelimiter ?? "\n")
             );
@@ -200,7 +207,8 @@ function parseExcel(filepath, callback, config) {
         { filter: x => ([sheetsRegex, drawingsRegex, chartsRegex].findIndex(fileRegex => x.path.match(fileRegex)) > -1) || (x.path == stringsFilePath )}
     )
     .then(files => {
-        if (files.length == 0)
+        // Verify if atleast the slides xml files exist in the extracted files list.
+        if (files.length == 0 || !files.map(file => file.path).some(filename => filename.match(sheetsRegex)))
             throw ERRORMSG.fileCorrupted(filepath);
 
         return {
@@ -225,7 +233,9 @@ function parseExcel(filepath, callback, config) {
         /** Find text nodes with t tags in sharedStrings xml file */
         const sharedStringsXmlTNodesList = parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName("t");
         /** Create shared string array. This will be used as a map to get strings from within sheet files. */
-        const sharedStrings = Array.from(sharedStringsXmlTNodesList).map(tNode => tNode.childNodes[0].nodeValue);
+        const sharedStrings = Array.from(sharedStringsXmlTNodesList)
+                                .filter(tNode => tNode.childNodes[0] && tNode.childNodes[0].nodeValue)
+                                .map(tNode => tNode.childNodes[0].nodeValue);
 
         // Parse Sheet files
         xmlContentFilesObject.sheetFiles.forEach(sheetXmlContent => {
@@ -234,8 +244,10 @@ function parseExcel(filepath, callback, config) {
             // Traverse through the nodes list and fill responseText with either the number value in its v node or find a mapped string from sharedStrings.
             responseText.push(
                 Array.from(sheetsXmlCNodesList)
-                    // Filter c nodes than do not have any v nodes
-                    .filter(cNode => cNode.getElementsByTagName("v").length != 0)
+                    // Filter c nodes than do not have any valid v nodes
+                    .filter(cNode => cNode.getElementsByTagName("v")[0]
+                                        && cNode.getElementsByTagName("v")[0].childNodes[0]
+                                        && cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue)
                     .map(cNode => {
                         /** Flag whether this node's value represents a string index */
                         const isString = cNode.getAttribute("t") == "s";
@@ -266,7 +278,10 @@ function parseExcel(filepath, callback, config) {
                     .map(paragraphNode => {
                         /** Find text nodes with a:t tags */
                         const xmlTextNodeList = paragraphNode.getElementsByTagName("a:t");
-                        return Array.from(xmlTextNodeList).map(textNode => textNode.childNodes[0].nodeValue).join("");
+                        return Array.from(xmlTextNodeList)
+                                .filter(textNode => textNode.childNodes[0] && textNode.childNodes[0].nodeValue)
+                                .map(textNode => textNode.childNodes[0].nodeValue)
+                                .join("");
                     })
                     .join(config.newlineDelimiter ?? "\n")
             );
@@ -279,6 +294,7 @@ function parseExcel(filepath, callback, config) {
             /** Store all the text content to respond */
             responseText.push(
                 Array.from(chartsXmlCVNodesList)
+                    .filter(cVNode => cVNode.childNodes[0] && cVNode.childNodes[0].nodeValue)
                     .map(cVNode => cVNode.childNodes[0].nodeValue)
                     .join(config.newlineDelimiter ?? "\n")
             );
@@ -311,7 +327,8 @@ function parseOpenOffice(filepath, callback, config) {
         { filter: x => x.path == mainContentFilePath || x.path.match(objectContentFilesRegex) }
     )
     .then(files => {
-        if (files.length == 0)
+        // Verify if atleast the content xml file exists in the extracted files list.
+        if (!files.map(file => file.path).includes(mainContentFilePath))
             throw ERRORMSG.fileCorrupted(filepath);
 
         return {
