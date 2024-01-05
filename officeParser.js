@@ -46,6 +46,7 @@ const parseString = (xml) => {
  * @property {boolean} [preserveTempFiles]    Flag to not delete the internal content files and the duplicate temp files that it uses after unzipping office files. Default is false. It deletes all of those files.
  * @property {boolean} [outputErrorToConsole] Flag to show all the logs to console in case of an error irrespective of your own handling.
  * @property {string}  [newlineDelimiter]     The delimiter used for every new line in places that allow multiline text like word. Default is \n.
+ * @property {string}  [newslideDelimiter]    The delimiter used for every new slide in powerpoint. Default is \n.
  * @property {boolean} [ignoreNotes]          Flag to ignore notes from parsing in files like powerpoint. Default is false. It includes notes in the parsed text by default.
  * @property {boolean} [putNotesAtLast]       Flag, if set to true, will collectively put all the parsed text from notes at last in files like powerpoint. Default is false. It puts each notes right after its main slide content. If ignoreNotes is set to true, this flag is also ignored.
  */
@@ -180,7 +181,7 @@ function parsePowerPoint(filepath, callback, config) {
         });
 
         // Join all responseText array
-        responseText = responseText.join(config.newlineDelimiter ?? "\n");
+        responseText = responseText.join(config.newslideDelimiter ?? config.newlineDelimiter ?? "\n");
         // Respond by calling the Callback function.
         callback(responseText, undefined);
     })
