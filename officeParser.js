@@ -234,8 +234,7 @@ function parseExcel(filepath, callback, config) {
         const sharedStringsXmlTNodesList = parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName("t");
         /** Create shared string array. This will be used as a map to get strings from within sheet files. */
         const sharedStrings = Array.from(sharedStringsXmlTNodesList)
-                                .filter(tNode => tNode.childNodes[0] && tNode.childNodes[0].nodeValue)
-                                .map(tNode => tNode.childNodes[0].nodeValue);
+                                .map(tNode => tNode.childNodes[0]?.nodeValue ?? '');
 
         // Parse Sheet files
         xmlContentFilesObject.sheetFiles.forEach(sheetXmlContent => {
