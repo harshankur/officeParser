@@ -59,25 +59,23 @@ const parseString = (xml) => {
  */
 function parseWord(filepath, callback, config) {
     /** The target content xml file for the docx file. */
-    const mainContentFile = 'word/document.xml';
-    const footnotesFile   = 'word/footnotes.xml';
-    const endnotesFile    = 'word/endnotes.xml';
+    const mainContentFileRegex = /word\/document[\d+]?.xml/g;
+    const footnotesFileRegex   = /word\/footnotes[\d+]?.xml/g;
+    const endnotesFileRegex    = /word\/endnotes[\d+]?.xml/g;
     /** The decompress location which contains the filename in it */
     const decompressLocation = `${config.tempFilesLocation}/${filepath.split("/").pop()}`;
     decompress(filepath,
         decompressLocation,
-        { filter: x => [mainContentFile, footnotesFile, endnotesFile].includes(x.path) }
+        { filter: x => [mainContentFileRegex, footnotesFileRegex, endnotesFileRegex].some(fileRegex => x.path.match(fileRegex)) }
     )
     .then(files => {
         // Verify if atleast the document xml file exists in the extracted files list.
-        if (!files.map(file => file.path).includes(mainContentFile))
+        if (!files.some(file => file.path.match(mainContentFileRegex)))
             throw ERRORMSG.fileCorrupted(filepath);
 
-        return [...files.filter(file => file.path == mainContentFile),
-                    ...files.filter(file => file.path == footnotesFile),
-                    ...files.filter(file => file.path == endnotesFile)
-                    ]
-                    .map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8'));
+            return files
+                .filter(file => file.path.match(mainContentFileRegex) || file.path.match(footnotesFileRegex) || file.path.match(endnotesFileRegex))
+                .map(file => fs.readFileSync(`${decompressLocation}/${file.path}`, 'utf8'));
     })
     // ************************************* word xml files explanation *************************************
     // Structure of xmlContent of a word file is simple.
@@ -204,7 +202,7 @@ function parseExcel(filepath, callback, config) {
     const decompressLocation = `${config.tempFilesLocation}/${filepath.split("/").pop()}`;
     decompress(filepath,
         decompressLocation,
-        { filter: x => ([sheetsRegex, drawingsRegex, chartsRegex].findIndex(fileRegex => x.path.match(fileRegex)) > -1) || (x.path == stringsFilePath )}
+        { filter: x => [sheetsRegex, drawingsRegex, chartsRegex].some(fileRegex => x.path.match(fileRegex)) || x.path == stringsFilePath }
     )
     .then(files => {
         // Verify if atleast the slides xml files exist in the extracted files list.
