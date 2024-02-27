@@ -17,6 +17,10 @@ export type OfficeParserConfig = {
      */
     newlineDelimiter?: string;
     /**
+     * The delimiter used for every new slide in powerpoint. Default is \n.
+     */
+    newslideDelimiter?: string;
+    /**
      * Flag to ignore notes from parsing in files like powerpoint. Default is false. It includes notes in the parsed text by default.
      */
     ignoreNotes?: boolean;
