@@ -4,7 +4,7 @@ const decompress    = require('decompress');
 const fs            = require('fs');
 const rimraf        = require('rimraf');
 const fileType      = require('file-type');
-const pdfParse      = require('pdf-parse');
+const pdfParse      = require('pdf-parse/lib/pdf-parse');
 const { DOMParser } = require('@xmldom/xmldom');
 
 /** Header for error messages */
@@ -584,7 +584,7 @@ let globalFileNameIterator = 0;
  * to allow the files to be sorted in chronological order
  * @param {string} tempFilesLocation Directory whether this new file needs to be stored
  * @param {string} ext               File extension for this new generated file name
- * @returns {string} 
+ * @returns {string}
  */
 function getNewFileName(tempFilesLocation, ext) {
     // Get the iterator part of the file name
