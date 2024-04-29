@@ -4,7 +4,7 @@ const decompress    = require('decompress');
 const fs            = require('fs');
 const rimraf        = require('rimraf');
 const fileType      = require('file-type');
-const pdfParse      = require('pdf-parse/lib/pdf-parse');
+const pdfParse      = require('pdf-parse/lib/pdf-parse'); // https://gitlab.com/autokent/pdf-parse/-/issues/24
 const { DOMParser } = require('@xmldom/xmldom');
 
 /** Header for error messages */
