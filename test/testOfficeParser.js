@@ -49,7 +49,7 @@ const localSupportedExtensionsList = supportedExtensionTests.map(test => test.ex
 
 /** Get filename for an extension */
 function getFilename(ext, isContentFile = false) {
-    return `test/files/test.${ext}` + (isContentFile ? `.txt` : '');
+    return `../test/files/test.${ext}` + (isContentFile ? `.txt` : '');
 }
 
 /** Run test for a passed extension */
