@@ -4,7 +4,7 @@ const decompress    = require('decompress');
 const fs            = require('fs');
 const rimraf        = require('rimraf');
 const fileType      = require('file-type');
-const pdfParse      = require('pdf-parse');
+const pdfjs         = require('./pdfjs-dist-build/pdf.js');
 const { DOMParser } = require('@xmldom/xmldom');
 
 /** Header for error messages */
@@ -431,9 +431,6 @@ function parseOpenOffice(filepath, callback, config) {
     .catch(e => callback(undefined, e));
 }
 
-/** Header for error messages */
-const PDFPARSEERRORHEADER = "[pdf-parse]: ";
-
 /** Main function for parsing text from pdf files
  * @param {string}             filepath File path
  * @param {function}           callback Callback function that returns value or error
@@ -441,17 +438,36 @@ const PDFPARSEERRORHEADER = "[pdf-parse]: ";
  * @returns {void}
  */
 function parsePdf(filepath, callback, config) {
-    // Get the data buffer for the given file path.
-    const dataBuffer = fs.readFileSync(filepath);
-
-    pdfParse(dataBuffer)
-        .then(data => {
-            let text = data.text;
-            if (!!config.newlineDelimiter && config.newlineDelimiter != "\n")
-                text = text.replaceAll("\n", config.newlineDelimiter)
-            callback(text, undefined);
-        })
-        .catch(e => callback(undefined, PDFPARSEERRORHEADER + e));
+    // Get the pdfjs document for the filepath.
+    pdfjs.getDocument(filepath).promise
+    // We go through each page and build our text content promise array.
+    .then(document => Promise.all(Array.from({ length: document.numPages }, (_, index) => index + 1).map(pageNr => document.getPage(pageNr).then(page => page.getTextContent()))))
+    // Each textContent item has property 'items' which is an array of objects.
+    // Each object element in the array has text stored in their 'str' key.
+    // The concatenation of str is what makes our pdf content.
+    // str already contains any space that was in the text.
+    // So, we only care about when to add the new line.
+    // That we determine using transform[5] value which is the y-coordinate of the item object.
+    // So, if there is a mismatch in the transform[5] value between the current item and the previous item, we put a line break.
+    .then(textContentArray => {
+        /** Store all the text content to respond */
+        const responseText = textContentArray
+                                .map(textContent => textContent.items)      // Get all the items
+                                .flat()                                     // Flatten all the items object
+                                .filter(item => item.str != '')             // Ignore the empty string items.
+                                .reduce((a, v) => (
+                                    {
+                                        text: a.text + (v.transform[5] != a.transform5 ? (config.newlineDelimiter ?? "\n") : '') + v.str,
+                                        transform5: v.transform[5]
+                                    }),
+                                    {
+                                        text: '',
+                                        transform5: undefined
+                                    }).text;
+        
+        callback(responseText, undefined);
+    })
+    .catch(e => callback(undefined, e));
 }
 
 /** Main async function with callback to execute parseOffice for supported files
@@ -584,7 +600,7 @@ let globalFileNameIterator = 0;
  * to allow the files to be sorted in chronological order
  * @param {string} tempFilesLocation Directory whether this new file needs to be stored
  * @param {string} ext               File extension for this new generated file name
- * @returns {string} 
+ * @returns {string}
  */
 function getNewFileName(tempFilesLocation, ext) {
     // Get the iterator part of the file name

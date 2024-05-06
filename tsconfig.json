@@ -5,7 +5,8 @@
     ],
     "exclude": [
         "./test/*",
-        "./supportedExtensions.js"
+        "./pdfjs-dist-build/*",
+        "./supportedExtensions.js",
     ],
     "compilerOptions": {
         // Tells TypeScript to read JS files, as

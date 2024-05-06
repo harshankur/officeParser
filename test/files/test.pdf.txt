@@ -1,5 +1,4 @@
 
-
 Hello World Walkthrough
 Full source (https://github.com/mozilla/pdf.js/blob/master/examples/learning/helloworld.html)
 PDF.js heavily relies on the use of Promises
@@ -32,7 +31,6 @@ the desired scale, rotation, and it transforms the coordinate system (the 0,0 po
 bottom-left whereas canvas 0,0 is top-left).
 PDFDocumentLoadingTask
 promise
-
 var scale = 1.5;
 var viewport = page.getViewport({ scale: scale, });
 // Support HiDPI-screens.
@@ -61,7 +59,6 @@ Interactive examples
 Hello World with document load error handling
 The example demonstrates how promises can be used to handle errors during loading. It also
 demonstrates how to wait until a page is loaded and rendered.
-
 Edit in JSFiddle
 HTML
 CSS
@@ -112,10 +109,8 @@ Result
   border: 1px solid black;
   direction: ltr;
 }
-
 Hello World using base64 encoded PDF
 The PDF.js can accept any decoded base64 data as an array.
-
 Edit in JSFiddle
 HTML
 CSS
@@ -172,7 +167,6 @@ Result
     // PDF loading error
     console.error(reason);
 })
-
   });
 </script>
 <h1>PDF.js 'Hello, base64!' example</h1>
@@ -185,7 +179,6 @@ Result
 Previous/Next example
 The same canvas cannot be used to perform to draw two pages at the same time – the example
 demonstrates how to wait on previous operation to be complete.
-
 Edit in JSFiddle
 HTML
 CSS
@@ -241,7 +234,6 @@ Result
    * finised. Otherwise, executes rendering immediately.
    */
 ftiR  d  P(){
-
   function queueRenderPage(num) {
     if (pageRendering) {
       pageNumPending = num;
@@ -294,7 +286,6 @@ ftiR  d  P(){
   border: 1px solid black;
   direction: ltr;
 }
-
 ©Mozilla and individual contributors
 PDF.js is licensed under Apache (https://github.com/mozilla/pdf.js/blob/master/LICENSE), documentation is
 licensed under CC BY-SA 2.5 (https://creativecommons.org/licenses/by-sa/2.5/)
