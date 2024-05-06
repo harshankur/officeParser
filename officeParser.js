@@ -556,7 +556,7 @@ function parseOffice(file, callback, config = {}) {
                     break;
 
                 default:
-                    throw ERRORMSG.extensionUnsupported(extension);
+                    internalCallback(undefined, ERRORMSG.extensionUnsupported(extension));  // Call the internalCallback function which removes the temp files if required.
             }
 
             /** Internal callback function that calls the user's callback function passed in argument and removes the temp files if required */
