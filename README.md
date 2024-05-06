@@ -13,7 +13,7 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
-* 2024/05/06 - Replaced pdf parsing support from pdf-parse library to natively building it using pdf.js library from Mozialla by analyzing its output. Added pdfjs-dist build as a local library.
+* 2024/05/06 - Replaced pdf parsing support from pdf-parse library to natively building it using pdf.js library from Mozilla by analyzing its output. Added pdfjs-dist build as a local library.
 * 2023/11/25 - Fixed error catching when an error occurs within the parsing of a file, especially after decompressing it. Also fixed the problem with parallel parsing of files as we were using only timestamp in file names.
 * 2023/10/24 - Revamped content parsing code. Fixed order of content in files, especially in word files where table information would always land up at the end of the text. Added config object as argument for parseOffice which can be used to set new line delimiter and multiple other configurations. Added support for parsing pdf files using the popular npm library pdf-parse. Removed support for individual file parsing functions.
 * 2023/04/26 - Added support for file buffers as argument for filepath for parseOffice and parseOfficeAsync
