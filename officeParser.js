@@ -126,6 +126,7 @@ function parsePowerPoint(filepath, callback, config) {
     // Files regex that hold our content of interest
     const allFilesRegex = /ppt\/(notesSlides|slides)\/(notesSlide|slide)\d+.xml/g;
     const slidesRegex   = /ppt\/slides\/slide\d+.xml/g;
+    const slideNumberRegex = /lide(\d+)\.xml/;
 
     /** The decompress location which contains the filename in it */
     const decompressLocation = `${config.tempFilesLocation}/${filepath.split("/").pop()}`;
@@ -134,6 +135,17 @@ function parsePowerPoint(filepath, callback, config) {
         { filter: x => x.path.match(config.ignoreNotes ? slidesRegex : allFilesRegex) }
     )
     .then(files => {
+        // Sort files by slide number and their notes (if any).
+        files.sort((a, b) => {
+            const matchedANumber = parseInt(a.path.match(slideNumberRegex)?.at(1), 10);
+            const matchedBNumber = parseInt(b.path.match(slideNumberRegex)?.at(1), 10);
+
+            const aNumber = isNaN(matchedANumber) ? Infinity : matchedANumber;
+            const bNumber = isNaN(matchedBNumber) ? Infinity : matchedBNumber;
+
+            return aNumber - bNumber || Number(a.path.includes('notes')) - Number(b.path.includes('notes'));
+        });
+
         // Verify if atleast the slides xml files exist in the extracted files list.
         if (files.length == 0 || !files.map(file => file.path).some(filename => filename.match(slidesRegex)))
             throw ERRORMSG.fileCorrupted(filepath);
