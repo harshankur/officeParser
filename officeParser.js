@@ -235,11 +235,36 @@ function parseExcel(filepath, callback, config) {
     // Each sheet has an individual sheet xml file which has numbers in v tags (probably value) inside c tags (probably cell)
     // Each value of v tag is to be used as it is if the "t" attribute (probably type) of c tag is not "s" (probably shared string)
     // If the "t" attribute of c tag is "s", then we use the value to select value from sharedStrings array with the value as its index.
+    // However, if the "t" attribute of c tag is "inlineStr", strings can be inline inside "is"(probably inside String) > "t".
+    // We extract either the inline strings or use the value to get numbers of text from shared strings.
     // Drawing files contain all text for each drawing and have text nodes in a:t and paragraph nodes in a:p.
     // ******************************************************************************************************
     .then(xmlContentFilesObject => {
         /** Store all the text content to respond */
         let responseText = [];
+
+        /** Function to check if the given c node is a valid inline string node. */
+        function isValidInlineStringCNode(cNode) {
+            // Initial check to see if the passed node is a cNode
+            if (cNode.tagName.toLowerCase() != 'c')
+                return false;
+            if (cNode.getAttribute("t") != 'inlineStr')
+                return false;
+            const childNodesNamedIs = cNode.getElementsByTagName('is');
+            if (childNodesNamedIs.length != 1)
+                return false;
+            const childNodesNamedT = childNodesNamedIs[0].getElementsByTagName('t');
+            if (childNodesNamedT.length != 1)
+                return false;
+            return childNodesNamedT[0].childNodes[0] && childNodesNamedT[0].childNodes[0].nodeValue != '';
+        }
+
+        /** Function to check if the given c node has a valid v node */
+        function hasValidVNodeInCNode(cNode) {
+            return cNode.getElementsByTagName("v")[0]
+                && cNode.getElementsByTagName("v")[0].childNodes[0]
+                && cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue != ''
+        }
 
         /** Find text nodes with t tags in sharedStrings xml file. If the sharedStringsFile is not present, we return an empty array. */
         const sharedStringsXmlTNodesList = xmlContentFilesObject.sharedStringsFile != undefined ? parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName("t")
@@ -252,25 +277,33 @@ function parseExcel(filepath, callback, config) {
         xmlContentFilesObject.sheetFiles.forEach(sheetXmlContent => {
             /** Find text nodes with c tags in sharedStrings xml file */
             const sheetsXmlCNodesList = parseString(sheetXmlContent).getElementsByTagName("c");
-            // Traverse through the nodes list and fill responseText with either the number value in its v node or find a mapped string from sharedStrings.
+            // Traverse through the nodes list and fill responseText with either the number value in its v node or find a mapped string from sharedStrings or an inline string.
             responseText.push(
                 Array.from(sheetsXmlCNodesList)
-                    // Filter c nodes than do not have any valid v nodes
-                    .filter(cNode => cNode.getElementsByTagName("v")[0]
-                                        && cNode.getElementsByTagName("v")[0].childNodes[0]
-                                        && cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue)
+                    // Filter out invalid c nodes
+                    .filter(cNode => isValidInlineStringCNode(cNode) || hasValidVNodeInCNode(cNode))
                     .map(cNode => {
-                        /** Flag whether this node's value represents a string index */
-                        const isString = cNode.getAttribute("t") == "s";
-                        /** Find value nodes represented by v tags */
-                        const value = cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue;
-                        // Validate text
-                        if (isString && value >= sharedStrings.length)
-                            throw ERRORMSG.fileCorrupted(filepath);
+                        // Processing if this is a valid inline string c node.
+                        if (isValidInlineStringCNode(cNode))
+                            return cNode.getElementsByTagName('is')[0].getElementsByTagName('t')[0].childNodes[0].nodeValue;
 
-                        return isString
-                                ? sharedStrings[value]
-                                : value;
+                        // Processing if this c node has a valid v node.
+                        if (hasValidVNodeInCNode(cNode)) {
+                            /** Flag whether this node's value represents an index in the shared string array */
+                            const isIndexInSharedStrings = cNode.getAttribute("t") == "s";
+                            /** Find value nodes represented by v tags */
+                            const value = cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue;
+                            // Validate text
+                            if (isIndexInSharedStrings && value >= sharedStrings.length)
+                                throw ERRORMSG.fileCorrupted(filepath);
+
+                            return isIndexInSharedStrings
+                                    ? sharedStrings[value]
+                                    : value;
+                        }
+                        // TODO: Add debug asserts for if we reach here which would mean we are filtering more items than we are processing.
+                        // Not the case now but it could happen and it is better to be safe.
+                        return '';
                     })
                     // Join each cell text within a sheet with a space.
                     .join(config.newlineDelimiter ?? "\n")
@@ -648,7 +681,7 @@ module.exports.parseOfficeAsync = parseOfficeAsync;
 
 
 // Run this library on CLI
-if ((process.argv[0].split('/').pop() == "node" || process.argv[0].split('/').pop() == "npx") && (process.argv[1].split('/').pop() == "officeParser.js" || process.argv[1].split('/').pop() == "officeparser")) {
+if ((process.argv[0].split('/').pop() == "node" || process.argv[0].split('/').pop() == "npx") && (process.argv[1].split('/').pop() == "officeParser.js" || process.argv[1].split('/').pop().toLowerCase() == "officeparser")) {
     if (process.argv.length == 2) {
         // continue
     }
