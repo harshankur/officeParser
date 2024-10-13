@@ -230,7 +230,8 @@ function parseExcel(filepath, callback, config) {
     })
     // ********************************** excel xml files explanation ***************************************
     // Structure of xmlContent of an excel file is a bit complex.
-    // We have a sharedStrings.xml file which has strings inside t tags
+    // We usually have a sharedStrings.xml file which has strings inside t tags
+    // However, this file is not necessary to be present. It is sometimes absent if the file has no shared strings indices represented in v nodes.
     // Each sheet has an individual sheet xml file which has numbers in v tags (probably value) inside c tags (probably cell)
     // Each value of v tag is to be used as it is if the "t" attribute (probably type) of c tag is not "s" (probably shared string)
     // If the "t" attribute of c tag is "s", then we use the value to select value from sharedStrings array with the value as its index.
@@ -240,8 +241,9 @@ function parseExcel(filepath, callback, config) {
         /** Store all the text content to respond */
         let responseText = [];
 
-        /** Find text nodes with t tags in sharedStrings xml file */
-        const sharedStringsXmlTNodesList = parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName("t");
+        /** Find text nodes with t tags in sharedStrings xml file. If the sharedStringsFile is not present, we return an empty array. */
+        const sharedStringsXmlTNodesList = xmlContentFilesObject.sharedStringsFile != undefined ? parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName("t")
+                                                                                                : [];
         /** Create shared string array. This will be used as a map to get strings from within sheet files. */
         const sharedStrings = Array.from(sharedStringsXmlTNodesList)
                                 .map(tNode => tNode.childNodes[0]?.nodeValue ?? '');
