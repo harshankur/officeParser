@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
-const decompress    = require('decompress');
-const fs            = require('fs');
-const rimraf        = require('rimraf');
-const fileType      = require('file-type');
-const pdfjs         = require('./pdfjs-dist-build/pdf.js');
-const { DOMParser } = require('@xmldom/xmldom');
+const decompress     = require('decompress');
+const fs             = require('fs');
+const { rimrafSync } = require('rimraf');
+const fileType       = require('file-type');
+const pdfjs          = require('./pdfjs-dist-build/pdf.js');
+const { DOMParser }  = require('@xmldom/xmldom');
 
 /** Header for error messages */
 const ERRORHEADER = "[OfficeParser]: ";
@@ -543,7 +543,7 @@ function parseOffice(file, callback, config = {}) {
         }
 
         // create temp file subdirectory if it does not exist
-        fs.mkdirSync(`${internalConfig.tempFilesLocation}/tempfiles`, { recursive: true });
+        fs.mkdirSync(getTempFilesDirectory(internalConfig.tempFilesLocation), { recursive: true });
 
         // Check if buffer
         if (Buffer.isBuffer(file)) {
@@ -552,11 +552,11 @@ function parseOffice(file, callback, config = {}) {
                 .then(data =>
                 {
                     // temp file name
-                    const newfilepath = getNewFileName(internalConfig.tempFilesLocation, data.ext.toLowerCase());
+                    const newFileName = getNewFileName(data.ext.toLowerCase());
                     // write new file
-                    fs.writeFileSync(newfilepath, file);
+                    fs.writeFileSync(getFilePath(getTempFilesDirectory(internalConfig.tempFilesLocation), newFileName), file);
                     // resolve promise
-                    res(newfilepath);
+                    res(newFileName);
                 })
                 .catch(() => rej(ERRORMSG.improperBuffers));
             return;
@@ -569,16 +569,18 @@ function parseOffice(file, callback, config = {}) {
             throw ERRORMSG.fileDoesNotExist(file);
 
         // temp file name
-        const newfilepath = getNewFileName(internalConfig.tempFilesLocation, file.split(".").pop().toLowerCase());
+        const newFileName = getNewFileName(file.split(".").pop().toLowerCase());
         // Copy the file into a temp location with the temp name
-        fs.copyFileSync(file, newfilepath)
+        fs.copyFileSync(file, getFilePath(getTempFilesDirectory(internalConfig.tempFilesLocation), newFileName))
         // resolve promise
-        res(newfilepath);
+        res(newFileName);
     });
 
     // Process filePreparedPromise resolution.
     filePreparedPromise
-        .then(filepath => {
+        .then(filename => {
+            // The file path
+            const filepath = getFilePath(getTempFilesDirectory(internalConfig.tempFilesLocation), filename);
             // File extension. Already in lowercase when we prepared the temp file above.
             const extension = filepath.split(".").pop();
 
@@ -609,9 +611,33 @@ function parseOffice(file, callback, config = {}) {
             /** Internal callback function that calls the user's callback function passed in argument and removes the temp files if required */
             function internalCallback(data, err) {
                 // Check if we need to preserve unzipped content files or delete them.
-                if (!internalConfig.preserveTempFiles)
-                    // Delete decompress sublocation.
-                    rimraf(internalConfig.tempFilesLocation, rimrafErr => consoleError(rimrafErr, internalConfig.outputErrorToConsole));
+                if (!internalConfig.preserveTempFiles) {
+                    /** Safely delete location */
+                    function safelyDeleteLocation(location, deleteDirIfEmpty) {
+                        if (!fs.existsSync(location))
+                            return;
+
+                        if (!fs.lstatSync(location).isDirectory()       // If not directory
+                            || !deleteDirIfEmpty                        // or if the deleteDirIfEmpty is false or undefined
+                            || fs.readdirSync(location).length == 0) {  // or if it is true, we check if the contents are empty.
+                            try {
+                                rimrafSync(location);
+                            }
+                            catch(rimrafErr) {
+                                consoleError(rimrafErr, internalConfig.outputErrorToConsole);
+                            }
+                        }
+                    }
+
+                    // We delete our file as well as the extracted files inside the office files.
+                    // There is no extraction for pdf files because we don't support any unpacking of it.
+                    // After removing files, we check if the folders containing them are empty.
+                    // If yes, we remove those folders too.
+                    safelyDeleteLocation(filepath);
+                    safelyDeleteLocation(getFilePath(internalConfig.tempFilesLocation, filename));
+                    safelyDeleteLocation(getTempFilesDirectory(internalConfig.tempFilesLocation), true);
+                    safelyDeleteLocation(internalConfig.tempFilesLocation, true);
+                }
 
                 // Check if there is an error. Throw if there is an error.
                 if (err)
@@ -644,21 +670,30 @@ function parseOfficeAsync(file, config = {}) {
 let globalFileNameIterator = 0;
 /**
  * File Name generator that takes the extension as an input and returns a file name that comprises a timestamp and an incrementing number
- * to allow the files to be sorted in chronological order
- * @param {string} tempFilesLocation Directory whether this new file needs to be stored
- * @param {string} ext               File extension for this new generated file name
+ * to allow the files to be sorted in chronological order. We also prefix them with ppid and pid of the process to support
+ * common destination from worker threads as well as multiple processes running them together.
+ * @param {string} ext File extension for this new generated file name
  * @returns {string}
  */
-function getNewFileName(tempFilesLocation, ext) {
+function getNewFileName(ext) {
     // Get the iterator part of the file name
     let iteratorPart = (globalFileNameIterator++).toString().padStart(5, '0');
     // We want the iterator part of the file name to be of 5 digits.
     // Therefore, when the iterator crosses into 6 digits, we reset it to 0.
     if (globalFileNameIterator > 99999)
         globalFileNameIterator = 0;
+    // Return the file name with ppid and pid to allow unique names even with worker threads.
+    return `${process.ppid}_${process.pid}_${new Date().getTime().toString() + iteratorPart}.${ext}`;
+}
 
-    // Return the file name
-    return `${tempFilesLocation}/tempfiles/${new Date().getTime().toString() + iteratorPart}.${ext}`;
+/** Gets directory for storing files. */
+function getTempFilesDirectory(root) {
+    return `${root}/tempfiles`;
+}
+
+/** Gets file path for the supplied directory and the file name. */
+function getFilePath(directory, fileName) {
+    return `${directory}/${fileName}`;
 }
 
 /**
