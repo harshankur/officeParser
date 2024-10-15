@@ -157,7 +157,7 @@ function searchForTermInOfficeFile(searchterm, filepath) {
 
 **Example - TypeScript**
 ```ts
-const officeParser = require('officeparser');
+import { OfficeParserConfig, parseOfficeAsync } from 'officeparser';
 
 const config: OfficeParserConfig = {
     newlineDelimiter: " ",  // Separate new lines with a space instead of the default \n.
@@ -165,7 +165,7 @@ const config: OfficeParserConfig = {
 }
 
 // relative path is also fine => eg: files/myWorkSheet.ods
-officeParser.parseOfficeAsync("/Users/harsh/Desktop/files/mySlides.pptx", config);
+parseOfficeAsync("/Users/harsh/Desktop/files/mySlides.pptx", config);
     .then(data => {
         const newText = data + " look, I can parse a powerpoint file";
         callSomeOtherFunction(newText);
@@ -174,7 +174,7 @@ officeParser.parseOfficeAsync("/Users/harsh/Desktop/files/mySlides.pptx", config
 
 // Search for a term in the parsed text.
 function searchForTermInOfficeFile(searchterm: string, filepath: string): Promise<boolean> {
-    return officeParser.parseOfficeAsync(filepath)
+    return parseOfficeAsync(filepath)
         .then(data => data.indexOf(searchterm) != -1)
 }
 ```
