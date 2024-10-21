@@ -13,6 +13,7 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
+* 2024/10/21 - Replaced extracting zip files from decompress to yauzl. This means that we now extract files in memory and we no longer need to write them to disk. Removed config flags related to extracted files. Added flags for CLI execution.
 * 2024/10/15 - Fixed erroring out while deleting temp files when multiple worker threads make parallel executions resulting in same file name for multiple files. Fixed erroring out when multiple executions are made without waiting for the previous execution to finish which resulted in deleting the file from other execution. Upgraded dependencies.
 * 2024/10/13 - Fixed parsing text from xlsx files which contain no shared strings file and files which have inlineStr based strings.
 * 2024/05/06 - Replaced pdf parsing support from pdf-parse library to natively building it using pdf.js library from Mozilla by analyzing its output. Added pdfjs-dist build as a local library.
@@ -37,7 +38,6 @@ A Node.js library to parse text out of any office file.
 
 ## Install via npm
 
-
 ```
 npm i officeparser
 ```
@@ -45,14 +45,20 @@ npm i officeparser
 ## Command Line usage
 If you want to call the installed officeParser.js file, use below command
 ```
-node </path/to/officeParser.js> <fileName>
+node <path/to/officeParser.js> [--configOption=value] [FILE_PATH]
+node officeparser [--configOption=value] [FILE_PATH]
 ```
 
-Otherwise, you can simply use npx to instantly extract parsed data.
+Otherwise, you can simply use npx without installing the node module to instantly extract parsed data.
 ```
-npx officeparser <fileName>
+npx officeparser [--configOption=value] [FILE_PATH]
 ```
 
+### Config Options:
+- `--ignoreNotes=[true|false]`          Flag to ignore notes from files like PowerPoint. Default is false.
+- `--newlineDelimiter=[delimiter]`      The delimiter to use for new lines. Default is `\n`.
+- `--putNotesAtLast=[true|false]`       Flag to collect notes at the end of files like PowerPoint. Default is false.
+- `--outputErrorToConsole=[true|false]` Flag to output errors to the console. Default is false.
 
 ## Library Usage
 ```js
@@ -101,8 +107,6 @@ officeParser.parseOfficeAsync(fileBuffers);
 *Optionally add a config object as 3rd variable to parseOffice for the following configurations*
 | Flag                 | DataType | Default          | Explanation                                                                                                                                                                                                                                     |
 |----------------------|----------|------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| tempFilesLocation    | string   | officeParserTemp | The directory where officeparser stores the temp files . The final decompressed data will be put inside officeParserTemp folder within your directory. **Please ensure that this directory actually exists.** Default is officeParserTemp.      |
-| preserveTempFiles    | boolean  | false            | Flag to not delete the internal content files and the possible duplicate temp files that it uses after unzipping office files. Default is false. It always deletes all of those files.                                                          |
 | outputErrorToConsole | boolean  | false            | Flag to show all the logs to console in case of an error. Default is false.                                                                                                                                                                     |
 | newlineDelimiter     | string   | \n               | The delimiter used for every new line in places that allow multiline text like word. Default is \n.                                                                                                                                             |
 | ignoreNotes          | boolean  | false            | Flag to ignore notes from parsing in files like powerpoint. Default is false. It includes notes in the parsed text by default.                                                                                                                  |

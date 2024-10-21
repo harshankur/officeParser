@@ -1,3 +1,5 @@
+// @ts-check
+
 const officeParser = require("../officeParser");
 const fs = require("fs");
 const supportedExtensions = require("../supportedExtensions");
@@ -53,29 +55,28 @@ function getFilename(ext, isContentFile = false) {
 }
 
 /** Run test for a passed extension */
-function runTest(ext) {
-    return officeParser.parseOfficeAsync(getFilename(ext), config)
+function runTest(ext, buffer) {
+    return officeParser.parseOfficeAsync(buffer ? fs.readFileSync(getFilename(ext)) : getFilename(ext), config)
         .then(text =>
             fs.readFileSync(getFilename(ext, true), 'utf8') == text
-                ? console.log(`[${ext}]=> Passed`)
-                : console.log(`[${ext}]=> Failed`)
+                ? console.log(`[${ext.padEnd(4)}: ${buffer ? 'buffer' : 'file  '}] => Passed`)
+                : console.log(`[${ext.padEnd(4)}: ${buffer ? 'buffer' : 'file  '}] => Failed`)
         )
-        .catch(error => console.log("ERROR: " + error))
+        .catch(error => console.log("ERROR: " + error));
 }
 
 async function runAllTests() {
     for (let i = 0; i < supportedExtensionTests.length; i++)
     {
         const test = supportedExtensionTests[i];
-        if (test.testAvailable)
-            await runTest(test.ext)
+        if (test.testAvailable) {
+            await runTest(test.ext, false);
+            await runTest(test.ext, true);
+        }
         else
             console.log(`[${test.ext}]=> Skipped`);
     }
 }
-
-// Enable console output in case something fails
-// officeParser.enableConsoleOutput();
 
 // Run all test files with test content if no argument passed.
 if (process.argv.length == 2)

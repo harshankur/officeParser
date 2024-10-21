@@ -1,15 +1,7 @@
 #!/usr/bin/env node
 export type OfficeParserConfig = {
     /**
-     * The directory where officeparser stores the temp files . The final decompressed data will be put inside officeParserTemp folder within your directory. Please ensure that this directory actually exists. Default is officeParsertemp.
-     */
-    tempFilesLocation?: string;
-    /**
-     * Flag to not delete the internal content files and the duplicate temp files that it uses after unzipping office files. Default is false. It deletes all of those files.
-     */
-    preserveTempFiles?: boolean;
-    /**
-     * Flag to show all the logs to console in case of an error irrespective of your own handling.
+     * Flag to show all the logs to console in case of an error irrespective of your own handling. Default is false.
      */
     outputErrorToConsole?: boolean;
     /**
@@ -32,8 +24,7 @@ export type OfficeParserConfig = {
  * @returns {void}
  */
 export function parseOffice(file: string | Buffer, callback: Function, config?: OfficeParserConfig): void;
-/**
- * Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
+/** Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
  * @param {string | Buffer}    file        File path or file buffers
  * @param {OfficeParserConfig} [config={}] [OPTIONAL]: Config Object for officeParser
  * @returns {Promise<string>}
