@@ -67,13 +67,15 @@ jobs:
         env:
           BUNDLE_NAME: ${{ env.BUNDLE_NAME }}
 
-      # Publish package to npm registry
-      - name: Publish to npm
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Set up npm authentication
+      - name: Set Up npm Authentication for npmjs.com
+        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
 
-      # Set Up npm Authentication
+      # Publish package to npm
+      - name: Publish to npm
+        run: npm publish --access public  # Add `--access public` if it's a public package.
+
+      # Set up github packages authentication
       - name: Set Up npm Authentication
         run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > ~/.npmrc
 
