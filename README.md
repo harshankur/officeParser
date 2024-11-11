@@ -13,6 +13,7 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
+* 2024/11/12 - Added ArrayBuffer as a type of file input. Generating bundle files now which exposes namespace officeParser to be able to access parseOffice and parseOfficeAsync directly on the browser. Extracting text out of pdf files does not work currently in browser bundles.
 * 2024/10/21 - Replaced extracting zip files from decompress to yauzl. This means that we now extract files in memory and we no longer need to write them to disk. Removed config flags related to extracted files. Added flags for CLI execution.
 * 2024/10/15 - Fixed erroring out while deleting temp files when multiple worker threads make parallel executions resulting in same file name for multiple files. Fixed erroring out when multiple executions are made without waiting for the previous execution to finish which resulted in deleting the file from other execution. Upgraded dependencies.
 * 2024/10/13 - Fixed parsing text from xlsx files which contain no shared strings file and files which have inlineStr based strings.
@@ -185,10 +186,51 @@ function searchForTermInOfficeFile(searchterm: string, filepath: string): Promis
 \
 **Please take note: I have breached convention in placing err as second argument in my callback but please understand that I had to do it to not break other people's existing modules.**
 
+## Browser Usage
+Download the bundle file available as part of the release asset.
+Include this bundle file in your browser html file and access `parseOffice` and `parseOfficeAsync` under the **`officeParser`** namespace.
+
+**Example**
+```html
+<head>
+    ...
+    <!-- Include bundle file in the script tag. -->
+    <script src="officeParserBundle@5.1.0.js"></script>
+</head>
+<body>
+    ...
+    <input type="file" id="fileInput" />
+    ...
+    <script>
+        document.getElementById('fileInput').addEventListener('change', async function(event) {
+            const outputDiv = document.getElementById('output');
+            const file = event.target.files[0];
+            try {
+                // Your configuration options for officeParser
+                const config = {
+                    outputErrorToConsole: false,
+                    newlineDelimiter: '\n',
+                    ignoreNotes: false,
+                    putNotesAtLast: false
+                };
+
+                const arrayBuffer = await file.arrayBuffer();
+                const result = await officeParser.parseOfficeAsync(arrayBuffer, config);
+                // result contains the extracted text.
+            }
+            catch (error) {
+                // Handle error
+            }
+        });
+    </script>
+</body>
+```
+
 
 ## Known Bugs
 1. Inconsistency and incorrectness in the positioning of footnotes and endnotes in .docx files where the footnotes and endnotes would end up at the end of the parsed text whereas it would be positioned exactly after the referenced word in .odt files.
 2. The charts and objects information of .odt files are not accurate and may end up showing a few NaN in some cases.
+3. Extracting texts in browser bundles does not work for pdf files.
 ----------
 
 **npm**

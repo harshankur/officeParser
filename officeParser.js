@@ -479,12 +479,12 @@ function parsePdf(file, callback, config) {
 }
 
 /** Main async function with callback to execute parseOffice for supported files
- * @param {string | Buffer}    file        File path or file buffers
- * @param {function}           callback    Callback function that returns value or error
- * @param {OfficeParserConfig} [config={}] [OPTIONAL]: Config Object for officeParser
+ * @param {string | Buffer | ArrayBuffer} srcFile      File path or file buffers or Javascript ArrayBuffer
+ * @param {function}                      callback     Callback function that returns value or error
+ * @param {OfficeParserConfig}            [config={}]  [OPTIONAL]: Config Object for officeParser
  * @returns {void}
  */
-function parseOffice(file, callback, config = {}) {
+function parseOffice(srcFile, callback, config = {}) {
     // Make a clone of the config with default values such that none of the config flags are undefined.
     /** @type {OfficeParserConfig} */
     const internalConfig = {
@@ -494,6 +494,12 @@ function parseOffice(file, callback, config = {}) {
         outputErrorToConsole: false,
         ...config
     };
+
+    // Our internal code can process regular node Buffers or file path.
+    // So, if the src file was presented as ArrayBuffers, we create Buffers from them.
+    let file = srcFile instanceof ArrayBuffer ? Buffer.from(srcFile)
+                                              : srcFile;
+
     /**
      * Prepare file for processing
      * @type {Promise<{ file:string | Buffer, ext: string}>}
@@ -559,13 +565,13 @@ function parseOffice(file, callback, config = {}) {
 }
 
 /** Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
- * @param {string | Buffer}    file        File path or file buffers
- * @param {OfficeParserConfig} [config={}] [OPTIONAL]: Config Object for officeParser
+ * @param {string | Buffer | ArrayBuffer} srcFile     File path or file buffers or Javascript ArrayBuffer
+ * @param {OfficeParserConfig}            [config={}] [OPTIONAL]: Config Object for officeParser
  * @returns {Promise<string>}
  */
-function parseOfficeAsync(file, config = {}) {
+function parseOfficeAsync(srcFile, config = {}) {
     return new Promise((res, rej) => {
-        parseOffice(file, function (data, err) {
+        parseOffice(srcFile, function (data, err) {
             if (err)
                 return rej(err);
             return res(data);

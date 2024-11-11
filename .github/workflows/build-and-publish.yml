@@ -1,0 +1,88 @@
+# Workflow Name: Build and Publish
+# This workflow performs the following tasks:
+# - Runs tests, builds, and creates a bundled JS file with Browserify
+# - Publishes the package to npm and GitHub Packages if triggered by a new release
+# - Attaches the bundle as a release asset and also as a downloadable artifact on each run
+
+name: Build and Publish
+
+# Trigger Events:
+on:
+  # Triggers the workflow when a new release is published on GitHub
+  release:
+    types: [published]
+
+jobs:
+  # Step 2: Build and Publish Tasks
+  build-and-publish:
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+
+    steps:
+      # Check out code for building and publishing
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      # Set up Node.js with a specified version
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Install dependencies
+      - name: Install Dependencies
+        run: npm ci
+
+      # Run tests; workflow stops here if any test fails
+      - name: Run Tests
+        run: npm test
+
+      # Generate bundled output using Browserify
+      - name: Generate Browserify Bundle
+        # Export the bundle name as as officeParserBundle@<M>.<m>.<p>.js to the environment
+        # Generate bundle
+        run: |
+          mkdir -p dist
+          VERSION=${{ github.event.release.tag_name }}
+          BUNDLE_NAME=officeParserBundle@${VERSION#v}.js
+          echo "BUNDLE_NAME=$BUNDLE_NAME" >> $GITHUB_ENV
+          npx browserify officeParser.js --standalone officeParser -o dist/$BUNDLE_NAME
+
+      # Attach officeParserBundle@<M>.<m>.<p>.js to the existing GitHub release as an asset
+      - name: Upload Bundle as Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}  # Use the tag name from the release event
+          files: dist/${{ env.BUNDLE_NAME }}              # Use the exported bundle name
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}       # Ensure you have the correct token
+          BUNDLE_NAME: ${{ env.BUNDLE_NAME }}
+
+      # Upload officeParserBundle.js as an artifact for download on every workflow run
+      - name: Upload Bundle as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BUNDLE_NAME }}
+          path: dist/${{ env.BUNDLE_NAME }}               # Use the exported bundle name
+        env:
+          BUNDLE_NAME: ${{ env.BUNDLE_NAME }}
+
+      # Publish package to npm registry
+      - name: Publish to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Set Up npm Authentication
+      - name: Set Up npm Authentication
+        run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > ~/.npmrc
+
+      # Modify package name temporarily
+      - name: Add GitHub Scope
+        run: npm pkg set name="@harshankur/officeparser"
+
+      # Publish package to GitHub Packages registry
+      - name: Publish to GitHub Packages
+        run: npm publish --registry=https://npm.pkg.github.com/
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

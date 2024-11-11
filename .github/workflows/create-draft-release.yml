@@ -1,0 +1,76 @@
+# Workflow Name: Create Draft Release
+# This workflow performs the following tasks:
+# - Checks current version in the most recent commit on master and gets the last version from previous tag.
+# - If the current version is different from the last, it creates a draft release
+
+name: Create Draft Release
+
+# Trigger Events:
+on:
+  # Triggers the workflow on pushes to the master branch
+  push:
+    branches:
+      - master
+
+jobs:
+  # Step 1: Version Check and Release Creation
+  version-check-and-release:
+    # Only runs on push events, to automate release creation based on version change
+    if: github.event_name == 'push'
+    # Use the latest Ubuntu runner for this job
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step to check out the repository's code to access files
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      # Set up Node.js with a specified version
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Install the project's dependencies using clean install
+      - name: Install Dependencies
+        run: npm ci
+
+      # Fetch current version from package.json and the latest Git tag
+      - name: Get Package Version and Latest Tag
+        # ID to reference this step's outputs
+        id: version
+
+        # Extract package.json version
+        # Set output variable `new_version` using environment file
+        # Fetch all tags from the repository
+        # Get the most recent tag
+        # Strip the "v" prefix for comparison
+        run: |
+          NEW_VERSION=$(jq -r '.version' package.json)
+          echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
+          git fetch --tags
+          LAST_TAG=$(git tag --sort=-v:refname | head -n 1)
+          LAST_VERSION=${LAST_TAG#v}
+          echo "last_version=$LAST_VERSION" >> $GITHUB_ENV
+        shell: bash
+
+      # Gets the current date in the correct format - DD-MM-YYYY.
+      - name: Get current date
+        id: date
+        run: echo "::set-output name=date::$(date +'%d.%m.%Y')"
+      # Compare versions and create a draft release if version has changed
+      - name: Create Draft GitHub Release
+        if: ${{ env.new_version != env.last_version }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.new_version }}
+          name: "v${{ env.new_version }}"
+          body: |
+            # v${{ env.new_version }} - ${{ steps.date.outputs.date }}
+            ## Changes: [v${{ env.last_version }}..v${{ env.new_version }}](https://github.com/${{ github.repository }}/compare/v${{ env.last_version }}..v${{ env.new_version }})
+          draft: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          new_version: ${{ env.new_version }}
+          last_version: ${{ env.last_version }}
