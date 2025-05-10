@@ -449,7 +449,13 @@ function parsePdf(file, callback, config) {
     // @ts-ignore
     pdfjs.getDocument(file).promise
         // We go through each page and build our text content promise array.
-        .then(document => Promise.all(Array.from({ length: document.numPages }, (_, index) => index + 1).map(pageNr => document.getPage(pageNr).then(page => page.getTextContent()))))
+        .then(document => Promise.all(Array.from({ length: document.numPages }, (_, index) => index + 1).map(pageNr => document.getPage(pageNr).then(page => page.getTextContent()).catch(e => {
+            // ignore error for current page
+            if (config.outputErrorToConsole) {
+                console.error(e);
+            }
+            return { items: [] };
+        }))))
         // Each textContent item has property 'items' which is an array of objects.
         // Each object element in the array has text stored in their 'str' key.
         // The concatenation of str is what makes our pdf content.
