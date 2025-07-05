@@ -6,8 +6,10 @@ const concat        = require('concat-stream');
 const { DOMParser } = require('@xmldom/xmldom');
 const fileType      = require('file-type');
 const fs            = require('fs');
-const pdfjs         = require('./pdfjs-dist-build/pdf.js');
 const yauzl         = require('yauzl');
+
+/** Load pdfjs-dist once at module scope. This returns a Promise that resolves to the module. */
+const pdfjsPromise = import('pdfjs-dist/legacy/build/pdf.mjs');
 
 /** Header for error messages */
 const ERRORHEADER = "[OfficeParser]: ";
@@ -271,8 +273,10 @@ function parseExcel(file, callback, config) {
                                         ? sharedStrings[value]
                                         : value;
                             }
-                            // TODO: Add debug asserts for if we reach here which would mean we are filtering more items than we are processing.
-                            // Not the case now but it could happen and it is better to be safe.
+                            // Should not reach here. If we do, it means we are not filtering out items that we are not ready to process.
+                            // Not the case now but it could happen if we change the filtering logic without updating the processing logic.
+                            // So, it is better to error out here.
+                            handleError(`Invalid c node found in sheet xml content: ${cNode}`, callback, config.outputErrorToConsole);
                             return '';
                         })
                         // Join each cell text within a sheet with a space.
@@ -442,14 +446,17 @@ function parseOpenOffice(file, callback, config) {
  * @param {string | Buffer}    file     File path or Buffers
  * @param {function}           callback Callback function that returns value or error
  * @param {OfficeParserConfig} config   Config Object for officeParser
- * @returns {void}
+ * @returns {Promise<void>}
  */
-function parsePdf(file, callback, config) {
-    // Get the pdfjs document for the filepath or buffers.
-    // @ts-ignore
-    pdfjs.getDocument(file).promise
+async function parsePdf(file, callback, config) {
+    // Wait for pdfjs module to be loaded once
+    const pdfjs = await pdfjsPromise;
+
+    // Get the pdfjs document for the filepath or Uint8Array buffers.
+    // pdfjs does not accept Buffers directly, so we convert them to Uint8Array.
+    pdfjs.getDocument(file instanceof Buffer ? new Uint8Array(file) : file).promise
         // We go through each page and build our text content promise array.
-        .then(document => Promise.all(Array.from({ length: document.numPages }, (_, index) => index + 1).map(pageNr => document.getPage(pageNr).then(page => page.getTextContent()))))
+        .then(document => Promise.all(Array.from({ length: document.numPages }, (_, index) => document.getPage(index + 1).then(page => page.getTextContent()))))
         // Each textContent item has property 'items' which is an array of objects.
         // Each object element in the array has text stored in their 'str' key.
         // The concatenation of str is what makes our pdf content.
@@ -462,17 +469,23 @@ function parsePdf(file, callback, config) {
             const responseText = textContentArray
                                     .map(textContent => textContent.items)      // Get all the items
                                     .flat()                                     // Flatten all the items object
-                                    .filter(item => item.str != '')             // Ignore the empty string items.
-                                    .reduce((a, v) => (
-                                        {
-                                            text: a.text + (v.transform[5] != a.transform5 ? (config.newlineDelimiter ?? "\n") : '') + v.str,
-                                            transform5: v.transform[5]
-                                        }),
-                                        {
-                                            text: '',
-                                            transform5: undefined
-                                        }).text;
-            
+                                    .reduce((a, v) =>  (
+                                        // the items could be TextItem or a TextMarkedContent.
+                                        // We are only interested in the TextItem which has a str property.
+                                        'str' in v && v.str != ''
+                                            ? {
+                                                text: a.text + (v.transform[5] != a.transform5 ? (config.newlineDelimiter ?? "\n") : '') + v.str,
+                                                transform5: v.transform[5]
+                                            } : {
+                                                text: a.text,
+                                                transform5: a.transform5
+                                            }
+                                    ),
+                                    {
+                                        text: '',
+                                        transform5: undefined
+                                    }).text;
+
             callback(responseText, undefined);
         })
         .catch(e => callback(undefined, e));
