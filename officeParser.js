@@ -8,9 +8,6 @@ const fileType      = require('file-type');
 const fs            = require('fs');
 const yauzl         = require('yauzl');
 
-/** Load pdfjs-dist once at module scope. This returns a Promise that resolves to the module. */
-const pdfjsPromise = import('pdfjs-dist/legacy/build/pdf.mjs');
-
 /** Header for error messages */
 const ERRORHEADER = "[OfficeParser]: ";
 /** Error messages */
@@ -450,7 +447,8 @@ function parseOpenOffice(file, callback, config) {
  */
 async function parsePdf(file, callback, config) {
     // Wait for pdfjs module to be loaded once
-    const pdfjs = await pdfjsPromise;
+    // Lazy import pdfjs to avoid Node startup issues for environments that don't use PDF parsing
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
 
     // Get the pdfjs document for the filepath or Uint8Array buffers.
     // pdfjs does not accept Buffers directly, so we convert them to Uint8Array.
