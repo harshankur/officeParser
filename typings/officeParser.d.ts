@@ -18,16 +18,16 @@ export type OfficeParserConfig = {
     putNotesAtLast?: boolean;
 };
 /** Main async function with callback to execute parseOffice for supported files
- * @param {string | Buffer}    file        File path or file buffers
- * @param {function}           callback    Callback function that returns value or error
- * @param {OfficeParserConfig} [config={}] [OPTIONAL]: Config Object for officeParser
+ * @param {string | Buffer | ArrayBuffer} srcFile      File path or file buffers or Javascript ArrayBuffer
+ * @param {function}                      callback     Callback function that returns value or error
+ * @param {OfficeParserConfig}            [config={}]  [OPTIONAL]: Config Object for officeParser
  * @returns {void}
  */
-export function parseOffice(file: string | Buffer, callback: Function, config?: OfficeParserConfig): void;
+export function parseOffice(srcFile: string | Buffer | ArrayBuffer, callback: Function, config?: OfficeParserConfig): void;
 /** Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
- * @param {string | Buffer}    file        File path or file buffers
- * @param {OfficeParserConfig} [config={}] [OPTIONAL]: Config Object for officeParser
+ * @param {string | Buffer | ArrayBuffer} srcFile     File path or file buffers or Javascript ArrayBuffer
+ * @param {OfficeParserConfig}            [config={}] [OPTIONAL]: Config Object for officeParser
  * @returns {Promise<string>}
  */
-export function parseOfficeAsync(file: string | Buffer, config?: OfficeParserConfig): Promise<string>;
+export function parseOfficeAsync(srcFile: string | Buffer | ArrayBuffer, config?: OfficeParserConfig): Promise<string>;
 //# sourceMappingURL=officeParser.d.ts.map
