@@ -235,12 +235,19 @@ function parseExcel(file, callback, config) {
                     && cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue != ''
             }
 
-            /** Find text nodes with t tags in sharedStrings xml file. If the sharedStringsFile is not present, we return an empty array. */
-            const sharedStringsXmlTNodesList = xmlContentFilesObject.sharedStringsFile != undefined ? parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName("t")
-                                                                                                    : [];
+            /** Find text nodes with t tags in sharedStrings.xml file. If the sharedStringsFile is not present, we return an empty array. */
+            const sharedStringsXmlSiNodesList = xmlContentFilesObject.sharedStringsFile != undefined
+                ? parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName("si")
+                : [];
+
             /** Create shared string array. This will be used as a map to get strings from within sheet files. */
-            const sharedStrings = Array.from(sharedStringsXmlTNodesList)
-                                    .map(tNode => tNode.childNodes[0]?.nodeValue ?? '');
+            const sharedStrings = Array.from(sharedStringsXmlSiNodesList)
+                .map(siNode => {
+                    // Concatenate all <t> nodes within the <si> node
+                    return Array.from(siNode.getElementsByTagName("t"))
+                        .map(tNode => tNode.childNodes[0]?.nodeValue ?? '') // Extract text content from each <t> node
+                        .join(''); // Combine all <t> node text into a single string
+                });
 
             // Parse Sheet files
             xmlContentFilesObject.sheetFiles.forEach(sheetXmlContent => {
