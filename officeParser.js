@@ -261,13 +261,14 @@ function parseExcel(file, callback, config) {
                                 /** Flag whether this node's value represents an index in the shared string array */
                                 const isIndexInSharedStrings = cNode.getAttribute("t") == "s";
                                 /** Find value nodes represented by v tags */
-                                const value = parseInt(cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue, 10);
+                                const value = cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue;
+                                const valueAsIndex = Number(value);
                                 // Validate text
-                                if (isIndexInSharedStrings && value >= sharedStrings.length)
+                                if (isIndexInSharedStrings && (valueAsIndex != parseInt(value, 10) || valueAsIndex >= sharedStrings.length))
                                     throw ERRORMSG.fileCorrupted(file);
 
                                 return isIndexInSharedStrings
-                                        ? sharedStrings[value]
+                                        ? sharedStrings[valueAsIndex]
                                         : value;
                             }
                             // Should not reach here. If we do, it means we are not filtering out items that we are not ready to process.
@@ -372,13 +373,19 @@ function parseOpenOffice(file, callback, config) {
             function traversal(node, xmlTextArray, isFirstRecursion) {
                 if (!node.childNodes || node.childNodes.length == 0) {
                     if (node.parentNode.tagName.indexOf('text') == 0 && node.nodeValue) {
+                        // If the corresponding value is of type float, we take the value from office:value attribute.
+                        // However, it is not on the parentNode but rather grandparentNode.
+                        const value = node.parentNode.parentNode?.getAttribute('office:value-type') == 'float'
+                                        ? Number(node.parentNode.parentNode.getAttribute('office:value'))
+                                        : node.nodeValue;
+
                         if (isNotesNode(node.parentNode) && (config.putNotesAtLast || config.ignoreNotes)) {
-                            notesText.push(node.nodeValue);
+                            notesText.push(value);
                             if (allowedTextTags.includes(node.parentNode.tagName) && !isFirstRecursion)
                                 notesText.push(config.newlineDelimiter ?? "\n");
                         }
                         else {
-                            xmlTextArray.push(node.nodeValue);
+                            xmlTextArray.push(value);
                             if (allowedTextTags.includes(node.parentNode.tagName) && !isFirstRecursion)
                                 xmlTextArray.push(config.newlineDelimiter ?? "\n");
                         }
