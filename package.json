@@ -46,7 +46,6 @@
   "homepage": "https://github.com/harshankur/officeParser#readme",
   "dependencies": {
     "@xmldom/xmldom": "^0.8.10",
-    "canvas": "^3.2.0",
     "concat-stream": "^2.0.0",
     "file-type": "^16.5.4",
     "node-ensure": "^0.0.0",
