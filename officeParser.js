@@ -700,21 +700,38 @@ function parseOpenOffice(file, callback, config) {
  */
 async function extractTextFromPdfPages(pages, config) {
     const delimiter = config.newlineDelimiter ?? '\n';
-    const textParts = [];
+    const textContentArray = [];
 
     for (const page of pages) {
         const textContent = await page.getTextContent();
-
-        // Put each text item on its own line for better text quality
-        const pageText = textContent.items
-            .filter(item => 'str' in item && item.str.trim())
-            .map(item => item.str)
-            .join(delimiter);
-
-        if (pageText) textParts.push(pageText);
+        textContentArray.push(textContent);
     }
 
-    return textParts.join(delimiter);
+    // str already contains any space that was in the text.
+    // So, we only care about when to add the new line.
+    // That we determine using transform[5] value which is the y-coordinate of the item object.
+    // So, if there is a mismatch in the transform[5] value between the current item and the previous item, we put a line break.
+    const responseText = textContentArray
+        .map(textContent => textContent.items)      // Get all the items
+        .flat()                                     // Flatten all the items object
+        .reduce((a, v) =>  (
+            // the items could be TextItem or a TextMarkedContent.
+            // We are only interested in the TextItem which has a str property.
+            'str' in v && v.str != ''
+                ? {
+                    text: a.text + (v.transform[5] != a.transform5 ? delimiter : '') + v.str,
+                    transform5: v.transform[5]
+                } : {
+                    text: a.text,
+                    transform5: a.transform5
+                }
+        ),
+        {
+            text: '',
+            transform5: undefined
+        }).text;
+
+    return responseText;
 }
 
 /** Extract images from all PDF pages
