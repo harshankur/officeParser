@@ -5,3 +5,4 @@ officeParser.bk.js
 test/.DS_Store
 .vscode/
 dist/
+.idea/
