@@ -1,5 +1,5 @@
 # officeParser
-A Node.js library to parse text out of any office file. 
+A Node.js library to parse text and images out of any office file.
 
 ### Supported File Types
 
@@ -13,6 +13,7 @@ A Node.js library to parse text out of any office file.
 
 
 #### Update
+* 2024/11/20 - Added image extraction support for docx and pdf files.
 * 2024/11/12 - Added ArrayBuffer as a type of file input. Generating bundle files now which exposes namespace officeParser to be able to access parseOffice and parseOfficeAsync directly on the browser. Extracting text out of pdf files does not work currently in browser bundles.
 * 2024/10/21 - Replaced extracting zip files from decompress to yauzl. This means that we now extract files in memory and we no longer need to write them to disk. Removed config flags related to extracted files. Added flags for CLI execution.
 * 2024/10/15 - Fixed erroring out while deleting temp files when multiple worker threads make parallel executions resulting in same file name for multiple files. Fixed erroring out when multiple executions are made without waiting for the previous execution to finish which resulted in deleting the file from other execution. Upgraded dependencies.
@@ -60,6 +61,7 @@ npx officeparser [--configOption=value] [FILE_PATH]
 - `--newlineDelimiter=[delimiter]`      The delimiter to use for new lines. Default is `\n`.
 - `--putNotesAtLast=[true|false]`       Flag to collect notes at the end of files like PowerPoint. Default is false.
 - `--outputErrorToConsole=[true|false]` Flag to output errors to the console. Default is false.
+- `--extractImages=[true|false]`        Flag to extract images from docx and pdf files. Default is false.
 
 ## Library Usage
 ```js
@@ -67,25 +69,30 @@ const officeParser = require('officeparser');
 
 // callback
 officeParser.parseOffice("/path/to/officeFile", function(data, err) {
-    // "data" string in the callback here is the text parsed from the office file passed in the first argument above
+    // "data" is an object with "text" and "images" properties
     if (err) {
         console.log(err);
         return;
     }
-    console.log(data);
+    console.log(data.text);
+    console.log(data.images); // Array of image objects
 })
 
 // promise
 officeParser.parseOfficeAsync("/path/to/officeFile");
-// "data" string in the promise here is the text parsed from the office file passed in the argument above
-    .then(data => console.log(data))
+// "data" is an object with "text" and "images" properties
+    .then(data => {
+        console.log(data.text);
+        console.log(data.images);
+    })
     .catch(err => console.error(err))
 
 // async/await
 try {
-    // "data" string returned from promise here is the text parsed from the office file passed in the argument
+    // "data" is an object with "text" and "images" properties
     const data = await officeParser.parseOfficeAsync("/path/to/officeFile");
-    console.log(data);
+    console.log(data.text);
+    console.log(data.images);
 } catch (err) {
     // resolve error
     console.log(err);
@@ -100,8 +107,40 @@ const fileBuffers = fs.readFileSync("/path/to/officeFile");
 // get parsed text from officeParser
 // NOTE: Only works with parseOffice. Old functions are not supported.
 officeParser.parseOfficeAsync(fileBuffers);
-    .then(data => console.log(data))
+    .then(data => {
+        console.log(data.text);
+        console.log(data.images);
+    })
     .catch(err => console.error(err))
+```
+
+### Image Extraction
+`officeParser` can now extract images from `.docx` and `.pdf` files by setting `extractImages: true` in the config. The `parseOfficeAsync` function returns an object with a `text` property (the extracted text) and an `images` property, which is an array of image objects. Each image object has the following properties:
+
+- `buffer`: A `Buffer` containing the image data.
+- `type`: The MIME type of the image (e.g., `image/jpeg`, `image/png`).
+- `filename`: The filename of the image (only available for `.docx` files).
+
+**Example:**
+```js
+const officeParser = require('officeparser');
+const fs = require('fs');
+
+const config = { extractImages: true };
+
+officeParser.parseOfficeAsync("/path/to/document.docx", config)
+    .then(data => {
+        console.log(data.text);
+        console.log(`Found ${data.images.length} images`);
+
+        // Save each image to disk
+        data.images.forEach((image, index) => {
+            const extension = image.type.split('/')[1];
+            const filename = image.filename || `image_${index}.${extension}`;
+            fs.writeFileSync(filename, image.buffer);
+        });
+    })
+    .catch(err => console.error(err));
 ```
 
 ### Configuration Object: OfficeParserConfig
@@ -112,12 +151,14 @@ officeParser.parseOfficeAsync(fileBuffers);
 | newlineDelimiter     | string   | \n               | The delimiter used for every new line in places that allow multiline text like word. Default is \n.                                                                                                                                             |
 | ignoreNotes          | boolean  | false            | Flag to ignore notes from parsing in files like powerpoint. Default is false. It includes notes in the parsed text by default.                                                                                                                  |
 | putNotesAtLast       | boolean  | false            | Flag, if set to true, will collectively put all the parsed text from notes at last in files like powerpoint. Default is false. It puts each notes right after its main slide content. If ignoreNotes is set to true, this flag is also ignored. |
+| extractImages        | boolean  | false            | Flag to extract images from files like docx and pdf. Default is false. If set to true, the return object will contain an 'images' array with image data.                                                                                        |
 <br>
 
 ```js
 const config = {
     newlineDelimiter: " ",  // Separate new lines with a space instead of the default \n.
-    ignoreNotes: true       // Ignore notes while parsing presentation files like pptx or odp.
+    ignoreNotes: true,      // Ignore notes while parsing presentation files like pptx or odp.
+    extractImages: true     // Extract images from docx and pdf files.
 }
 
 // callback
@@ -126,18 +167,19 @@ officeParser.parseOffice("/path/to/officeFile", function(data, err){
         console.log(err);
         return;
     }
-    console.log(data);
+    console.log(data.text);
 }, config)
 
 // promise
 officeParser.parseOfficeAsync("/path/to/officeFile", config);
-    .then(data => console.log(data))
+    .then(data => console.log(data.text))
     .catch(err => console.error(err))
 ```
 
 **Example - JavaScript**
 ```js
 const officeParser = require('officeparser');
+const fs = require('fs');
 
 const config = {
     newlineDelimiter: " ",  // Separate new lines with a space instead of the default \n.
@@ -147,44 +189,51 @@ const config = {
 // relative path is also fine => eg: files/myWorkSheet.ods
 officeParser.parseOfficeAsync("/Users/harsh/Desktop/files/mySlides.pptx", config);
     .then(data => {
-        const newText = data + " look, I can parse a powerpoint file";
+        const newText = data.text + " look, I can parse a powerpoint file";
         callSomeOtherFunction(newText);
+        data.images.forEach((image, index) => {
+            fs.writeFileSync(`image_${index}.${image.type.split('/')[1]}`, image.buffer);
+        });
     })
     .catch(err => console.error(err));
 
 // Search for a term in the parsed text.
 function searchForTermInOfficeFile(searchterm, filepath) {
     return officeParser.parseOfficeAsync(filepath)
-        .then(data => data.indexOf(searchterm) != -1)
+        .then(data => data.text.indexOf(searchterm) != -1)
 }
 ```
 
 
 **Example - TypeScript**
 ```ts
-import { OfficeParserConfig, parseOfficeAsync } from 'officeparser';
+import { OfficeParserConfig, parseOfficeAsync, ParseOfficeResult } from 'officeparser';
+import * as fs from 'fs';
 
 const config: OfficeParserConfig = {
     newlineDelimiter: " ",  // Separate new lines with a space instead of the default \n.
-    ignoreNotes: true       // Ignore notes while parsing presentation files like pptx or odp.
+    ignoreNotes: true,      // Ignore notes while parsing presentation files like pptx or odp.
+    extractImages: true     // Extract images from docx and pdf files.
 }
 
 // relative path is also fine => eg: files/myWorkSheet.ods
-parseOfficeAsync("/Users/harsh/Desktop/files/mySlides.pptx", config);
-    .then(data => {
-        const newText = data + " look, I can parse a powerpoint file";
+parseOfficeAsync("/Users/harsh/Desktop/files/mySlides.pptx", config)
+    .then((data: ParseOfficeResult) => {
+        const newText = data.text + " look, I can parse a powerpoint file";
         callSomeOtherFunction(newText);
+        data.images.forEach((image, index) => {
+            fs.writeFileSync(`image_${index}.${image.type.split('/')[1]}`, image.buffer);
+        });
     })
     .catch(err => console.error(err));
 
 // Search for a term in the parsed text.
 function searchForTermInOfficeFile(searchterm: string, filepath: string): Promise<boolean> {
     return parseOfficeAsync(filepath)
-        .then(data => data.indexOf(searchterm) != -1)
+        .then((data: ParseOfficeResult) => data.text.indexOf(searchterm) != -1)
 }
 ```
-\
-**Please take note: I have breached convention in placing err as second argument in my callback but please understand that I had to do it to not break other people's existing modules.**
+\n**Please take note: I have breached convention in placing err as second argument in my callback but please understand that I had to do it to not break other people's existing modules.**
 
 ## Browser Usage
 Download the bundle file available as part of the release asset.
@@ -211,12 +260,15 @@ Include this bundle file in your browser html file and access `parseOffice` and 
                     outputErrorToConsole: false,
                     newlineDelimiter: '\n',
                     ignoreNotes: false,
-                    putNotesAtLast: false
+                    putNotesAtLast: false,
+                    extractImages: true
                 };
 
                 const arrayBuffer = await file.arrayBuffer();
                 const result = await officeParser.parseOfficeAsync(arrayBuffer, config);
-                // result contains the extracted text.
+                // result contains the extracted text and images.
+                console.log(result.text);
+                console.log(result.images);
             }
             catch (error) {
                 // Handle error
