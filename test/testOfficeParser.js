@@ -95,21 +95,30 @@ async function runImageExtractionTest(testFile) {
     const testConfig = { ...config, extractImages: true };
     return officeParser.parseOfficeAsync(`test/files/${testFile.filename}`, testConfig)
         .then(result => {
+            // Validate image count
             const imageCount = result.images.length;
-            let passed = false;
+            let imagesPassed = false;
 
             if (testFile.expectedImageCount.exact !== undefined) {
-                passed = imageCount === testFile.expectedImageCount.exact;
+                imagesPassed = imageCount === testFile.expectedImageCount.exact;
             } else if (testFile.expectedImageCount.min !== undefined) {
-                passed = imageCount >= testFile.expectedImageCount.min;
+                imagesPassed = imageCount >= testFile.expectedImageCount.min;
             }
 
+            // Validate text content
+            const expectedText = fs.readFileSync(`test/files/${testFile.filename}.txt`, 'utf8').trim();
+            const actualText = result.text.trim();
+            const textPassed = expectedText === actualText;
+
+            // Overall pass/fail
+            const passed = imagesPassed && textPassed;
             const status = passed ? 'Passed' : 'Failed';
-            const details = testFile.expectedImageCount.exact !== undefined
+
+            const imageDetails = testFile.expectedImageCount.exact !== undefined
                 ? `expected: ${testFile.expectedImageCount.exact}, got: ${imageCount}`
                 : `expected: >=${testFile.expectedImageCount.min}, got: ${imageCount}`;
 
-            console.log(`[${testFile.filename.padEnd(30)}] => ${status} (${details})`);
+            console.log(`[${testFile.filename.padEnd(30)}] => ${status} (text: ${textPassed}, images: ${imagesPassed} - ${imageDetails})`);
         })
         .catch(error => console.log(`[${testFile.filename.padEnd(30)}] => Error: ${error.message}`));
 }
