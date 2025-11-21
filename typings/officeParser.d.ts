@@ -1,10 +1,18 @@
 #!/usr/bin/env node
 
-export type Image = {
+export type TextBlock = {
+    type: 'text';
+    content: string;
+}
+
+export type ImageBlock = {
+    type: 'image';
     buffer: Buffer;
-    type: string;
+    mimeType: string;
     filename?: string;
 }
+
+export type Block = TextBlock | ImageBlock;
 
 export type OfficeParserConfig = {
     /**
@@ -24,14 +32,14 @@ export type OfficeParserConfig = {
      */
     putNotesAtLast?: boolean;
     /**
-     * Flag to extract images from files like docx and pdf. Default is false. If set to true, the return object will contain an 'images' array.
+     * Flag to extract images from files. Default is false. If set to true, the blocks array will contain image blocks alongside text blocks.
      */
     extractImages?: boolean;
 };
 
 export type ParseOfficeResult = {
     text: string;
-    images: Image[];
+    blocks: Block[];
 }
 
 /** Main async function with callback to execute parseOffice for supported files
