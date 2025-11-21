@@ -10,7 +10,9 @@
   ],
   "types": "typings/officeParser.d.ts",
   "scripts": {
-    "test": "node test/testOfficeParser.js"
+    "test": "node test/testOfficeParser.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "repository": {
     "type": "git",
@@ -55,6 +57,8 @@
     "@types/node": "^18.16.1",
     "@types/xmldom": "^0.1.33",
     "@types/yauzl": "^2.10.3",
+    "eslint": "^9.39.1",
+    "globals": "^16.5.0",
     "typescript": "^5.0.3"
   }
 }

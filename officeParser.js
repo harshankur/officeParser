@@ -9,7 +9,7 @@ const fs            = require('fs');
 const yauzl         = require('yauzl');
 
 /** Header for error messages */
-const ERRORHEADER = "[OfficeParser]: ";
+const ERRORHEADER = '[OfficeParser]: ';
 /** Error messages */
 const ERRORMSG = {
     extensionUnsupported: (ext) =>      `Sorry, OfficeParser currently support docx, pptx, xlsx, odt, odp, ods, pdf files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
@@ -19,26 +19,148 @@ const ERRORMSG = {
     improperArguments:                  `Improper arguments`,
     improperBuffers:                    `Error occured while reading the file buffers`,
     invalidInput:                       `Invalid input type: Expected a Buffer or a valid file path`
-}
+};
 
 /** Returns parsed xml document for a given xml text.
  * @param {string} xml The xml string from the doc file
  * @returns {XMLDocument}
  */
 const parseString = (xml) => {
-    let parser = new DOMParser();
-    return parser.parseFromString(xml, "text/xml");
+    const parser = new DOMParser();
+    return parser.parseFromString(xml, 'text/xml');
 };
+
+/** MIME type mapping for common image extensions
+ * @type {Object.<string, string>}
+ */
+const MIME_TYPE_MAP = {
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'bmp': 'image/bmp',
+    'tif': 'image/tiff',
+    'tiff': 'image/tiff',
+    'webp': 'image/webp',
+    'svg': 'image/svg+xml',
+    'ico': 'image/x-icon'
+};
+
+/** Get proper MIME type from filename extension
+ * @param {string} filename The filename with extension
+ * @returns {string} The MIME type
+ */
+function getMimeTypeFromFilename(filename) {
+    const extension = filename.split('.').pop()?.toLowerCase();
+    return MIME_TYPE_MAP[extension] || 'application/octet-stream';
+}
+
+/** Extracts text from XML paragraphs following Office XML patterns
+ * @param {XMLDocument} xmlDoc - Parsed XML document
+ * @param {string} paragraphTag - Tag name for paragraphs (e.g., "w:p", "a:p")
+ * @param {string} textTag - Tag name for text nodes (e.g., "w:t", "a:t")
+ * @param {string} delimiter - Delimiter for joining paragraphs
+ * @returns {string} Extracted text
+ */
+function extractTextFromXmlParagraphs(xmlDoc, paragraphTag, textTag, delimiter) {
+    const paragraphNodes = xmlDoc.getElementsByTagName(paragraphTag);
+    return Array.from(paragraphNodes)
+        .filter(paragraphNode => paragraphNode.getElementsByTagName(textTag).length !== 0)
+        .map(paragraphNode => {
+            const textNodes = paragraphNode.getElementsByTagName(textTag);
+            return Array.from(textNodes)
+                .filter(textNode => textNode.childNodes[0]?.nodeValue)
+                .map(textNode => textNode.childNodes[0].nodeValue)
+                .join('');
+        })
+        .join(delimiter);
+}
+
+/** Retrieves an image from PDF.js object stores with timeout fallback
+ * @param {Object} page - PDF page object
+ * @param {string} imageName - Image resource identifier
+ * @param {number} [timeout=500] - Timeout in milliseconds (default: 500ms to prevent hanging on missing resources)
+ * @returns {Promise<Object|null>} Image object or null if not found
+ */
+async function getPdfImageResource(page, imageName, timeout = 500) {
+    const getFromStore = (store) => new Promise(resolve => {
+        store.get(imageName, obj => resolve(obj || null));
+        setTimeout(() => resolve(null), timeout);
+    });
+
+    return await getFromStore(page.commonObjs) || await getFromStore(page.objs);
+}
 
 /** @typedef {Object} OfficeParserConfig
  * @property {boolean} [outputErrorToConsole] Flag to show all the logs to console in case of an error irrespective of your own handling. Default is false.
  * @property {string}  [newlineDelimiter]     The delimiter used for every new line in places that allow multiline text like word. Default is \n.
  * @property {boolean} [ignoreNotes]          Flag to ignore notes from parsing in files like powerpoint. Default is false. It includes notes in the parsed text by default.
  * @property {boolean} [putNotesAtLast]       Flag, if set to true, will collectively put all the parsed text from notes at last in files like powerpoint. Default is false. It puts each notes right after its main slide content. If ignoreNotes is set to true, this flag is also ignored.
+ * @property {boolean} [extractImages]        Flag to extract images from files like docx and pdf. Default is false. If set to true, the return object will contain an 'images' array.
  */
 
+/**
+ * @typedef {Object} TextBlock
+ * @property {'text'} type
+ * @property {string} content
+ */
 
-/** Main function for parsing text from word files
+/**
+ * @typedef {Object} ImageBlock
+ * @property {'image'} type
+ * @property {Buffer} buffer
+ * @property {string} mimeType
+ * @property {string} [filename]
+ */
+
+/**
+ * @typedef {TextBlock | ImageBlock} Block
+ */
+
+/**
+ * @typedef {Object} ParseOfficeResult
+ * @property {string} text The full extracted text content, preserved for backwards compatibility.
+ * @property {Block[]} blocks An ordered array of content blocks (e.g., text, images) preserving the document structure.
+ */
+
+/** Creates a text block
+ * @param {string} content The text content
+ * @returns {TextBlock}
+ */
+function createTextBlock(content) {
+    return { type: 'text', content };
+}
+
+/** Creates an image block
+ * @param {Buffer} buffer The image data
+ * @param {string} mimeType The MIME type of the image
+ * @param {string} [filename] Optional filename
+ * @returns {ImageBlock}
+ */
+function createImageBlock(buffer, mimeType, filename) {
+    return { type: 'image', buffer, mimeType, filename };
+}
+
+/** Parse relationships from Word document.xml.rels file
+ * @param {Buffer|string} relsFileContent Content of the rels file
+ * @returns {Object.<string, string>} Map of relationship IDs to targets
+ */
+function parseWordRelationships(relsFileContent) {
+    const rels = {};
+    const relsDoc = parseString(relsFileContent.toString());
+    const relationships = relsDoc.getElementsByTagName('Relationship');
+    for (let i = 0; i < relationships.length; i++) {
+        const rel = relationships[i];
+        const id = rel.getAttribute('Id');
+        if (id) {
+            rels[id] = rel.getAttribute('Target');
+        }
+    }
+    return rels;
+}
+
+
+/** Main async function for parsing text from word files
  * @param {string | Buffer}    file     File path or Buffers
  * @param {function}           callback Callback function that returns value or error
  * @param {OfficeParserConfig} config   Config Object for officeParser
@@ -49,50 +171,84 @@ function parseWord(file, callback, config) {
     const mainContentFileRegex = /word\/document[\d+]?.xml/g;
     const footnotesFileRegex   = /word\/footnotes[\d+]?.xml/g;
     const endnotesFileRegex    = /word\/endnotes[\d+]?.xml/g;
+    const relsFileRegex        = /word\/_rels\/document.xml.rels/g;
+    const mediaFileRegex       = /word\/media\//g;
 
-    extractFiles(file, x => [mainContentFileRegex, footnotesFileRegex, endnotesFileRegex].some(fileRegex => x.match(fileRegex)))
+    const filesToExtract = [mainContentFileRegex, footnotesFileRegex, endnotesFileRegex];
+    if (config.extractImages) {
+        filesToExtract.push(relsFileRegex, mediaFileRegex);
+    }
+
+    extractFiles(file, x => filesToExtract.some(fileRegex => x.match(fileRegex)), config.extractImages)
         .then(files => {
             // Verify if atleast the document xml file exists in the extracted files list.
             if (!files.some(file => file.path.match(mainContentFileRegex)))
                 throw ERRORMSG.fileCorrupted(file);
 
-            return files
+            // Extract content files once for both image and text extraction
+            const contentFiles = files
                 .filter(file => file.path.match(mainContentFileRegex) || file.path.match(footnotesFileRegex) || file.path.match(endnotesFileRegex))
-                .map(file => file.content);
-        })
-        // ************************************* word xml files explanation *************************************
-        // Structure of xmlContent of a word file is simple.
-        // All text nodes are within w:t tags and each of the text nodes that belong in one paragraph are clubbed together within a w:p tag.
-        // So, we will filter out all the empty w:p tags and then combine all the w:t tag text inside for creating our response text.
-        // ******************************************************************************************************
-        .then(xmlContentArray => {
-            /** Store all the text content to respond. */
-            let responseText = [];
+                .map(file => file.content.toString());
 
-            xmlContentArray.forEach(xmlContent => {
-                /** Find text nodes with w:p tags */
-                const xmlParagraphNodesList = parseString(xmlContent).getElementsByTagName("w:p");
-                /** Store all the text content to respond */
-                responseText.push(
-                    Array.from(xmlParagraphNodesList)
-                        // Filter paragraph nodes than do not have any text nodes which are identifiable by w:t tag
-                        .filter(paragraphNode => paragraphNode.getElementsByTagName("w:t").length != 0)
-                        .map(paragraphNode => {
-                            // Find text nodes with w:t tags
-                            const xmlTextNodeList = paragraphNode.getElementsByTagName("w:t");
-                            // Join the texts within this paragraph node without any spaces or delimiters.
-                            return Array.from(xmlTextNodeList)
-                                    .filter(textNode => textNode.childNodes[0] && textNode.childNodes[0].nodeValue)
-                                    .map(textNode => textNode.childNodes[0].nodeValue)
-                                    .join("");
-                        })
-                        // Join each paragraph text with a new line delimiter.
-                        .join(config.newlineDelimiter ?? "\n")
-                );
+            const relsFile = files.find(file => file.path.match(relsFileRegex));
+            const mediaFiles = files.filter(file => file.path.match(mediaFileRegex));
+            const relationships = relsFile ? parseWordRelationships(relsFile.content) : {};
+
+            const delimiter = config.newlineDelimiter ?? '\n';
+            const blocks = [];
+            const textParts = [];
+
+            // ******************************** word xml files explanation ************************************
+            // Structure of xmlContent of a word file has paragraphs in w:p tags.
+            // Text content is in w:t tags, images are in w:drawing tags containing a:blip references.
+            // A paragraph can contain BOTH text AND images - we must extract both in document order.
+            // ************************************************************************************************
+            contentFiles.forEach(xmlContent => {
+                const xmlDoc = parseString(xmlContent);
+                const pNodes = xmlDoc.getElementsByTagName('w:p');
+
+                for (let i = 0; i < pNodes.length; i++) {
+                    const pNode = pNodes[i];
+
+                    // Extract text from paragraph (always, regardless of images)
+                    const textNodes = pNode.getElementsByTagName('w:t');
+                    const paragraphText = Array.from(textNodes)
+                        .map(t => t.childNodes[0]?.nodeValue || '')
+                        .join('');
+
+                    if (paragraphText) {
+                        blocks.push(createTextBlock(paragraphText));
+                        textParts.push(paragraphText);
+                    }
+
+                    // Extract images from paragraph if requested
+                    if (config.extractImages) {
+                        const drawingNodes = pNode.getElementsByTagName('w:drawing');
+                        for (let j = 0; j < drawingNodes.length; j++) {
+                            const blip = drawingNodes[j].getElementsByTagName('a:blip')[0];
+                            if (blip) {
+                                const embedId = blip.getAttribute('r:embed');
+                                if (embedId && relationships[embedId]) {
+                                    const imagePath = 'word/' + relationships[embedId].replace('../', '');
+                                    const imageFile = mediaFiles.find(mf => mf.path === imagePath);
+                                    if (imageFile) {
+                                        const filename = imagePath.split('/').pop();
+                                        blocks.push(createImageBlock(imageFile.content, getMimeTypeFromFilename(filename), filename));
+                                        // Add image placeholder to text
+                                        textParts.push(`<image ${filename}/>`);
+                                    } else if (config.outputErrorToConsole) {
+                                        console.warn(`${ERRORHEADER}Image referenced but not found: ${imagePath}`);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             });
 
-            // Respond by calling the Callback function.
-            callback(responseText.join(config.newlineDelimiter ?? "\n"), undefined);
+            const text = textParts.join(delimiter);
+
+            callback({ text, blocks }, undefined);
         })
         .catch(e => callback(undefined, e));
 }
@@ -108,8 +264,15 @@ function parsePowerPoint(file, callback, config) {
     const allFilesRegex = /ppt\/(notesSlides|slides)\/(notesSlide|slide)\d+.xml/g;
     const slidesRegex   = /ppt\/slides\/slide\d+.xml/g;
     const slideNumberRegex = /lide(\d+)\.xml/;
+    const relsFileRegex = /ppt\/slides\/_rels\/slide\d+.xml.rels/g;
+    const mediaFileRegex = /ppt\/media\//g;
 
-    extractFiles(file, x => !!x.match(config.ignoreNotes ? slidesRegex : allFilesRegex))
+    const filesToExtract = [config.ignoreNotes ? slidesRegex : allFilesRegex];
+    if (config.extractImages) {
+        filesToExtract.push(relsFileRegex, mediaFileRegex);
+    }
+
+    extractFiles(file, x => filesToExtract.some(fileRegex => x.match(fileRegex)), config.extractImages)
         .then(files => {
             // Sort files by slide number and their notes (if any).
             files.sort((a, b) => {
@@ -130,43 +293,73 @@ function parsePowerPoint(file, callback, config) {
             if (!config.ignoreNotes && config.putNotesAtLast)
                 // Sort files according to previous order of taking text out of ppt/slides followed by ppt/notesSlides
                 // For this we are looking at the index of notes which results in -1 in the main slide file and exists at a certain index in notes file names.
-                files.sort((a, b) => a.path.indexOf("notes") - b.path.indexOf("notes"));
+                files.sort((a, b) => a.path.indexOf('notes') - b.path.indexOf('notes'));
 
-            // Returning an array of all the xml contents read using fs.readFileSync
-            return files.map(file => file.content);
+            return files;
         })
         // ******************************** powerpoint xml files explanation ************************************
         // Structure of xmlContent of a powerpoint file is simple.
         // There are multiple xml files for each slide and correspondingly their notesSlide files.
         // All text nodes are within a:t tags and each of the text nodes that belong in one paragraph are clubbed together within a a:p tag.
-        // So, we will filter out all the empty a:p tags and then combine all the a:t tag text inside for creating our response text.
+        // Images are referenced via a:blip tags within p:pic elements.
+        // For blocks, we process each slide and extract text paragraphs and images in document order.
         // ******************************************************************************************************
-        .then(xmlContentArray => {
-            /** Store all the text content to respond */
-            let responseText = [];
+        .then(files => {
+            const contentFiles = files.filter(file => file.path.match(allFilesRegex));
+            const relsFiles = files.filter(file => file.path.match(relsFileRegex));
+            const mediaFiles = files.filter(file => file.path.match(mediaFileRegex));
 
-            xmlContentArray.forEach(xmlContent => {
-                /** Find text nodes with a:p tags */
-                const xmlParagraphNodesList = parseString(xmlContent).getElementsByTagName("a:p");
-                /** Store all the text content to respond */
-                responseText.push(
-                    Array.from(xmlParagraphNodesList)
-                        // Filter paragraph nodes than do not have any text nodes which are identifiable by a:t tag
-                        .filter(paragraphNode => paragraphNode.getElementsByTagName("a:t").length != 0)
-                        .map(paragraphNode => {
-                            /** Find text nodes with a:t tags */
-                            const xmlTextNodeList = paragraphNode.getElementsByTagName("a:t");
-                            return Array.from(xmlTextNodeList)
-                                    .filter(textNode => textNode.childNodes[0] && textNode.childNodes[0].nodeValue)
-                                    .map(textNode => textNode.childNodes[0].nodeValue)
-                                    .join("");
-                        })
-                        .join(config.newlineDelimiter ?? "\n")
-                );
+            // Parse relationship files and map them to their corresponding slide
+            // Each slide has its own rels file with relationship IDs scoped to that slide
+            const slideRelationships = {};
+            relsFiles.forEach(relsFile => {
+                const slidePath = relsFile.path.replace('/_rels', '').replace('.rels', '');
+                slideRelationships[slidePath] = parseWordRelationships(relsFile.content);
             });
 
-            // Respond by calling the Callback function.
-            callback(responseText.join(config.newlineDelimiter ?? "\n"), undefined);
+            const delimiter = config.newlineDelimiter ?? '\n';
+            const blocks = [];
+            const textParts = [];
+
+            contentFiles.forEach(file => {
+                const xmlDoc = parseString(file.content.toString());
+                const slideRels = slideRelationships[file.path] || {};
+
+                // Extract text from all paragraphs in this slide
+                const slideText = extractTextFromXmlParagraphs(xmlDoc, 'a:p', 'a:t', delimiter);
+                // Always add to textParts to preserve slide boundaries (empty slides produce newlines)
+                textParts.push(slideText);
+                if (slideText) {
+                    blocks.push(createTextBlock(slideText));
+                }
+
+                // Extract images from this slide if requested
+                // Note: Images appear after text per slide. For true document-order interleaving
+                // within a slide, a deeper XML tree traversal would be needed.
+                if (config.extractImages) {
+                    const blipNodes = xmlDoc.getElementsByTagName('a:blip');
+                    for (let i = 0; i < blipNodes.length; i++) {
+                        const blip = blipNodes[i];
+                        const embedId = blip.getAttribute('r:embed');
+                        if (embedId && slideRels[embedId]) {
+                            const imagePath = 'ppt/' + slideRels[embedId].replace('../', '');
+                            const imageFile = mediaFiles.find(mf => mf.path === imagePath);
+                            if (imageFile) {
+                                const filename = imagePath.split('/').pop();
+                                blocks.push(createImageBlock(imageFile.content, getMimeTypeFromFilename(filename), filename));
+                                // Add image placeholder to text
+                                textParts.push(`<image ${filename}/>`);
+                            } else if (config.outputErrorToConsole) {
+                                console.warn(`${ERRORHEADER}Image referenced but not found: ${imagePath}`);
+                            }
+                        }
+                    }
+                }
+            });
+
+            const text = textParts.join(delimiter);
+
+            callback({ text, blocks }, undefined);
         })
         .catch(e => callback(undefined, e));
 }
@@ -210,14 +403,14 @@ function parseExcel(file, callback, config) {
         // ******************************************************************************************************
         .then(xmlContentFilesObject => {
             /** Store all the text content to respond */
-            let responseText = [];
+            const responseText = [];
 
             /** Function to check if the given c node is a valid inline string node. */
             function isValidInlineStringCNode(cNode) {
                 // Initial check to see if the passed node is a cNode
                 if (cNode.tagName.toLowerCase() != 'c')
                     return false;
-                if (cNode.getAttribute("t") != 'inlineStr')
+                if (cNode.getAttribute('t') != 'inlineStr')
                     return false;
                 const childNodesNamedIs = cNode.getElementsByTagName('is');
                 if (childNodesNamedIs.length != 1)
@@ -230,21 +423,21 @@ function parseExcel(file, callback, config) {
 
             /** Function to check if the given c node has a valid v node */
             function hasValidVNodeInCNode(cNode) {
-                return cNode.getElementsByTagName("v")[0]
-                    && cNode.getElementsByTagName("v")[0].childNodes[0]
-                    && cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue != ''
+                return cNode.getElementsByTagName('v')[0]
+                    && cNode.getElementsByTagName('v')[0].childNodes[0]
+                    && cNode.getElementsByTagName('v')[0].childNodes[0].nodeValue != '';
             }
 
             /** Find text nodes with t tags in sharedStrings.xml file. If the sharedStringsFile is not present, we return an empty array. */
             const sharedStringsXmlSiNodesList = xmlContentFilesObject.sharedStringsFile != undefined
-                ? parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName("si")
+                ? parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName('si')
                 : [];
 
             /** Create shared string array. This will be used as a map to get strings from within sheet files. */
             const sharedStrings = Array.from(sharedStringsXmlSiNodesList)
                 .map(siNode => {
                     // Concatenate all <t> nodes within the <si> node
-                    return Array.from(siNode.getElementsByTagName("t"))
+                    return Array.from(siNode.getElementsByTagName('t'))
                         .map(tNode => tNode.childNodes[0]?.nodeValue ?? '') // Extract text content from each <t> node
                         .join(''); // Combine all <t> node text into a single string
                 });
@@ -252,7 +445,7 @@ function parseExcel(file, callback, config) {
             // Parse Sheet files
             xmlContentFilesObject.sheetFiles.forEach(sheetXmlContent => {
                 /** Find text nodes with c tags in sharedStrings xml file */
-                const sheetsXmlCNodesList = parseString(sheetXmlContent).getElementsByTagName("c");
+                const sheetsXmlCNodesList = parseString(sheetXmlContent).getElementsByTagName('c');
                 // Traverse through the nodes list and fill responseText with either the number value in its v node or find a mapped string from sharedStrings or an inline string.
                 responseText.push(
                     Array.from(sheetsXmlCNodesList)
@@ -266,69 +459,52 @@ function parseExcel(file, callback, config) {
                             // Processing if this c node has a valid v node.
                             if (hasValidVNodeInCNode(cNode)) {
                                 /** Flag whether this node's value represents an index in the shared string array */
-                                const isIndexInSharedStrings = cNode.getAttribute("t") == "s";
+                                const isIndexInSharedStrings = cNode.getAttribute('t') == 's';
                                 /** Find value nodes represented by v tags */
-                                const value = cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue;
+                                const value = cNode.getElementsByTagName('v')[0].childNodes[0].nodeValue;
                                 const valueAsIndex = Number(value);
                                 // Validate text
                                 if (isIndexInSharedStrings && (valueAsIndex != parseInt(value, 10) || valueAsIndex >= sharedStrings.length))
                                     throw ERRORMSG.fileCorrupted(file);
 
                                 return isIndexInSharedStrings
-                                        ? sharedStrings[valueAsIndex]
-                                        : value;
+                                    ? sharedStrings[valueAsIndex]
+                                    : value;
                             }
-                            // Should not reach here. If we do, it means we are not filtering out items that we are not ready to process.
-                            // Not the case now but it could happen if we change the filtering logic without updating the processing logic.
-                            // So, it is better to error out here.
                             handleError(`Invalid c node found in sheet xml content: ${cNode}`, callback, config.outputErrorToConsole);
                             return '';
                         })
-                        // Join each cell text within a sheet with a space.
-                        .join(config.newlineDelimiter ?? "\n")
+                        .join(config.newlineDelimiter ?? '\n')
                 );
             });
 
             // Parse Drawing files
             xmlContentFilesObject.drawingFiles.forEach(drawingXmlContent => {
-                /** Find text nodes with a:p tags */
-                const drawingsXmlParagraphNodesList = parseString(drawingXmlContent).getElementsByTagName("a:p");
-                /** Store all the text content to respond */
-                responseText.push(
-                    Array.from(drawingsXmlParagraphNodesList)
-                        // Filter paragraph nodes than do not have any text nodes which are identifiable by a:t tag
-                        .filter(paragraphNode => paragraphNode.getElementsByTagName("a:t").length != 0)
-                        .map(paragraphNode => {
-                            /** Find text nodes with a:t tags */
-                            const xmlTextNodeList = paragraphNode.getElementsByTagName("a:t");
-                            return Array.from(xmlTextNodeList)
-                                    .filter(textNode => textNode.childNodes[0] && textNode.childNodes[0].nodeValue)
-                                    .map(textNode => textNode.childNodes[0].nodeValue)
-                                    .join("");
-                        })
-                        .join(config.newlineDelimiter ?? "\n")
-                );
+                const xmlDoc = parseString(drawingXmlContent);
+                const text = extractTextFromXmlParagraphs(xmlDoc, 'a:p', 'a:t', config.newlineDelimiter ?? '\n');
+                responseText.push(text);
             });
 
             // Parse Chart files
             xmlContentFilesObject.chartFiles.forEach(chartXmlContent => {
                 /** Find text nodes with c:v tags */
-                const chartsXmlCVNodesList = parseString(chartXmlContent).getElementsByTagName("c:v");
+                const chartsXmlCVNodesList = parseString(chartXmlContent).getElementsByTagName('c:v');
                 /** Store all the text content to respond */
                 responseText.push(
                     Array.from(chartsXmlCVNodesList)
                         .filter(cVNode => cVNode.childNodes[0] && cVNode.childNodes[0].nodeValue)
                         .map(cVNode => cVNode.childNodes[0].nodeValue)
-                        .join(config.newlineDelimiter ?? "\n")
+                        .join(config.newlineDelimiter ?? '\n')
                 );
             });
 
-            // Respond by calling the Callback function.
-            callback(responseText.join(config.newlineDelimiter ?? "\n"), undefined);
+            const text = responseText.join(config.newlineDelimiter ?? '\n');
+            const blocks = text ? [createTextBlock(text)] : [];
+
+            callback({ text, blocks }, undefined);
         })
         .catch(e => callback(undefined, e));
 }
-
 
 /** Main function for parsing text from open office files
  * @param {string | Buffer}    file     File path or Buffers
@@ -340,42 +516,59 @@ function parseOpenOffice(file, callback, config) {
     /** The target content xml file for the openoffice file. */
     const mainContentFilePath     = 'content.xml';
     const objectContentFilesRegex = /Object \d+\/content.xml/g;
+    const mediaFileRegex          = /Pictures\//g;
+    const objectReplacementsRegex = /ObjectReplacements\/Object \d+/g;
 
-    extractFiles(file, x => x == mainContentFilePath || !!x.match(objectContentFilesRegex))
+    const filesToExtract = [mainContentFilePath, objectContentFilesRegex];
+    if (config.extractImages) {
+        filesToExtract.push(mediaFileRegex, objectReplacementsRegex);
+    }
+
+    extractFiles(file, x => filesToExtract.some(filePattern => {
+        if (typeof filePattern === 'string') return x == filePattern;
+        return !!x.match(filePattern);
+    }), config.extractImages)
         .then(files => {
             // Verify if atleast the content xml file exists in the extracted files list.
             if (!files.map(file => file.path).includes(mainContentFilePath))
                 throw ERRORMSG.fileCorrupted(file);
 
-            return {
-                mainContentFile:    files.filter(file => file.path == mainContentFilePath).map(file => file.content)[0],
-                objectContentFiles: files.filter(file => file.path.match(objectContentFilesRegex)).map(file => file.content),
-            }
+            const result = {
+                mainContentFile:    files.filter(file => file.path == mainContentFilePath).map(file => file.content.toString())[0],
+                objectContentFiles: files.filter(file => file.path.match(objectContentFilesRegex)).map(file => file.content.toString()),
+                mediaFiles:         config.extractImages ? files.filter(file => file.path.match(mediaFileRegex) || file.path.match(objectReplacementsRegex)) : []
+            };
+
+            return result;
         })
         // ********************************** openoffice xml files explanation **********************************
         // Structure of xmlContent of openoffice files is simple.
         // All text nodes are within text:h and text:p tags with all kinds of formatting within nested tags.
         // All text in these tags are separated by new line delimiters.
         // Objects like charts in ods files are in Object d+/content.xml with the same way as above.
+        // Images are referenced via draw:image tags with xlink:href attributes.
         // ******************************************************************************************************
         .then(xmlContentFilesObject => {
             /** Store all the notes text content to respond */
-            let notesText = [];
+            const notesText = [];
             /** Store all the text content to respond */
             let responseText = [];
+            /** Blocks array for ordered content */
+            const blocks = [];
 
             /** List of allowed text tags */
-            const allowedTextTags = ["text:p", "text:h"];
+            const allowedTextTags = ['text:p', 'text:h'];
             /** List of notes tags */
-            const notesTag = "presentation:notes";
+            const notesTag = 'presentation:notes';
 
             /** Main dfs traversal function that goes from one node to its children and returns the value out. */
             function extractAllTextsFromNode(root) {
-                let xmlTextArray = []
+                const xmlTextArray = [];
                 for (let i = 0; i < root.childNodes.length; i++)
                     traversal(root.childNodes[i], xmlTextArray, true);
-                return xmlTextArray.join("");
+                return xmlTextArray.join('');
             }
+
             /** Traversal function that gets recursive calling. */
             function traversal(node, xmlTextArray, isFirstRecursion) {
                 if (!node.childNodes || node.childNodes.length == 0) {
@@ -383,18 +576,17 @@ function parseOpenOffice(file, callback, config) {
                         // If the corresponding value is of type float, we take the value from office:value attribute.
                         // However, it is not on the parentNode but rather grandparentNode.
                         const value = node.parentNode.parentNode?.getAttribute('office:value-type') == 'float'
-                                        ? Number(node.parentNode.parentNode.getAttribute('office:value'))
-                                        : node.nodeValue;
+                            ? Number(node.parentNode.parentNode.getAttribute('office:value'))
+                            : node.nodeValue;
 
                         if (isNotesNode(node.parentNode) && (config.putNotesAtLast || config.ignoreNotes)) {
                             notesText.push(value);
                             if (allowedTextTags.includes(node.parentNode.tagName) && !isFirstRecursion)
-                                notesText.push(config.newlineDelimiter ?? "\n");
-                        }
-                        else {
+                                notesText.push(config.newlineDelimiter ?? '\n');
+                        } else {
                             xmlTextArray.push(value);
                             if (allowedTextTags.includes(node.parentNode.tagName) && !isFirstRecursion)
-                                xmlTextArray.push(config.newlineDelimiter ?? "\n");
+                                xmlTextArray.push(config.newlineDelimiter ?? '\n');
                         }
                     }
                     return;
@@ -423,35 +615,68 @@ function parseOpenOffice(file, callback, config) {
             }
 
             /** The xml string parsed as xml array */
-            const xmlContentArray = [xmlContentFilesObject.mainContentFile, ...xmlContentFilesObject.objectContentFiles].map(xmlContent => parseString(xmlContent));
-            // Iterate over each xmlContent and extract text from them.
+            const xmlContentArray = [xmlContentFilesObject.mainContentFile, ...xmlContentFilesObject.objectContentFiles]
+                .filter(content => content)  // Filter out undefined content
+                .map(xmlContent => {
+                    try {
+                        return parseString(xmlContent);
+                    } catch (e) {
+                        if (config.outputErrorToConsole) {
+                            console.error(`${ERRORHEADER}Error parsing XML content:`, e.message);
+                        }
+                        return null;
+                    }
+                })
+                .filter(doc => doc);  // Filter out any failed parses
+
+            // Iterate over each xmlContent and extract text and images in document order
             xmlContentArray.forEach(xmlContent => {
-                /** Find text nodes with text:h and text:p tags in xmlContent */
-                const xmlTextNodesList = [...Array.from(xmlContent
-                                                .getElementsByTagName("*"))
-                                                .filter(node => allowedTextTags.includes(node.tagName)
-                                                    && !isInvalidTextNode(node.parentNode))
-                                            ];
-                /** Store all the text content to respond */
-                responseText.push(
-                    xmlTextNodesList
-                        // Add every text information from within this textNode and combine them together.
-                        .map(textNode => extractAllTextsFromNode(textNode))
-                        .filter(text => text != "")
-                        .join(config.newlineDelimiter ?? "\n")
-                );
+                /** Find all nodes to process in document order */
+                const allNodes = Array.from(xmlContent.getElementsByTagName('*'));
+
+                allNodes.forEach(node => {
+                    // Handle text paragraphs
+                    if (allowedTextTags.includes(node.tagName) && !isInvalidTextNode(node.parentNode)) {
+                        const textContent = extractAllTextsFromNode(node);
+                        if (textContent) {
+                            blocks.push(createTextBlock(textContent));
+                            if (!isNotesNode(node) || (!config.ignoreNotes && !config.putNotesAtLast)) {
+                                responseText.push(textContent);
+                            }
+                        }
+                    }
+
+                    // Handle images
+                    if (node.tagName === 'draw:image' && config.extractImages) {
+                        const href = node.getAttribute('xlink:href');
+                        if (href) {
+                            const normalizedHref = href.startsWith('./') ? href.substring(2) : href;
+                            const imageFile = xmlContentFilesObject.mediaFiles.find(mf => mf.path === normalizedHref);
+                            if (imageFile) {
+                                const filename = href.split('/').pop();
+                                blocks.push(createImageBlock(imageFile.content, getMimeTypeFromFilename(filename), filename));
+                                // Add image placeholder to text
+                                responseText.push(`<image ${filename}/>`);
+                            } else if (config.outputErrorToConsole) {
+                                console.warn(`${ERRORHEADER}Image referenced but not found: ${href}`);
+                            }
+                        }
+                    }
+                });
             });
 
             // Add notes text at the end if the user config says so.
-            // Note that we already have pushed the text content to notesText array while extracting all texts from the nodes.
             if (!config.ignoreNotes && config.putNotesAtLast)
                 responseText = [...responseText, ...notesText];
 
+            const text = responseText.join(config.newlineDelimiter ?? '\n');
+
             // Respond by calling the Callback function.
-            callback(responseText.join(config.newlineDelimiter ?? "\n"), undefined);
+            callback({ text, blocks }, undefined);
         })
         .catch(e => callback(undefined, e));
 }
+
 
 /** Main function for parsing text from pdf files
  * @param {string | Buffer}    file     File path or Buffers
@@ -460,45 +685,91 @@ function parseOpenOffice(file, callback, config) {
  * @returns {Promise<void>}
  */
 async function parsePdf(file, callback, config) {
-    // Wait for pdfjs module to be loaded once
-    // Lazy import pdfjs to avoid Node startup issues for environments that don't use PDF parsing
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const delimiter = config.newlineDelimiter ?? '\n';
 
-    // Get the pdfjs document for the filepath or Uint8Array buffers.
-    // pdfjs does not accept Buffers directly, so we convert them to Uint8Array.
     pdfjs.getDocument(file instanceof Buffer ? new Uint8Array(file) : file).promise
-        // We go through each page and build our text content promise array.
-        .then(document => Promise.all(Array.from({ length: document.numPages }, (_, index) => document.getPage(index + 1).then(page => page.getTextContent()))))
-        // Each textContent item has property 'items' which is an array of objects.
-        // Each object element in the array has text stored in their 'str' key.
-        // The concatenation of str is what makes our pdf content.
-        // str already contains any space that was in the text.
-        // So, we only care about when to add the new line.
-        // That we determine using transform[5] value which is the y-coordinate of the item object.
-        // So, if there is a mismatch in the transform[5] value between the current item and the previous item, we put a line break.
-        .then(textContentArray => {
-            /** Store all the text content to respond */
-            const responseText = textContentArray
-                                    .map(textContent => textContent.items)      // Get all the items
-                                    .flat()                                     // Flatten all the items object
-                                    .reduce((a, v) =>  (
-                                        // the items could be TextItem or a TextMarkedContent.
-                                        // We are only interested in the TextItem which has a str property.
-                                        'str' in v && v.str != ''
-                                            ? {
-                                                text: a.text + (v.transform[5] != a.transform5 ? (config.newlineDelimiter ?? "\n") : '') + v.str,
-                                                transform5: v.transform[5]
-                                            } : {
-                                                text: a.text,
-                                                transform5: a.transform5
-                                            }
-                                    ),
-                                    {
-                                        text: '',
-                                        transform5: undefined
-                                    }).text;
+        .then(async document => {
+            const blocks = [];
+            const pagePromises = Array.from({ length: document.numPages }, (_, index) => document.getPage(index + 1));
+            const pages = await Promise.all(pagePromises);
 
-            callback(responseText, undefined);
+            // First, get all text content for the full text output (backwards compatibility)
+            // This uses the original logic that flattens all items across pages
+            const textContentArray = [];
+            for (const page of pages) {
+                const textContent = await page.getTextContent();
+                textContentArray.push(textContent);
+            }
+
+            // Build full text using original algorithm (line breaks based on transform[5])
+            const text = textContentArray
+                .map(textContent => textContent.items)
+                .flat()
+                .reduce((a, v) => (
+                    'str' in v && v.str != ''
+                        ? {
+                            text: a.text + (v.transform[5] != a.transform5 ? delimiter : '') + v.str,
+                            transform5: v.transform[5]
+                        } : {
+                            text: a.text,
+                            transform5: a.transform5
+                        }
+                ), { text: '', transform5: undefined }).text;
+
+            // Build blocks per page for document order
+            const imagePlaceholders = [];
+            let imageIndex = 0;
+
+            for (let i = 0; i < pages.length; i++) {
+                const page = pages[i];
+                const textContent = textContentArray[i];
+
+                // Extract text block for this page
+                const pageText = textContent.items
+                    .reduce((a, v) => (
+                        'str' in v && v.str != ''
+                            ? {
+                                text: a.text + (v.transform[5] != a.transform5 ? delimiter : '') + v.str,
+                                transform5: v.transform[5]
+                            } : {
+                                text: a.text,
+                                transform5: a.transform5
+                            }
+                    ), { text: '', transform5: undefined }).text;
+
+                if (pageText) {
+                    blocks.push(createTextBlock(pageText));
+                }
+
+                // Extract images from this page if requested
+                if (config.extractImages) {
+                    const operatorList = await page.getOperatorList(true);
+                    const imageOps = operatorList.fnArray
+                        .map((fn, j) => fn === pdfjs.OPS.paintImageXObject ? operatorList.argsArray[j][0] : null)
+                        .filter(op => op);
+
+                    for (const op of imageOps) {
+                        const image = await getPdfImageResource(page, op);
+                        if (image) {
+                            const mimeType = image.kind === pdfjs.ImageKind.JPEG ? 'image/jpeg' : 'image/png';
+                            const extension = mimeType === 'image/jpeg' ? 'jpg' : 'png';
+                            const filename = `image_${++imageIndex}.${extension}`;
+                            blocks.push(createImageBlock(Buffer.from(image.data), mimeType, filename));
+                            // Collect image placeholder
+                            imagePlaceholders.push(`<image ${filename}/>`);
+                        } else if (config.outputErrorToConsole) {
+                            console.warn(`${ERRORHEADER}PDF image resource not found: ${op}`);
+                        }
+                    }
+                }
+            }
+
+            // Append image placeholders at the end of text (PDF images don't have exact positions)
+            const finalText = imagePlaceholders.length > 0
+                ? text + delimiter + imagePlaceholders.join(delimiter)
+                : text;
+            callback({ text: finalText, blocks }, undefined);
         })
         .catch(e => callback(undefined, e));
 }
@@ -517,13 +788,14 @@ function parseOffice(srcFile, callback, config = {}) {
         newlineDelimiter: '\n',
         putNotesAtLast: false,
         outputErrorToConsole: false,
+        extractImages: false,
         ...config
     };
 
     // Our internal code can process regular node Buffers or file path.
     // So, if the src file was presented as ArrayBuffers, we create Buffers from them.
-    let file = srcFile instanceof ArrayBuffer ? Buffer.from(srcFile)
-                                              : srcFile;
+    const file = srcFile instanceof ArrayBuffer ? Buffer.from(srcFile)
+        : srcFile;
 
     /**
      * Prepare file for processing
@@ -543,9 +815,8 @@ function parseOffice(srcFile, callback, config = {}) {
                 throw ERRORMSG.fileDoesNotExist(file);
 
             // resolve promise
-            res({ file: file, ext: file.split(".").pop() });
-        }
-        else
+            res({ file: file, ext: file.split('.').pop() });
+        } else
             rej(ERRORMSG.invalidInput);
     });
 
@@ -554,21 +825,21 @@ function parseOffice(srcFile, callback, config = {}) {
         .then(({ file, ext }) => {
             // Switch between parsing functions depending on extension.
             switch (ext) {
-                case "docx":
+                case 'docx':
                     parseWord(file, internalCallback, internalConfig);
                     break;
-                case "pptx":
+                case 'pptx':
                     parsePowerPoint(file, internalCallback, internalConfig);
                     break;
-                case "xlsx":
+                case 'xlsx':
                     parseExcel(file, internalCallback, internalConfig);
                     break;
-                case "odt":
-                case "odp":
-                case "ods":
+                case 'odt':
+                case 'odp':
+                case 'ods':
                     parseOpenOffice(file, internalCallback, internalConfig);
                     break;
-                case "pdf":
+                case 'pdf':
                     parsePdf(file, internalCallback, internalConfig);
                     break;
 
@@ -582,8 +853,17 @@ function parseOffice(srcFile, callback, config = {}) {
                 if (err)
                     return handleError(err, callback, internalConfig.outputErrorToConsole);
 
-                // Call the original callback
-                callback(data, undefined);
+                if (typeof data === 'object' && data !== null) {
+                    if (!data.blocks) {
+                        data.blocks = data.text ? [{ type: 'text', content: data.text }] : [];
+                    }
+                    if (!data.text) {
+                        data.text = data.blocks.filter(b => b.type === 'text').map(b => b.content).join(internalConfig.newlineDelimiter ?? '\n');
+                    }
+                    callback(data, undefined);
+                } else {
+                    callback({ text: data, blocks: data ? [{type: 'text', content: data }] : [] }, undefined);
+                }
             }
         })
         .catch(error => handleError(error, callback, internalConfig.outputErrorToConsole));
@@ -607,15 +887,16 @@ function parseOfficeAsync(srcFile, config = {}) {
 /** Extract specific files from either a ZIP file buffer or file path based on a filter function.
  * @param {Buffer|string}          zipInput ZIP file input, either a Buffer or a file path (string).
  * @param {(x: string) => boolean} filterFn A function that receives the entry object and returns true if the file should be extracted.
- * @returns {Promise<{ path: string, content: string }[]>} Resolves to an array of object 
+ * @param {boolean}                [asBuffer=false] Whether to extract the file as a buffer or string.
+ * @returns {Promise<{ path: string, content: string|Buffer }[]>} Resolves to an array of objects
  */
-function extractFiles(zipInput, filterFn) {
+function extractFiles(zipInput, filterFn, asBuffer = false) {
     return new Promise((res, rej) => {
         /** Processes zip file and resolves with the path of file and their content.
          * @param {yauzl.ZipFile} zipfile
          */
         const processZipfile = (zipfile) => {
-            /** @type {{ path: string, content: string }[]} */
+            /** @type {{ path: string, content: string|Buffer }[]} */
             const extractedFiles = [];
             zipfile.readEntry();
 
@@ -631,13 +912,12 @@ function extractFiles(zipInput, filterFn) {
                         readStream.pipe(concat(data => {
                             extractedFiles.push({
                                 path: entry.fileName,
-                                content: data.toString()
+                                content: asBuffer ? data : data.toString()
                             });
                             zipfile.readEntry(); // Continue reading entries
                         }));
                     });
-                }
-                else
+                } else
                     zipfile.readEntry(); // Skip entries that don't match the filter
             }
 
@@ -653,15 +933,13 @@ function extractFiles(zipInput, filterFn) {
                 if (err) return rej(err);
                 processZipfile(zipfile);
             });
-        }
-        else if (typeof zipInput === 'string') {
+        } else if (typeof zipInput === 'string') {
             // Process ZIP from File Path
             yauzl.open(zipInput, { lazyEntries: true }, (err, zipfile) => {
                 if (err) return rej(err);
                 processZipfile(zipfile);
             });
-        }
-        else
+        } else
             rej(ERRORMSG.invalidInput);
     });
 }
@@ -687,8 +965,8 @@ module.exports.parseOfficeAsync = parseOfficeAsync;
 
 
 // Run this library on CLI
-if ((typeof process.argv[0] == 'string' && (process.argv[0].split('/').pop() == "node" || process.argv[0].split('/').pop() == "npx")) &&
-    (typeof process.argv[1] == 'string' && (process.argv[1].split('/').pop() == "officeParser.js" || process.argv[1].split('/').pop().toLowerCase() == "officeparser"))) {
+if ((typeof process.argv[0] === 'string' && (process.argv[0].split('/').pop() == 'node' || process.argv[0].split('/').pop() == 'npx')) &&
+    (typeof process.argv[1] === 'string' && (process.argv[1].split('/').pop() == 'officeParser.js' || process.argv[1].split('/').pop().toLowerCase() == 'officeparser'))) {
 
     // Extract arguments after the script is called
     /** Stores the list of arguments for this CLI call
@@ -706,7 +984,7 @@ if ((typeof process.argv[0] == 'string' && (process.argv[0].split('/').pop() == 
 
     /** Function to identify if an argument is a config option (i.e., --key=value)
      * @param {string} arg Argument passed in the CLI call.
-     */ 
+     */
     function isConfigOption(arg) {
         return arg.startsWith('--') && arg.includes('=');
     }
@@ -748,6 +1026,9 @@ if ((typeof process.argv[0] == 'string' && (process.argv[0].split('/').pop() == 
                     case '--outputErrorToConsole':
                         config.outputErrorToConsole = value.toLowerCase() === 'true';
                         break;
+                    case '--extractImages':
+                        config.extractImages = value.toLowerCase() === 'true';
+                        break;
                 }
             });
 
@@ -759,10 +1040,25 @@ if ((typeof process.argv[0] == 'string' && (process.argv[0].split('/').pop() == 
 
         // Execute parseOfficeAsync with file and config
         parseOfficeAsync(fileArg, config)
-            .then(text => console.log(text))
+            .then(result => {
+                console.log(result.text)
+                if (result.blocks && result.blocks.length > 0) {
+                    const imageBlocks = result.blocks.filter(b => b.type === 'image');
+                    console.log(`\n[Extracted ${result.blocks.length} block(s), ${imageBlocks.length} image(s)]`);
+
+                    // Save images to current directory when extractImages is enabled
+                    if (config.extractImages && imageBlocks.length > 0) {
+                        imageBlocks.forEach((image, index) => {
+                            const extension = image.mimeType.split('/')[1] || 'bin';
+                            const filename = image.filename || `image_${index + 1}.${extension}`;
+                            fs.writeFileSync(filename, image.buffer);
+                            console.log(`  Saved: ${filename}`);
+                        });
+                    }
+                }
+            })
             .catch(error => console.error(ERRORHEADER + error));
-    }
-    else {
+    } else {
         console.error(ERRORMSG.improperArguments);
 
         const CLI_INSTRUCTIONS =
@@ -774,12 +1070,14 @@ Usage:
 
 Example:
     node officeparser --ignoreNotes=true --putNotesAtLast=true ./example.docx
+    node officeparser --extractImages=true ./document.docx
 
 Config Options:
     --ignoreNotes=[true|false]          Flag to ignore notes from files like PowerPoint. Default is false.
     --newlineDelimiter=[delimiter]      The delimiter to use for new lines. Default is '\\n'.
     --putNotesAtLast=[true|false]       Flag to collect notes at the end of files like PowerPoint. Default is false.
     --outputErrorToConsole=[true|false] Flag to output errors to the console. Default is false.
+    --extractImages=[true|false]        Flag to extract images from files. Default is false. Images are saved to current directory.
 
 Note:
     The order of file path and config options doesn't matter.

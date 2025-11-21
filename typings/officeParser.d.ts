@@ -1,4 +1,19 @@
 #!/usr/bin/env node
+
+export type TextBlock = {
+    type: 'text';
+    content: string;
+}
+
+export type ImageBlock = {
+    type: 'image';
+    buffer: Buffer;
+    mimeType: string;
+    filename?: string;
+}
+
+export type Block = TextBlock | ImageBlock;
+
 export type OfficeParserConfig = {
     /**
      * Flag to show all the logs to console in case of an error irrespective of your own handling. Default is false.
@@ -16,18 +31,28 @@ export type OfficeParserConfig = {
      * Flag, if set to true, will collectively put all the parsed text from notes at last in files like powerpoint. Default is false. It puts each notes right after its main slide content. If ignoreNotes is set to true, this flag is also ignored.
      */
     putNotesAtLast?: boolean;
+    /**
+     * Flag to extract images from files. Default is false. If set to true, the blocks array will contain image blocks alongside text blocks.
+     */
+    extractImages?: boolean;
 };
+
+export type ParseOfficeResult = {
+    text: string;
+    blocks: Block[];
+}
+
 /** Main async function with callback to execute parseOffice for supported files
  * @param {string | Buffer | ArrayBuffer} srcFile      File path or file buffers or Javascript ArrayBuffer
- * @param {function}                      callback     Callback function that returns value or error
+ * @param {(data: ParseOfficeResult | undefined, error: Error | undefined) => void} callback     Callback function that returns value or error
  * @param {OfficeParserConfig}            [config={}]  [OPTIONAL]: Config Object for officeParser
  * @returns {void}
  */
-export function parseOffice(srcFile: string | Buffer | ArrayBuffer, callback: Function, config?: OfficeParserConfig): void;
+export function parseOffice(srcFile: string | Buffer | ArrayBuffer, callback: (data: ParseOfficeResult | undefined, error: Error | undefined) => void, config?: OfficeParserConfig): void;
+
 /** Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
  * @param {string | Buffer | ArrayBuffer} srcFile     File path or file buffers or Javascript ArrayBuffer
  * @param {OfficeParserConfig}            [config={}] [OPTIONAL]: Config Object for officeParser
- * @returns {Promise<string>}
+ * @returns {Promise<ParseOfficeResult>}
  */
-export function parseOfficeAsync(srcFile: string | Buffer | ArrayBuffer, config?: OfficeParserConfig): Promise<string>;
-//# sourceMappingURL=officeParser.d.ts.map
+export function parseOfficeAsync(srcFile: string | Buffer | ArrayBuffer, config?: OfficeParserConfig): Promise<ParseOfficeResult>;
