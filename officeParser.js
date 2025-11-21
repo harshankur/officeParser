@@ -223,18 +223,21 @@ function parseWord(file, callback, config) {
 }
 
 /** Extract images from PowerPoint slide content files
- * @param {Array<string>} contentFiles Array of XML content strings
- * @param {Object.<string, string>} relationships Map of relationship IDs to targets
+ * @param {Array<{path: string, content: Buffer}>} contentFiles Array of slide file objects
+ * @param {Object.<string, Object.<string, string>>} slideRelationships Map of slide path to relationship map
  * @param {Array<{path: string, content: Buffer}>} mediaFiles Array of media file objects
  * @param {OfficeParserConfig} config Config object
  * @returns {Array<{buffer: Buffer, type: string, filename: string}>} Array of extracted images
  */
-function extractImagesFromPptx(contentFiles, relationships, mediaFiles, config) {
+function extractImagesFromPptx(contentFiles, slideRelationships, mediaFiles, config) {
     const images = [];
 
-    contentFiles.forEach(xmlContent => {
-        const xmlDoc = parseString(xmlContent);
+    contentFiles.forEach(file => {
+        const xmlDoc = parseString(file.content.toString());
         const blipNodes = xmlDoc.getElementsByTagName('a:blip');
+
+        // Get relationships for this specific slide
+        const relationships = slideRelationships[file.path] || {};
 
         for (let i = 0; i < blipNodes.length; i++) {
             const blip = blipNodes[i];
@@ -312,8 +315,7 @@ function parsePowerPoint(file, callback, config) {
         .then(files => {
             // Extract content files for text processing
             const contentFiles = files
-                .filter(file => file.path.match(allFilesRegex))
-                .map(file => file.content.toString());
+                .filter(file => file.path.match(allFilesRegex));
 
             // Extract images if requested
             let images = [];
@@ -321,19 +323,21 @@ function parsePowerPoint(file, callback, config) {
                 const relsFiles = files.filter(file => file.path.match(relsFileRegex));
                 const mediaFiles = files.filter(file => file.path.match(mediaFileRegex));
 
-                // Parse all relationship files and merge them
-                const relationships = {};
+                // Parse relationship files and map them to their corresponding slide
+                // Each slide has its own rels file with relationship IDs scoped to that slide
+                const slideRelationships = {};
                 relsFiles.forEach(relsFile => {
-                    const rels = parseWordRelationships(relsFile.content);
-                    Object.assign(relationships, rels);
+                    // Convert ppt/slides/_rels/slide1.xml.rels -> ppt/slides/slide1.xml
+                    const slidePath = relsFile.path.replace('/_rels', '').replace('.rels', '');
+                    slideRelationships[slidePath] = parseWordRelationships(relsFile.content);
                 });
 
-                images = extractImagesFromPptx(contentFiles, relationships, mediaFiles, config);
+                images = extractImagesFromPptx(contentFiles, slideRelationships, mediaFiles, config);
             }
 
             const delimiter = config.newlineDelimiter ?? '\n';
-            const responseText = contentFiles.map(xmlContent => {
-                const xmlDoc = parseString(xmlContent);
+            const responseText = contentFiles.map(file => {
+                const xmlDoc = parseString(file.content.toString());
                 return extractTextFromXmlParagraphs(xmlDoc, 'a:p', 'a:t', delimiter);
             });
 

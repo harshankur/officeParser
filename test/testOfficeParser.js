@@ -90,6 +90,20 @@ function runTest(ext, buffer, extractImages) {
         .catch(error => console.log("ERROR: " + error));
 }
 
+/** Check if all images are unique by comparing their buffer contents */
+function areImagesUnique(images) {
+    const bufferHashes = new Set();
+    for (const image of images) {
+        // Use buffer content as a simple hash
+        const hash = image.buffer.toString('base64');
+        if (bufferHashes.has(hash)) {
+            return false; // Duplicate found
+        }
+        bufferHashes.add(hash);
+    }
+    return true;
+}
+
 /** Test image extraction for files with images */
 async function runImageExtractionTest(testFile) {
     const testConfig = { ...config, extractImages: true };
@@ -105,6 +119,10 @@ async function runImageExtractionTest(testFile) {
                 imagesPassed = imageCount >= testFile.expectedImageCount.min;
             }
 
+            // Validate images are unique (not duplicates)
+            const imagesUnique = areImagesUnique(result.images);
+            imagesPassed = imagesPassed && imagesUnique;
+
             // Validate text content
             const expectedText = fs.readFileSync(`test/files/${testFile.filename}.txt`, 'utf8').trim();
             const actualText = result.text.trim();
@@ -118,7 +136,8 @@ async function runImageExtractionTest(testFile) {
                 ? `expected: ${testFile.expectedImageCount.exact}, got: ${imageCount}`
                 : `expected: >=${testFile.expectedImageCount.min}, got: ${imageCount}`;
 
-            console.log(`[${testFile.filename.padEnd(30)}] => ${status} (text: ${textPassed}, images: ${imagesPassed} - ${imageDetails})`);
+            const uniqueInfo = imagesUnique ? '' : ' [DUPLICATES DETECTED]';
+            console.log(`[${testFile.filename.padEnd(30)}] => ${status} (text: ${textPassed}, images: ${imagesPassed} - ${imageDetails}${uniqueInfo})`);
         })
         .catch(error => console.log(`[${testFile.filename.padEnd(30)}] => Error: ${error.message}`));
 }
