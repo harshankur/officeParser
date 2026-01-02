@@ -1,6 +1,6 @@
 {
   "name": "officeparser",
-  "version": "6.0.0",
+  "version": "6.0.1",
   "description": "A robust, strictly-typed Node.js and Browser library for parsing office files (.docx, .pptx, .xlsx, .odt, .odp, .ods, .pdf, .rtf) into structured AST with rich metadata, formatting, and attachment support.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,10 +12,10 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc && node build_browser.js && npm run sync:public",
+    "build": "tsc && node build_browser.js && npm run sync:docs",
     "build:node": "tsc",
-    "build:browser": "node build_browser.js && npm run sync:public",
-    "sync:public": "mkdir -p public/dist && cp dist/officeparser.browser.js public/dist/",
+    "build:browser": "node build_browser.js && npm run sync:docs",
+    "sync:docs": "mkdir -p docs/dist && cp dist/officeparser.browser.js docs/dist/",
     "test": "npm run test:clean && npm run build && npx tsx test/testOfficeParser.ts",
     "test:clean": "rm -rf test/results",
     "clean": "rm -rf dist && npm run test:clean",

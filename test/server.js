@@ -21,7 +21,7 @@ const server = http.createServer((req, res) => {
     // Map root URL directly to the visualizer
     let urlPath = req.url;
     if (urlPath === '/') {
-        urlPath = '/public/index.html';
+        urlPath = '/docs/index.html';
     }
 
     // Sanitize path (prevent directory traversal)
@@ -52,5 +52,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}/`);
-    console.log(`Root mapped to: http://localhost:${PORT}/public/index.html`);
+    console.log(`Root mapped to: http://localhost:${PORT}/docs/index.html`);
 });
