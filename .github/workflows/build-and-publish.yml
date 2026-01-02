@@ -1,90 +1,91 @@
 # Workflow Name: Build and Publish
 # This workflow performs the following tasks:
-# - Runs tests, builds, and creates a bundled JS file with Browserify
-# - Publishes the package to npm and GitHub Packages if triggered by a new release
-# - Attaches the bundle as a release asset and also as a downloadable artifact on each run
+# - Checkout out repository code and sets up Node.js environment
+# - Installs dependencies and runs comprehensive tests
+# - Builds the project (TSC) and generates the browser bundle (ESBuild)
+# - Creates a versioned bundle file and attaches it as a release asset
+# - Publishes the library to the npm registry
+# - Publishes the library to GitHub Packages registry under the @harshankur scope
 
 name: Build and Publish
 
 # Trigger Events:
+# This workflow is triggered specifically when a new release is published on GitHub
 on:
-  # Triggers the workflow when a new release is published on GitHub
   release:
     types: [published]
 
-jobs:
-  # Step 2: Build and Publish Tasks
-  build-and-publish:
-    if: github.event_name == 'release' && github.event.action == 'published'
-    runs-on: ubuntu-latest
+# Job Permissions:
+# - contents: write (Required to upload release assets)
+# - packages: write (Required to publish to GitHub Packages)
+# - id-token: write (Required for secure publishing flows)
+permissions:
+  contents: write
+  packages: write
+  id-token: write
 
+jobs:
+  # Single job handling both build and publication to ensure atomicity
+  build-and-publish:
+    # Use the latest Ubuntu runner for consistent build performance
+    runs-on: ubuntu-latest
+    
     steps:
-      # Check out code for building and publishing
+      # Step 1: Check out the code to the runner
       - name: Checkout Repository Code
         uses: actions/checkout@v4
 
-      # Set up Node.js with a specified version
+      # Step 2: Initialize Node.js environment with caching for performance
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
-      # Install dependencies
+      # Step 3: Clean install dependencies based on package-lock.json
       - name: Install Dependencies
         run: npm ci
 
-      # Run tests; workflow stops here if any test fails
+      # Step 4: Run the full test suite to ensure release stability
+      # The workflow will pause and fail here if any test fails
       - name: Run Tests
         run: npm test
 
-      # Generate bundled output using Browserify
-      - name: Generate Browserify Bundle
-        # Export the bundle name as as officeParserBundle@<M>.<m>.<p>.js to the environment
-        # Generate bundle
+      # Step 5: Build artifacts and generate versioned browser bundle
+      # We extract the version from the tag (e.g., v6.0.0 -> 6.0.0)
+      # Then rename the generic browser dist for the release asset
+      - name: Build and Bundle
         run: |
-          mkdir -p dist
+          npm run build
           VERSION=${{ github.event.release.tag_name }}
-          BUNDLE_NAME=officeParserBundle@${VERSION#v}.js
+          VERSION_CLEAN=${VERSION#v}
+          BUNDLE_NAME="officeParserBundle@$VERSION_CLEAN.js"
+          cp dist/officeparser.browser.js "dist/$BUNDLE_NAME"
           echo "BUNDLE_NAME=$BUNDLE_NAME" >> $GITHUB_ENV
-          npx browserify officeParser.js --standalone officeParser -o dist/$BUNDLE_NAME
 
-      # Attach officeParserBundle@<M>.<m>.<p>.js to the existing GitHub release as an asset
+      # Step 6: Attach the versioned .js bundle to the GitHub Release
       - name: Upload Bundle as Release Asset
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name }}  # Use the tag name from the release event
-          files: dist/${{ env.BUNDLE_NAME }}              # Use the exported bundle name
+          files: dist/${{ env.BUNDLE_NAME }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}       # Ensure you have the correct token
-          BUNDLE_NAME: ${{ env.BUNDLE_NAME }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Upload officeParserBundle.js as an artifact for download on every workflow run
-      - name: Upload Bundle as Workflow Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.BUNDLE_NAME }}
-          path: dist/${{ env.BUNDLE_NAME }}               # Use the exported bundle name
-        env:
-          BUNDLE_NAME: ${{ env.BUNDLE_NAME }}
-
-      # Set up npm authentication
-      - name: Set Up npm Authentication for npmjs.com
-        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-
-      # Publish package to npm
+      # Step 7: Push the package to npmjs.com
+      # Uses local .npmrc configuration to avoid global credentials leakage
       - name: Publish to npm
-        run: npm publish --access public  # Add `--access public` if it's a public package.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          npm publish --access public
 
-      # Set up github packages authentication
-      - name: Set Up npm Authentication
-        run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > ~/.npmrc
-
-      # Modify package name temporarily
-      - name: Add GitHub Scope
-        run: npm pkg set name="@harshankur/officeparser"
-
-      # Publish package to GitHub Packages registry
+      # Step 8: Push the package to GitHub Packages (ghcr.io compatibility)
+      # Temporarily modifies the package name to follow @harshankur scope
       - name: Publish to GitHub Packages
-        run: npm publish --registry=https://npm.pkg.github.com/
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm pkg set name="@harshankur/officeparser"
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          npm publish --registry=https://npm.pkg.github.com/

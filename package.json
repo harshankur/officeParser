@@ -1,22 +1,32 @@
 {
   "name": "officeparser",
-  "version": "5.2.2",
-  "description": "A Node.js library to parse text out of any office file. Currently supports docx, pptx, xlsx, odt, odp, ods, pdf files.",
-  "main": "officeParser.js",
+  "version": "6.0.0",
+  "description": "A robust, strictly-typed Node.js and Browser library for parsing office files (.docx, .pptx, .xlsx, .odt, .odp, .ods, .pdf, .rtf) into structured AST with rich metadata, formatting, and attachment support.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "files": [
-    "officeParser.js",
-    "typings/officeParser.d.ts",
-    "pdfjs-dist-build/*"
+    "dist"
   ],
-  "types": "typings/officeParser.d.ts",
   "scripts": {
-    "test": "node test/testOfficeParser.js"
+    "build": "tsc && node build_browser.js && npm run sync:public",
+    "build:node": "tsc",
+    "build:browser": "node build_browser.js && npm run sync:public",
+    "sync:public": "mkdir -p public/dist && cp dist/officeparser.browser.js public/dist/",
+    "test": "npm run test:clean && npm run build && npx tsx test/testOfficeParser.ts",
+    "test:clean": "rm -rf test/results",
+    "clean": "rm -rf dist && npm run test:clean",
+    "prepublishOnly": "npm run build",
+    "prepare": "husky"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/harshankur/officeParser.git"
   },
-  "bin": "officeParser.js",
+  "bin": "dist/index.js",
   "keywords": [
     "office",
     "docx",
@@ -26,15 +36,28 @@
     "odp",
     "ods",
     "pdf",
+    "rtf",
     "parser",
-    "text",
-    "extract text",
-    "document",
+    "text extraction",
+    "document parser",
     "word",
     "excel",
-    "worksheet",
     "powerpoint",
-    "slides"
+    "spreadsheet",
+    "presentation",
+    "slides",
+    "ast",
+    "ocr",
+    "typescript",
+    "browser",
+    "metadata",
+    "formatting",
+    "attachments",
+    "tesseract",
+    "pdf.js",
+    "structured-data",
+    "openoffice",
+    "libreoffice"
   ],
   "author": "Harsh Ankur",
   "license": "MIT",
@@ -46,8 +69,8 @@
     "@xmldom/xmldom": "^0.8.10",
     "concat-stream": "^2.0.0",
     "file-type": "^16.5.4",
-    "node-ensure": "^0.0.0",
-    "pdfjs-dist": "^5.3.31",
+    "pdfjs-dist": "5.4.530",
+    "tesseract.js": "^6.0.0",
     "yauzl": "^3.1.3"
   },
   "devDependencies": {
@@ -55,6 +78,10 @@
     "@types/node": "^18.16.1",
     "@types/xmldom": "^0.1.33",
     "@types/yauzl": "^2.10.3",
+    "esbuild": "^0.27.0",
+    "esbuild-plugin-polyfill-node": "^0.3.0",
+    "husky": "^9.1.7",
+    "tsx": "^4.21.0",
     "typescript": "^5.0.3"
   }
 }

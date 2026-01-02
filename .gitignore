@@ -1,7 +1,10 @@
 node_modules/
 officeParserTemp/
 officeParser.bk.js
-.DS_Store
-test/.DS_Store
+*.DS_Store
 .vscode/
-dist/
+/dist/
+*.actual.json
+*.actual.txt
+*.traineddata
+/test/results/
