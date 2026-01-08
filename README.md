@@ -2,6 +2,10 @@
 
 A robust, strictly-typed Node.js and Browser library for parsing office files ([`docx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`odt`](https://en.wikipedia.org/wiki/OpenDocument), [`odp`](https://en.wikipedia.org/wiki/OpenDocument), [`ods`](https://en.wikipedia.org/wiki/OpenDocument), [`pdf`](https://en.wikipedia.org/wiki/PDF), [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format)). It produces a clean, hierarchical Abstract Syntax Tree (AST) with rich metadata, text formatting, and full attachment support.
 
+[![Node.js CI](https://github.com/harshankur/officeParser/actions/workflows/ci.yml/badge.svg)](https://github.com/harshankur/officeParser/actions/workflows/ci.yml)
+[![npm version](https://badge.fury.io/js/officeparser.svg)](https://badge.fury.io/js/officeparser)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 ---
 
 ### 🌟 [Live Interactive AST Visualizer](https://harshankur.github.io/officeParser/) 🌟
@@ -486,3 +490,11 @@ const ast2 = await officeParser.parseOffice(file, {
 **npm**: [https://npmjs.com/package/officeparser](https://npmjs.com/package/officeparser)
 
 **github**: [https://github.com/harshankur/officeParser](https://github.com/harshankur/officeParser)
+
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to get started.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
