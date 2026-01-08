@@ -1,6 +1,6 @@
 {
   "name": "officeparser",
-  "version": "6.0.1",
+  "version": "6.0.2",
   "description": "A robust, strictly-typed Node.js and Browser library for parsing office files (.docx, .pptx, .xlsx, .odt, .odp, .ods, .pdf, .rtf) into structured AST with rich metadata, formatting, and attachment support.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

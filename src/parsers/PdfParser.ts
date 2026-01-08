@@ -357,15 +357,20 @@ function convertToRgbaBuffer(data: Uint8Array | Uint8ClampedArray, width: number
  */
 export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Promise<OfficeParserAST> => {
     let pdfjs: any;
+
     // Check if we are in a Node.js environment
     // @ts-ignore
     if (typeof window === 'undefined') {
+        // Helper to bypass TS/Webpack/Other transpilers converting import() to require() when compiling to CJS
+        // Defined here to avoid CSP 'unsafe-eval' issues in browser environments
+        const dynamicImport = new Function('specifier', 'return import(specifier)');
+
         try {
             // Use legacy build for Node.js (required for pdfjs-dist v5+)
-            pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+            pdfjs = await dynamicImport('pdfjs-dist/legacy/build/pdf.mjs');
         } catch (e) {
             // Fallback to standard if legacy not found (e.g. older versions)
-            pdfjs = await import('pdfjs-dist');
+            pdfjs = await dynamicImport('pdfjs-dist');
         }
     } else {
         pdfjs = await import('pdfjs-dist');
