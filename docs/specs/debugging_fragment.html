@@ -1,0 +1,31 @@
+<div class="doc-body">
+    <h1>officeParser Debugging Tips</h1>
+    <p>Tips and common solutions for working with <code>officeParser</code>.</p>
+
+    <h2>1. Enable Verbose Errors</h2>
+    <p>If you encounter an issue during parsing, set <code>outputErrorToConsole</code> to <code>true</code>. This will
+        log internal stack traces.</p>
+    <pre><code>const ast = await officeParser.parseOffice(file, { outputErrorToConsole: true });</code></pre>
+
+    <h2>2. Accessing Raw Source</h2>
+    <p>Enable <code>includeRawContent</code> to attach original XML/RTF markup to each node. Useful for investigating
+        missing formatting or internal tags.</p>
+
+    <h2>3. PDF Parsing in Browser</h2>
+    <p>In the browser, PDF parsing requires a background worker script. Default is a CDN, but you can host it locally:
+    </p>
+    <pre><code>const config = {
+    pdfWorkerSrc: '/assets/workers/pdf.worker.min.mjs'
+};</code></pre>
+
+    <h2>4. OCR Issues</h2>
+    <ul>
+        <li><strong>Multiple Languages</strong>: Provide comma-separated languages (e.g., <code>eng+fra</code>).</li>
+        <li><strong>Image Quality</strong>: OCR accuracy depends on resolution and clarity.</li>
+        <li><strong>Connectivity</strong>: Tesseract.js may need to download data files.</li>
+    </ul>
+
+    <h2>5. Large Spreadsheet Memory</h2>
+    <p>XLSX files can be massive. Use <code>ast.toText()</code> if you only need plain text to save memory, or parse on
+        the server.</p>
+</div>

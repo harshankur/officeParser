@@ -4,216 +4,1024 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OfficeParser AST Visualizer</title>
+    <title>officeParser | The Most Versatile Office Parser for Node.js & Browser</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Pre-load theme to avoid flash
+        (function () {
+            const savedTheme = localStorage.getItem('theme') || 'auto';
+            const html = document.documentElement;
+            if (savedTheme === 'auto') {
+                const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                html.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+            } else {
+                html.setAttribute('data-theme', savedTheme);
+            }
+        })();
+    </script>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        :root {
+            /* Dark Theme (Default) */
+            --bg-deep: #0a0a0c;
+            --bg-card: #141417;
+            --bg-card-hover: #1c1c21;
+            --primary: #6366f1;
+            --secondary: #a855f7;
+            --accent: #38bdf8;
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --text-dark: #475569;
+            --border: #27272a;
+            --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
+            --glow: 0 0 20px rgba(99, 102, 241, 0.2);
+            --header-bg: rgba(10, 10, 12, 0.8);
+            --preview-bg: #ffffff;
+            --preview-text: #1a1a1a;
+            --visual-card-bg: #f8fafc;
+            --visual-card-border: #e2e8f0;
+            --json-key: #818cf8;
+            --json-string: #34d399;
+            --json-number: #fbbf24;
+            --json-boolean: #f87171;
+            --json-null: #94a3b8;
+        }
+
+        [data-theme="light"] {
+            --bg-deep: #f8fafc;
+            --bg-card: #ffffff;
+            --bg-card-hover: #f1f5f9;
+            --primary: #4f46e5;
+            --secondary: #9333ea;
+            --accent: #0ea5e9;
+            --text-main: #1e293b;
+            --text-dim: #64748b;
+            --text-dark: #94a3b8;
+            --border: #e2e8f0;
+            --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
+            --glow: 0 0 20px rgba(79, 70, 229, 0.1);
+            --header-bg: rgba(248, 250, 252, 0.8);
+            --preview-bg: #ffffff;
+            --preview-text: #1a1a1a;
+            --visual-card-bg: #f1f5f9;
+            --visual-card-border: #cbd5e1;
+            --json-key: #312e81;
+            --json-string: #059669;
+            --json-number: #d97706;
+            --json-boolean: #dc2626;
+            --json-null: #64748b;
+        }
+
+        * {
+            box-sizing: border-box;
             margin: 0;
             padding: 0;
-            /* Changed to 0 for header */
-            background-color: #f5f5f7;
-            color: #333;
+            transition: background-color 0.3s, color 0.3s, border-color 0.3s;
         }
 
-        header {
-            background-color: #1d1d1f;
-            color: white;
-            padding: 15px 40px;
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-deep);
+            color: var(--text-main);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* --- JSON Viewer Styles --- */
+        .json-tree {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }
+
+        .json-tree details {
+            margin-left: 1.25rem;
+        }
+
+        .json-tree summary {
+            cursor: pointer;
+            outline: none;
+            list-style: none;
+        }
+
+        .json-tree summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .json-tree summary::before {
+            content: '▶';
+            display: inline-block;
+            width: 1rem;
+            font-size: 0.7rem;
+            transition: transform 0.2s;
+            color: var(--text-dim);
+        }
+
+        .json-tree details[open]>summary::before {
+            transform: rotate(90deg);
+        }
+
+        .json-tree summary:hover {
+            color: var(--primary);
+        }
+
+        .json-key {
+            color: var(--json-key);
+        }
+
+        .json-string {
+            color: var(--json-string);
+        }
+
+        .json-number {
+            color: var(--json-number);
+        }
+
+        .json-boolean {
+            color: var(--json-boolean);
+        }
+
+        .json-null {
+            color: var(--json-null);
+        }
+
+        .json-punctuation {
+            color: var(--text-dim);
+        }
+
+        /* --- Spec Cards UX --- */
+        .specs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        .spec-card {
+            cursor: pointer;
+            position: relative;
+            z-index: 1;
+            padding: 2.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .spec-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-5px);
+            box-shadow: var(--glow);
+        }
+
+        .spec-card.active {
+            border-color: var(--primary);
+            background: var(--bg-card-hover);
+            box-shadow: var(--glow);
+        }
+
+        .spec-card h3 {
+            font-size: 1.5rem;
+            margin-bottom: 0.75rem;
+            color: var(--text-main);
+        }
+
+        .spec-card p {
+            color: var(--text-dim);
+            font-size: 0.95rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .spec-link-hint {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--primary);
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-            position: sticky;
-            top: 0;
-            z-index: 1000;
+            gap: 0.5rem;
         }
 
-        header h1 {
-            margin: 0;
-            font-size: 20px;
-            text-align: left;
-            color: white;
-        }
-
-        .github-link {
-            color: white;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 14px;
-            font-weight: 500;
-            opacity: 0.8;
-            transition: opacity 0.2s;
-        }
-
-        .github-link:hover {
-            opacity: 1;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 30px auto;
-            background: white;
-            padding: 40px;
+        /* --- Visualizer Parity Styles --- */
+        .visual-chart-container {
+            margin: 1.5rem 0;
+            padding: 1rem;
+            background: var(--visual-card-bg);
+            border: 1px solid var(--visual-card-border);
             border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            max-width: 600px;
         }
 
-        .section-header {
+        .nested-table-container {
+            margin: 0.5rem 0;
+            overflow-x: auto;
+        }
+
+        /* --- Header --- */
+        header {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            padding: 1rem 2rem;
+            background: var(--header-bg);
+            backdrop-filter: blur(12px);
+            z-index: 1000;
+            border-bottom: 1px solid var(--border);
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 15px;
-            border-bottom: 2px solid #f5f5f7;
-            padding-bottom: 10px;
         }
 
-        .section-header h3 {
-            margin: 0;
-            font-size: 18px;
-            color: #1d1d1f;
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.02em;
+            cursor: pointer;
         }
 
-        .controls {
+        .nav-links {
             display: flex;
-            gap: 20px;
+            gap: 1.5rem;
+            align-items: center;
+        }
+
+        .nav-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.2s;
+            font-size: 0.95rem;
+        }
+
+        .nav-links a:hover {
+            color: var(--text-main);
+        }
+
+        .theme-switcher {
+            display: flex;
+            background: var(--border);
+            padding: 2px;
+            border-radius: 10px;
+            margin-left: 0.5rem;
+        }
+
+        .theme-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            padding: 0.4rem 0.6rem;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
             align-items: center;
             justify-content: center;
-            margin-bottom: 30px;
+            transition: all 0.2s;
+            font-size: 0.9rem;
         }
 
-        input[type="file"] {
-            border: 1px solid #d2d2d7;
-            padding: 10px;
-            border-radius: 8px;
+        .theme-btn.active {
+            background: var(--bg-card);
+            color: var(--primary);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .theme-btn:hover:not(.active) {
+            color: var(--text-main);
+        }
+
+        .github-btn {
+            background: var(--border);
+            padding: 0.5rem 1.25rem;
+            border-radius: 9999px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+            text-decoration: none;
+            color: var(--text-main);
+            font-size: 0.9rem;
+        }
+
+        .github-btn:hover {
+            border-color: var(--primary);
+            box-shadow: var(--glow);
+        }
+
+        /* --- Hero Section --- */
+        .hero {
+            padding: 10rem 2rem 6rem;
+            text-align: center;
+            max-width: 900px;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 20%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, transparent 70%);
+            z-index: -1;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.35rem 1rem;
+            background: rgba(99, 102, 241, 0.1);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 1.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .hero h1 {
+            font-size: 4rem;
+            font-weight: 800;
+            line-height: 1.1;
+            background: linear-gradient(to bottom, var(--text-main), var(--text-dim));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 1.5rem;
+            letter-spacing: -0.03em;
+        }
+
+        [data-theme="light"] .hero h1 {
+            background: linear-gradient(to bottom, #000, #475569);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero p {
+            font-size: 1.25rem;
+            color: var(--text-dim);
+            margin-bottom: 2.5rem;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .cta-group {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.75rem 2rem;
+            border-radius: 10px;
+            font-weight: 600;
             cursor: pointer;
-        }
-
-        button {
-            background-color: #0071e3;
-            color: white;
+            transition: all 0.2s;
+            text-decoration: none;
+            font-size: 1rem;
             border: none;
-            padding: 10px 20px;
-            border-radius: 8px;
-            font-size: 16px;
+        }
+
+        .btn-primary {
+            background: var(--gradient);
+            color: white;
+            box-shadow: var(--glow);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            opacity: 0.9;
+            box-shadow: 0 0 30px rgba(99, 102, 241, 0.4);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-main) !important;
+        }
+
+        .btn-outline:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--primary);
+        }
+
+        /* --- Stats Section --- */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 2rem;
+            max-width: 1000px;
+            margin: 4rem auto;
+            padding: 2rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+        }
+
+        .stat-item h3 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .stat-item p {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-top: 0.25rem;
+        }
+
+        /* --- Features & Specs Section --- */
+        .section-title {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+
+        .section-title h2 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+        }
+
+        .section-title p {
+            color: var(--text-dim);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 0 auto 4rem;
+            padding: 0 2rem;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 2rem;
+            border-radius: 20px;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feature-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-5px);
+            background: var(--bg-card-hover);
+            box-shadow: var(--glow);
+        }
+
+        .support-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        .support-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 1.5rem;
+            border-radius: 16px;
+            text-align: center;
+            transition: all 0.3s;
+        }
+
+        .support-card:hover {
+            border-color: var(--accent);
+            transform: scale(1.05);
+        }
+
+        .feature-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1.5rem;
+            display: block;
+        }
+
+        .feature-card h3 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .feature-card p {
+            color: var(--text-dim);
+            font-size: 1rem;
+        }
+
+        /* --- Visualizer Section --- */
+        .visualizer-section {
+            background: radial-gradient(circle at bottom right, rgba(168, 85, 247, 0.05), transparent 40%),
+                radial-gradient(circle at top left, rgba(99, 102, 241, 0.05), transparent 40%);
+            padding: 6rem 2rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .visualizer-container {
+            max-width: 1280px;
+            margin: 0 auto;
+        }
+
+        .drop-zone {
+            background: var(--bg-card);
+            border: 2px dashed var(--border);
+            border-radius: 20px;
+            padding: 3rem;
+            text-align: center;
+            transition: all 0.2s;
             cursor: pointer;
-            transition: background-color 0.2s;
+            margin-bottom: 2rem;
         }
 
-        button:hover {
-            background-color: #0077ed;
+        .drop-zone.dragover {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.05);
         }
 
-        button:disabled {
-            background-color: #d2d2d7;
-            cursor: not-allowed;
+        .drop-zone i {
+            font-size: 3rem;
+            color: var(--primary);
+            margin-bottom: 1.5rem;
+            display: block;
         }
 
-        .action-btn {
-            background-color: #f5f5f7;
+        .drop-zone p {
+            font-size: 1.1rem;
+            color: var(--text-dim);
+        }
+
+        .drop-zone span {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+
+        .hidden-input {
+            display: none;
+        }
+
+        .config-bar {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 15px;
+            padding: 1.25rem;
+            margin-bottom: 2rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2rem;
+            justify-content: center;
+        }
+
+        .config-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .sync-btn {
+            background: rgba(0, 113, 227, 0.1);
+            border: 1px solid rgba(0, 113, 227, 0.2);
             color: #0071e3;
-            border: 1px solid #0071e3;
-            padding: 5px 12px;
-            font-size: 13px;
+            padding: 0.4rem 0.8rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .sync-btn:hover:not(:disabled) {
+            background: #0071e3;
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 113, 227, 0.2);
+        }
+
+        .sync-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+            filter: grayscale(1);
+        }
+
+        .file-info {
+            margin-top: 1.5rem;
+            padding: 0.75rem 1.5rem;
+            background: rgba(99, 102, 241, 0.1);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            border-radius: 10px;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+            animation: slideUp 0.3s ease-out;
+        }
+
+        .file-info.hidden {
+            display: none;
+        }
+
+        .file-info .file-icon {
+            font-size: 1.5rem;
+        }
+
+        .file-info .file-name {
+            font-weight: 600;
+            color: var(--primary);
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .config-label {
+            font-size: 0.85rem;
+            color: var(--text-dim);
             font-weight: 500;
         }
 
-        .action-btn:hover {
-            background-color: #0071e3;
-            color: white;
+        /* Results Area - New Layout */
+        .visual-panel-full {
+            width: 100%;
+            margin-bottom: 2rem;
+            height: 600px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
 
-        .action-btn.success {
-            background-color: #34c759;
-            color: white;
-            border-color: #34c759;
+        .bottom-panels {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            height: 500px;
         }
 
-        /* Stacked Layout */
-        .preview-section {
-            margin-bottom: 30px;
+        .result-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
 
-        .json-section {
-            margin-top: 30px;
-            border-top: 1px solid #eee;
-            padding-top: 20px;
+        .panel-header {
+            padding: 0.75rem 1.25rem;
+            background: rgba(255, 255, 255, 0.02);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
-        #preview {
-            background: white;
-            padding: 20px;
-            border: 1px solid #d2d2d7;
-            border-radius: 8px;
-            min-height: 400px;
-            max-height: 80vh;
-            /* Scrollable large view */
-            overflow-y: auto;
-            overflow-x: auto;
-        }
-
-        #output {
-            background-color: #f5f5f7;
-            padding: 20px;
-            border-radius: 8px;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            font-family: 'SF Mono', SFMono-Regular, ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
-            font-size: 12px;
-            max-height: 400px;
-            overflow-y: scroll;
-            border: 1px solid #d2d2d7;
-        }
-
-        #textOutput {
-            background-color: #f5f5f7;
-            padding: 20px;
-            border-radius: 8px;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            font-family: 'SF Mono', SFMono-Regular, ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
-            font-size: 12px;
-            max-height: 400px;
-            overflow-y: scroll;
-            border: 1px solid #d2d2d7;
-            margin-bottom: 30px;
-        }
-
-        .error {
-            color: #d60017;
-            background-color: #ffe5e5;
-            padding: 15px;
-            border-radius: 8px;
-            margin-top: 20px;
-        }
-
-        .content-link {
-            color: inherit;
-            text-decoration: underline;
-            text-decoration-color: rgba(0, 113, 227, 0.4);
-            transition: all 0.2s ease;
-        }
-
-        .content-link:hover {
-            color: #0071e3;
-            text-decoration-color: #0071e3;
-            background-color: rgba(0, 113, 227, 0.05);
-        }
-
-        /* Specific Rendering Styles */
-        .slide-number,
-        .page-number,
-        .sheet-number {
-            font-weight: bold;
-            color: #888;
-            margin-bottom: 15px;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 8px;
-            font-size: 14px;
-            letter-spacing: 0.5px;
+        .panel-header h4 {
+            font-size: 0.75rem;
             text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-dim);
+            font-weight: 700;
+        }
+
+        .panel-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }
+
+        #visual-preview {
+            background: var(--preview-bg);
+            color: var(--preview-text);
+            font-family: 'Outfit', sans-serif;
+        }
+
+        /* --- SPA Documentation Section --- */
+        .doc-viewer {
+            display: none;
+            max-width: 1000px;
+            margin: 6rem auto;
+            padding: 0 2rem;
+            animation: fadeIn 0.4s ease;
+        }
+
+        .doc-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 3rem;
+            border-radius: 24px;
+        }
+
+        .doc-body h1,
+        .doc-body h2,
+        .doc-body h3 {
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        .doc-body table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5rem 0;
+            font-size: 0.9rem;
+        }
+
+        .doc-body th,
+        .doc-body td {
+            text-align: left;
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .doc-body th {
+            color: var(--text-main);
+            font-weight: 700;
+        }
+
+        .doc-body td {
+            color: var(--text-dim);
+        }
+
+        .doc-body pre {
+            background: var(--bg-deep);
+            padding: 1.5rem;
+            border-radius: 12px;
+            overflow-x: auto;
+            margin: 1.5rem 0;
+            border: 1px solid var(--border);
+        }
+
+        .doc-body code {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent);
+        }
+
+        .doc-body blockquote {
+            border-left: 4px solid var(--primary);
+            background: rgba(99, 102, 241, 0.05);
+            padding: 1rem 1.5rem;
+            margin: 1.5rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        /* JSON Highlighting */
+        .json-key {
+            color: var(--json-key);
+        }
+
+        .json-string {
+            color: var(--json-string);
+        }
+
+        .json-number {
+            color: var(--json-number);
+        }
+
+        .json-boolean {
+            color: var(--json-boolean);
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* --- Footer --- */
+        footer {
+            padding: 6rem 2rem 3rem;
+            border-top: 1px solid var(--border);
+            text-align: center;
+        }
+
+        .footer-logo {
+            font-size: 1.25rem;
+            font-weight: 800;
+            margin-bottom: 2rem;
+            display: block;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 3rem;
+            justify-content: center;
+            margin-bottom: 3rem;
+            flex-wrap: wrap;
+        }
+
+        .footer-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            transition: color 0.2s;
+            font-size: 0.9rem;
+        }
+
+        .footer-links a:hover {
+            color: var(--text-main);
+        }
+
+        .copyright {
+            color: var(--text-dark);
+            font-size: 0.85rem;
+        }
+
+        /* --- Responsive --- */
+        @media (max-width: 1024px) {
+            .bottom-panels {
+                grid-template-columns: 1fr;
+                height: auto;
+                gap: 1.5rem;
+            }
+
+            .bottom-panels>.result-panel {
+                height: 450px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            header {
+                padding: 1rem 1.5rem;
+            }
+
+            .nav-links {
+                display: none;
+            }
+
+            .hero {
+                padding: 8rem 1.5rem 4rem;
+            }
+
+            .hero h1 {
+                font-size: 2.5rem;
+            }
+
+            .hero p {
+                font-size: 1.1rem;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+                gap: 1.5rem;
+                margin: 2rem 1.5rem;
+            }
+
+            .visual-panel-full {
+                height: 450px;
+            }
+
+            .doc-viewer {
+                padding: 1rem;
+                margin: 4rem auto;
+            }
+
+            .doc-content {
+                padding: 1.5rem;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .theme-switcher {
+                margin-left: 0;
+            }
+
+            .section-title h2 {
+                font-size: 2rem;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .support-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .features-grid {
+                grid-template-columns: 1fr;
+                padding: 0 1.5rem;
+            }
+
+            .config-bar {
+                gap: 1rem;
+                padding: 1rem;
+            }
+
+            .config-item {
+                width: 100%;
+                justify-content: space-between;
+                padding: 0.5rem 0;
+                border-bottom: 1px solid var(--border);
+            }
+
+            .config-item:last-child {
+                border-bottom: none;
+            }
+
+            .doc-body table {
+                display: block;
+                overflow-x: auto;
+                white-space: nowrap;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            .doc-body pre {
+                padding: 1rem;
+                font-size: 0.8rem;
+            }
+
+            .doc-content {
+                border-radius: 12px;
+            }
+
+            .file-info {
+                flex-direction: column;
+                text-align: center;
+                width: 100%;
+            }
+        }
+
+        /* Visual Preview Component Styles - Restored from visualizer_old.html */
+        #visual-preview {
+            background: #ffffff !important;
+            color: #1a1a1a !important;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+        }
+
+        /* Restore standard list formatting within preview which was broken by global * reset */
+        #visual-preview ul,
+        #visual-preview ol {
+            padding-inline-start: 40px;
+            margin-block-start: 1em;
+            margin-block-end: 1em;
+            list-style-position: outside;
+        }
+
+        #visual-preview ul {
+            list-style-type: disc;
+        }
+
+        #visual-preview ol {
+            list-style-type: decimal;
+        }
+
+        #visual-preview ul ul,
+        #visual-preview ol ul,
+        #visual-preview ul ol,
+        #visual-preview ol ol {
+            margin-block-start: 0;
+            margin-block-end: 0;
+        }
+
+        #visual-preview li {
+            display: list-item;
+            margin-bottom: 0.25em;
+        }
+
+        #visual-preview p {
+            margin-block-start: 1em;
+            margin-block-end: 1em;
         }
 
         .page-card,
@@ -226,47 +1034,66 @@
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
             background-color: #fcfcfc;
             border-left: 6px solid #ccc;
-            /* Default */
         }
 
         .page-card {
             border-left-color: #0071e3;
-            /* Blue */
+        }
+
+        .sheet-card {
+            border-left-color: #34c759;
+        }
+
+        .slide-card {
+            border-left-color: #ff9500;
+        }
+
+        .slide-note-card {
+            border: 1px solid #ccc;
+            margin-bottom: 30px;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            background-color: #fcfcfc;
+            border-left: 6px solid #888;
+        }
+
+        .slide-note-card .slide-note-number {
+            font-weight: bold;
+            color: #888;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 8px;
+            font-size: 14px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            display: block;
+        }
+
+        .page-number,
+        .sheet-number,
+        .slide-number {
+            font-weight: bold;
+            color: #888;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 8px;
+            font-size: 14px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            display: block;
         }
 
         .page-card .page-number {
             color: #0071e3;
         }
 
-        .sheet-card {
-            border-left-color: #34c759;
-            /* Green */
-        }
-
         .sheet-card .sheet-number {
             color: #34c759;
         }
 
-        .slide-card {
-            border-left-color: #ff9500;
-            /* Orange */
-        }
-
         .slide-card .slide-number {
             color: #ff9500;
-        }
-
-        .sheet-container {
-            margin-bottom: 10px;
-            overflow-x: auto;
-        }
-
-        .sheet-title {
-            font-size: 1.2em;
-            font-weight: bold;
-            margin-bottom: 10px;
-            background: #eee;
-            padding: 5px;
         }
 
         table.spreadsheet-grid {
@@ -283,99 +1110,19 @@
             min-width: 50px;
         }
 
-
-
-        /* Configuration Panel */
-        .config-panel {
-            margin-bottom: 30px;
-            padding: 20px;
-            background: #fdfdfd;
-            border: 1px solid #e1e1e8;
-            border-radius: 12px;
+        .content-link {
+            color: inherit;
+            text-decoration: underline;
+            text-decoration-color: rgba(0, 113, 227, 0.4);
+            transition: all 0.2s ease;
         }
 
-        .config-panel h3 {
-            margin-top: 0;
-            margin-bottom: 15px;
-            font-size: 18px;
-            color: #1d1d1f;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 8px;
+        .content-link:hover {
+            color: #0071e3;
+            text-decoration-color: #0071e3;
+            background-color: rgba(0, 113, 227, 0.05);
         }
 
-        .config-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 15px 30px;
-        }
-
-        .config-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .config-label {
-            font-size: 14px;
-            font-weight: 500;
-            color: #444;
-        }
-
-        .config-input {
-            padding: 6px 10px;
-            border: 1px solid #d2d2d7;
-            border-radius: 6px;
-            font-size: 13px;
-            width: 140px;
-        }
-
-        /* Toggle Switch */
-        .switch {
-            position: relative;
-            display: inline-block;
-            width: 44px;
-            height: 24px;
-        }
-
-        .switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-
-        .slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #ccc;
-            transition: .4s;
-            border-radius: 24px;
-        }
-
-        .slider:before {
-            position: absolute;
-            content: "";
-            height: 18px;
-            width: 18px;
-            left: 3px;
-            bottom: 3px;
-            background-color: white;
-            transition: .3s;
-            border-radius: 50%;
-        }
-
-        input:checked+.slider {
-            background-color: #34c759;
-        }
-
-        input:checked+.slider:before {
-            transform: translateX(20px);
-        }
-
-        /* High Contrast for Light Text */
         .light-text-bg {
             background-color: #333 !important;
             padding: 2px;
@@ -386,724 +1133,1089 @@
 
 <body>
     <header>
-        <h1>OfficeParser AST Visualizer</h1>
-        <a href="https://github.com/harshankur/officeParser" class="github-link" target="_blank">
-            <svg height="20" width="20" viewBox="0 0 16 16" fill="currentColor">
-                <path
-                    d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z">
-                </path>
-            </svg>
-            GitHub Repository
-        </a>
+        <div class="logo" onclick="window.location.href='#top'">officeParser</div>
+        <nav class="nav-links">
+            <a href="#support">Support</a>
+            <a href="#features">Features</a>
+            <a href="#specs">Specifications</a>
+            <a href="#visualizer">Visualizer</a>
+            <div class="theme-switcher">
+                <button class="theme-btn" id="theme-light" title="Light Mode">☀️</button>
+                <button class="theme-btn" id="theme-dark" title="Dark Mode">🌙</button>
+                <button class="theme-btn" id="theme-auto" title="System Settings">💻</button>
+            </div>
+            <a href="https://github.com/harshankur/officeParser" class="github-btn" target="_blank">
+                <svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor">
+                    <path
+                        d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z">
+                    </path>
+                </svg>
+                GitHub
+            </a>
+        </nav>
     </header>
 
-    <div class="container">
-        <div style="text-align: center; margin-bottom: 30px;">
-            <p style="color: #666; max-width: 600px; margin: 0 auto;">
-                Drop any Office file (DOCX, PPTX, XLSX, ODT, ODP, ODS, PDF, RTF) to visualize its Abstract Syntax Tree
-                (AST),
-                extracted text, and a rich content preview.
-            </p>
-        </div>
+    <main>
+        <section class="hero">
+            <div class="badge">120k+ Weekly Downloads</div>
+            <h1>The Industry's Most <span class="gradient-text">Versatile</span> Office Parser</h1>
+            <p>One library, every format. Extract content, metadata, and attachments into a structured Abstract Syntax
+                Tree with 7 Million+ total downloads and counting.</p>
+            <div class="cta-group">
+                <a href="#visualizer" class="btn btn-primary">Try Visualizer</a>
+                <a href="https://www.npmjs.com/package/officeparser" class="btn btn-outline" target="_blank">View on
+                    NPM</a>
+            </div>
+        </section>
 
-        <div class="controls">
-            <input type="file" id="fileInput" accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.pdf,.rtf">
-        </div>
+        <section class="stats-grid">
+            <div class="stat-item">
+                <a href="https://npm-stat.com/charts.html?package=officeparser&from=2025-07-01&to=2025-12-31"
+                    target="_blank" style="text-decoration: none;">
+                    <h3>120k+</h3>
+                    <p>Weekly Downloads*</p>
+                </a>
+            </div>
+            <div class="stat-item">
+                <a href="https://npm-stat.com/charts.html?package=officeparser&from=2019-01-01&to=2025-12-31"
+                    target="_blank" style="text-decoration: none;">
+                    <h3>7M+</h3>
+                    <p>Total Downloads</p>
+                </a>
+            </div>
+            <div class="stat-item">
+                <h3>8+</h3>
+                <p>Formats Supported</p>
+            </div>
+        </section>
 
-        <div class="config-panel">
-            <h3>Configuration</h3>
-            <div class="config-grid">
-                <div class="config-item">
-                    <span class="config-label" title="Show all logs to console in case of an error">Output Error To
-                        Console</span>
-                    <label class="switch">
-                        <input type="checkbox" id="cfg_outputErrorToConsole">
-                        <span class="slider"></span>
-                    </label>
+        <section id="support" class="support">
+            <div class="section-title">
+                <h2>Universal Support</h2>
+                <p>One library to rule them all. Built to handle the complexities of legacy and modern office standards.
+                </p>
+            </div>
+            <div class="support-grid">
+                <div class="support-card">
+                    <span class="feature-icon">📄</span>
+                    <h3>DOCX</h3>
+                    <p>Modern Word</p>
                 </div>
-                <div class="config-item">
-                    <span class="config-label" title="Ignore notes (PowerPoint)">Ignore Notes</span>
-                    <label class="switch">
-                        <input type="checkbox" id="cfg_ignoreNotes">
-                        <span class="slider"></span>
-                    </label>
+                <div class="support-card">
+                    <span class="feature-icon">📊</span>
+                    <h3>XLSX</h3>
+                    <p>Modern Excel</p>
                 </div>
-                <div class="config-item">
-                    <span class="config-label" title="Collectively put all parsed text from notes at last">Put Notes At
-                        Last</span>
-                    <label class="switch">
-                        <input type="checkbox" id="cfg_putNotesAtLast">
-                        <span class="slider"></span>
-                    </label>
+                <div class="support-card">
+                    <span class="feature-icon">📽️</span>
+                    <h3>PPTX</h3>
+                    <p>Modern Powerpoint</p>
                 </div>
-                <div class="config-item">
-                    <span class="config-label" title="Extract attachments (images, charts, etc.)">Extract
-                        Attachments</span>
-                    <label class="switch">
-                        <input type="checkbox" id="cfg_extractAttachments" checked>
-                        <span class="slider"></span>
-                    </label>
+                <div class="support-card">
+                    <span class="feature-icon">🧾</span>
+                    <h3>PDF</h3>
+                    <p>Documents</p>
                 </div>
-                <div class="config-item">
-                    <span class="config-label" title="Include raw content (XML/RTF) in the AST">Include Raw
-                        Content</span>
-                    <label class="switch">
-                        <input type="checkbox" id="cfg_includeRawContent">
-                        <span class="slider"></span>
-                    </label>
+                <div class="support-card">
+                    <span class="feature-icon">📝</span>
+                    <h3>ODT</h3>
+                    <p>OpenDocument Text</p>
                 </div>
-                <div class="config-item">
-                    <span class="config-label" title="Enable OCR for images (Requires Tesseract.js)">Enable OCR</span>
-                    <label class="switch">
-                        <input type="checkbox" id="cfg_ocr" checked>
-                        <span class="slider"></span>
-                    </label>
+                <div class="support-card">
+                    <span class="feature-icon">📈</span>
+                    <h3>ODS</h3>
+                    <p>OpenDocument Spreadsheet</p>
                 </div>
-                <div class="config-item">
-                    <span class="config-label">OCR Language</span>
-                    <input type="text" id="cfg_ocrLanguage" class="config-input" value="eng"
-                        placeholder="e.g. eng, fra">
+                <div class="support-card">
+                    <span class="feature-icon">📽️</span>
+                    <h3>ODP</h3>
+                    <p>OpenDocument Presentation</p>
                 </div>
-                <div class="config-item">
-                    <span class="config-label">Newline Delimiter</span>
-                    <input type="text" id="cfg_newlineDelimiter" class="config-input" value="\n"
-                        placeholder="e.g. \n, <br>">
-                </div>
-                <div class="config-item" style="grid-column: span 2;">
-                    <span class="config-label">PDF Worker Source</span>
-                    <input type="text" id="cfg_pdfWorkerSrc" class="config-input"
-                        style="width: 100%; margin-left: 20px;"
-                        value="https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.min.mjs">
+                <div class="support-card">
+                    <span class="feature-icon">📜</span>
+                    <h3>RTF</h3>
+                    <p>Rich Text</p>
                 </div>
             </div>
-        </div>
+        </section>
 
-        <div class="controls">
-            <button id="parseBtn" disabled>Parse File</button>
-        </div>
+        <section id="features" class="features" style="padding: 6rem 0;">
+            <div class="section-title">
+                <h2>Powerful Features</h2>
+                <p>Designed for developers who need more than just plain text extraction.</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <span class="feature-icon">🌳</span>
+                    <h3>AST Output</h3>
+                    <p>Get a structured Abstract Syntax Tree reflecting the document's true hierarchy.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">📎</span>
+                    <h3>Attachments</h3>
+                    <p>Extract embedded images, charts, and objects directly from the source.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">🔍</span>
+                    <h3>OCR Integration</h3>
+                    <p>Seamlessly read text from images within documents using Tesseract.js.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">ℹ️</span>
+                    <h3>Full Metadata</h3>
+                    <p>Access document properties, author info, creation dates, and more.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">⚡</span>
+                    <h3>High Performance</h3>
+                    <p>Optimized for both heavy server-side processing and light browser usage.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">⚙️</span>
+                    <h3>Customizable</h3>
+                    <p>Fine-tune delimiters, note handling, and parsing depth via robust configuration.</p>
+                </div>
+            </div>
+        </section>
 
-        <div id="status"
-            style="text-align: center; margin-bottom: 20px; color: #666; font-size: 14px; min-height: 20px;"></div>
+        <section id="specs" class="specs" style="padding-bottom: 6rem;">
+            <div class="section-title">
+                <h2>Specifications</h2>
+                <p>Detailed technical documentation for the core components of officeParser.</p>
+            </div>
+            <div class="specs-grid">
+                <div class="spec-card" id="card-config" onclick="location.hash='#spec/config'">
+                    <h3>Configuration</h3>
+                    <p>Full reference of parsing options including OCR, attachment handling, and delimiters.</p>
+                    <div class="spec-link-hint">Read Config Spec →</div>
+                </div>
+                <div class="spec-card" id="card-ast" onclick="location.hash='#spec/ast'">
+                    <h3>AST Reference</h3>
+                    <p>Understand the structure of the Abstract Syntax Tree and all supported node types.</p>
+                    <div class="spec-link-hint">Read AST Spec →</div>
+                </div>
+                <div class="spec-card" id="card-debugging" onclick="location.hash='#spec/debugging'">
+                    <h3>Debugging</h3>
+                    <p>Tips and tricks for handling edge cases, large files, and common parsing hurdles.</p>
+                    <div class="spec-link-hint">Read Debugging Spec →</div>
+                </div>
+            </div>
+        </section>
 
-        <div class="preview-section">
-            <div class="section-header">
-                <h3>Visualized Content</h3>
+        <!-- SPA Doc Viewer -->
+        <section id="doc-viewer" class="doc-viewer">
+            <div class="doc-content">
+                <div style="display: flex; justify-content: flex-end; margin-bottom: 2rem;">
+                    <button class="btn btn-outline" style="padding: 0.5rem 1rem;" onclick="closeDoc()">Close Document
+                        ✕</button>
+                </div>
+                <div id="doc-body-placeholder" class="doc-body">
+                    <!-- Dynamic Content -->
+                </div>
             </div>
-            <div id="preview">
-                <em>Rendered content will appear here...</em>
-            </div>
-        </div>
+        </section>
 
-        <div class="text-section">
-            <div class="section-header">
-                <h3>Plain Text Output (ast.toText())</h3>
-                <button class="action-btn" id="copyTextBtn" disabled>Copy Text</button>
-            </div>
-            <div id="textOutput">
-                <em>Text content will appear here...</em>
-            </div>
-        </div>
+        <section id="visualizer" class="visualizer-section">
+            <div class="visualizer-container">
+                <div class="section-title">
+                    <h2>AST Visualizer</h2>
+                    <p>Drop a file to see the power of our structured parsing engine in action.</p>
+                </div>
 
-        <div class="json-section">
-            <div class="section-header">
-                <h3>Raw AST (JSON)</h3>
-                <button class="action-btn" id="copyJsonBtn" disabled>Copy JSON</button>
+                <div
+                    style="text-align: center; margin-bottom: 2.5rem; display: flex; flex-direction: column; align-items: center; gap: 1rem;">
+                    <div
+                        style="max-width: 800px; padding: 1.5rem; background: rgba(99, 102, 241, 0.05); border: 1px solid rgba(99, 102, 241, 0.1); border-radius: 16px; font-size: 0.95rem; color: var(--text-dim); line-height: 1.6;">
+                        <span
+                            style="color: var(--primary); font-weight: 700; display: block; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem;">High
+                            Fidelity Guarantee</span>
+                        This preview is built <strong>100% from the AST output</strong>. This demonstrates the extreme
+                        depth and structural accuracy of our parsing engine—allowing us to reconstruct complex document
+                        layouts with near-perfect fidelity solely from the structured data.
+                    </div>
+
+                    <div style="font-size: 0.85rem; color: var(--text-dark);">
+                        Looking for the old tool? <a href="visualizer_old.html"
+                            style="color: var(--primary); text-decoration: none; font-weight: 600;">Legacy Visualizer
+                            →</a>
+                    </div>
+                </div>
+
+                <div class="drop-zone" id="drop-zone">
+                    <div id="drop-zone-prompt">
+                        <i>📤</i>
+                        <p>Drag & Drop your file here or <span>Click to Browse</span></p>
+                        <p style="font-size: 0.8rem; margin-top: 1rem; opacity: 0.6;">DOCX, PPTX, XLSX, PDF, RTF, ODT,
+                            ODP,
+                            ODS</p>
+                    </div>
+                    <div id="file-info" class="file-info hidden">
+                        <span class="file-icon">📄</span>
+                        <div style="text-align: left;">
+                            <div class="file-name" id="display-filename">No file selected</div>
+                        </div>
+                    </div>
+                    <input type="file" id="file-input" class="hidden-input"
+                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.pdf,.rtf">
+                </div>
+
+                <div class="config-bar">
+                    <div class="config-item">
+                        <span class="config-label">Extract Attachments</span>
+                        <label class="switch">
+                            <input type="checkbox" id="cfg_extractAttachments" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-item">
+                        <span class="config-label">Enable OCR</span>
+                        <label class="switch">
+                            <input type="checkbox" id="cfg_ocr" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-item">
+                        <span class="config-label">Include Raw Source</span>
+                        <label class="switch">
+                            <input type="checkbox" id="cfg_includeRawContent">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-item">
+                        <span class="config-label">Ignore Notes</span>
+                        <label class="switch">
+                            <input type="checkbox" id="cfg_ignoreNotes">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-item">
+                        <span class="config-label">Notes At Last</span>
+                        <label class="switch">
+                            <input type="checkbox" id="cfg_putNotesAtLast">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-item">
+                        <span class="config-label">Verbose Errors</span>
+                        <label class="switch">
+                            <input type="checkbox" id="cfg_outputErrorToConsole">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-item">
+                        <span class="config-label">OCR Lang</span>
+                        <input type="text" id="cfg_ocrLanguage" class="btn btn-outline"
+                            style="padding: 0.4rem 0.8rem; width: 80px; font-size: 0.8rem;" value="eng">
+                    </div>
+                    <div class="config-item">
+                        <span class="config-label">Delimiter</span>
+                        <input type="text" id="cfg_newlineDelimiter" class="btn btn-outline"
+                            style="padding: 0.4rem 0.8rem; width: 60px; font-size: 0.8rem;" value="\n">
+                    </div>
+                </div>
             </div>
-            <div id="output">JSON output will appear here...</div>
+
+            <div id="status-msg"
+                style="text-align: center; margin-bottom: 2rem; color: var(--accent); font-weight: 600;"></div>
+
+            <div class="results-layout">
+                <!-- Full Width Preview -->
+                <div class="visual-panel-full">
+                    <div class="panel-header" style="justify-content: space-between;">
+                        <h4>Visual Preview</h4>
+                        <button id="reparse-btn" class="sync-btn" title="Update Visual Preview" style="display: none;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round" style="width: 1rem; height: 1rem;">
+                                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+                                <path d="M21 3v5h-5"></path>
+                                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+                                <path d="M8 16H3v5"></path>
+                            </svg>
+                            Refresh View
+                        </button>
+                    </div>
+                    <div class="panel-body" id="visual-preview">
+                        <div style="color: #64748b; text-align: center; margin-top: 10rem;">Drop a file to generate
+                            preview</div>
+                    </div>
+                </div>
+
+                <!-- Side by Side Bottom Panels -->
+                <div class="bottom-panels">
+                    <div class="result-panel">
+                        <div class="panel-header">
+                            <h4>Abstract Syntax Tree (JSON)</h4>
+                            <button id="copy-json-btn" class="btn-outline"
+                                style="padding: 0.25rem 0.75rem; font-size: 0.75rem; border-radius: 5px; cursor: pointer;">Copy
+                                JSON</button>
+                        </div>
+                        <div class="panel-body" id="ast-output">
+                            <div style="color: #475569; text-align: center; margin-top: 5rem;">JSON structure will
+                                appear here</div>
+                        </div>
+                    </div>
+                    <div class="result-panel">
+                        <div class="panel-header">
+                            <h4>Plain Text Output</h4>
+                            <button id="copy-text-btn" class="btn-outline"
+                                style="padding: 0.25rem 0.75rem; font-size: 0.75rem; border-radius: 5px; cursor: pointer;">Copy
+                                Text</button>
+                        </div>
+                        <div class="panel-body" id="text-output" style="color: var(--text-dim);">
+                            <div style="color: #475569; text-align: center; margin-top: 5rem;">Extracted text will
+                                appear here</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-logo">officeParser</div>
+        <div class="footer-links">
+            <a href="https://github.com/harshankur/officeParser">GitHub</a>
+            <a href="https://www.npmjs.com/package/officeparser">NPM</a>
+            <a href="#spec/config">Configuration</a>
+            <a href="#spec/ast">AST Reference</a>
+            <a href="#spec/debugging">Debugging</a>
         </div>
-    </div>
+        <p class="copyright">© 2026 officeParser. Built with ❤️ for the Open Source community.</p>
+    </footer>
 
     <script src="dist/officeparser.browser.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            try {
+            const html = document.documentElement;
+            const dropZone = document.getElementById('drop-zone');
+            const fileInput = document.getElementById('file-input');
+            const visualPreview = document.getElementById('visual-preview');
+            const astOutput = document.getElementById('ast-output');
+            const textOutput = document.getElementById('text-output');
+            const statusMsg = document.getElementById('status-msg');
+            const copyJsonBtn = document.getElementById('copy-json-btn');
+            const copyTextBtn = document.getElementById('copy-text-btn');
+            const docViewer = document.getElementById('doc-viewer');
+            const docBody = document.getElementById('doc-body-placeholder');
+            const reparseBtn = document.getElementById('reparse-btn');
+            const fileInfo = document.getElementById('file-info');
+            const dropZonePrompt = document.getElementById('drop-zone-prompt');
+            const displayFilename = document.getElementById('display-filename');
 
-                // Access from global IIFE namespace
-                if (!window.officeParser) {
-                    throw new Error('officeParser is not defined. The library script might have failed to load.');
-                }
+            let currentAst = null;
+            let lastFileBuffer = null;
+            let lastFileName = "";
 
-                const parseOffice = window.officeParser.parseOffice;
-                if (!parseOffice) {
-                    throw new Error('parseOffice function not found in officeParser global.');
-                }
+            // --- Theme Switcher ---
+            const themeBtns = {
+                light: document.getElementById('theme-light'),
+                dark: document.getElementById('theme-dark'),
+                auto: document.getElementById('theme-auto')
+            };
 
-                const fileInput = document.getElementById('fileInput');
-                const parseBtn = document.getElementById('parseBtn');
-                const copyTextBtn = document.getElementById('copyTextBtn');
-                const copyJsonBtn = document.getElementById('copyJsonBtn');
-                const output = document.getElementById('output');
-                const status = document.getElementById('status');
-                let selectedFile = null;
-
-                // Configuration Persistence Logic
-                const CONFIG_KEY = 'officeparser_visualizer_config';
-                const configInputs = [
-                    'cfg_outputErrorToConsole', 'cfg_ignoreNotes', 'cfg_putNotesAtLast',
-                    'cfg_extractAttachments', 'cfg_includeRawContent', 'cfg_ocr',
-                    'cfg_ocrLanguage', 'cfg_newlineDelimiter', 'cfg_pdfWorkerSrc'
-                ];
-
-                const saveConfig = () => {
-                    const config = {};
-                    configInputs.forEach(id => {
-                        const el = document.getElementById(id);
-                        if (el.type === 'checkbox') config[id] = el.checked;
-                        else config[id] = el.value;
-                    });
-                    localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
-                };
-
-                const loadConfig = () => {
-                    const saved = localStorage.getItem(CONFIG_KEY);
-                    if (!saved) return;
-                    try {
-                        const config = JSON.parse(saved);
-                        configInputs.forEach(id => {
-                            if (config[id] !== undefined) {
-                                const el = document.getElementById(id);
-                                if (el.type === 'checkbox') el.checked = config[id];
-                                else el.value = config[id];
-                            }
-                        });
-                    } catch (e) {
-                        console.error("Failed to load config:", e);
-                    }
-                };
-
-                // Add change listeners to all config inputs
-                configInputs.forEach(id => {
-                    document.getElementById(id).addEventListener('change', saveConfig);
-                });
-
-                loadConfig();
-
-                console.log("Visualizer initialized successfully.");
-
-                fileInput.addEventListener('change', (e) => {
-                    selectedFile = e.target.files[0];
-                    parseBtn.disabled = !selectedFile;
-                    status.textContent = selectedFile ? `Selected: ${selectedFile.name}` : '';
-                    output.textContent = 'Ready to parse...';
-                    output.classList.remove('error');
-
-                    // Reset copy buttons when file changes
-                    copyTextBtn.disabled = true;
-                    copyJsonBtn.disabled = true;
-                });
-
-                parseBtn.addEventListener('click', async () => {
-                    if (!selectedFile) return;
-
-                    status.textContent = 'Parsing...';
-                    parseBtn.disabled = true;
-                    copyTextBtn.disabled = true;
-                    copyJsonBtn.disabled = true;
-
-                    // Clear previous results immediately
-                    output.textContent = 'Parsing in progress...';
-                    output.classList.remove('error');
-                    document.getElementById('preview').innerHTML = '<em>Parsing...</em>';
-                    document.getElementById('textOutput').textContent = 'Parsing in progress...';
-
-                    try {
-                        const arrayBuffer = await selectedFile.arrayBuffer();
-
-                        // Gather configuration
-                        const config = {
-                            outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
-                            ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
-                            putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
-                            extractAttachments: document.getElementById('cfg_extractAttachments').checked,
-                            includeRawContent: document.getElementById('cfg_includeRawContent').checked,
-                            ocr: document.getElementById('cfg_ocr').checked,
-                            ocrLanguage: document.getElementById('cfg_ocrLanguage').value || 'eng',
-                            newlineDelimiter: document.getElementById('cfg_newlineDelimiter').value.replace(/\\n/g, '\n') || '\n',
-                            pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value
-                        };
-
-                        console.log("Parsing with config:", config);
-
-                        // Use the direct parseOffice function
-                        const ast = await parseOffice(arrayBuffer, config);
-
-                        // Render JSON
-                        output.textContent = JSON.stringify(ast, null, 2);
-
-                        // Render Preview
-                        renderPreview(ast);
-
-                        // Render Text Output
-                        const textOutput = document.getElementById('textOutput');
-                        if (typeof ast.toText === 'function') {
-                            textOutput.textContent = ast.toText();
-                        } else {
-                            textOutput.textContent = 'Error: toText() method not found on AST object.';
-                        }
-
-                        status.textContent = 'Parsing complete!';
-
-                        // Enable copy buttons on success
-                        copyTextBtn.disabled = false;
-                        copyJsonBtn.disabled = false;
-
-                    } catch (err) {
-                        console.error(err);
-                        output.textContent = `Error: ${err.message}\n\nCheck console for details.`;
-                        output.classList.add('error');
-                        status.textContent = 'Parsing failed.';
-                    } finally {
-                        parseBtn.disabled = false;
-                    }
-                });
-
-                // Copy Buttons Logic
-                const setupCopyBtn = (btnId, textSourceId) => {
-                    const btn = document.getElementById(btnId);
-                    const source = document.getElementById(textSourceId);
-                    btn.addEventListener('click', async () => {
-                        try {
-                            const text = source.textContent;
-                            if (!text || text.includes('Parsing...')) return;
-                            await navigator.clipboard.writeText(text);
-                            const originalText = btn.textContent;
-                            btn.textContent = 'Copied!';
-                            btn.classList.add('success');
-                            setTimeout(() => {
-                                btn.textContent = originalText;
-                                btn.classList.remove('success');
-                            }, 2000);
-                        } catch (err) {
-                            console.error('Failed to copy:', err);
-                        }
-                    });
-                };
-
-                setupCopyBtn('copyJsonBtn', 'output');
-                setupCopyBtn('copyTextBtn', 'textOutput');
-
-            } catch (initErr) {
-                console.error("Initialization Error:", initErr);
-                const statusCallback = document.getElementById('status');
-                if (statusCallback) statusCallback.textContent = `Initialization Error: ${initErr.message}`;
-                alert(`Failed to initialize OfficeParser: ${initErr.message}`);
-            }
-        });
-
-        function renderPreview(ast) {
-            const previewContainer = document.getElementById('preview');
-            previewContainer.innerHTML = ''; // Clear previous
-
-            if (!ast.content || !Array.isArray(ast.content)) {
-                previewContainer.innerHTML = '<p>No content found in AST.</p>';
-                return;
+            function updateThemeUI(theme) {
+                Object.values(themeBtns).forEach(btn => btn.classList.remove('active'));
+                themeBtns[theme].classList.add('active');
             }
 
-            // Create a map for faster attachment lookup
-            const attachmentMap = new Map();
-            if (ast.attachments) {
-                ast.attachments.forEach(att => {
-                    attachmentMap.set(att.name, att);
-                });
-            }
-
-            renderNodes(ast.content, previewContainer, attachmentMap);
-        }
-
-        /**
-         * Renders a list of nodes into a container, grouping adjacent list items.
-         */
-        function renderNodes(nodes, container, attachmentMap) {
-            if (!nodes || !Array.isArray(nodes)) return;
-
-            // Stack of active lists: { indentation, listId, element, lastLi }
-            let listStack = [];
-
-            nodes.forEach(node => {
-                if (node.type === 'list') {
-                    const listType = node.metadata?.listType || 'unordered';
-                    const indentation = node.metadata?.indentation || 0;
-                    const listId = node.metadata?.listId || 'no-id';
-
-                    // 1. Manage Stack Depth
-                    // Pop any lists deeper than current indentation
-                    while (listStack.length > 0 && listStack[listStack.length - 1].indentation > indentation) {
-                        listStack.pop();
-                    }
-
-                    // 2. Check for Continuation
-                    let currentList = null;
-                    if (listStack.length > 0) {
-                        const top = listStack[listStack.length - 1];
-                        if (top.indentation === indentation && top.listId === listId && top.listType === listType) {
-                            currentList = top;
-                        } else if (top.indentation === indentation) {
-                            // Same level but different list -> Replace top
-                            listStack.pop();
-                        }
-                    }
-
-                    // 3. Create New List if needed
-                    if (!currentList) {
-                        const newListEl = document.createElement(listType === 'ordered' ? 'ol' : 'ul');
-
-                        // Decide where to attach
-                        if (listStack.length > 0) {
-                            // We are deeper than top (or just pushed).
-                            // Attach to last LI of the parent list for proper nesting
-                            const parent = listStack[listStack.length - 1];
-                            if (parent.lastLi) {
-                                parent.lastLi.appendChild(newListEl);
-                            } else {
-                                // Fallback: sibling of parent list (should rarely happen if strict nesting)
-                                parent.element.appendChild(newListEl);
-                            }
-                        } else {
-                            // Root level list
-                            // Add indentation margin only for root lists to avoid double indent
-                            if (indentation > 0) {
-                                newListEl.style.marginLeft = `${indentation * 20}px`;
-                            }
-                            container.appendChild(newListEl);
-                        }
-
-                        currentList = {
-                            indentation,
-                            listId,
-                            listType,
-                            element: newListEl,
-                            lastLi: null
-                        };
-                        listStack.push(currentList);
-                    }
-
-                    // 4. Create and Append Item
-                    const li = createNodeElement(node, attachmentMap);
-                    if (li) {
-                        currentList.element.appendChild(li);
-                        currentList.lastLi = li;
-                    }
-
+            function setTheme(theme) {
+                localStorage.setItem('theme', theme);
+                if (theme === 'auto') {
+                    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    html.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
                 } else {
-                    // Non-list node breaks the stack
-                    listStack = [];
-                    const el = createNodeElement(node, attachmentMap);
-                    if (el) container.appendChild(el);
+                    html.setAttribute('data-theme', theme);
+                }
+                updateThemeUI(theme);
+            }
+
+            themeBtns.light.addEventListener('click', () => setTheme('light'));
+            themeBtns.dark.addEventListener('click', () => setTheme('dark'));
+            themeBtns.auto.addEventListener('click', () => setTheme('auto'));
+
+            const initialTheme = localStorage.getItem('theme') || 'auto';
+            updateThemeUI(initialTheme);
+
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+                if (localStorage.getItem('theme') === 'auto') {
+                    html.setAttribute('data-theme', e.matches ? 'dark' : 'light');
                 }
             });
-        }
 
-        function createNodeElement(node, attachmentMap) {
-            let el = null;
+            // --- SPA Routing & Docs ---
+            function handleHash() {
+                const hash = location.hash;
+                if (hash.startsWith('#spec/')) {
+                    const type = hash.replace('#spec/', '');
+                    loadDocContent(type);
+                } else if (!hash || hash === '#specs') {
+                    // Default to 'config' if we are in specs section or homepage
+                    loadDocContent('config');
+                } else {
+                    docViewer.style.display = 'none';
+                }
+            }
 
-            switch (node.type) {
-                case 'paragraph':
-                    el = document.createElement('p');
+            async function loadDocContent(type) {
+                try {
+                    // Highlight active card
+                    document.querySelectorAll('.spec-card').forEach(c => c.classList.remove('active'));
+                    const activeCard = document.getElementById(`card-${type}`);
+                    if (activeCard) activeCard.classList.add('active');
 
-                    if (node.metadata && node.metadata.alignment) {
-                        el.style.textAlign = node.metadata.alignment;
+                    const response = await fetch(`specs/${type}_fragment.html`);
+                    if (!response.ok) throw new Error('Failed to load document');
+                    const content = await response.text();
+                    docBody.innerHTML = content;
+                    docViewer.style.display = 'block';
+
+                    // Only scroll if it's a direct hash change, not initial load default
+                    if (location.hash.startsWith('#spec/')) {
+                        docViewer.scrollIntoView({ behavior: 'smooth' });
                     }
-                    break;
-                case 'heading':
-                    const level = (node.metadata && node.metadata.level) || 1;
-                    el = document.createElement(`h${Math.min(level, 6)}`);
+                } catch (err) {
+                    console.error(err);
+                    docBody.innerHTML = `<div style="color:var(--json-boolean); padding:2rem; text-align:center;">Error loading spec: ${err.message}</div>`;
+                    docViewer.style.display = 'block';
+                }
+            }
 
-                    if (node.metadata && node.metadata.alignment) {
-                        el.style.textAlign = node.metadata.alignment;
+            window.closeDoc = () => {
+                docViewer.style.display = 'none';
+                document.querySelectorAll('.spec-card').forEach(c => c.classList.remove('active'));
+                history.pushState("", document.title, window.location.pathname + window.location.search);
+                document.getElementById('specs').scrollIntoView({ behavior: 'smooth' });
+            };
+
+            window.addEventListener('hashchange', handleHash);
+            window.addEventListener('load', handleHash);
+
+            // --- Visualizer Handlers ---
+            dropZone.addEventListener('click', () => fileInput.click());
+            dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+            dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+                const file = e.dataTransfer.files[0];
+                if (file) handleFile(file);
+            });
+            fileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) handleFile(file);
+            });
+
+            // Config Persistence
+            const configIds = ['cfg_extractAttachments', 'cfg_ocr', 'cfg_includeRawContent', 'cfg_ignoreNotes', 'cfg_putNotesAtLast', 'cfg_outputErrorToConsole', 'cfg_ocrLanguage', 'cfg_newlineDelimiter'];
+            configIds.forEach(id => {
+                const el = document.getElementById(id);
+                const saved = localStorage.getItem(id);
+                if (saved !== null) {
+                    if (el.type === 'checkbox') el.checked = saved === 'true';
+                    else el.value = saved;
+                }
+                el.addEventListener('change', () => {
+                    localStorage.setItem(id, el.type === 'checkbox' ? el.checked : el.value);
+                });
+            });
+
+            // Reparse Action
+            reparseBtn.addEventListener('click', () => {
+                if (lastFileBuffer) {
+                    processFileBuffer(lastFileBuffer, lastFileName);
+                }
+            });
+
+            // Config change detection for reparse button
+            let lastConfigJson = "";
+            function updateReparseButtonState() {
+                if (!lastFileBuffer) {
+                    reparseBtn.style.display = 'none';
+                    return;
+                }
+                const currentConfig = {
+                    extractAttachments: document.getElementById('cfg_extractAttachments').checked,
+                    ocr: document.getElementById('cfg_ocr').checked,
+                    includeRawContent: document.getElementById('cfg_includeRawContent').checked,
+                    ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
+                    putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
+                    outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
+                    ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
+                    newlineDelimiter: document.getElementById('cfg_newlineDelimiter').value
+                };
+                const currentJson = JSON.stringify(currentConfig);
+                reparseBtn.disabled = (currentJson === lastConfigJson);
+                reparseBtn.style.display = 'flex';
+            }
+
+            configIds.forEach(id => {
+                document.getElementById(id).addEventListener('input', updateReparseButtonState);
+                document.getElementById(id).addEventListener('change', updateReparseButtonState);
+            });
+
+            async function handleFile(file) {
+                const buffer = await file.arrayBuffer();
+                lastFileBuffer = buffer;
+                lastFileName = file.name;
+
+                // Update UI to show file selected
+                displayFilename.textContent = file.name;
+                fileInfo.classList.remove('hidden');
+                dropZonePrompt.classList.add('hidden');
+
+                processFileBuffer(buffer, file.name);
+            }
+
+            async function processFileBuffer(buffer, filename) {
+                if (!window.officeParser) {
+                    statusMsg.textContent = "Error: Library not loaded!";
+                    return;
+                }
+
+                statusMsg.textContent = `Parsing ${filename}...`;
+                visualPreview.innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">Parsing document structure...</div>';
+                astOutput.innerHTML = '<div style="text-align:center; padding: 2rem; color: var(--text-dim);">Processing AST...</div>';
+                textOutput.innerHTML = '<div style="text-align:center; padding: 2rem; color: var(--text-dim);">Extracting text...</div>';
+
+                try {
+                    const config = {
+                        extractAttachments: document.getElementById('cfg_extractAttachments').checked,
+                        ocr: document.getElementById('cfg_ocr').checked,
+                        includeRawContent: document.getElementById('cfg_includeRawContent').checked,
+                        ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
+                        putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
+                        outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
+                        ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
+                        newlineDelimiter: document.getElementById('cfg_newlineDelimiter').value.replace(/\\n/g, '\n'),
+                        pdfWorkerSrc: 'https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.min.mjs'
+                    };
+
+                    lastConfigJson = JSON.stringify({
+                        extractAttachments: config.extractAttachments,
+                        ocr: config.ocr,
+                        includeRawContent: config.includeRawContent,
+                        ignoreNotes: config.ignoreNotes,
+                        putNotesAtLast: config.putNotesAtLast,
+                        outputErrorToConsole: config.outputErrorToConsole,
+                        ocrLanguage: config.ocrLanguage,
+                        newlineDelimiter: document.getElementById('cfg_newlineDelimiter').value
+                    });
+                    updateReparseButtonState();
+
+                    const startTime = performance.now();
+                    const ast = await window.officeParser.parseOffice(buffer, config);
+                    const endTime = performance.now();
+                    const duration = ((endTime - startTime) / 1000).toFixed(2);
+
+                    currentAst = ast;
+                    renderResults(ast);
+                    statusMsg.textContent = `Successfully parsed ${filename} in ${duration}s`;
+                } catch (err) {
+                    console.error(err);
+                    statusMsg.textContent = `Error: ${err.message}`;
+                    visualPreview.innerHTML = `<div style="color: #ef4444; padding: 2rem;">Error: ${err.message}</div>`;
+                }
+            }
+
+            function renderResults(ast) {
+                renderJsonTree(ast, astOutput);
+                textOutput.textContent = typeof ast.toText === 'function' ? ast.toText() : "Text extraction not available";
+
+                visualPreview.innerHTML = '';
+                if (ast.content && Array.isArray(ast.content)) {
+                    // Create a map for faster attachment lookup - from visualizer_old.html
+                    const attachmentMap = new Map();
+                    if (ast.attachments) {
+                        ast.attachments.forEach(att => {
+                            attachmentMap.set(att.name, att);
+                        });
                     }
-                    break;
-                case 'table':
-                    el = document.createElement('table');
-                    el.style.borderCollapse = 'collapse';
-                    el.style.width = '100%';
-                    el.style.border = '1px solid #ccc';
-                    el.style.marginBottom = '10px';
-                    break;
-                case 'row':
-                    el = document.createElement('tr');
-                    break;
-                case 'cell':
-                    el = document.createElement('td');
-                    el.style.border = '1px solid #ccc';
-                    el.style.padding = '5px';
-                    break;
-                case 'list':
-                    el = document.createElement('li');
-                    if (node.metadata?.listType === 'ordered' && typeof node.metadata.itemIndex === 'number') {
-                        el.value = node.metadata.itemIndex + 1;
-                    }
-                    break;
-                case 'text':
-                    const textSpan = document.createElement('span');
-                    renderTextFormatting(textSpan, node.formatting);
-                    textSpan.textContent = node.text || '';
+                    renderNodes(ast.content, visualPreview, attachmentMap);
+                } else {
+                    visualPreview.innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">No content structure found in AST.</div>';
+                }
+            }
 
-                    if (node.metadata?.link && node.metadata?.linkType === 'external') {
-                        const link = document.createElement('a');
-                        link.href = node.metadata.link;
-                        link.target = '_blank';
-                        link.className = 'content-link';
-                        link.appendChild(textSpan);
-                        return link;
-                    }
-                    return textSpan;
+            // --- Advanced JSON Viewer (Collapsible) ---
+            function renderJsonTree(obj, container) {
+                container.innerHTML = `<div class="json-tree">${buildJsonHtml(obj)}</div>`;
+            }
 
-                case 'image':
-                    el = document.createElement('div');
-                    el.style.textAlign = 'center';
-                    el.style.margin = '20px 0';
+            function buildJsonHtml(obj) {
+                if (obj === null) return '<span class="json-null">null</span>';
+                if (typeof obj === 'boolean') return `<span class="json-boolean">${obj}</span>`;
+                if (typeof obj === 'number') return `<span class="json-number">${obj}</span>`;
+                if (typeof obj === 'string') return `<span class="json-string">"${escapeHtml(obj)}"</span>`;
 
-                    const attName = node.metadata?.attachmentName;
-                    const attachment = attName && attachmentMap ? attachmentMap.get(attName) : null;
+                if (Array.isArray(obj)) {
+                    if (obj.length === 0) return '<span class="json-punctuation">[]</span>';
+                    let html = `<details><summary><span class="json-punctuation">[</span> <span style="color:var(--text-dim); font-size:0.8em;">${obj.length} items</span></summary><div style="padding-left:1.5rem;">`;
+                    obj.forEach((item, index) => {
+                        html += `<div>${buildJsonHtml(item)}${index < obj.length - 1 ? '<span class="json-punctuation">,</span>' : ''}</div>`;
+                    });
+                    html += `</div><span class="json-punctuation">]</span></details>`;
+                    return html;
+                }
 
-                    if (attachment && attachment.data) {
-                        const img = document.createElement('img');
-                        let b64Data = attachment.data;
-                        // Handle Node.js Buffer JSON representation ({ type: 'Buffer', data: [...] })
-                        if (typeof attachment.data === 'object' && attachment.data.data && Array.isArray(attachment.data.data)) {
-                            // Convert byte array to Base64
-                            const binary = String.fromCharCode.apply(null, attachment.data.data);
-                            b64Data = btoa(binary);
-                        } else if (Array.isArray(attachment.data)) {
-                            // Handle raw array
-                            const binary = String.fromCharCode.apply(null, attachment.data);
-                            b64Data = btoa(binary);
+                if (typeof obj === 'object') {
+                    if (obj.type === 'Buffer' && Array.isArray(obj.data)) return '<span class="json-string">[Buffer Data]</span>';
+                    const keys = Object.keys(obj);
+                    if (keys.length === 0) return '<span class="json-punctuation">{}</span>';
+
+                    let html = `<details open><summary><span class="json-punctuation">{</span></summary><div style="padding-left:1.5rem;">`;
+                    keys.forEach((key, index) => {
+                        let valHTML;
+                        if (key === 'data' && (typeof obj[key] === 'string' && obj[key].length > 100)) {
+                            valHTML = `<span class="json-string">"${obj[key].substring(0, 50)}... [truncated]"</span>`;
+                        } else {
+                            valHTML = buildJsonHtml(obj[key]);
+                        }
+                        html += `<div><span class="json-key">"${key}"</span><span class="json-punctuation">:</span> ${valHTML}${index < keys.length - 1 ? '<span class="json-punctuation">,</span>' : ''}</div>`;
+                    });
+                    html += `</div><span class="json-punctuation">}</span></details>`;
+                    return html;
+                }
+            }
+
+            function escapeHtml(text) {
+                return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+            }
+
+            /**
+             * Renders a list of nodes into a container, grouping adjacent list items.
+             * EXACT PORT from visualizer_old.html
+             */
+            function renderNodes(nodes, container, attachmentMap) {
+                if (!nodes || !Array.isArray(nodes)) return;
+
+                // Stack of active lists: { indentation, listId, element, lastLi }
+                let listStack = [];
+
+                nodes.forEach(node => {
+                    if (node.type === 'list') {
+                        const listType = node.metadata?.listType || 'unordered';
+                        const indentation = node.metadata?.indentation || 0;
+                        const listId = node.metadata?.listId || 'no-id';
+
+                        // 1. Manage Stack Depth
+                        // Pop any lists deeper than current indentation
+                        while (listStack.length > 0 && listStack[listStack.length - 1].indentation > indentation) {
+                            listStack.pop();
                         }
 
-                        img.src = `data:${attachment.mimeType || 'image/png'};base64,${b64Data}`;
-                        img.style.maxWidth = '100%';
-                        img.style.maxHeight = '400px';
-                        img.style.border = '1px solid #ddd';
-                        img.alt = node.metadata?.altText || attachment.altText || 'Document Image';
-                        el.appendChild(img);
-
-                        const caption = document.createElement('div');
-                        caption.style.fontSize = '12px';
-                        caption.style.color = '#666';
-                        caption.textContent = `Image: ${attName}`;
-                        el.appendChild(caption);
-                    } else {
-                        el.textContent = `[Image: ${attName || 'Unknown'} - Data not found]`;
-                        el.style.backgroundColor = '#eee';
-                        el.style.padding = '10px';
-                    }
-
-                    if (node.metadata?.link && node.metadata?.linkType === 'external') {
-                        const link = document.createElement('a');
-                        link.href = node.metadata.link;
-                        link.target = '_blank';
-                        link.className = 'content-link';
-                        link.style.display = 'block';
-                        link.style.textDecoration = 'none';
-                        link.appendChild(el);
-                        return link;
-                    }
-                    return el;
-
-                case 'chart':
-                    el = document.createElement('div');
-                    el.style.margin = '20px 0';
-                    el.style.padding = '20px';
-                    el.style.border = '1px solid #eee';
-                    el.style.borderRadius = '8px';
-                    el.style.maxWidth = '600px';
-                    el.style.marginLeft = 'auto';
-                    el.style.marginRight = 'auto';
-
-                    const chartAttName = node.metadata?.attachmentName;
-                    const chartAttachment = chartAttName && attachmentMap ? attachmentMap.get(chartAttName) : null;
-
-                    if (chartAttachment && chartAttachment.chartData) {
-                        const canvas = document.createElement('canvas');
-                        el.appendChild(canvas);
-
-                        // Render Chart.js
-                        const chartData = chartAttachment.chartData;
-                        const ctx = canvas.getContext('2d');
-
-                        // Helper for chart colors
-                        const getRandomColor = (index, alpha) => {
-                            const colors = [
-                                `rgba(255, 99, 132, ${alpha})`,
-                                `rgba(54, 162, 235, ${alpha})`,
-                                `rgba(255, 206, 86, ${alpha})`,
-                                `rgba(75, 192, 192, ${alpha})`,
-                                `rgba(153, 102, 255, ${alpha})`,
-                                `rgba(255, 159, 64, ${alpha})`
-                            ];
-                            return colors[index % colors.length];
-                        };
-
-                        // Prepare datasets for Chart.js
-                        const datasets = chartData.dataSets.map((ds, index) => ({
-                            label: ds.name || `Series ${index + 1}`,
-                            data: ds.values.map(Number), // Convert strings to numbers
-                            backgroundColor: getRandomColor(index, 0.5),
-                            borderColor: getRandomColor(index, 1),
-                            borderWidth: 1
-                        }));
-
-                        new Chart(ctx, {
-                            type: 'bar', // Default to bar
-                            data: {
-                                labels: chartData.labels,
-                                datasets: datasets
-                            },
-                            options: {
-                                responsive: true,
-                                plugins: {
-                                    title: {
-                                        display: !!chartData.title,
-                                        text: chartData.title
-                                    }
-                                },
-                                scales: {
-                                    x: { title: { display: !!chartData.xAxisTitle, text: chartData.xAxisTitle } },
-                                    y: { title: { display: !!chartData.yAxisTitle, text: chartData.yAxisTitle } }
-                                }
+                        // 2. Check for Continuation
+                        let currentList = null;
+                        if (listStack.length > 0) {
+                            const top = listStack[listStack.length - 1];
+                            if (top.indentation === indentation && top.listId === listId && top.listType === listType) {
+                                currentList = top;
+                            } else if (top.indentation === indentation) {
+                                // Same level but different list -> Replace top
+                                listStack.pop();
                             }
-                        });
+                        }
 
-                    } else {
-                        el.textContent = `[Chart: ${chartAttName || 'Unknown'} - Data not found]`;
-                        el.style.backgroundColor = '#eee';
-                        el.style.padding = '10px';
-                    }
-                    break;
+                        // 3. Create New List if needed
+                        if (!currentList) {
+                            const newListEl = document.createElement(listType === 'ordered' ? 'ol' : 'ul');
 
-                case 'slide':
-                    el = document.createElement('div');
-                    el.className = 'slide-card';
-
-                    const slideHeader = document.createElement('div');
-                    slideHeader.className = 'slide-number';
-                    slideHeader.textContent = `Slide ${node.metadata?.slideNumber || ''}`;
-                    el.appendChild(slideHeader);
-
-                    const slideContent = document.createElement('div');
-                    renderNodes(node.children, slideContent, attachmentMap);
-                    el.appendChild(slideContent);
-                    return el;
-
-                case 'page':
-                    el = document.createElement('div');
-                    el.className = 'page-card';
-
-                    const pageHeader = document.createElement('div');
-                    pageHeader.className = 'page-number';
-                    pageHeader.textContent = `Page ${node.metadata?.pageNumber || ''}`;
-                    el.appendChild(pageHeader);
-
-                    const pageContent = document.createElement('div');
-                    renderNodes(node.children, pageContent, attachmentMap);
-                    el.appendChild(pageContent);
-                    return el;
-
-                case 'sheet':
-                    el = document.createElement('div');
-                    el.className = 'sheet-card';
-
-                    const sheetHeader = document.createElement('div');
-                    sheetHeader.className = 'sheet-number';
-                    sheetHeader.textContent = `Sheet: ${node.metadata?.sheetName || ''}`;
-                    el.appendChild(sheetHeader);
-
-                    const sheetContainer = document.createElement('div');
-                    sheetContainer.className = 'sheet-container';
-
-                    const grid = document.createElement('table');
-                    grid.className = 'spreadsheet-grid';
-
-                    if (node.children) {
-                        node.children.forEach(rowNode => {
-                            if (rowNode.type === 'row') {
-                                const tr = document.createElement('tr');
-                                if (rowNode.children) {
-                                    rowNode.children.forEach(cellNode => {
-                                        if (cellNode.type === 'cell') {
-                                            const td = document.createElement('td');
-                                            renderNodes(cellNode.children, td, attachmentMap);
-                                            if (!cellNode.children || cellNode.children.length === 0) {
-                                                if (cellNode.text) td.textContent = cellNode.text;
-                                            }
-                                            tr.appendChild(td);
-                                        }
-                                    });
+                            // Decide where to attach
+                            if (listStack.length > 0) {
+                                // We are deeper than top (or just pushed).
+                                // Attach to last LI of the parent list for proper nesting
+                                const parent = listStack[listStack.length - 1];
+                                if (parent.lastLi) {
+                                    parent.lastLi.appendChild(newListEl);
+                                } else {
+                                    // Fallback: sibling of parent list (should rarely happen if strict nesting)
+                                    parent.element.appendChild(newListEl);
                                 }
-                                grid.appendChild(tr);
                             } else {
-                                const childEl = createNodeElement(rowNode, attachmentMap);
-                                if (childEl) sheetContainer.appendChild(childEl);
+                                // Root level list
+                                // Add indentation margin only for root lists to avoid double indent
+                                if (indentation > 0) {
+                                    newListEl.style.marginLeft = `${indentation * 20}px`;
+                                }
+                                container.appendChild(newListEl);
                             }
-                        });
+
+                            currentList = {
+                                indentation,
+                                listId,
+                                listType,
+                                element: newListEl,
+                                lastLi: null
+                            };
+                            listStack.push(currentList);
+                        }
+
+                        // 4. Create and Append Item
+                        const li = createNodeElement(node, attachmentMap);
+                        if (li) {
+                            currentList.element.appendChild(li);
+                            currentList.lastLi = li;
+                        }
+
+                    } else {
+                        // Non-list node breaks the stack
+                        listStack = [];
+                        const el = createNodeElement(node, attachmentMap);
+                        if (el) container.appendChild(el);
                     }
-                    sheetContainer.appendChild(grid);
-                    el.appendChild(sheetContainer);
-                    return el;
-
-                default:
-                    el = document.createElement('div');
-                    break;
-            }
-
-            // Prevent text from overwriting rich content (images, charts)
-            const isRichContent = node.type === 'image' || node.type === 'chart' || node.type === 'table';
-            if (node.text && !isRichContent && (!node.children || node.children.length === 0)) {
-                el.textContent = node.text;
-            }
-
-            if (node.children) {
-                node.children.forEach(child => {
-                    const childEl = createNodeElement(child, attachmentMap);
-                    if (childEl) el.appendChild(childEl);
                 });
             }
 
-            return el;
-        }
+            function createNodeElement(node, attachmentMap) {
+                let el = null;
 
-        function renderTextFormatting(el, formatting) {
-            if (!formatting) return;
-            if (formatting.bold) el.style.fontWeight = 'bold';
-            if (formatting.italic) el.style.fontStyle = 'italic';
-            if (formatting.underline) el.style.textDecoration = 'underline';
-            if (formatting.strikethrough) el.style.textDecoration = formatting.strikethrough ? (el.style.textDecoration + ' line-through') : 'line-through';
+                switch (node.type) {
+                    case 'paragraph':
+                        el = document.createElement('p');
 
-            if (formatting.color && formatting.color.startsWith('#')) {
-                el.style.color = formatting.color;
-                // Check for light colors to ensure visibility
-                const hex = formatting.color.substring(1);
-                // Handle shorthand hex like #fff
-                const fullHex = hex.length === 3
-                    ? hex.split('').map(c => c + c).join('')
-                    : hex;
+                        if (node.metadata && node.metadata.alignment) {
+                            el.style.textAlign = node.metadata.alignment;
+                        }
+                        break;
+                    case 'heading':
+                        const level = (node.metadata && node.metadata.level) || 1;
+                        el = document.createElement(`h${Math.min(level, 6)}`);
 
-                if (fullHex.length === 6) {
-                    const r = parseInt(fullHex.substring(0, 2), 16);
-                    const g = parseInt(fullHex.substring(2, 4), 16);
-                    const b = parseInt(fullHex.substring(4, 6), 16);
-                    // Simple brightness formula
-                    const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-                    if (brightness > 200 && !formatting.backgroundColor) { // > 200 is fairly light (255 is white)
-                        el.classList.add('light-text-bg');
-                        el.title = `Original Color: ${formatting.color} (Background added for visibility)`;
+                        if (node.metadata && node.metadata.alignment) {
+                            el.style.textAlign = node.metadata.alignment;
+                        }
+                        break;
+                    case 'table':
+                        el = document.createElement('table');
+                        el.style.borderCollapse = 'collapse';
+                        el.style.width = '100%';
+                        el.style.border = '1px solid #ccc';
+                        el.style.marginBottom = '10px';
+                        break;
+                    case 'row':
+                        el = document.createElement('tr');
+                        break;
+                    case 'cell':
+                        el = document.createElement('td');
+                        el.style.border = '1px solid #ccc';
+                        el.style.padding = '5px';
+                        break;
+                    case 'list':
+                        el = document.createElement('li');
+                        if (node.metadata?.listType === 'ordered' && typeof node.metadata.itemIndex === 'number') {
+                            el.value = node.metadata.itemIndex + 1;
+                        }
+                        break;
+                    case 'text':
+                        const textSpan = document.createElement('span');
+                        renderTextFormatting(textSpan, node.formatting);
+                        textSpan.textContent = node.text || '';
+
+                        if (node.metadata?.link && node.metadata?.linkType === 'external') {
+                            const link = document.createElement('a');
+                            link.href = node.metadata.link;
+                            link.target = '_blank';
+                            link.className = 'content-link';
+                            link.appendChild(textSpan);
+                            return link;
+                        }
+                        return textSpan;
+
+                    case 'image':
+                        el = document.createElement('div');
+                        el.style.textAlign = 'center';
+                        el.style.margin = '20px 0';
+
+                        const attName = node.metadata?.attachmentName;
+                        const attachment = attName && attachmentMap ? attachmentMap.get(attName) : null;
+
+                        if (attachment && attachment.data) {
+                            const img = document.createElement('img');
+                            let b64Data = attachment.data;
+                            // Handle Node.js Buffer JSON representation ({ type: 'Buffer', data: [...] })
+                            if (typeof attachment.data === 'object' && attachment.data.data && Array.isArray(attachment.data.data)) {
+                                // Convert byte array to Base64
+                                const binary = String.fromCharCode.apply(null, attachment.data.data);
+                                b64Data = btoa(binary);
+                            } else if (Array.isArray(attachment.data)) {
+                                // Handle raw array
+                                const binary = String.fromCharCode.apply(null, attachment.data);
+                                b64Data = btoa(binary);
+                            }
+
+                            img.src = `data:${attachment.mimeType || 'image/png'};base64,${b64Data}`;
+                            img.style.maxWidth = '100%';
+                            img.style.maxHeight = '400px';
+                            img.style.border = '1px solid #ddd';
+                            img.alt = node.metadata?.altText || attachment.altText || 'Document Image';
+                            el.appendChild(img);
+
+                            const caption = document.createElement('div');
+                            caption.style.fontSize = '12px';
+                            caption.style.color = '#666';
+                            caption.textContent = `Image: ${attName}`;
+                            el.appendChild(caption);
+                        } else {
+                            el.textContent = `[Image: ${attName || 'Unknown'} - Data not found]`;
+                            el.style.backgroundColor = '#eee';
+                            el.style.padding = '10px';
+                        }
+
+                        if (node.metadata?.link && node.metadata?.linkType === 'external') {
+                            const link = document.createElement('a');
+                            link.href = node.metadata.link;
+                            link.target = '_blank';
+                            link.className = 'content-link';
+                            link.style.display = 'block';
+                            link.style.textDecoration = 'none';
+                            link.appendChild(el);
+                            return link;
+                        }
+                        return el;
+
+                    case 'chart':
+                        el = document.createElement('div');
+                        el.style.margin = '20px 0';
+                        el.style.padding = '20px';
+                        el.style.border = '1px solid #eee';
+                        el.style.borderRadius = '8px';
+                        el.style.maxWidth = '600px';
+                        el.style.marginLeft = 'auto';
+                        el.style.marginRight = 'auto';
+
+                        const chartAttName = node.metadata?.attachmentName;
+                        const chartAttachment = chartAttName && attachmentMap ? attachmentMap.get(chartAttName) : null;
+
+                        if (chartAttachment && chartAttachment.chartData) {
+                            const canvas = document.createElement('canvas');
+                            el.appendChild(canvas);
+
+                            // Render Chart.js
+                            const chartData = chartAttachment.chartData;
+                            const ctx = canvas.getContext('2d');
+
+                            // Helper for chart colors
+                            const getRandomColor = (index, alpha) => {
+                                const colors = [
+                                    `rgba(255, 99, 132, ${alpha})`,
+                                    `rgba(54, 162, 235, ${alpha})`,
+                                    `rgba(255, 206, 86, ${alpha})`,
+                                    `rgba(75, 192, 192, ${alpha})`,
+                                    `rgba(153, 102, 255, ${alpha})`,
+                                    `rgba(255, 159, 64, ${alpha})`
+                                ];
+                                return colors[index % colors.length];
+                            };
+
+                            // Prepare datasets for Chart.js
+                            const datasets = chartData.dataSets.map((ds, index) => ({
+                                label: ds.name || `Series ${index + 1}`,
+                                data: ds.values.map(Number), // Convert strings to numbers
+                                backgroundColor: getRandomColor(index, 0.5),
+                                borderColor: getRandomColor(index, 1),
+                                borderWidth: 1
+                            }));
+
+                            new Chart(ctx, {
+                                type: 'bar', // Default to bar
+                                data: {
+                                    labels: chartData.labels,
+                                    datasets: datasets
+                                },
+                                options: {
+                                    responsive: true,
+                                    plugins: {
+                                        title: {
+                                            display: !!chartData.title,
+                                            text: chartData.title
+                                        }
+                                    },
+                                    scales: {
+                                        x: { title: { display: !!chartData.xAxisTitle, text: chartData.xAxisTitle } },
+                                        y: { title: { display: !!chartData.yAxisTitle, text: chartData.yAxisTitle } }
+                                    }
+                                }
+                            });
+
+                        } else {
+                            el.textContent = `[Chart: ${chartAttName || 'Unknown'} - Data not found]`;
+                            el.style.backgroundColor = '#eee';
+                            el.style.padding = '10px';
+                        }
+                        break;
+
+                    case 'slide':
+                        el = document.createElement('div');
+                        el.className = 'slide-card';
+
+                        const slideHeader = document.createElement('div');
+                        slideHeader.className = 'slide-number';
+                        slideHeader.textContent = `Slide ${node.metadata?.slideNumber || ''}`;
+                        el.appendChild(slideHeader);
+
+                        const slideContent = document.createElement('div');
+                        renderNodes(node.children, slideContent, attachmentMap);
+                        el.appendChild(slideContent);
+                        return el;
+
+                    case 'note':
+                        el = document.createElement('div');
+                        el.className = 'slide-note-card';
+
+                        const noteHeader = document.createElement('div');
+                        noteHeader.className = 'slide-note-number';
+                        noteHeader.textContent = !node.metadata?.noteType
+                            ? `Slide ${node.metadata?.slideNumber || ''} Notes`
+                            : node.metadata?.noteType == 'footnote'
+                                ? 'Footnotes'
+                                : node.metadata?.noteType == 'endnote'
+                                    ? 'Endnotes'
+                                    : 'Notes';
+                        el.appendChild(noteHeader);
+
+                        const noteContent = document.createElement('div');
+                        renderNodes(node.children, noteContent, attachmentMap);
+                        el.appendChild(noteContent);
+                        return el;
+
+                    case 'page':
+                        el = document.createElement('div');
+                        el.className = 'page-card';
+
+                        const pageHeader = document.createElement('div');
+                        pageHeader.className = 'page-number';
+                        pageHeader.textContent = `Page ${node.metadata?.pageNumber || ''}`;
+                        el.appendChild(pageHeader);
+
+                        const pageContent = document.createElement('div');
+                        renderNodes(node.children, pageContent, attachmentMap);
+                        el.appendChild(pageContent);
+                        return el;
+
+                    case 'sheet':
+                        el = document.createElement('div');
+                        el.className = 'sheet-card';
+
+                        const sheetHeader = document.createElement('div');
+                        sheetHeader.className = 'sheet-number';
+                        sheetHeader.textContent = `Sheet: ${node.metadata?.sheetName || ''}`;
+                        el.appendChild(sheetHeader);
+
+                        const sheetContainer = document.createElement('div');
+                        sheetContainer.className = 'sheet-container';
+
+                        const grid = document.createElement('table');
+                        grid.className = 'spreadsheet-grid';
+
+                        if (node.children) {
+                            node.children.forEach(rowNode => {
+                                if (rowNode.type === 'row') {
+                                    const tr = document.createElement('tr');
+                                    if (rowNode.children) {
+                                        rowNode.children.forEach(cellNode => {
+                                            if (cellNode.type === 'cell') {
+                                                const td = document.createElement('td');
+                                                renderNodes(cellNode.children, td, attachmentMap);
+                                                if (!cellNode.children || cellNode.children.length === 0) {
+                                                    if (cellNode.text) td.textContent = cellNode.text;
+                                                }
+                                                tr.appendChild(td);
+                                            }
+                                        });
+                                    }
+                                    grid.appendChild(tr);
+                                } else {
+                                    const childEl = createNodeElement(rowNode, attachmentMap);
+                                    if (childEl) sheetContainer.appendChild(childEl);
+                                }
+                            });
+                        }
+                        sheetContainer.appendChild(grid);
+                        el.appendChild(sheetContainer);
+                        return el;
+
+                    default:
+                        el = document.createElement('div');
+                        break;
+                }
+
+                // Prevent text from overwriting rich content (images, charts)
+                const isRichContent = node.type === 'image' || node.type === 'chart' || node.type === 'table';
+                if (node.text && !isRichContent && (!node.children || node.children.length === 0)) {
+                    el.textContent = node.text;
+                }
+
+                if (node.children) {
+                    node.children.forEach(child => {
+                        const childEl = createNodeElement(child, attachmentMap);
+                        if (childEl) el.appendChild(childEl);
+                    });
+                }
+
+                return el;
+            }
+
+            function renderTextFormatting(el, formatting) {
+                if (!formatting) return;
+                if (formatting.bold) el.style.fontWeight = 'bold';
+                if (formatting.italic) el.style.fontStyle = 'italic';
+                if (formatting.underline) el.style.textDecoration = 'underline';
+                if (formatting.strikethrough) el.style.textDecoration = formatting.strikethrough ? (el.style.textDecoration + ' line-through') : 'line-through';
+
+                if (formatting.color && formatting.color.startsWith('#')) {
+                    el.style.color = formatting.color;
+                    // Check for light colors to ensure visibility
+                    const hex = formatting.color.substring(1);
+                    // Handle shorthand hex like #fff
+                    const fullHex = hex.length === 3
+                        ? hex.split('').map(c => c + c).join('')
+                        : hex;
+
+                    if (fullHex.length === 6) {
+                        const r = parseInt(fullHex.substring(0, 2), 16);
+                        const g = parseInt(fullHex.substring(2, 4), 16);
+                        const b = parseInt(fullHex.substring(4, 6), 16);
+                        // Simple brightness formula
+                        const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+                        if (brightness > 200 && !formatting.backgroundColor) { // > 200 is fairly light (255 is white)
+                            el.classList.add('light-text-bg');
+                            el.title = `Original Color: ${formatting.color} (Background added for visibility)`;
+                        }
+                    }
+                }
+
+                if (formatting.backgroundColor && formatting.backgroundColor.startsWith('#')) el.style.backgroundColor = formatting.backgroundColor;
+                if (formatting.size) {
+                    // If the size already has a unit (contains letters), use it as is.
+                    // Otherwise, append 'pt' for backward compatibility.
+                    const sizeStr = String(formatting.size);
+                    if (/[a-zA-Z]/.test(sizeStr)) {
+                        el.style.fontSize = sizeStr;
+                    } else {
+                        const sizeVal = sizeStr.replace(/[^0-9.]/g, '');
+                        if (sizeVal) el.style.fontSize = `${sizeVal}pt`;
                     }
                 }
             }
-
-            if (formatting.backgroundColor && formatting.backgroundColor.startsWith('#')) el.style.backgroundColor = formatting.backgroundColor;
-            if (formatting.size) {
-                // If the size already has a unit (contains letters), use it as is.
-                // Otherwise, append 'pt' for backward compatibility.
-                const sizeStr = String(formatting.size);
-                if (/[a-zA-Z]/.test(sizeStr)) {
-                    el.style.fontSize = sizeStr;
-                } else {
-                    const sizeVal = sizeStr.replace(/[^0-9.]/g, '');
-                    if (sizeVal) el.style.fontSize = `${sizeVal}pt`;
+            // Copy Buttons
+            copyJsonBtn.addEventListener('click', () => {
+                if (currentAst) {
+                    navigator.clipboard.writeText(JSON.stringify(currentAst, null, 2));
+                    let orig = copyJsonBtn.textContent;
+                    copyJsonBtn.textContent = 'Copied!';
+                    setTimeout(() => copyJsonBtn.textContent = orig, 2000);
                 }
-            }
-        }
+            });
+            copyTextBtn.addEventListener('click', () => {
+                const txt = textOutput.textContent;
+                if (txt) {
+                    navigator.clipboard.writeText(txt);
+                    let orig = copyTextBtn.textContent;
+                    copyTextBtn.textContent = 'Copied!';
+                    setTimeout(() => copyTextBtn.textContent = orig, 2000);
+                }
+            });
+        });
     </script>
 </body>
 

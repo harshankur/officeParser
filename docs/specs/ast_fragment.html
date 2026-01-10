@@ -1,0 +1,165 @@
+<div class="doc-body">
+    <h1>officeParser AST Structure Specification</h1>
+    <p>The <code>officeParser</code> library produces a structured Abstract Syntax Tree (AST) that represents the parsed
+        document in a format-agnostic way. This tree is designed for high-fidelity reconstruction and programmatic
+        analysis.</p>
+
+    <h2>OfficeParserAST (Root)</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>type</code></td>
+                <td><code>SupportedFileType</code></td>
+                <td>The type of the parsed file (<code>docx</code>, <code>xlsx</code>, <code>pptx</code>,
+                    <code>pdf</code>, <code>rtf</code>, <code>odt</code>, <code>ods</code>, <code>odp</code>).</td>
+            </tr>
+            <tr>
+                <td><code>metadata</code></td>
+                <td><code>OfficeMetadata</code></td>
+                <td>Global document metadata (author, title, creation/modification dates).</td>
+            </tr>
+            <tr>
+                <td><code>content</code></td>
+                <td><code>OfficeContentNode[]</code></td>
+                <td>The hierarchical tree of document content nodes.</td>
+            </tr>
+            <tr>
+                <td><code>attachments</code></td>
+                <td><code>OfficeAttachment[]</code></td>
+                <td>Unified array of binary resources (images, charts, objects) referenced in the content.</td>
+            </tr>
+            <tr>
+                <td><code>toText()</code></td>
+                <td><code>function</code></td>
+                <td>Utility method to flatten the entire AST into plain text based on the current configuration.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2 id="interpretation">Node Interpretation Guide</h2>
+    <p>Every node in the <code>content</code> tree follows a consistent recursive structure. Children are stored in the
+        <code>children</code> array, and visuals are defined in <code>formatting</code>.</p>
+
+    <h3>OfficeContentNode</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>type</code></td>
+                <td><code>OfficeContentNodeType</code></td>
+                <td>The functional role of the node (e.g., <code>paragraph</code>, <code>table</code>,
+                    <code>list</code>).</td>
+            </tr>
+            <tr>
+                <td><code>text</code></td>
+                <td><code>string</code></td>
+                <td>Flattened text content of this node and all its descendants. <em>Useful for quick
+                        search/indexing.</em></td>
+            </tr>
+            <tr>
+                <td><code>children</code></td>
+                <td><code>OfficeContentNode[]</code></td>
+                <td>Recursive child nodes. Use these for high-fidelity rendering.</td>
+            </tr>
+            <tr>
+                <td><code>metadata</code></td>
+                <td><code>ContentMetadata</code></td>
+                <td>Type-specific configuration (alignment, indentation, slide numbers, etc.).</td>
+            </tr>
+            <tr>
+                <td><code>formatting</code></td>
+                <td><code>TextFormatting</code></td>
+                <td>Styling applied to the node (bold, italic, size, color, etc.).</td>
+            </tr>
+            <tr>
+                <td><code>rawContent</code></td>
+                <td><code>string</code> | <code>undefined</code></td>
+                <td>The raw XML or RTF source markup for this specific node. <em>(Only if enabled in config)</em>.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2 id="node-types">Core Node Types</h2>
+
+    <h3>1. Lists (The <code>list</code> Node)</h3>
+    <p>Lists are represented as a flat sequence of <code>list</code> nodes. To reconstruct the visual nesting (nested
+        <code>ul/ol</code>), you must interpret the <code>metadata</code>.</p>
+    <ul>
+        <li><code>indentation</code>: Integer starting at 0. Represents the nesting level.</li>
+        <li><code>listType</code>: <code>'ordered'</code> or <code>'unordered'</code>.</li>
+        <li><code>listId</code>: A unique identifier for the list group. Use this to determine if adjacent items belong
+            to the same logical list.</li>
+        <li><code>itemIndex</code>: (Ordered lists only) The 0-based index of the item.</li>
+    </ul>
+    <blockquote>
+        [!TIP]
+        <strong>Interpretation Logic</strong>: Maintain a "List Stack". When <code>indentation</code> increases, push a
+        new list container. When it decreases, pop the stack. If <code>listId</code> changes at the same indentation,
+        start a new list block.
+    </blockquote>
+
+    <h3>2. Tables</h3>
+    <ul>
+        <li><strong><code>table</code></strong>: The container.</li>
+        <li><strong><code>row</code></strong>: A horizontal group of cells.</li>
+        <li><strong><code>cell</code></strong>: A container for other content (paragraphs, images, or even nested
+            tables). Use <code>metadata</code> for <code>rowSpan</code> and <code>colSpan</code>.</li>
+    </ul>
+
+    <h3>3. Structural Containers</h3>
+    <p>These nodes represent large-scale document sections:</p>
+    <ul>
+        <li><strong><code>slide</code></strong>: Container for PPTX/ODP slides. <code>metadata.slideNumber</code>
+            provides the position.</li>
+        <li><strong><code>page</code></strong>: Container for PDF pages. <code>metadata.pageNumber</code> provides the
+            position.</li>
+        <li><strong><code>sheet</code></strong>: Container for XLSX/ODS spreadsheets. <code>metadata.sheetName</code>
+            provides the label.</li>
+    </ul>
+
+    <h3>4. Rich Content</h3>
+    <ul>
+        <li><strong><code>image</code></strong>: References an item in the root <code>attachments</code> array via
+            <code>metadata.attachmentName</code>.</li>
+        <li><strong><code>chart</code></strong>: References a chart attachment. Contains structured
+            <code>chartData</code> in metadata if requested.</li>
+    </ul>
+
+    <h2>Text Formatting</h2>
+    <p>Applied to <code>text</code>, <code>paragraph</code>, or <code>heading</code> nodes.</p>
+    <pre><code>{
+    bold?: boolean;
+    italic?: boolean;
+    underline?: boolean;
+    strikethrough?: boolean;
+    color?: string;           // Hex (#RRGGBB)
+    backgroundColor?: string; // Hex (#RRGGBB)
+    size?: string;            // e.g., "12pt" or "14"
+    font?: string;            // e.g., "Arial"
+    alignment?: 'left' | 'center' | 'right' | 'justify';
+}</code></pre>
+
+    <h2>Programmatic Traversal Best Practices</h2>
+    <ol>
+        <li><strong>Depth-First Search</strong>: Use recursion to walk the <code>children</code> tree for rendering.
+        </li>
+        <li><strong>Fallback to <code>.text</code></strong>: If you only need plain text, use the <code>text</code>
+            property of any node—it is pre-calculated to include all text from its children.</li>
+        <li><strong>Map Attachments First</strong>: Before rendering, create a <code>Map</code> from the
+            <code>attachments</code> array using the <code>name</code> property for O(1) lookups when encountering
+            <code>image</code> nodes.</li>
+    </ol>
+</div>

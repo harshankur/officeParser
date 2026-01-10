@@ -380,8 +380,12 @@ export class SimpleRtfParser {
  * 2. **StyleMap**: RTF uses inline formatting rather than named style definitions.
  *    There is no direct equivalent to DOCX's style.xml.
  *    
- * 3. **Endnotes**: RTF uses `\footnote` for both footnotes and endnotes.
- *    No separate endnote support exists in the format.
+ * **Note Support:**
+ * RTF supports both footnotes and endnotes using the `\footnote` group.
+ * The `\fet` control word distinguishes between them:
+ * - `\fet0` = footnotes only (default)
+ * - `\fet1` = endnotes only
+ * - `\fet2` = both footnotes and endnotes
  * 
  * @param buffer The file buffer.
  * @param config The parser configuration.
@@ -437,6 +441,15 @@ export const parseRtf = async (buffer: Buffer, config: OfficeParserConfig): Prom
 
         let tableStack: TableContext[] = [];
         let currentFootnoteId = 0;
+
+        // ═══════════════════════════════════════════════════════════════════
+        // Note type tracking (footnotes vs endnotes)
+        // ═══════════════════════════════════════════════════════════════════
+        // RTF uses \fet to distinguish note types:
+        // \fet0 = footnotes only (default)
+        // \fet1 = endnotes only
+        // \fet2 = both footnotes and endnotes
+        let fetValue = 0; // Default to footnotes only
 
         // Helper to get current table context
         const getCurrentTable = (): TableContext | undefined => tableStack.length > 0 ? tableStack[tableStack.length - 1] : undefined;
@@ -1132,12 +1145,29 @@ export const parseRtf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                     }
                     flushParagraph();
                     currentFootnoteId++;
+
+                    // Determine note type based on \fet value
+                    let noteType: 'footnote' | 'endnote' = 'footnote';
+                    if (fetValue === 1) {
+                        // \fet1 means all notes are endnotes
+                        noteType = 'endnote';
+                    } else if (fetValue === 2) {
+                        // \fet2 means both types exist
+                        // Check for \ftnalt marker to distinguish endnotes from footnotes
+                        // \footnote\ftnalt indicates an endnote
+                        const hasFtnalt = node.content.some(child =>
+                            child.type === 'control' && child.value === 'ftnalt'
+                        );
+                        noteType = hasFtnalt ? 'endnote' : 'footnote';
+                    }
+                    // fetValue === 0 (default) means footnotes only
+
                     const noteNode: OfficeContentNode = {
                         type: 'note',
                         children: [],
                         metadata: {
                             noteId: currentFootnoteId.toString(),
-                            noteType: 'footnote'
+                            noteType: noteType
                         } as NoteMetadata
                     };
                     notes.push(noteNode);
@@ -1489,6 +1519,15 @@ export const parseRtf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                         formatting.color = colorTable[node.param];
                     }
                 }
+                // Note type (\fet)
+                else if (node.value === 'fet') {
+                    // \fet0 = footnotes only (default)
+                    // \fet1 = endnotes only
+                    // \fet2 = both footnotes and endnotes
+                    if (node.param !== undefined) {
+                        fetValue = node.param;
+                    }
+                }
                 // Background/highlight color (\cb, \highlight, \chcbpat, \cbpat)
                 // \chcbpat = character background pattern color (used for shading)
                 // \cbpat = paragraph background pattern color
@@ -1696,7 +1735,6 @@ export const parseRtf = async (buffer: Buffer, config: OfficeParserConfig): Prom
             type: 'rtf',
             metadata: {
                 // RTF Limitation: No style map available (RTF uses inline styles)
-                // RTF Limitation: No endnote support (uses footnotes for both)
             },
             content: content,
             attachments: attachments, // PNG and JPEG images extracted from \\pict groups

@@ -2,14 +2,21 @@
 
 A robust, strictly-typed Node.js and Browser library for parsing office files ([`docx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`odt`](https://en.wikipedia.org/wiki/OpenDocument), [`odp`](https://en.wikipedia.org/wiki/OpenDocument), [`ods`](https://en.wikipedia.org/wiki/OpenDocument), [`pdf`](https://en.wikipedia.org/wiki/PDF), [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format)). It produces a clean, hierarchical Abstract Syntax Tree (AST) with rich metadata, text formatting, and full attachment support.
 
-[![Node.js CI](https://github.com/harshankur/officeParser/actions/workflows/ci.yml/badge.svg)](https://github.com/harshankur/officeParser/actions/workflows/ci.yml)
 [![npm version](https://badge.fury.io/js/officeparser.svg)](https://badge.fury.io/js/officeparser)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
 
-### 🌟 [Live Interactive AST Visualizer](https://harshankur.github.io/officeParser/) 🌟
+### 🌟 [Live Interactive AST Visualizer & Documentation](https://harshankur.github.io/officeParser/) 🌟
 *Test any office file in your browser and see the extracted AST, text, and preview in real-time which is rebuilt from the AST!*
+
+**What you can do there:**
+- **AST Visualizer**: Upload any office file and inspect the hierarchical AST structure, metadata, and raw content.
+- **Config Configurator**: Tweak parsing options (like `ignoreNotes`, `ocr`, `newlineDelimiter`) and see the results instantly.
+- **Debugging**: Use the visualizer to debug parsing issues by inspecting exactly how nodes are interpreted.
+- **Format Specs**: Read detailed specifications for the AST structure and configuration options.
+
+*(Legacy Visualizer: If you prefer the [old simple visualizer](https://harshankur.github.io/officeParser/visualizer_old.html), it is still available.)*
 
 ---
 

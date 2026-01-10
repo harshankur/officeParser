@@ -1,0 +1,119 @@
+<div class="doc-body">
+    <h1>officeParser Configuration Specification</h1>
+    <p>This document details the configuration options available for the <code>officeParser</code> library. These
+        options
+        directly influence how the document structure is interpreted and what data is extracted into the Final AST.</p>
+
+    <h2>OfficeParserConfig</h2>
+    <p>The <code>OfficeParserConfig</code> object is used as the second argument to <code>parseOffice</code>. All
+        properties are optional.</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description (In Action)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>outputErrorToConsole</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Diagnostic Mode</strong>: When enabled, the library will dump internal trace logs and raw
+                    parsing errors to the browser/node console. <em>Essential for debugging malformed files.</em></td>
+            </tr>
+            <tr>
+                <td><code>newlineDelimiter</code></td>
+                <td><code>string</code></td>
+                <td><code>\n</code></td>
+                <td><strong>Text Flattening</strong>: Determines the string inserted between structural blocks
+                    (paragraphs,
+                    cells, slides) when calculating the pre-flattened <code>.text</code> property. <em>Change to
+                        <code>&lt;br&gt;</code> for HTML-ready output.</em></td>
+            </tr>
+            <tr>
+                <td><code>ignoreNotes</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Note Filtering</strong>: Specifically targets PowerPoint (PPTX/ODP) speaker notes. If
+                    <code>true</code>, notes are entirely omitted from both the structure and text output.
+                </td>
+            </tr>
+            <tr>
+                <td><code>putNotesAtLast</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Note Reordering</strong>: By default, notes are interleaved after each slide. If
+                    <code>true</code>,
+                    all notes are collected and appended as a final section at the end of the <code>content</code> tree.
+                </td>
+            </tr>
+            <tr>
+                <td><code>extractAttachments</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Resource Extraction</strong>: Enables the collection of images, charts, and embedded
+                    objects.
+                    Populates the root <code>attachments</code> array and ensures <code>image</code> nodes have
+                    <code>attachmentName</code> metadata.
+                </td>
+            </tr>
+            <tr>
+                <td><code>includeRawContent</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Source Inspection</strong>: Adds a <code>rawContent</code> property to every node containing
+                    its
+                    original XML (OOXML) or RTF source. <em>Warning: Significantly increases AST memory footprint.</em>
+                </td>
+            </tr>
+            <tr>
+                <td><code>ocr</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Vision Synthesis</strong>: Enables optical character recognition for images and
+                    non-selectable
+                    PDF layers. <em>Requires Tesseract.js in the environment.</em></td>
+            </tr>
+            <tr>
+                <td><code>ocrLanguage</code></td>
+                <td><code>string</code></td>
+                <td><code>eng</code></td>
+                <td><strong>Language Training</strong>: Specifies which Tesseract data files to load.
+                    Use combinations like <code>eng+fra</code> for multi-lingual documents.</td>
+            </tr>
+            <tr>
+                <td><code>pdfWorkerSrc</code></td>
+                <td><code>string</code></td>
+                <td>(CDN)</td>
+                <td><strong>PDF Engine</strong>: Path to the <code>pdf.worker.js</code>. Must be accessible by the
+                    browser. <em>Crucial for PDF parsing stability and performance.</em></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2 id="examples">Common Scenarios</h2>
+
+    <h3>1. Search Engine Indexing (High Speed)</h3>
+    <pre><code>const config = {
+    ignoreNotes: true,
+    extractAttachments: false, // Don't need images for indexing
+    newlineDelimiter: ' '      // Simple space for search ranking
+};</code></pre>
+
+    <h3>2. Document Reconstruction (Rich Data)</h3>
+    <pre><code>const config = {
+    extractAttachments: true,
+    includeRawContent: true,   // For deep attribute analysis
+    putNotesAtLast: false      // Keep slides and notes together
+};</code></pre>
+
+    <blockquote>
+        [!IMPORTANT]
+        <strong>RTF Notes</strong>: <code>putNotesAtLast</code> is currently forced to <code>true</code> for RTF files
+        due to the nature of the format's group stacking for footnotes/endnotes.
+    </blockquote>
+</div>
