@@ -40,6 +40,7 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
+import { createWorker } from 'tesseract.js';
 import { ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types';
 import { logWarning } from '../utils/errorUtils';
 import { performOcr } from '../utils/ocrUtils';
@@ -1673,17 +1674,26 @@ export const parseRtf = async (buffer: Buffer, config: OfficeParserConfig): Prom
 
         // Perform OCR if enabled
         if (config.ocr && config.extractAttachments) {
-            for (const attachment of attachments) {
-                if (attachment.mimeType.startsWith('image/')) {
-                    try {
-                        // Convert base64 data back to Buffer for Tesseract.js
-                        // Passing base64 string directly would be interpreted as a file path,
-                        // causing ENAMETOOLONG error for large images.
-                        const imageBuffer = Buffer.from(attachment.data, 'base64');
-                        attachment.ocrText = (await performOcr(imageBuffer, config.ocrLanguage)).trim();
-                    } catch (e) {
-                        logWarning(`OCR failed for ${attachment.name}:`, config, e);
+            let worker = config.ocr && attachments.some(attachment => attachment.mimeType.startsWith('image/')) ? await createWorker(config.ocrLanguage || 'eng', 1, {
+                logger: () => { }
+            }) : undefined;
+            try {
+                for (const attachment of attachments) {
+                    if (attachment.mimeType.startsWith('image/')) {
+                        try {
+                            // Convert base64 data back to Buffer for Tesseract.js
+                            // Passing base64 string directly would be interpreted as a file path,
+                            // causing ENAMETOOLONG error for large images.
+                            const imageBuffer = Buffer.from(attachment.data, 'base64');
+                            attachment.ocrText = (await performOcr(imageBuffer, worker!)).trim();
+                        } catch (e) {
+                            logWarning(`OCR failed for ${attachment.name}:`, config, e);
+                        }
                     }
+                }
+            } finally {
+                if (worker) {
+                    await worker.terminate();
                 }
             }
 

@@ -57,6 +57,7 @@
  * @see https://www.adobe.com/devnet/pdf/pdf_reference.html PDF Reference
  */
 
+import { createWorker } from 'tesseract.js';
 import { ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types';
 import { getOfficeError, logWarning, OfficeErrorType } from '../utils/errorUtils';
 import { createAttachment } from '../utils/imageUtils';
@@ -688,181 +689,190 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
         let lastY = -1;
         let imageCounter = 0;
 
-        for (const item of pageItems) {
-            if (item.type === 'text') {
-                const text = item.text;
-                if (!text) continue;
+        let worker = config.ocr && pageItems.some(item => item.type === 'image') ? await createWorker(config.ocrLanguage || 'eng', 1, {
+            logger: () => { }
+        }) : undefined;
+        try {
+            for (const item of pageItems) {
+                if (item.type === 'text') {
+                    const text = item.text;
+                    if (!text) continue;
 
-                // Check for new line
-                const isNewLine = lastY !== -1 && Math.abs(item.y - lastY) > 5;
+                    // Check for new line
+                    const isNewLine = lastY !== -1 && Math.abs(item.y - lastY) > 5;
 
-                if (isNewLine && currentNode) {
-                    // Finalize and push current node
-                    if ((currentNode.text || '').trim().length > 0) {
-                        pageContent.push(currentNode);
-                    }
-                    currentNode = null;
-                }
-
-                // Skip pure whitespace at start of lines
-                if (!currentNode && text.trim().length === 0) {
-                    lastY = item.y;
-                    continue;
-                }
-
-                // Determine if this should be a heading
-                const headingLevel = detectHeadingLevel(item.height, fontStats);
-
-                if (!currentNode) {
-                    // Start new node
-                    if (headingLevel > 0) {
-                        currentNode = {
-                            type: 'heading',
-                            text: '',
-                            children: [],
-                            metadata: { level: headingLevel }
-                        };
-                    } else {
-                        currentNode = {
-                            type: 'paragraph',
-                            text: '',
-                            children: []
-                        };
-                    }
-                    currentNodeFontSize = item.height;
-                }
-
-                // Handle whitespace
-                if (text.trim().length === 0) {
-                    if (currentNode.children && currentNode.children.length > 0) {
-                        const lastChild = currentNode.children[currentNode.children.length - 1];
-                        if (lastChild.type === 'text' && lastChild.text) {
-                            lastChild.text += text;
-                            currentNode.text += text;
+                    if (isNewLine && currentNode) {
+                        // Finalize and push current node
+                        if ((currentNode.text || '').trim().length > 0) {
+                            pageContent.push(currentNode);
                         }
+                        currentNode = null;
                     }
-                    lastY = item.y;
-                    continue;
-                }
 
-                // Add space between words if needed
-                if (currentNode.text && currentNode.text.length > 0 && !currentNode.text.endsWith(' ')) {
-                    currentNode.text += ' ';
-                    if (currentNode.children && currentNode.children.length > 0) {
-                        const lastChild = currentNode.children[currentNode.children.length - 1];
-                        if (lastChild.type === 'text' && lastChild.text) {
-                            lastChild.text += ' ';
+                    // Skip pure whitespace at start of lines
+                    if (!currentNode && text.trim().length === 0) {
+                        lastY = item.y;
+                        continue;
+                    }
+
+                    // Determine if this should be a heading
+                    const headingLevel = detectHeadingLevel(item.height, fontStats);
+
+                    if (!currentNode) {
+                        // Start new node
+                        if (headingLevel > 0) {
+                            currentNode = {
+                                type: 'heading',
+                                text: '',
+                                children: [],
+                                metadata: { level: headingLevel }
+                            };
+                        } else {
+                            currentNode = {
+                                type: 'paragraph',
+                                text: '',
+                                children: []
+                            };
                         }
+                        currentNodeFontSize = item.height;
                     }
-                }
 
-                currentNode.text += text;
-
-                // Check for link
-                const link = findLinkForText(item, annotations);
-                let textMetadata: TextMetadata | undefined;
-                if (link) {
-                    if (link.url) {
-                        textMetadata = {
-                            link: link.url,
-                            linkType: link.url.startsWith('#') ? 'internal' : 'external'
-                        };
-                    } else if (link.dest) {
-                        // Internal destination
-                        textMetadata = {
-                            link: typeof link.dest === 'string' ? `#${link.dest}` : '#internal',
-                            linkType: 'internal'
-                        };
-                    }
-                }
-
-                // Try to merge with last child if same formatting and no link change
-                let merged = false;
-                if (currentNode.children && currentNode.children.length > 0 && !textMetadata) {
-                    const lastChild = currentNode.children[currentNode.children.length - 1];
-                    if (lastChild.type === 'text' &&
-                        isSameFormatting(lastChild.formatting, item.formatting) &&
-                        !lastChild.metadata) {
-                        lastChild.text = (lastChild.text || '') + text;
-                        merged = true;
-                    }
-                }
-
-                if (!merged) {
-                    const textNode: OfficeContentNode = {
-                        type: 'text',
-                        text: text,
-                        formatting: Object.keys(item.formatting).length > 0 ? item.formatting : undefined
-                    };
-                    if (textMetadata) {
-                        textNode.metadata = textMetadata;
-                    }
-                    currentNode.children?.push(textNode);
-                }
-
-                lastY = item.y;
-
-            } else if (item.type === 'image') {
-                // Flush current node
-                if (currentNode) {
-                    if ((currentNode.text || '').trim().length > 0) {
-                        pageContent.push(currentNode);
-                    }
-                    currentNode = null;
-                }
-
-                imageCounter++;
-                // Note: Using .bmp extension since we encode to BMP for broad compatibility
-                const attachmentName = `pdf_image_p${pageNum}_${imageCounter}.bmp`;
-
-                /**
-                 * Image extraction for PDF files.
-                 * 
-                 * PDF stores images as raw pixel data. We convert to BMP for compatibility.
-                 */
-                if (config.extractAttachments) {
-                    try {
-                        const imageBuffer = convertToRgbaBuffer(
-                            item.data,
-                            item.width,
-                            item.height,
-                            item.kind
-                        );
-
-                        // Encode as BMP
-                        const bmpBuffer = encodeBmp(item.width, item.height, new Uint8Array(imageBuffer));
-                        const attachment = createAttachment(attachmentName, bmpBuffer);
-                        attachment.mimeType = 'image/bmp';
-
-                        // Perform OCR if enabled
-                        if (config.ocr) {
-                            try {
-                                // Skip OCR for very small images/artifacts (e.g. < 10px) to avoid Tesseract warnings
-                                if (item.width >= 10 && item.height >= 10) {
-                                    attachment.ocrText = (await performOcr(bmpBuffer, config.ocrLanguage)).trim();
-                                }
-                            } catch (e) {
-                                if (config.outputErrorToConsole) console.error(`OCR failed for ${attachmentName}:`, e);
+                    // Handle whitespace
+                    if (text.trim().length === 0) {
+                        if (currentNode.children && currentNode.children.length > 0) {
+                            const lastChild = currentNode.children[currentNode.children.length - 1];
+                            if (lastChild.type === 'text' && lastChild.text) {
+                                lastChild.text += text;
+                                currentNode.text += text;
                             }
                         }
+                        lastY = item.y;
+                        continue;
+                    }
 
-                        attachments.push(attachment);
+                    // Add space between words if needed
+                    if (currentNode.text && currentNode.text.length > 0 && !currentNode.text.endsWith(' ')) {
+                        currentNode.text += ' ';
+                        if (currentNode.children && currentNode.children.length > 0) {
+                            const lastChild = currentNode.children[currentNode.children.length - 1];
+                            if (lastChild.type === 'text' && lastChild.text) {
+                                lastChild.text += ' ';
+                            }
+                        }
+                    }
 
-                        // Create image content node
-                        const imageMetadata: ImageMetadata = {
-                            attachmentName,
+                    currentNode.text += text;
+
+                    // Check for link
+                    const link = findLinkForText(item, annotations);
+                    let textMetadata: TextMetadata | undefined;
+                    if (link) {
+                        if (link.url) {
+                            textMetadata = {
+                                link: link.url,
+                                linkType: link.url.startsWith('#') ? 'internal' : 'external'
+                            };
+                        } else if (link.dest) {
+                            // Internal destination
+                            textMetadata = {
+                                link: typeof link.dest === 'string' ? `#${link.dest}` : '#internal',
+                                linkType: 'internal'
+                            };
+                        }
+                    }
+
+                    // Try to merge with last child if same formatting and no link change
+                    let merged = false;
+                    if (currentNode.children && currentNode.children.length > 0 && !textMetadata) {
+                        const lastChild = currentNode.children[currentNode.children.length - 1];
+                        if (lastChild.type === 'text' &&
+                            isSameFormatting(lastChild.formatting, item.formatting) &&
+                            !lastChild.metadata) {
+                            lastChild.text = (lastChild.text || '') + text;
+                            merged = true;
+                        }
+                    }
+
+                    if (!merged) {
+                        const textNode: OfficeContentNode = {
+                            type: 'text',
+                            text: text,
+                            formatting: Object.keys(item.formatting).length > 0 ? item.formatting : undefined
                         };
+                        if (textMetadata) {
+                            textNode.metadata = textMetadata;
+                        }
+                        currentNode.children?.push(textNode);
+                    }
 
-                        pageContent.push({
-                            type: 'image',
-                            text: attachment.ocrText || '',
-                            metadata: { ...imageMetadata }
-                        });
+                    lastY = item.y;
 
-                    } catch (e) {
-                        logWarning(`Failed to process image ${attachmentName}:`, config, e);
+                } else if (item.type === 'image') {
+                    // Flush current node
+                    if (currentNode) {
+                        if ((currentNode.text || '').trim().length > 0) {
+                            pageContent.push(currentNode);
+                        }
+                        currentNode = null;
+                    }
+
+                    imageCounter++;
+                    // Note: Using .bmp extension since we encode to BMP for broad compatibility
+                    const attachmentName = `pdf_image_p${pageNum}_${imageCounter}.bmp`;
+
+                    /**
+                     * Image extraction for PDF files.
+                     * 
+                     * PDF stores images as raw pixel data. We convert to BMP for compatibility.
+                     */
+                    if (config.extractAttachments) {
+                        try {
+                            const imageBuffer = convertToRgbaBuffer(
+                                item.data,
+                                item.width,
+                                item.height,
+                                item.kind
+                            );
+
+                            // Encode as BMP
+                            const bmpBuffer = encodeBmp(item.width, item.height, new Uint8Array(imageBuffer));
+                            const attachment = createAttachment(attachmentName, bmpBuffer);
+                            attachment.mimeType = 'image/bmp';
+
+                            // Perform OCR if enabled
+                            if (config.ocr) {
+                                try {
+                                    // Skip OCR for very small images/artifacts (e.g. < 10px) to avoid Tesseract warnings
+                                    if (item.width >= 10 && item.height >= 10) {
+                                        attachment.ocrText = (await performOcr(bmpBuffer, worker!)).trim();
+                                    }
+                                } catch (e) {
+                                    if (config.outputErrorToConsole) console.error(`OCR failed for ${attachmentName}:`, e);
+                                }
+                            }
+
+                            attachments.push(attachment);
+
+                            // Create image content node
+                            const imageMetadata: ImageMetadata = {
+                                attachmentName,
+                            };
+
+                            pageContent.push({
+                                type: 'image',
+                                text: attachment.ocrText || '',
+                                metadata: { ...imageMetadata }
+                            });
+
+                        } catch (e) {
+                            logWarning(`Failed to process image ${attachmentName}:`, config, e);
+                        }
                     }
                 }
+            }
+        } finally {
+            if (worker) {
+                await worker.terminate();
             }
         }
 

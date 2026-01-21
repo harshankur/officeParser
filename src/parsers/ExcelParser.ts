@@ -29,6 +29,7 @@ import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';
 import { getElementsByTagName, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils';
 import { extractFiles } from '../utils/zipUtils';
+import { createWorker } from 'tesseract.js';
 
 /**
  * Parses an Excel spreadsheet (.xlsx) and extracts sheets, rows, and cells.
@@ -295,36 +296,47 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
             }
         }
 
-        // 3. Process Media Files
-        for (const media of mediaFiles) {
-            const attachment = createAttachment(media.path.split('/').pop() || 'image', media.content);
+        const language = config.ocrLanguage || 'eng';
+        let worker = config.ocr && mediaFiles.length > 0 ? await createWorker(language, 1, {
+            logger: () => { }
+        }) : undefined;
+        try {
+            // 3. Process Media Files
+            for (const media of mediaFiles) {
+                const attachment = createAttachment(media.path.split('/').pop() || 'image', media.content);
 
-            // Try to find alt text for this media
-            let altText = '';
-            for (const drawingPath in drawingImageMap) {
-                for (const rId in drawingImageMap[drawingPath]) {
-                    if (drawingImageMap[drawingPath][rId].path === media.path) {
-                        altText = drawingImageMap[drawingPath][rId].altText || '';
-                        break;
-                    }
-                }
-                if (altText) break;
-            }
-            if (altText) attachment.altText = altText;
-
-            attachments.push(attachment);
-
-            if (config.ocr) {
-                if (attachment.mimeType.startsWith('image/')) {
-                    try {
-                        const ocrText = await performOcr(media.content, config.ocrLanguage);
-                        if (ocrText.trim()) {
-                            attachment.ocrText = ocrText.trim();
+                // Try to find alt text for this media
+                let altText = '';
+                for (const drawingPath in drawingImageMap) {
+                    for (const rId in drawingImageMap[drawingPath]) {
+                        if (drawingImageMap[drawingPath][rId].path === media.path) {
+                            altText = drawingImageMap[drawingPath][rId].altText || '';
+                            break;
                         }
-                    } catch (e) {
-                        logWarning(`OCR failed for ${attachment.name}:`, config, e);
+                    }
+                    if (altText) break;
+                }
+                if (altText) attachment.altText = altText;
+
+                attachments.push(attachment);
+
+                if (config.ocr) {
+                    if (attachment.mimeType.startsWith('image/')) {
+                        try {
+                            const ocrText = await performOcr(media.content, worker!);
+                            if (ocrText.trim()) {
+                                attachment.ocrText = ocrText.trim();
+                            }
+                        } catch (e) {
+                            logWarning(`OCR failed for ${attachment.name}:`, config, e);
+                        }
                     }
                 }
+            }
+
+        } finally {
+            if (worker) {
+                await worker.terminate();
             }
         }
 
