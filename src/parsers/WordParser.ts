@@ -66,6 +66,7 @@ import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';
 import { getDirectChildren, getElementsByTagName, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils';
 import { extractFiles } from '../utils/zipUtils';
+import { createWorker } from 'tesseract.js';
 
 /**
  * Parses a Word document (.docx) and extracts content, formatting, and metadata.
@@ -772,18 +773,27 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
 
     // Extract attachments
     if (config.extractAttachments) {
-        for (const media of mediaFiles) {
-            const attachment = createAttachment(media.path.split('/').pop() || 'image', media.content);
-            attachments.push(attachment);
+        let worker = config.ocr && mediaFiles.length > 0 ? await createWorker(config.ocrLanguage || 'eng', 1, {
+            logger: () => { }
+        }) : undefined;
+        try {
+            for (const media of mediaFiles) {
+                const attachment = createAttachment(media.path.split('/').pop() || 'image', media.content);
+                attachments.push(attachment);
 
-            if (config.ocr) {
-                if (attachment.mimeType.startsWith('image/')) {
-                    try {
-                        attachment.ocrText = (await performOcr(media.content, config.ocrLanguage)).trim();
-                    } catch (e) {
-                        logWarning(`OCR failed for ${attachment.name}:`, config, e);
+                if (config.ocr) {
+                    if (attachment.mimeType.startsWith('image/')) {
+                        try {
+                            attachment.ocrText = (await performOcr(media.content, worker!)).trim();
+                        } catch (e) {
+                            logWarning(`OCR failed for ${attachment.name}:`, config, e);
+                        }
                     }
                 }
+            }
+        } finally {
+            if (worker) {
+                await worker.terminate();
             }
         }
 
