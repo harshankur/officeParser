@@ -45,6 +45,7 @@ const imageTestFiles = [
     { filename: "docwithimages.docx", expectedImageCount: { exact: 3 } },
     { filename: "docwithimages.pdf", expectedImageCount: { exact: 3 } },
     { filename: "docwithimages.odt", expectedImageCount: { exact: 3 } },
+    
     { filename: "presentationwithimages.pptx", expectedImageCount: { exact: 2 } },
     { filename: "presentationwithimages.odp", expectedImageCount: { exact: 2 } }
 ];
@@ -52,6 +53,7 @@ const imageTestFiles = [
 /** List of Word files for testing table and chart extraction */
 const structuredContentTestFiles = [
     { filename: "test.docx", expectedTables: { min: 1 }, expectedCharts: { min: 0 } },
+    { filename:"Guide.pptx", expectedSlides: { exact: 8 } },
     { filename: "docwithimages_with_chart.docx", expectedTables: { min: 0 }, expectedCharts: { min: 0 } }
 ];
 
@@ -163,11 +165,25 @@ function validateChartStructure(chart) {
         if (!series || typeof series !== 'object') return false;
         if (!Array.isArray(series.categories)) return false;
         if (!Array.isArray(series.values)) return false;
+        
+        // Validate categories - can be strings or hierarchical category objects
         for (const category of series.categories) {
-            if (!category || typeof category !== 'string') return false;
+            if (typeof category === 'string') {
+                // String category - valid
+                continue;
+            } else if (category && typeof category === 'object') {
+                // Hierarchical category - check structure
+                if (!Array.isArray(category.levels) || typeof category.value !== 'string') {
+                    return false;
+                }
+            } else {
+                return false;
+            }
         }
+        
+        // Validate values - must be numbers
         for (const value of series.values) {
-            if (!value || typeof value !== 'number') return false;
+            if (typeof value !== 'number') return false;
         }
     }
     
@@ -176,7 +192,7 @@ function validateChartStructure(chart) {
 
 /** Test structured content extraction (tables and charts) for Word files */
 async function runStructuredContentTest(testFile) {
-    const testConfig = { ...config, extractImages: false, extractCharts: true };
+    const testConfig = { ...config, extractImages: true, extractCharts: true };
     return officeParser.parseOfficeAsync(`test/files/${testFile.filename}`, testConfig)
         .then(result => {
             // Handle case where result might be a string (backwards compatibility)
@@ -197,20 +213,37 @@ async function runStructuredContentTest(testFile) {
             // @ts-ignore - TypeScript doesn't narrow properly after string check
             const chartBlocks = result.blocks ? result.blocks.filter(b => b.type === 'chart') : [];
             
+            // Validate slides for PowerPoint files
+            // @ts-ignore - TypeScript doesn't narrow properly after string check
+            const slides = result.slides || {};
+            let slidesPassed = true;
+            if (testFile.expectedSlides) {
+                const slideCount = Object.keys(slides).length;
+                if (testFile.expectedSlides.exact !== undefined) {
+                    slidesPassed = slideCount === testFile.expectedSlides.exact;
+                } else if (testFile.expectedSlides.min !== undefined) {
+                    slidesPassed = slideCount >= testFile.expectedSlides.min;
+                }
+            }
+            
             // Check table count
             let tablesPassed = true;
-            if (testFile.expectedTables.exact !== undefined) {
-                tablesPassed = tables.length === testFile.expectedTables.exact;
-            } else if (testFile.expectedTables.min !== undefined) {
-                tablesPassed = tables.length >= testFile.expectedTables.min;
+            if (testFile.expectedTables) {
+                if (testFile.expectedTables.exact !== undefined) {
+                    tablesPassed = tables.length === testFile.expectedTables.exact;
+                } else if (testFile.expectedTables.min !== undefined) {
+                    tablesPassed = tables.length >= testFile.expectedTables.min;
+                }
             }
             
             // Check chart count
             let chartsPassed = true;
-            if (testFile.expectedCharts.exact !== undefined) {
-                chartsPassed = charts.length === testFile.expectedCharts.exact;
-            } else if (testFile.expectedCharts.min !== undefined) {
-                chartsPassed = charts.length >= testFile.expectedCharts.min;
+            if (testFile.expectedCharts) {
+                if (testFile.expectedCharts.exact !== undefined) {
+                    chartsPassed = charts.length === testFile.expectedCharts.exact;
+                } else if (testFile.expectedCharts.min !== undefined) {
+                    chartsPassed = charts.length >= testFile.expectedCharts.min;
+                }
             }
             
             // Validate table structures
@@ -249,25 +282,27 @@ async function runStructuredContentTest(testFile) {
             }
             
             // Overall pass/fail
-            const passed = tablesPassed && chartsPassed && tableStructurePassed && 
+            const passed = tablesPassed && chartsPassed && slidesPassed && tableStructurePassed && 
                           chartStructurePassed && blocksMatchArrays && orderPassed;
             const status = passed ? 'Passed' : 'Failed';
             
             const details = [
-                `tables: ${tables.length}${testFile.expectedTables.exact !== undefined ? ` (expected: ${testFile.expectedTables.exact})` : testFile.expectedTables.min !== undefined ? ` (min: ${testFile.expectedTables.min})` : ''}`,
-                `charts: ${charts.length}${testFile.expectedCharts.exact !== undefined ? ` (expected: ${testFile.expectedCharts.exact})` : testFile.expectedCharts.min !== undefined ? ` (min: ${testFile.expectedCharts.min})` : ''}`,
+                testFile.expectedSlides ? `slides: ${Object.keys(slides).length}${testFile.expectedSlides.exact !== undefined ? ` (expected: ${testFile.expectedSlides.exact})` : testFile.expectedSlides.min !== undefined ? ` (min: ${testFile.expectedSlides.min})` : ''}` : null,
+                `tables: ${tables.length}${testFile.expectedTables ? (testFile.expectedTables.exact !== undefined ? ` (expected: ${testFile.expectedTables.exact})` : testFile.expectedTables.min !== undefined ? ` (min: ${testFile.expectedTables.min})` : '') : ''}`,
+                `charts: ${charts.length}${testFile.expectedCharts ? (testFile.expectedCharts.exact !== undefined ? ` (expected: ${testFile.expectedCharts.exact})` : testFile.expectedCharts.min !== undefined ? ` (min: ${testFile.expectedCharts.min})` : '') : ''}`,
                 `table structure: ${tableStructurePassed ? 'OK' : 'FAIL'}`,
                 `chart structure: ${chartStructurePassed ? 'OK' : 'FAIL'}`,
                 `blocks match: ${blocksMatchArrays ? 'OK' : 'FAIL'}`,
                 `order: ${orderPassed ? 'OK' : 'FAIL'}`
-            ].join(', ');
+            ].filter(d => d !== null).join(', ');
             
             console.log(`[${testFile.filename.padEnd(35)}] => ${status} (${details})`);
             
             // Print detailed info if failed
             if (!passed && config.outputErrorToConsole) {
-                if (!tablesPassed) console.log(`  Tables: expected ${testFile.expectedTables.exact || `>=${testFile.expectedTables.min}`}, got ${tables.length}`);
-                if (!chartsPassed) console.log(`  Charts: expected ${testFile.expectedCharts.exact || `>=${testFile.expectedCharts.min}`}, got ${charts.length}`);
+                if (!slidesPassed && testFile.expectedSlides) console.log(`  Slides: expected ${testFile.expectedSlides.exact || `>=${testFile.expectedSlides.min}`}, got ${Object.keys(slides).length}`);
+                if (!tablesPassed && testFile.expectedTables) console.log(`  Tables: expected ${testFile.expectedTables.exact || `>=${testFile.expectedTables.min}`}, got ${tables.length}`);
+                if (!chartsPassed && testFile.expectedCharts) console.log(`  Charts: expected ${testFile.expectedCharts.exact || `>=${testFile.expectedCharts.min}`}, got ${charts.length}`);
                 if (!tableStructurePassed) console.log(`  Table structure validation failed`);
                 if (!chartStructurePassed) console.log(`  Chart structure validation failed`);
                 if (!blocksMatchArrays) console.log(`  Blocks don't match arrays: tables=${tables.length} vs tableBlocks=${tableBlocks.length}, charts=${charts.length} vs chartBlocks=${chartBlocks.length}`);
@@ -294,10 +329,16 @@ async function runImageExtractionTest(testFile) {
             const imageCount = imageBlocks.length;
             let imagesPassed = false;
 
-            if (testFile.expectedImageCount.exact !== undefined) {
-                imagesPassed = imageCount === testFile.expectedImageCount.exact;
-            } else if (testFile.expectedImageCount.min !== undefined) {
-                imagesPassed = imageCount >= testFile.expectedImageCount.min;
+            // Handle cases where expectedImageCount might not be defined (e.g., for slide tests)
+            if (testFile.expectedImageCount) {
+                if (testFile.expectedImageCount.exact !== undefined) {
+                    imagesPassed = imageCount === testFile.expectedImageCount.exact;
+                } else if (testFile.expectedImageCount.min !== undefined) {
+                    imagesPassed = imageCount >= testFile.expectedImageCount.min;
+                }
+            } else {
+                // If no expectedImageCount is defined, skip image validation
+                imagesPassed = true;
             }
 
             // Validate images are unique (not duplicates)
@@ -314,9 +355,11 @@ async function runImageExtractionTest(testFile) {
             const passed = imagesPassed && textPassed;
             const status = passed ? 'Passed' : 'Failed';
 
-            const imageDetails = testFile.expectedImageCount.exact !== undefined
-                ? `expected: ${testFile.expectedImageCount.exact}, got: ${imageCount}`
-                : `expected: >=${testFile.expectedImageCount.min}, got: ${imageCount}`;
+            const imageDetails = testFile.expectedImageCount 
+                ? (testFile.expectedImageCount.exact !== undefined
+                    ? `expected: ${testFile.expectedImageCount.exact}, got: ${imageCount}`
+                    : `expected: >=${testFile.expectedImageCount.min}, got: ${imageCount}`)
+                : `got: ${imageCount}`;
 
             const uniqueInfo = imagesUnique ? '' : ' [DUPLICATES DETECTED]';
             console.log(`[${testFile.filename.padEnd(30)}] => ${status} (text: ${textPassed}, images: ${imagesPassed} - ${imageDetails}${uniqueInfo})`);
@@ -324,7 +367,218 @@ async function runImageExtractionTest(testFile) {
         .catch(error => console.log(`[${testFile.filename.padEnd(30)}] => Error: ${error.message}`));
 }
 
+/** Validate PowerPoint element structure */
+function validatePowerPointElement(element) {
+    if (!element || typeof element !== 'object') return false;
+    if (!['text', 'image', 'shape'].includes(element.type)) return false;
+    if (!element.coordinates || typeof element.coordinates !== 'object') return false;
+    
+    const coords = element.coordinates;
+    if (typeof coords.x !== 'number' || typeof coords.y !== 'number' ||
+        typeof coords.width !== 'number' || typeof coords.height !== 'number') {
+        return false;
+    }
+    
+    if (element.type === 'text') {
+        return typeof element.content === 'string';
+    } else if (element.type === 'image') {
+        return Buffer.isBuffer(element.buffer) && typeof element.mimeType === 'string';
+    } else if (element.type === 'shape') {
+        return typeof element.shapeType === 'string';
+    }
+    
+    return false;
+}
+
+/** Test PowerPoint-specific features (slides, notes, images) */
+async function runPowerPointTest(testFile) {
+    const testConfig = { ...config, extractImages: false };
+    
+    // Test 1: Basic text extraction
+    return officeParser.parseOfficeAsync(`test/files/${testFile}`, testConfig)
+        .then(result => {
+            if (typeof result === 'string') {
+                console.log(`[${testFile.padEnd(30)}] => Skipped (string result)`);
+                return;
+            }
+
+            // Validate blocks structure
+            // @ts-ignore
+            const blocks = result.blocks || [];
+            const textBlocks = blocks.filter(b => b.type === 'text');
+            const imageBlocks = blocks.filter(b => b.type === 'image');
+            
+            // Validate text content
+            const expectedText = fs.readFileSync(`test/files/${testFile}.txt`, 'utf8').trim();
+            // @ts-ignore
+            const actualText = result.text.replace(/<image [^>]+\/>\n?/g, '').trim();
+            const textPassed = expectedText === actualText;
+            
+            // Validate blocks structure
+            const blocksValid = Array.isArray(blocks) && blocks.every(b => 
+                b && typeof b === 'object' && 
+                (b.type === 'text' || b.type === 'image') &&
+                (b.type === 'text' ? typeof b.content === 'string' : true)
+            );
+            
+            // Validate text blocks match text content
+            const blocksMatchText = textBlocks.length > 0 && 
+                textBlocks.map(b => b.content).join('\n').trim() === actualText;
+            
+            const passed = textPassed && blocksValid && blocksMatchText;
+            const status = passed ? 'Passed' : 'Failed';
+            
+            const details = [
+                `text: ${textPassed ? 'OK' : 'FAIL'}`,
+                `blocks: ${blocks.length} (${textBlocks.length} text, ${imageBlocks.length} images)`,
+                `structure: ${blocksValid ? 'OK' : 'FAIL'}`,
+                `blocks match text: ${blocksMatchText ? 'OK' : 'FAIL'}`
+            ].join(', ');
+            
+            console.log(`[${testFile.padEnd(30)}] => ${status} (${details})`);
+            
+            if (!passed && config.outputErrorToConsole) {
+                if (!textPassed) {
+                    console.log(`  Text mismatch:`);
+                    console.log(`  Expected length: ${expectedText.length}`);
+                    console.log(`  Actual length: ${actualText.length}`);
+                }
+                if (!blocksValid) console.log(`  Block structure validation failed`);
+                if (!blocksMatchText) console.log(`  Blocks don't match text content`);
+            }
+        })
+        .catch(error => console.log(`[${testFile.padEnd(30)}] => Error: ${error.message}`));
+}
+
+/** Test PowerPoint elements with coordinates */
+async function runPowerPointElementsTest(testFile) {
+    const testConfig = { ...config, extractImages: true };
+    
+    return officeParser.parseOfficeAsync(`test/files/${testFile}`, testConfig)
+        .then(result => {
+            if (typeof result === 'string') {
+                console.log(`[${testFile.padEnd(30)}] => Skipped (string result)`);
+                return;
+            }
+
+            // @ts-ignore
+            const elements = result.elements || [];
+            
+            // Validate elements array exists and has valid structure
+            const elementsValid = Array.isArray(elements);
+            const elementsStructureValid = elements.every(el => validatePowerPointElement(el));
+            
+            // Validate coordinates are valid numbers
+            const coordinatesValid = elements.every(el => {
+                const coords = el.coordinates;
+                return coords && 
+                       typeof coords.x === 'number' && 
+                       typeof coords.y === 'number' &&
+                       typeof coords.width === 'number' && 
+                       typeof coords.height === 'number' &&
+                       coords.x >= 0 && coords.y >= 0 &&
+                       coords.width >= 0 && coords.height >= 0;
+            });
+            
+            // Validate element types
+            const textElements = elements.filter(el => el.type === 'text');
+            const imageElements = elements.filter(el => el.type === 'image');
+            const shapeElements = elements.filter(el => el.type === 'shape');
+            
+            // Validate text elements have content
+            const textElementsValid = textElements.every(el => 
+                typeof el.content === 'string' && el.content.length > 0
+            );
+            
+            // Validate image elements have buffer
+            const imageElementsValid = imageElements.every(el => 
+                Buffer.isBuffer(el.buffer) && typeof el.mimeType === 'string'
+            );
+            
+            const passed = elementsValid && elementsStructureValid && coordinatesValid && 
+                          textElementsValid && imageElementsValid;
+            const status = passed ? 'Passed' : 'Failed';
+            
+            const details = [
+                `elements: ${elements.length}`,
+                `structure: ${elementsStructureValid ? 'OK' : 'FAIL'}`,
+                `coordinates: ${coordinatesValid ? 'OK' : 'FAIL'}`,
+                `types: ${textElements.length} text, ${imageElements.length} images, ${shapeElements.length} shapes`
+            ].join(', ');
+            
+            console.log(`[${testFile.padEnd(30)}] => ${status} (${details})`);
+            
+            if (!passed && config.outputErrorToConsole) {
+                if (!elementsValid) console.log(`  Elements array validation failed`);
+                if (!elementsStructureValid) console.log(`  Element structure validation failed`);
+                if (!coordinatesValid) console.log(`  Coordinate validation failed`);
+                if (!textElementsValid) console.log(`  Text elements validation failed`);
+                if (!imageElementsValid) console.log(`  Image elements validation failed`);
+            }
+        })
+        .catch(error => console.log(`[${testFile.padEnd(30)}] => Error: ${error.message}`));
+}
+
+/** Test PowerPoint notes handling */
+async function runPowerPointNotesTest(testFile) {
+    // Test with notes included (default)
+    const configWithNotes = { ...config, extractImages: false, ignoreNotes: false, putNotesAtLast: false };
+    const configNotesAtLast = { ...config, extractImages: false, ignoreNotes: false, putNotesAtLast: true };
+    const configIgnoreNotes = { ...config, extractImages: false, ignoreNotes: true };
+    
+    // @ts-ignore
+    const results = {
+        withNotes: null,
+        notesAtLast: null,
+        ignoreNotes: null
+    };
+    
+    try {
+        // @ts-ignore
+        results.withNotes = await officeParser.parseOfficeAsync(`test/files/${testFile}`, configWithNotes);
+        // @ts-ignore
+        results.notesAtLast = await officeParser.parseOfficeAsync(`test/files/${testFile}`, configNotesAtLast);
+        // @ts-ignore
+        results.ignoreNotes = await officeParser.parseOfficeAsync(`test/files/${testFile}`, configIgnoreNotes);
+        
+        // @ts-ignore
+        const withNotesText = typeof results.withNotes === 'string' ? results.withNotes : (results.withNotes?.text || '');
+        // @ts-ignore
+        const notesAtLastText = typeof results.notesAtLast === 'string' ? results.notesAtLast : (results.notesAtLast?.text || '');
+        // @ts-ignore
+        const ignoreNotesText = typeof results.ignoreNotes === 'string' ? results.ignoreNotes : (results.ignoreNotes?.text || '');
+        
+        // Notes should be present in withNotes and notesAtLast
+        const notesPresent = withNotesText.length > 0 && notesAtLastText.length > 0;
+        
+        // Notes should be at the end when putNotesAtLast is true
+        // (This is a basic check - actual implementation may vary)
+        const notesAtEnd = notesAtLastText.length >= withNotesText.length;
+        
+        // Notes should be absent or reduced when ignoreNotes is true
+        const notesIgnored = ignoreNotesText.length <= withNotesText.length;
+        
+        const passed = notesPresent && notesAtEnd && notesIgnored;
+        const status = passed ? 'Passed' : 'Failed';
+        
+        console.log(`[${testFile.padEnd(30)}] => ${status} (notes: ${notesPresent ? 'OK' : 'FAIL'}, atLast: ${notesAtEnd ? 'OK' : 'FAIL'}, ignored: ${notesIgnored ? 'OK' : 'FAIL'})`);
+    } catch (error) {
+        console.log(`[${testFile.padEnd(30)}] => Error: ${error.message}`);
+    }
+}
+
 async function runAllTests() {
+    console.log("\n=== Running PowerPoint-specific tests ===");
+    await runPowerPointTest('test.pptx');
+    await runPowerPointTest('presentationwithimages.pptx');
+    
+    console.log("\n=== Running PowerPoint elements with coordinates tests ===");
+    await runPowerPointElementsTest('test.pptx');
+    await runPowerPointElementsTest('presentationwithimages.pptx');
+    
+    console.log("\n=== Running PowerPoint notes handling tests ===");
+    await runPowerPointNotesTest('test.pptx');
+
     console.log("\n=== Running standard format tests ===");
     for (let i = 0; i < supportedExtensionTests.length; i++)
     {
