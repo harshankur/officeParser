@@ -2,23 +2,23 @@
 
 // @ts-check
 
-const concat        = require('concat-stream');
+const concat = require('concat-stream');
 const { DOMParser } = require('@xmldom/xmldom');
-const fileType      = require('file-type');
-const fs            = require('fs');
-const yauzl         = require('yauzl');
+const fileType = require('file-type');
+const fs = require('fs');
+const yauzl = require('yauzl');
 
 /** Header for error messages */
 const ERRORHEADER = '[OfficeParser]: ';
 /** Error messages */
 const ERRORMSG = {
-    extensionUnsupported: (ext) =>      `Sorry, OfficeParser currently support docx, pptx, xlsx, odt, odp, ods, pdf files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
-    fileCorrupted:        (filepath) => `Your file ${filepath} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
-    fileDoesNotExist:     (filepath) => `File ${filepath} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
-    locationNotFound:     (location) => `Entered location ${location} is not reachable! Please make sure that the entered directory location exists. Check relative paths and reenter.`,
-    improperArguments:                  `Improper arguments`,
-    improperBuffers:                    `Error occured while reading the file buffers`,
-    invalidInput:                       `Invalid input type: Expected a Buffer or a valid file path`
+    extensionUnsupported: (ext) => `Sorry, OfficeParser currently support docx, pptx, xlsx, odt, odp, ods, pdf files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
+    fileCorrupted: (filepath) => `Your file ${filepath} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
+    fileDoesNotExist: (filepath) => `File ${filepath} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
+    locationNotFound: (location) => `Entered location ${location} is not reachable! Please make sure that the entered directory location exists. Check relative paths and reenter.`,
+    improperArguments: `Improper arguments`,
+    improperBuffers: `Error occured while reading the file buffers`,
+    invalidInput: `Invalid input type: Expected a Buffer or a valid file path`
 };
 
 /** Returns parsed xml document for a given xml text.
@@ -97,6 +97,7 @@ async function getPdfImageResource(page, imageName, timeout = 500) {
  * @property {boolean} [ignoreNotes]          Flag to ignore notes from parsing in files like powerpoint. Default is false. It includes notes in the parsed text by default.
  * @property {boolean} [putNotesAtLast]       Flag, if set to true, will collectively put all the parsed text from notes at last in files like powerpoint. Default is false. It puts each notes right after its main slide content. If ignoreNotes is set to true, this flag is also ignored.
  * @property {boolean} [extractImages]        Flag to extract images from files like docx and pdf. Default is false. If set to true, the return object will contain an 'images' array.
+ * @property {boolean} [extractCharts]        Flag to extract charts from files like docx. Default is false. If set to true, the return object will contain an 'charts' array.
  */
 
 /**
@@ -114,13 +115,78 @@ async function getPdfImageResource(page, imageName, timeout = 500) {
  */
 
 /**
- * @typedef {TextBlock | ImageBlock} Block
+ * @typedef {Object} TableBlock
+ * @property {'table'} type
+ * @property {string} name
+ * @property {Array<{ cols: Array<{ value: string }> }>} rows
+ */
+
+/**
+ * @typedef {Object} HierarchicalCategory
+ * @property {Array<string>} levels Array of hierarchical level labels
+ * @property {string} value The leaf value for this category
+ */
+
+/**
+ * @typedef {Object} ChartBlock
+ * @property {'chart'} type
+ * @property {string} chartType
+ * @property {Array<{ categories: Array<string | HierarchicalCategory>, values: Array<number> }>} series
+ */
+
+/**
+ * @typedef {TextBlock | ImageBlock | TableBlock | ChartBlock} Block
+ */
+
+/**
+ * @typedef {Object} CoordinateData
+ * @property {number} x X position in EMU (English Metric Units)
+ * @property {number} y Y position in EMU
+ * @property {number} width Width in EMU
+ * @property {number} height Height in EMU
+ * @property {number} [rotation] Rotation angle in 60000ths of a degree
+ * @property {number} [zIndex] Z-order/stacking order
+ */
+
+/**
+ * @typedef {Object} PowerPointTextElement
+ * @property {'text'} type
+ * @property {string} content Text content
+ * @property {CoordinateData} coordinates Position and size information
+ * @property {string} [slideNumber] Slide number this element belongs to
+ */
+
+/**
+ * @typedef {Object} PowerPointImageElement
+ * @property {'image'} type
+ * @property {Buffer} buffer Image data
+ * @property {string} mimeType MIME type
+ * @property {string} [filename] Filename
+ * @property {CoordinateData} coordinates Position and size information
+ * @property {string} [slideNumber] Slide number this element belongs to
+ */
+
+/**
+ * @typedef {Object} PowerPointShapeElement
+ * @property {'shape'} type
+ * @property {string} [text] Text content if shape contains text
+ * @property {string} shapeType Type of shape (e.g., 'rect', 'oval', 'line')
+ * @property {CoordinateData} coordinates Position and size information
+ * @property {string} [slideNumber] Slide number this element belongs to
+ */
+
+/**
+ * @typedef {PowerPointTextElement | PowerPointImageElement | PowerPointShapeElement} PowerPointElement
  */
 
 /**
  * @typedef {Object} ParseOfficeResult
  * @property {string} text The full extracted text content, preserved for backwards compatibility.
- * @property {Block[]} blocks An ordered array of content blocks (e.g., text, images) preserving the document structure.
+ * @property {Block[]} blocks An ordered array of content blocks (e.g., text, images, tables, charts) preserving the document structure.
+ * @property {PowerPointElement[]} [elements] Array of PowerPoint elements with coordinates (PowerPoint files only).
+ * @property {Object.<string, PowerPointElement[]>} [slides] Object grouping PowerPoint elements by slide number (PowerPoint files only). Keys are slide numbers as strings, values are arrays of elements for that slide.
+ * @property {Array<{ name: string, rows: Array<{ cols: Array<{ value: string }> }> }>} [tables] Array of all extracted tables (for convenience).
+ * @property {Array<{ chartType: string, series: Array<{ categories: Array<string | HierarchicalCategory>, values: Array<number> }> }>} [charts] Array of all extracted charts (for convenience).
  */
 
 /** Creates a text block
@@ -141,19 +207,608 @@ function createImageBlock(buffer, mimeType, filename) {
     return { type: 'image', buffer, mimeType, filename };
 }
 
+/**
+ * Extracts coordinate data from a:xfrm (transform) element
+ * @param {Element} xfrmNode The a:xfrm XML element
+ * @returns {CoordinateData | null} Coordinate data or null if not found
+ */
+function extractCoordinates(xfrmNode) {
+    if (!xfrmNode) return null;
+    
+    const offNode = xfrmNode.getElementsByTagName('a:off')[0];
+    const extNode = xfrmNode.getElementsByTagName('a:ext')[0];
+    
+    if (!offNode || !extNode) return null;
+    
+    const x = parseInt(offNode.getAttribute('x') || '0', 10);
+    const y = parseInt(offNode.getAttribute('y') || '0', 10);
+    const width = parseInt(extNode.getAttribute('cx') || '0', 10);
+    const height = parseInt(extNode.getAttribute('cy') || '0', 10);
+    const rotation = parseInt(xfrmNode.getAttribute('rot') || '0', 10);
+    
+    const coords = { x, y, width, height };
+    if (rotation !== 0) {
+        coords.rotation = rotation;
+    }
+    
+    return coords;
+}
+
+/**
+ * Finds the a:xfrm element for a given shape/picture element
+ * @param {Element} element The shape or picture element
+ * @returns {Element | null} The a:xfrm element or null
+ */
+function findTransformElement(element) {
+    if (!element) return null;
+    
+    // Check p:spPr for xfrm (most common location)
+    const spPr = element.getElementsByTagName('p:spPr')[0];
+    if (spPr) {
+        const spXfrm = spPr.getElementsByTagName('a:xfrm')[0];
+        if (spXfrm) return spXfrm;
+    }
+    
+    // Check for a:xfrm directly in the element
+    const xfrm = element.getElementsByTagName('a:xfrm')[0];
+    if (xfrm) return xfrm;
+    
+    // Check p:nvSpPr or p:nvPicPr for nested xfrm
+    const nvSpPr = element.getElementsByTagName('p:nvSpPr')[0];
+    const nvPicPr = element.getElementsByTagName('p:nvPicPr')[0];
+    const nvPr = nvSpPr || nvPicPr;
+    
+    if (nvPr) {
+        // Check parent chain for xfrm
+        let parent = nvPr.parentElement;
+        while (parent && parent !== element) {
+            const parentXfrm = parent.getElementsByTagName('a:xfrm')[0];
+            if (parentXfrm) return parentXfrm;
+            parent = parent.parentElement;
+        }
+    }
+    
+    return null;
+}
+
+/** Creates a table block
+ * @param {string} name The table name
+ * @param {Array<{ cols: Array<{ value: string }> }>} rows The table rows
+ * @returns {TableBlock}
+ */
+function createTableBlock(name, rows) {
+    return { type: 'table', name, rows };
+}
+
+/** Creates a chart block
+ * @param {string} chartType The type of chart
+ * @param {Array<{ categories: Array<string | HierarchicalCategory>, values: Array<number> }>} series The chart series with categories and values
+ * @returns {ChartBlock}
+ */
+function createChartBlock(chartType, series) {
+    return { type: 'chart', chartType, series };
+}
+
+/** Extract text from a cell node (w:tc)
+ * @param {Element} cellNode The cell node
+ * @returns {string} Extracted text from the cell
+ */
+function extractCellText(cellNode) {
+    const paragraphs = cellNode.getElementsByTagName('w:p');
+    const cellTexts = [];
+    for (let i = 0; i < paragraphs.length; i++) {
+        const textNodes = paragraphs[i].getElementsByTagName('w:t');
+        const paraText = Array.from(textNodes)
+            .map(t => t.childNodes[0]?.nodeValue || '')
+            .join('');
+        if (paraText) {
+            cellTexts.push(paraText);
+        }
+    }
+    return cellTexts.join(' ');
+}
+
+/** Extract text from a paragraph node (w:p)
+ * @param {Element} paraNode The paragraph node
+ * @returns {string} Extracted text from the paragraph
+ */
+function extractParagraphText(paraNode) {
+    const textNodes = paraNode.getElementsByTagName('w:t');
+    return Array.from(textNodes)
+        .map(t => t.childNodes[0]?.nodeValue || '')
+        .join('');
+}
+
+/** Extract table rows from a table node
+ * @param {Element} tableNode The table node (w:tbl)
+ * @returns {Array<{ cols: Array<{ value: string }> }>} Array of rows with columns
+ */
+function extractTableRows(tableNode) {
+    const rows = [];
+    const rowNodes = tableNode.getElementsByTagName('w:tr');
+    for (let i = 0; i < rowNodes.length; i++) {
+        const rowNode = rowNodes[i];
+        const cellNodes = rowNode.getElementsByTagName('w:tc');
+        const cols = [];
+        for (let j = 0; j < cellNodes.length; j++) {
+            const cellNode = cellNodes[j];
+            // Check for merged cells (gridSpan)
+            const gridSpan = cellNode.getElementsByTagName('w:gridSpan')[0];
+            const span = gridSpan ? parseInt(gridSpan.getAttribute('w:val') || '1', 10) : 1;
+            const cellText = extractCellText(cellNode);
+            cols.push({ value: cellText });
+            // If cell is merged, add empty cells for the span
+            for (let k = 1; k < span; k++) {
+                cols.push({ value: '' });
+            }
+        }
+        rows.push({ cols });
+    }
+    return rows;
+}
+
+/** Extract text from a PowerPoint table cell (a:tc)
+ * @param {Element} cellNode The cell node (a:tc)
+ * @returns {string} Extracted text from the cell
+ */
+function extractPowerPointCellText(cellNode) {
+    const paragraphs = cellNode.getElementsByTagName('a:p');
+    const cellTexts = [];
+    for (let i = 0; i < paragraphs.length; i++) {
+        const textNodes = paragraphs[i].getElementsByTagName('a:t');
+        const paraText = Array.from(textNodes)
+            .map(t => t.childNodes[0]?.nodeValue || '')
+            .join('');
+        if (paraText) {
+            cellTexts.push(paraText);
+        }
+    }
+    return cellTexts.join(' ');
+}
+
+/** Extract table rows from a PowerPoint table node
+ * @param {Element} tableNode The table node (a:tbl)
+ * @returns {Array<{ cols: Array<{ value: string }> }>} Array of rows with columns
+ */
+function extractPowerPointTableRows(tableNode) {
+    const rows = [];
+    const rowNodes = tableNode.getElementsByTagName('a:tr');
+    for (let i = 0; i < rowNodes.length; i++) {
+        const rowNode = rowNodes[i];
+        const cellNodes = rowNode.getElementsByTagName('a:tc');
+        const cols = [];
+        for (let j = 0; j < cellNodes.length; j++) {
+            const cellNode = cellNodes[j];
+            // Check for merged cells (gridSpan) - PowerPoint uses a:gridSpan
+            const gridSpan = cellNode.getElementsByTagName('a:gridSpan')[0];
+            const span = gridSpan ? parseInt(gridSpan.getAttribute('val') || '1', 10) : 1;
+            const cellText = extractPowerPointCellText(cellNode);
+            cols.push({ value: cellText });
+            // If cell is merged, add empty cells for the span
+            for (let k = 1; k < span; k++) {
+                cols.push({ value: '' });
+            }
+        }
+        rows.push({ cols });
+    }
+    return rows;
+}
+
+/** Extract table name from PowerPoint slide or generate sequential name
+ * @param {XMLDocument} xmlDoc The XML document
+ * @param {Element} tableNode The table node
+ * @param {number} tableIndex The index of the table (0-based)
+ * @param {string} [slideNumber] The slide number
+ * @returns {string} Table name
+ */
+function extractPowerPointTableName(xmlDoc, tableNode, tableIndex, slideNumber) {
+    // Try to find caption in surrounding text elements
+    // Check if there's a shape before or after the table with text like "Table 1"
+    const spTree = xmlDoc.getElementsByTagName('p:spTree')[0];
+    if (!spTree) return `Table ${tableIndex + 1}`;
+
+    const spTreeChildren = Array.from(spTree.childNodes).filter(
+        node => node.nodeType === 1 // Element nodes only
+    );
+    const tableIndexInTree = spTreeChildren.indexOf(tableNode);
+
+    // Check following shapes for caption (usually 1-2 shapes after table)
+    for (let i = 1; i <= 3 && tableIndexInTree + i < spTreeChildren.length; i++) {
+        const nextNode = spTreeChildren[tableIndexInTree + i];
+        if (nextNode.nodeType === 1) {
+            const nextElement = /** @type {Element} */ (nextNode);
+            const textNodes = nextElement.getElementsByTagName('a:t');
+            if (textNodes.length > 0) {
+                const paraNodes = nextElement.getElementsByTagName('a:p');
+                for (let pIdx = 0; pIdx < paraNodes.length; pIdx++) {
+                    const para = paraNodes[pIdx];
+                    const paraTextNodes = para.getElementsByTagName('a:t');
+                    const paraText = Array.from(paraTextNodes)
+                        .map(t => t.childNodes[0]?.nodeValue || '')
+                        .join('');
+                    // Look for "Table" followed by a number
+                    const tableMatch = paraText.match(/Table\s+(\d+)/i);
+                    if (tableMatch) {
+                        return paraText.trim();
+                    }
+                }
+            }
+        }
+    }
+
+    // Check preceding shapes
+    for (let i = 1; i <= 2 && tableIndexInTree - i >= 0; i++) {
+        const prevNode = spTreeChildren[tableIndexInTree - i];
+        if (prevNode.nodeType === 1) {
+            const prevElement = /** @type {Element} */ (prevNode);
+            const textNodes = prevElement.getElementsByTagName('a:t');
+            if (textNodes.length > 0) {
+                const paraNodes = prevElement.getElementsByTagName('a:p');
+                for (let pIdx = 0; pIdx < paraNodes.length; pIdx++) {
+                    const para = paraNodes[pIdx];
+                    const paraTextNodes = para.getElementsByTagName('a:t');
+                    const paraText = Array.from(paraTextNodes)
+                        .map(t => t.childNodes[0]?.nodeValue || '')
+                        .join('');
+                    const tableMatch = paraText.match(/Table\s+(\d+)/i);
+                    if (tableMatch) {
+                        return paraText.trim();
+                    }
+                }
+            }
+        }
+    }
+
+    // Generate sequential name if no caption found
+    return `Table ${tableIndex + 1}`;
+}
+
+/** Extract table name from caption or generate sequential name
+ * @param {XMLDocument} xmlDoc The XML document
+ * @param {Element} tableNode The table node
+ * @param {number} tableIndex The index of the table (0-based)
+ * @returns {string} Table name
+ */
+function extractTableName(xmlDoc, tableNode, tableIndex) {
+    // Try to find caption in following paragraphs
+    const body = xmlDoc.getElementsByTagName('w:body')[0];
+    if (!body) return `Table ${tableIndex + 1}`;
+
+    const bodyChildren = Array.from(body.childNodes);
+    const tableIndexInBody = bodyChildren.indexOf(tableNode);
+
+    // Check following paragraphs for caption (usually 1-2 paragraphs after table)
+    for (let i = 1; i <= 3 && tableIndexInBody + i < bodyChildren.length; i++) {
+        const nextNode = bodyChildren[tableIndexInBody + i];
+        if (nextNode.nodeType === 1 && nextNode.nodeName === 'w:p') {
+            const paraText = extractParagraphText(/** @type {Element} */(nextNode));
+            // Look for "Table" followed by a number
+            const tableMatch = paraText.match(/Table\s+(\d+)/i);
+            if (tableMatch) {
+                // Extract the full caption text
+                return paraText.trim();
+            }
+            // Check for SEQ field codes
+            const instrTexts = /** @type {Element} */ (nextNode).getElementsByTagName('w:instrText');
+            for (let j = 0; j < instrTexts.length; j++) {
+                const instr = instrTexts[j].childNodes[0]?.nodeValue || '';
+                if (instr.includes('SEQ Table')) {
+                    // Found SEQ field, get the full paragraph text as caption
+                    return paraText.trim() || `Table ${tableIndex + 1}`;
+                }
+            }
+        }
+    }
+
+    // Check preceding paragraphs
+    for (let i = 1; i <= 2 && tableIndexInBody - i >= 0; i++) {
+        const prevNode = bodyChildren[tableIndexInBody - i];
+        if (prevNode.nodeType === 1 && prevNode.nodeName === 'w:p') {
+            const paraText = extractParagraphText(/** @type {Element} */(prevNode));
+            const tableMatch = paraText.match(/Table\s+(\d+)/i);
+            if (tableMatch) {
+                return paraText.trim();
+            }
+        }
+    }
+
+    // Generate sequential name if no caption found
+    return `Table ${tableIndex + 1}`;
+}
+
+/** Parse legacy c: namespace chart data
+ * @param {XMLDocument} chartDoc The parsed chart XML document
+ * @param {OfficeParserConfig} [config] Config object for error handling
+ * @returns {{ chartType: string, series: Array<{ categories: Array<string>, values: Array<number> }> } | null} Chart data or null if parsing fails
+ */
+function parseLegacyChart(chartDoc, config) {
+    try {
+        // Extract chart type from plotArea
+        const plotArea = chartDoc.getElementsByTagName('c:plotArea')[0];
+        if (!plotArea) return null;
+
+        let chartType = 'unknown';
+        const plotAreaChildren = plotArea.childNodes;
+        const child = /** @type {Element} */ (plotAreaChildren[1]);
+
+        const tagName = /** @type {Element} */ (child).tagName;
+        if (tagName === 'c:barChart') chartType = 'bar';
+        else if (tagName === 'c:lineChart') chartType = 'line';
+        else if (tagName === 'c:pieChart') chartType = 'pie';
+        else if (tagName === 'c:areaChart') chartType = 'area';
+        else if (tagName === 'c:scatterChart') chartType = 'scatter';
+        else if (tagName === 'c:bubbleChart') chartType = 'bubble';
+        else if (tagName === 'c:doughnutChart') chartType = 'doughnut';
+        else if (tagName === 'c:radarChart') chartType = 'radar';
+        else if (tagName === 'c:surfaceChart') chartType = 'surface';
+        else if (tagName === 'c:stockChart') chartType = 'stock';
+        
+        // Extract categories and values
+        const series = [];
+        const serNodes = child.getElementsByTagName('c:ser');
+        for (let i = 0; i < serNodes.length; i++) {
+            const serNode = serNodes[i];
+            const catNode = serNode.getElementsByTagName('c:cat')[0];
+            const valNode = serNode.getElementsByTagName('c:val')[0];
+            const categories = [];
+            const values = [];
+            if (catNode) {
+                const pts = catNode.getElementsByTagName('c:pt');
+                for (let j = 0; j < pts.length; j++) {
+                    const pt = pts[j];
+                    const v = pt.getElementsByTagName('c:v')[0];
+                    if (v && v.childNodes[0]) {
+                        categories.push(v.childNodes[0].nodeValue || '');
+                    }
+                }
+            }
+            if (valNode) {
+                const pts = valNode.getElementsByTagName('c:pt');
+                for (let j = 0; j < pts.length; j++) {
+                    const pt = pts[j];
+                    const v = pt.getElementsByTagName('c:v')[0];
+                    if (v && v.childNodes[0]) {
+                        values.push(parseFloat(v.childNodes[0].nodeValue || '0'));
+                    }
+                }
+            }
+            series.push({ categories, values });
+        }
+
+        if (series.length === 0) {
+            return null;
+        }
+
+        return { chartType, series };
+    } catch (e) {
+        if (config && config.outputErrorToConsole) {
+            console.warn(`${ERRORHEADER}Error parsing legacy chart data:`, e.message);
+        }
+        return null;
+    }
+}
+
+/** Parse chartex (cx:) namespace chart data with hierarchical structure
+ * @param {XMLDocument} chartDoc The parsed chart XML document
+ * @param {OfficeParserConfig} [config] Config object for error handling
+ * @returns {{ chartType: string, series: Array<{ categories: Array<string | HierarchicalCategory>, values: Array<number> }> } | null} Chart data or null if parsing fails
+ */
+function parseChartexChart(chartDoc, config) {
+    try {
+        // Extract chart type from cx:series layoutId attribute
+        const plotArea = chartDoc.getElementsByTagName('cx:plotArea')[0];
+        if (!plotArea) return null;
+
+        const plotAreaRegion = plotArea.getElementsByTagName('cx:plotAreaRegion')[0];
+        if (!plotAreaRegion) return null;
+
+        const seriesNodes = plotAreaRegion.getElementsByTagName('cx:series');
+        if (seriesNodes.length === 0) return null;
+
+        // Get chart type from first series layoutId
+        const firstSeries = seriesNodes[0];
+        const chartType = firstSeries.getAttribute('layoutId') || 'unknown';
+
+        // Extract data from cx:chartData
+        const chartData = chartDoc.getElementsByTagName('cx:chartData')[0];
+        if (!chartData) return null;
+
+        // Build a map of data by id
+        const dataMap = {};
+        const dataElements = chartData.getElementsByTagName('cx:data');
+        for (let i = 0; i < dataElements.length; i++) {
+            const dataEl = dataElements[i];
+            const dataId = dataEl.getAttribute('id') || '0';
+            dataMap[dataId] = dataEl;
+        }
+
+        const series = [];
+
+        // Process each series
+        for (let i = 0; i < seriesNodes.length; i++) {
+            const serNode = seriesNodes[i];
+            const dataIdNode = serNode.getElementsByTagName('cx:dataId')[0];
+            const dataId = dataIdNode ? dataIdNode.getAttribute('val') || '0' : '0';
+            
+            const dataEl = dataMap[dataId];
+            if (!dataEl) {
+                if (config && config.outputErrorToConsole) {
+                    console.warn(`${ERRORHEADER}Chart series dataId ${dataId} not found`);
+                }
+                continue;
+            }
+
+            // Parse categories
+            const categories = [];
+            
+            // Check for string categories (cx:strDim type="cat")
+            const strDim = dataEl.getElementsByTagName('cx:strDim')[0];
+            if (strDim && strDim.getAttribute('type') === 'cat') {
+                const lvlNodes = strDim.getElementsByTagName('cx:lvl');
+                const levelCount = lvlNodes.length;
+                
+                if (levelCount > 0) {
+                    // Get ptCount from first level
+                    const firstLvl = lvlNodes[0];
+                    const ptCount = parseInt(firstLvl.getAttribute('ptCount') || '0', 10);
+                    
+                    // Build hierarchical structure
+                    // Note: In XML, first level is innermost (e.g., Leaf), last level is outermost (e.g., Branch)
+                    // We want levels array to go from outermost to innermost, with value being the innermost
+                    for (let idx = 0; idx < ptCount; idx++) {
+                        const levelValues = [];
+                        
+                        // Extract from each level (innermost to outermost)
+                        for (let lvlIdx = 0; lvlIdx < levelCount; lvlIdx++) {
+                            const lvl = lvlNodes[lvlIdx];
+                            const pt = Array.from(lvl.getElementsByTagName('cx:pt')).find(
+                                p => parseInt(p.getAttribute('idx') || '-1', 10) === idx
+                            );
+                            
+                            if (pt) {
+                                const ptText = pt.textContent || '';
+                                levelValues.push(ptText);
+                            }
+                        }
+                        
+                        if (levelValues.length > 0) {
+                            // The first element is the innermost (value), rest are levels (outermost to innermost)
+                            const value = levelValues[0];
+                            const levels = levelValues.slice(1).reverse(); // Reverse to get outermost to innermost
+                            categories.push({ levels, value });
+                        }
+                    }
+                }
+            }
+            
+            // Check for numeric categories (cx:numDim type="catVal")
+            const numDimCat = Array.from(dataEl.getElementsByTagName('cx:numDim')).find(
+                dim => dim.getAttribute('type') === 'catVal'
+            );
+            if (numDimCat && categories.length === 0) {
+                const lvl = numDimCat.getElementsByTagName('cx:lvl')[0];
+                if (lvl) {
+                    const pts = lvl.getElementsByTagName('cx:pt');
+                    for (let j = 0; j < pts.length; j++) {
+                        const pt = pts[j];
+                        const ptText = pt.textContent || '';
+                        categories.push({ levels: [], value: ptText });
+                    }
+                }
+            }
+
+            // Parse values (cx:numDim type="size" or type="val")
+            const values = [];
+            const numDimVal = Array.from(dataEl.getElementsByTagName('cx:numDim')).find(
+                dim => dim.getAttribute('type') === 'size' || dim.getAttribute('type') === 'val'
+            );
+            if (numDimVal) {
+                const lvl = numDimVal.getElementsByTagName('cx:lvl')[0];
+                if (lvl) {
+                    const pts = lvl.getElementsByTagName('cx:pt');
+                    for (let j = 0; j < pts.length; j++) {
+                        const pt = pts[j];
+                        const ptText = pt.textContent || '';
+                        const numValue = parseFloat(ptText) || 0;
+                        values.push(numValue);
+                    }
+                }
+            }
+
+            if (categories.length > 0 || values.length > 0) {
+                series.push({ categories, values });
+            }
+        }
+
+        if (series.length === 0) {
+            return null;
+        }
+
+        return { chartType, series };
+    } catch (e) {
+        if (config && config.outputErrorToConsole) {
+            console.warn(`${ERRORHEADER}Error parsing chartex chart data:`, e.message);
+        }
+        return null;
+    }
+}
+
+/** Parse chart data from chart XML content
+ * @param {string} chartPartContent The chart XML content
+ * @param {OfficeParserConfig} [config] Config object for error handling
+ * @returns {{ chartType: string, series: Array<{ categories: Array<string | HierarchicalCategory>, values: Array<number> }> } | null} Chart data or null if parsing fails
+ */
+function parseChartData(chartPartContent, config) {
+    try {
+        const chartDoc = parseString(chartPartContent);
+        
+        // Detect namespace by checking root element
+        const rootElement = chartDoc.documentElement;
+        const rootTagName = rootElement ? rootElement.tagName : '';
+        
+        // Check if it's chartex (cx:) namespace
+        if (rootTagName === 'cx:chartSpace' || rootTagName.includes('chartSpace')) {
+            // Check if it has cx: namespace by looking for cx:chartData
+            const chartData = chartDoc.getElementsByTagName('cx:chartData')[0];
+            if (chartData) {
+                return parseChartexChart(chartDoc, config);
+            }
+        }
+        
+        // Default to legacy c: namespace
+        return parseLegacyChart(chartDoc, config);
+    } catch (e) {
+        if (config && config.outputErrorToConsole) {
+            console.warn(`${ERRORHEADER}Error parsing chart data:`, e.message);
+        }
+        return null;
+    }
+}
+
+/** Extract charts from an embedded Excel file
+ * @param {Buffer} excelBuffer The Excel file buffer (ZIP archive)
+ * @param {OfficeParserConfig} config Config object for error handling
+ * @returns {Promise<Array<{ chartType: string, series: Array<{ categories: Array<string | HierarchicalCategory>, values: Array<number> }> }>>} Array of chart data
+ */
+function extractChartsFromExcelEmbedding(excelBuffer, config) {
+    const excelChartFileRegex = /xl\/charts\/chart\d+\.xml/g;
+
+    return extractFiles(excelBuffer, x => !!x.match(excelChartFileRegex), false)
+        .then(chartFiles => {
+            const charts = [];
+
+            for (const chartFile of chartFiles) {
+                const chartContent = chartFile.content.toString();
+                const chartData = parseChartData(chartContent, config);
+                
+                if (chartData) {
+                    charts.push(chartData);
+                }
+            }
+
+            return charts;
+        })
+        .catch(error => {
+            if (config && config.outputErrorToConsole) {
+                console.warn(`${ERRORHEADER}Error extracting charts from Excel embedding:`, error.message);
+            }
+            return [];
+        });
+}
+
 /** Parse relationships from Word document.xml.rels file
  * @param {Buffer|string} relsFileContent Content of the rels file
  * @returns {Object.<string, string>} Map of relationship IDs to targets
  */
 function parseWordRelationships(relsFileContent) {
-    const rels = {};
+    const rels = /** @type {Object.<string, string>} */ ({});
     const relsDoc = parseString(relsFileContent.toString());
     const relationships = relsDoc.getElementsByTagName('Relationship');
     for (let i = 0; i < relationships.length; i++) {
         const rel = relationships[i];
         const id = rel.getAttribute('Id');
         if (id) {
-            rels[id] = rel.getAttribute('Target');
+            rels[id] = rel.getAttribute('Target') || '';
         }
     }
     return rels;
@@ -169,18 +824,48 @@ function parseWordRelationships(relsFileContent) {
 function parseWord(file, callback, config) {
     /** The target content xml file for the docx file. */
     const mainContentFileRegex = /word\/document[\d+]?.xml/g;
-    const footnotesFileRegex   = /word\/footnotes[\d+]?.xml/g;
-    const endnotesFileRegex    = /word\/endnotes[\d+]?.xml/g;
-    const relsFileRegex        = /word\/_rels\/document.xml.rels/g;
-    const mediaFileRegex       = /word\/media\//g;
+    const footnotesFileRegex = /word\/footnotes[\d+]?.xml/g;
+    const endnotesFileRegex = /word\/endnotes[\d+]?.xml/g;
+    const relsFileRegex = /word\/_rels\/document.xml.rels/g;
+    const mediaFileRegex = /word\/media\//g;
+    const chartFileRegex = /word\/charts\/chart(Ex)?\d+\.xml/g;
+    const chartRelsFileRegex = /word\/charts\/_rels\/chart(Ex)?\d+\.xml\.rels/g;
+    const embeddingsFileRegex = /word\/embeddings\/.*\.xlsx/g;
 
     const filesToExtract = [mainContentFileRegex, footnotesFileRegex, endnotesFileRegex];
+    // Always extract chart-related files
+    filesToExtract.push(chartFileRegex, chartRelsFileRegex, embeddingsFileRegex);
     if (config.extractImages) {
         filesToExtract.push(relsFileRegex, mediaFileRegex);
     }
+    if (config.extractCharts) {
+        filesToExtract.push(relsFileRegex, chartRelsFileRegex);
+    }
 
-    extractFiles(file, x => filesToExtract.some(fileRegex => x.match(fileRegex)), config.extractImages)
+    // Extract text/XML files as strings
+    const textFilesPromise = extractFiles(file, x => filesToExtract.some(fileRegex => x.match(fileRegex)), false);
+
+    // Extract media files as buffers if extractImages is true
+    const mediaFilesPromise = config.extractImages
+        ? extractFiles(file, x => !!x.match(mediaFileRegex), true)
+        : Promise.resolve([]);
+
+    // Extract embedded Excel files as buffers (they are ZIP archives)
+    const excelFilesPromise = extractFiles(file, x => !!x.match(embeddingsFileRegex), true);
+
+    Promise.all([textFilesPromise, mediaFilesPromise, excelFilesPromise])
+        .then(([textFiles, mediaFilesBuffers, excelFilesBuffers]) => {
+            // Create a map to merge files, with buffer versions taking precedence
+            const filesMap = new Map();
+            textFiles.forEach(f => filesMap.set(f.path, f));
+            mediaFilesBuffers.forEach(f => filesMap.set(f.path, f));
+            excelFilesBuffers.forEach(f => filesMap.set(f.path, f));
+            const files = Array.from(filesMap.values());
+
+            return files;
+        })
         .then(files => {
+            
             // Verify if atleast the document xml file exists in the extracted files list.
             if (!files.some(file => file.path.match(mainContentFileRegex)))
                 throw ERRORMSG.fileCorrupted(file);
@@ -192,63 +877,255 @@ function parseWord(file, callback, config) {
 
             const relsFile = files.find(file => file.path.match(relsFileRegex));
             const mediaFiles = files.filter(file => file.path.match(mediaFileRegex));
+            const chartFiles = files.filter(file => file.path.match(chartFileRegex));
+            const chartRelsFiles = files.filter(file => file.path.match(chartRelsFileRegex));
+            const embeddingsFiles = files.filter(file => file.path.match(embeddingsFileRegex));
             const relationships = relsFile ? parseWordRelationships(relsFile.content) : {};
+
+            
+            // Parse chart relationships
+            const chartRelationships = /** @type {Object.<string, Object.<string, string>>} */ ({});
+            chartRelsFiles.forEach(chartRelsFile => {
+                const chartPath = chartRelsFile.path.replace('/_rels', '').replace('.rels', '');
+                chartRelationships[chartPath] = parseWordRelationships(chartRelsFile.content);
+            });
 
             const delimiter = config.newlineDelimiter ?? '\n';
             const blocks = [];
             const textParts = [];
+            const tables = [];
+            const charts = [];
+            const excelChartPromises = []; // Collect promises for async Excel chart extraction
+            let tableIndex = 0;
 
             // ******************************** word xml files explanation ************************************
             // Structure of xmlContent of a word file has paragraphs in w:p tags.
             // Text content is in w:t tags, images are in w:drawing tags containing a:blip references.
-            // A paragraph can contain BOTH text AND images - we must extract both in document order.
+            // Tables are in w:tbl tags, charts are embedded via w:object or chart parts.
+            // We traverse w:body child nodes sequentially to maintain document order.
             // ************************************************************************************************
             contentFiles.forEach(xmlContent => {
                 const xmlDoc = parseString(xmlContent);
-                const pNodes = xmlDoc.getElementsByTagName('w:p');
-
-                for (let i = 0; i < pNodes.length; i++) {
-                    const pNode = pNodes[i];
-
-                    // Extract text from paragraph (always, regardless of images)
-                    const textNodes = pNode.getElementsByTagName('w:t');
-                    const paragraphText = Array.from(textNodes)
-                        .map(t => t.childNodes[0]?.nodeValue || '')
-                        .join('');
-
-                    if (paragraphText) {
-                        blocks.push(createTextBlock(paragraphText));
-                        textParts.push(paragraphText);
+                
+                // Check if this is a footnotes or endnotes file
+                const footnotesRoot = xmlDoc.getElementsByTagName('w:footnotes')[0];
+                const endnotesRoot = xmlDoc.getElementsByTagName('w:endnotes')[0];
+                const body = xmlDoc.getElementsByTagName('w:body')[0];
+                
+                let elementsToProcess = [];
+                
+                if (body) {
+                    // Main document - traverse body children sequentially
+                    elementsToProcess = Array.from(body.childNodes);
+                } else if (footnotesRoot) {
+                    // Footnotes file - process all footnote elements
+                    const footnotes = footnotesRoot.getElementsByTagName('w:footnote');
+                    for (let fnIdx = 0; fnIdx < footnotes.length; fnIdx++) {
+                        const footnote = footnotes[fnIdx];
+                        const footnoteParas = footnote.getElementsByTagName('w:p');
+                        for (let pIdx = 0; pIdx < footnoteParas.length; pIdx++) {
+                            elementsToProcess.push(footnoteParas[pIdx]);
+                        }
                     }
+                } else if (endnotesRoot) {
+                    // Endnotes file - process all endnote elements
+                    const endnotes = endnotesRoot.getElementsByTagName('w:endnote');
+                    for (let enIdx = 0; enIdx < endnotes.length; enIdx++) {
+                        const endnote = endnotes[enIdx];
+                        const endnoteParas = endnote.getElementsByTagName('w:p');
+                        for (let pIdx = 0; pIdx < endnoteParas.length; pIdx++) {
+                            elementsToProcess.push(endnoteParas[pIdx]);
+                        }
+                    }
+                } else {
+                    // Unknown structure, skip
+                    return;
+                }
 
-                    // Extract images from paragraph if requested
-                    if (config.extractImages) {
-                        const drawingNodes = pNode.getElementsByTagName('w:drawing');
-                        for (let j = 0; j < drawingNodes.length; j++) {
-                            const blip = drawingNodes[j].getElementsByTagName('a:blip')[0];
-                            if (blip) {
-                                const embedId = blip.getAttribute('r:embed');
-                                if (embedId && relationships[embedId]) {
-                                    const imagePath = 'word/' + relationships[embedId].replace('../', '');
-                                    const imageFile = mediaFiles.find(mf => mf.path === imagePath);
-                                    if (imageFile) {
-                                        const filename = imagePath.split('/').pop();
-                                        blocks.push(createImageBlock(imageFile.content, getMimeTypeFromFilename(filename), filename));
-                                        // Add image placeholder to text
-                                        textParts.push(`<image ${filename}/>`);
-                                    } else if (config.outputErrorToConsole) {
-                                        console.warn(`${ERRORHEADER}Image referenced but not found: ${imagePath}`);
+                // Process elements (either body children or footnote/endnote paragraphs)
+                for (let i = 0; i < elementsToProcess.length; i++) {
+                    const node = elementsToProcess[i];
+
+                    // Skip non-element nodes
+                    if (node.nodeType !== 1) continue;
+
+                    const tagName = node.nodeName;
+
+                    // Handle paragraphs (w:p)
+                    if (tagName === 'w:p') {
+                        const paraNode = /** @type {Element} */ (node);
+                        // Extract text from paragraph using helper function
+                        const paragraphText = extractParagraphText(paraNode);
+
+                        if (paragraphText) {
+                            blocks.push(createTextBlock(paragraphText));
+                            textParts.push(paragraphText);
+                        }
+
+                        // Extract images from paragraph if requested
+                        if (config.extractImages) {
+                            const drawingNodes = paraNode.getElementsByTagName('w:drawing');
+                            for (let j = 0; j < drawingNodes.length; j++) {
+                                const blip = drawingNodes[j].getElementsByTagName('a:blip')[0];
+                                if (blip) {
+                                    const embedId = blip.getAttribute('r:embed');
+                                    if (embedId && relationships[embedId]) {
+                                        const imagePath = 'word/' + relationships[embedId].replace('../', '');
+                                        const imageFile = mediaFiles.find(mf => mf.path === imagePath);
+                                        if (imageFile) {
+                                            const filename = imagePath.split('/').pop();
+                                            const imageBuffer = Buffer.isBuffer(imageFile.content) ? imageFile.content : Buffer.from(imageFile.content);
+                                            blocks.push(createImageBlock(imageBuffer, getMimeTypeFromFilename(filename), filename));
+                                            textParts.push(`<image ${filename}/>`);
+                                        } else if (config.outputErrorToConsole) {
+                                            console.warn(`${ERRORHEADER}Image referenced but not found: ${imagePath}`);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (config.extractCharts) {
+                            const chartNodes = paraNode.getElementsByTagName('c:chart');
+                            for (let k = 0; k < chartNodes.length; k++) {
+                                const chartNode = chartNodes[k];
+                                const chartId = chartNode.getAttribute('r:id');
+
+                                if (chartId && relationships[chartId]) {
+                                    const target = relationships[chartId];
+
+                                    // Check if it's a chart part
+                                    if (target.includes('charts/chart')) {
+                                        const chartPath = 'word/' + target.replace('../', '');
+                                        const chartFile = chartFiles.find(cf => cf.path === chartPath);
+
+                                        if (chartFile) {
+                                            const chartData = parseChartData(chartFile.content.toString(), config);
+                                            
+                                            if (chartData) {
+                                                charts.push(chartData);
+                                                blocks.push(createChartBlock(chartData.chartType, chartData.series));
+                                                textParts.push(`<chart ${chartData.chartType}/>`);
+
+                                            }
+                                        } else if (config.outputErrorToConsole) {
+                                            console.warn(`${ERRORHEADER}Chart referenced but not found: ${chartPath}`);
+                                        }
+                                    }
+                                    // Check if it's an embedded Excel file (which may contain charts)
+                                    else if (target.includes('embeddings/') && target.endsWith('.xlsx')) {
+                                        const embedPath = 'word/' + target.replace('../', '');
+                                        const embedFile = embeddingsFiles.find(ef => ef.path === embedPath);
+
+                                        if (embedFile) {
+                                            // Ensure we have a Buffer (not string)
+                                            const excelBuffer = Buffer.isBuffer(embedFile.content)
+                                                ? embedFile.content
+                                                : Buffer.from(embedFile.content);
+
+                                            // Extract charts from Excel file asynchronously
+                                            const chartPromise = extractChartsFromExcelEmbedding(excelBuffer, config)
+                                                .then(excelCharts => {
+                                                    // Add each chart found
+                                                    excelCharts.forEach(chartData => {
+                                                        charts.push(chartData);
+                                                        blocks.push(createChartBlock(chartData.chartType, chartData.series));
+                                                        textParts.push(`<chart ${chartData.chartType}/>`);
+                                                    });
+                                                })
+                                                .catch(error => {
+                                                    if (config.outputErrorToConsole) {
+                                                        console.warn(`${ERRORHEADER}Error extracting charts from embedded Excel:`, error.message);
+                                                    }
+                                                });
+
+                                            excelChartPromises.push(chartPromise);
+                                        }
+                                    }
+                                }
+                            }
+
+                            const chartxNodes = paraNode.getElementsByTagName('cx:chart');
+                            for (let k = 0; k < chartxNodes.length; k++) {
+                                const chartNode = chartxNodes[k];
+                                const chartId = chartNode.getAttribute('r:id');
+
+                                if (chartId && relationships[chartId]) {
+                                    const target = relationships[chartId];
+
+                                    // Check if it's a chart part
+                                    if (target.includes('charts/chart')) {
+                                        const chartPath = 'word/' + target.replace('../', '');
+                                        const chartFile = chartFiles.find(cf => cf.path === chartPath);
+
+                                        if (chartFile) {
+                                            const chartData = parseChartData(chartFile.content.toString(), config);
+                                            
+                                            if (chartData) {
+                                                charts.push(chartData);
+                                                blocks.push(createChartBlock(chartData.chartType, chartData.series));
+                                                textParts.push(`<chart ${chartData.chartType}/>`);
+
+                                            }
+                                        } else if (config.outputErrorToConsole) {
+                                            console.warn(`${ERRORHEADER}Chart referenced but not found: ${chartPath}`);
+                                        }
+                                    }
+                                    // Check if it's an embedded Excel file (which may contain charts)
+                                    else if (target.includes('embeddings/') && target.endsWith('.xlsx')) {
+                                        const embedPath = 'word/' + target.replace('../', '');
+                                        const embedFile = embeddingsFiles.find(ef => ef.path === embedPath);
+
+                                        if (embedFile) {
+                                            // Ensure we have a Buffer (not string)
+                                            const excelBuffer = Buffer.isBuffer(embedFile.content)
+                                                ? embedFile.content
+                                                : Buffer.from(embedFile.content);
+
+                                            // Extract charts from Excel file asynchronously
+                                            const chartPromise = extractChartsFromExcelEmbedding(excelBuffer, config)
+                                                .then(excelCharts => {
+                                                    // Add each chart found
+                                                    excelCharts.forEach(chartData => {
+                                                        charts.push(chartData);
+                                                        blocks.push(createChartBlock(chartData.chartType, chartData.series));
+                                                        textParts.push(`<chart ${chartData.chartType}/>`);
+                                                    });
+                                                })
+                                                .catch(error => {
+                                                    if (config.outputErrorToConsole) {
+                                                        console.warn(`${ERRORHEADER}Error extracting charts from embedded Excel:`, error.message);
+                                                    }
+                                                });
+
+                                            excelChartPromises.push(chartPromise);
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                    // Handle tables (w:tbl)
+                    else if (tagName === 'w:tbl') {
+                        const tableNode = /** @type {Element} */ (node);
+                        const rows = extractTableRows(tableNode);
+                        const name = extractTableName(xmlDoc, tableNode, tableIndex);
+                        const tableData = { name, rows };
+
+                        tables.push(tableData);
+                        blocks.push(createTableBlock(name, rows));
+                        textParts.push(`<table ${name}/>`);
+                        tableIndex++;
+                    }
+
                 }
             });
 
-            const text = textParts.join(delimiter);
-
-            callback({ text, blocks }, undefined);
+            // Wait for all Excel chart extraction promises to complete
+            return Promise.all(excelChartPromises).then(() => {
+                const text = textParts.join(delimiter);
+                callback({ text, blocks, tables, charts }, undefined);
+            });
         })
         .catch(e => callback(undefined, e));
 }
@@ -262,17 +1139,46 @@ function parseWord(file, callback, config) {
 function parsePowerPoint(file, callback, config) {
     // Files regex that hold our content of interest
     const allFilesRegex = /ppt\/(notesSlides|slides)\/(notesSlide|slide)\d+.xml/g;
-    const slidesRegex   = /ppt\/slides\/slide\d+.xml/g;
+    const slidesRegex = /ppt\/slides\/slide\d+.xml/g;
     const slideNumberRegex = /lide(\d+)\.xml/;
     const relsFileRegex = /ppt\/slides\/_rels\/slide\d+.xml.rels/g;
     const mediaFileRegex = /ppt\/media\//g;
+    const chartFileRegex = /ppt\/charts\/chart(Ex)?\d+\.xml/g;
+    const chartRelsFileRegex = /ppt\/charts\/_rels\/chart(Ex)?\d+\.xml\.rels/g;
+    const embeddingsFileRegex = /ppt\/embeddings\/.*\.xlsx/g;
 
     const filesToExtract = [config.ignoreNotes ? slidesRegex : allFilesRegex];
+    // Always extract chart-related files
+    filesToExtract.push(chartFileRegex, chartRelsFileRegex, embeddingsFileRegex);
     if (config.extractImages) {
         filesToExtract.push(relsFileRegex, mediaFileRegex);
     }
+    if (config.extractCharts) {
+        filesToExtract.push(relsFileRegex, chartRelsFileRegex);
+    }
 
-    extractFiles(file, x => filesToExtract.some(fileRegex => x.match(fileRegex)), config.extractImages)
+    // Extract text/XML files as strings
+    const textFilesPromise = extractFiles(file, x => filesToExtract.some(fileRegex => x.match(fileRegex)), false);
+
+    // Extract media files as buffers if extractImages is true
+    const mediaFilesPromise = config.extractImages
+        ? extractFiles(file, x => !!x.match(mediaFileRegex), true)
+        : Promise.resolve([]);
+
+    // Extract embedded Excel files as buffers (they are ZIP archives)
+    const excelFilesPromise = extractFiles(file, x => !!x.match(embeddingsFileRegex), true);
+
+    Promise.all([textFilesPromise, mediaFilesPromise, excelFilesPromise])
+        .then(([textFiles, mediaFilesBuffers, excelFilesBuffers]) => {
+            // Combine all files
+            const files = [...textFiles];
+            if (config.extractImages) {
+                files.push(...mediaFilesBuffers);
+            }
+            files.push(...excelFilesBuffers);
+
+            return files;
+        })
         .then(files => {
             // Sort files by slide number and their notes (if any).
             files.sort((a, b) => {
@@ -308,6 +1214,9 @@ function parsePowerPoint(file, callback, config) {
             const contentFiles = files.filter(file => file.path.match(allFilesRegex));
             const relsFiles = files.filter(file => file.path.match(relsFileRegex));
             const mediaFiles = files.filter(file => file.path.match(mediaFileRegex));
+            const chartFiles = files.filter(file => file.path.match(chartFileRegex));
+            const chartRelsFiles = files.filter(file => file.path.match(chartRelsFileRegex));
+            const excelFiles = files.filter(file => file.path.match(embeddingsFileRegex));
 
             // Parse relationship files and map them to their corresponding slide
             // Each slide has its own rels file with relationship IDs scoped to that slide
@@ -317,25 +1226,237 @@ function parsePowerPoint(file, callback, config) {
                 slideRelationships[slidePath] = parseWordRelationships(relsFile.content);
             });
 
+            // Parse chart relationships
+            const chartRelationships = /** @type {Object.<string, Object.<string, string>>} */ ({});
+            chartRelsFiles.forEach(chartRelsFile => {
+                const chartPath = chartRelsFile.path.replace('/_rels', '').replace('.rels', '');
+                chartRelationships[chartPath] = parseWordRelationships(chartRelsFile.content);
+            });
+
             const delimiter = config.newlineDelimiter ?? '\n';
             const blocks = [];
             const textParts = [];
+            const elements = [];
+            const tables = [];
+            const charts = [];
+            const excelChartPromises = []; // Collect promises for async Excel chart extraction
+            let tableIndex = 0;
 
             contentFiles.forEach(file => {
                 const xmlDoc = parseString(file.content.toString());
                 const slideRels = slideRelationships[file.path] || {};
+                
+                // Extract slide number from filename
+                const slideMatch = file.path.match(slideNumberRegex);
+                const slideNumber = slideMatch ? slideMatch[1] : undefined;
 
-                // Extract text from all paragraphs in this slide
-                const slideText = extractTextFromXmlParagraphs(xmlDoc, 'a:p', 'a:t', delimiter);
-                // Always add to textParts to preserve slide boundaries (empty slides produce newlines)
-                textParts.push(slideText);
-                if (slideText) {
-                    blocks.push(createTextBlock(slideText));
+                // Find the shape tree (p:spTree) which contains all elements
+                const sldNode = xmlDoc.documentElement;
+                const cSldNode = sldNode.getElementsByTagName('p:cSld')[0];
+                if (!cSldNode) return;
+                
+                const spTreeNode = cSldNode.getElementsByTagName('p:spTree')[0];
+                if (!spTreeNode) return;
+
+                // Track whether text was extracted for this specific slide
+                let textExtractedForThisSlide = false;
+
+                // Traverse child nodes of p:spTree in document order
+                const childNodes = Array.from(spTreeNode.childNodes).filter(
+                    node => node.nodeType === 1 // Element nodes only
+                );
+
+                childNodes.forEach((node, index) => {
+                    const element = /** @type {Element} */ (node);
+                    const tagName = element.tagName;
+                    
+                    // Find transform element for coordinates
+                    const xfrmNode = findTransformElement(element);
+                    const coordinates = xfrmNode ? extractCoordinates(xfrmNode) : null;
+                    
+                    // Handle shapes (p:sp) - can be text boxes or graphics
+                    if (tagName === 'p:sp') {
+                        // Extract text content from paragraphs (check all shapes for text)
+                        const paragraphNodes = element.getElementsByTagName('a:p');
+                        const textPartsArray = [];
+                        for (let pIdx = 0; pIdx < paragraphNodes.length; pIdx++) {
+                            const para = paragraphNodes[pIdx];
+                            const textNodes = para.getElementsByTagName('a:t');
+                            const paraText = Array.from(textNodes)
+                                .filter(textNode => textNode.childNodes[0]?.nodeValue)
+                                .map(textNode => textNode.childNodes[0].nodeValue)
+                                .join('');
+                            if (paraText) {
+                                textPartsArray.push(paraText);
+                            }
+                        }
+                        const textContent = textPartsArray.join(delimiter);
+                        const hasText = textContent.length > 0;
+                        
+                        if (hasText) {
+                            // Shape with text - always extract text
+                            textExtractedForThisSlide = true;
+                            // Always add to blocks/textParts for backward compatibility
+                            blocks.push(createTextBlock(textContent));
+                            textParts.push(textContent);
+                            
+                            // Add to elements array only if coordinates exist
+                            if (coordinates) {
+                                const textElement = {
+                                    type: 'text',
+                                    content: textContent,
+                                    coordinates: coordinates,
+                                    slideNumber: slideNumber
+                                };
+                                elements.push(textElement);
+                            }
+                        } else if (coordinates) {
+                            // Shape without text but with coordinates (graphic shape)
+                            const prstGeom = element.getElementsByTagName('a:prstGeom')[0];
+                            const shapeType = prstGeom ? (prstGeom.getAttribute('prst') || 'rect') : 'rect';
+                            
+                            const shapeElement = {
+                                type: 'shape',
+                                shapeType: shapeType,
+                                coordinates: coordinates,
+                                slideNumber: slideNumber
+                            };
+                            
+                            elements.push(shapeElement);
+                        }
+                    }
+                    // Handle pictures (p:pic)
+                    else if (tagName === 'p:pic' && config.extractImages) {
+                        const blipNode = element.getElementsByTagName('a:blip')[0];
+                        if (blipNode) {
+                            const embedId = blipNode.getAttribute('r:embed');
+                            if (embedId && slideRels[embedId]) {
+                                const imagePath = 'ppt/' + slideRels[embedId].replace('../', '');
+                                const imageFile = mediaFiles.find(mf => mf.path === imagePath);
+                                if (imageFile) {
+                                    const filename = imagePath.split('/').pop();
+                                    const mimeType = getMimeTypeFromFilename(filename);
+                                    
+                                    // Ensure buffer is a Buffer
+                                    const imageBuffer = Buffer.isBuffer(imageFile.content)
+                                        ? imageFile.content
+                                        : Buffer.from(imageFile.content);
+                                    
+                                    // Always add to blocks for backward compatibility
+                                    blocks.push(createImageBlock(imageBuffer, mimeType, filename));
+                                    textParts.push(`<image ${filename}/>`);
+                                    
+                                    // Add to elements array if coordinates exist
+                                    if (coordinates) {
+                                        const imageElement = {
+                                            type: 'image',
+                                            buffer: imageBuffer,
+                                            mimeType: mimeType,
+                                            filename: filename,
+                                            coordinates: coordinates,
+                                            slideNumber: slideNumber
+                                        };
+                                        elements.push(imageElement);
+                                    }
+                                } else if (config.outputErrorToConsole) {
+                                    console.warn(`${ERRORHEADER}Image referenced but not found: ${imagePath}`);
+                                }
+                            }
+                        }
+                    }
+                    // Handle graphic frames (p:graphicFrame) - can contain charts or tables
+                    else if (tagName === 'p:graphicFrame') {
+                        // Check for chart references
+                        const chartRef = element.getElementsByTagName('c:chartReference')[0] ||
+                                        element.getElementsByTagName('cx:chartReference')[0];
+                        
+                        if (chartRef && config.extractCharts) {
+                            const chartId = chartRef.getAttribute('r:id');
+                            if (chartId && slideRels[chartId]) {
+                                // Get chart file path from slide relationships
+                                const chartPath = 'ppt/' + slideRels[chartId].replace('../', '');
+                                const chartFile = chartFiles.find(cf => cf.path === chartPath);
+                                
+                                if (chartFile) {
+                                    // Parse chart data
+                                    const chartContent = chartFile.content.toString();
+                                    const chartData = parseChartData(chartContent, config);
+                                    
+                                    if (chartData) {
+                                        charts.push(chartData);
+                                        blocks.push(createChartBlock(chartData.chartType, chartData.series));
+                                        textParts.push(`<chart ${chartData.chartType}/>`);
+                                    }
+                                } else {
+                                    // Check if chart references an embedded Excel file
+                                    const chartRels = chartRelationships[chartPath];
+                                    if (chartRels) {
+                                        // Look for Excel embedding reference
+                                        for (const relId in chartRels) {
+                                            const target = chartRels[relId];
+                                            if (target.match(/embeddings\/.*\.xlsx/)) {
+                                                const excelPath = 'ppt/' + target.replace('../', '');
+                                                const embedFile = excelFiles.find(ef => ef.path === excelPath);
+                                                
+                                                if (embedFile) {
+                                                    // Ensure buffer is a Buffer
+                                                    const excelBuffer = Buffer.isBuffer(embedFile.content)
+                                                        ? embedFile.content
+                                                        : Buffer.from(embedFile.content);
+                                                    
+                                                    // Extract charts from Excel file asynchronously
+                                                    const chartPromise = extractChartsFromExcelEmbedding(excelBuffer, config)
+                                                        .then(excelCharts => {
+                                                            // Add each chart found
+                                                            excelCharts.forEach(chartData => {
+                                                                charts.push(chartData);
+                                                                blocks.push(createChartBlock(chartData.chartType, chartData.series));
+                                                                textParts.push(`<chart ${chartData.chartType}/>`);
+                                                            });
+                                                        })
+                                                        .catch(error => {
+                                                            if (config.outputErrorToConsole) {
+                                                                console.warn(`${ERRORHEADER}Error extracting charts from embedded Excel:`, error.message);
+                                                            }
+                                                        });
+                                                    
+                                                    excelChartPromises.push(chartPromise);
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Check for table (a:tbl)
+                        const tblNode = element.getElementsByTagName('a:tbl')[0];
+                        if (tblNode) {
+                            // Extract structured table data
+                            const rows = extractPowerPointTableRows(tblNode);
+                            const name = extractPowerPointTableName(xmlDoc, tblNode, tableIndex, slideNumber);
+                            const tableData = { name, rows };
+
+                            tables.push(tableData);
+                            blocks.push(createTableBlock(name, rows));
+                            textParts.push(`<table ${name}/>`);
+                            tableIndex++;
+                        }
+                    }
+                });
+
+                // Fallback: Extract text from all paragraphs if no text was extracted for THIS slide
+                // This maintains backward compatibility
+                if (!textExtractedForThisSlide) {
+                    const slideText = extractTextFromXmlParagraphs(xmlDoc, 'a:p', 'a:t', delimiter);
+                    if (slideText) {
+                        textParts.push(slideText);
+                        blocks.push(createTextBlock(slideText));
+                    }
                 }
 
-                // Extract images from this slide if requested
-                // Note: Images appear after text per slide. For true document-order interleaving
-                // within a slide, a deeper XML tree traversal would be needed.
+                // Fallback: Extract images if extractImages is true but no images were found in traversal
                 if (config.extractImages) {
                     const blipNodes = xmlDoc.getElementsByTagName('a:blip');
                     for (let i = 0; i < blipNodes.length; i++) {
@@ -346,9 +1467,19 @@ function parsePowerPoint(file, callback, config) {
                             const imageFile = mediaFiles.find(mf => mf.path === imagePath);
                             if (imageFile) {
                                 const filename = imagePath.split('/').pop();
-                                blocks.push(createImageBlock(imageFile.content, getMimeTypeFromFilename(filename), filename));
-                                // Add image placeholder to text
-                                textParts.push(`<image ${filename}/>`);
+                                // Check if this image was already added to blocks
+                                const alreadyAdded = blocks.some(block => 
+                                    block.type === 'image' && block.filename === filename
+                                );
+                                if (!alreadyAdded) {
+                                    // Ensure buffer is a Buffer
+                                    const imageBuffer = Buffer.isBuffer(imageFile.content)
+                                        ? imageFile.content
+                                        : Buffer.from(imageFile.content);
+                                    const mimeType = getMimeTypeFromFilename(filename);
+                                    blocks.push(createImageBlock(imageBuffer, mimeType, filename));
+                                    textParts.push(`<image ${filename}/>`);
+                                }
                             } else if (config.outputErrorToConsole) {
                                 console.warn(`${ERRORHEADER}Image referenced but not found: ${imagePath}`);
                             }
@@ -357,9 +1488,59 @@ function parsePowerPoint(file, callback, config) {
                 }
             });
 
-            const text = textParts.join(delimiter);
-
-            callback({ text, blocks }, undefined);
+            // Wait for all Excel chart extraction promises to complete
+            Promise.all(excelChartPromises).then(() => {
+                const text = textParts.join(delimiter);
+                const result = { text, blocks };
+                
+                // Add tables and charts arrays
+                result.tables = tables;
+                result.charts = charts;
+                
+                // Add images array for consistency (extract from blocks)
+                const imageBlocks = blocks.filter(b => b.type === 'image');
+                result.images = imageBlocks.map(img => ({
+                    buffer: img.buffer,
+                    mimeType: img.mimeType,
+                    filename: img.filename
+                }));
+                
+                // Group elements by slide number and create slides object
+                // We need to track all slides that were processed, even if they have no elements
+                const slides = {};
+                const processedSlides = new Set();
+                
+                // Track which slides were processed
+                contentFiles.forEach(file => {
+                    const slideMatch = file.path.match(slideNumberRegex);
+                    if (slideMatch) {
+                        const slideNum = slideMatch[1];
+                        processedSlides.add(slideNum);
+                        if (!slides[slideNum]) {
+                            slides[slideNum] = [];
+                        }
+                    }
+                });
+                
+                // Add elements to their respective slides
+                elements.forEach(element => {
+                    const slideNum = element.slideNumber || 'unknown';
+                    if (!slides[slideNum]) {
+                        slides[slideNum] = [];
+                    }
+                    slides[slideNum].push(element);
+                });
+                
+                // Add elements and slides arrays if any slides were processed
+                if (Object.keys(slides).length > 0) {
+                    result.slides = slides;
+                    if (elements.length > 0) {
+                        result.elements = elements;
+                    }
+                }
+                
+                callback(result, undefined);
+            }).catch(e => callback(undefined, e));
         })
         .catch(e => callback(undefined, e));
 }
@@ -372,9 +1553,9 @@ function parsePowerPoint(file, callback, config) {
  */
 function parseExcel(file, callback, config) {
     // Files regex that hold our content of interest
-    const sheetsRegex     = /xl\/worksheets\/sheet\d+.xml/g;
-    const drawingsRegex   = /xl\/drawings\/drawing\d+.xml/g;
-    const chartsRegex     = /xl\/charts\/chart\d+.xml/g;
+    const sheetsRegex = /xl\/worksheets\/sheet\d+.xml/g;
+    const drawingsRegex = /xl\/drawings\/drawing\d+.xml/g;
+    const chartsRegex = /xl\/charts\/chart\d+.xml/g;
     const stringsFilePath = 'xl/sharedStrings.xml';
 
     extractFiles(file, x => [sheetsRegex, drawingsRegex, chartsRegex].some(fileRegex => x.match(fileRegex)) || x == stringsFilePath)
@@ -384,9 +1565,9 @@ function parseExcel(file, callback, config) {
                 throw ERRORMSG.fileCorrupted(file);
 
             return {
-                sheetFiles:        files.filter(file => file.path.match(sheetsRegex)).map(file => file.content),
-                drawingFiles:      files.filter(file => file.path.match(drawingsRegex)).map(file => file.content),
-                chartFiles:        files.filter(file => file.path.match(chartsRegex)).map(file => file.content),
+                sheetFiles: files.filter(file => file.path.match(sheetsRegex)).map(file => file.content),
+                drawingFiles: files.filter(file => file.path.match(drawingsRegex)).map(file => file.content),
+                chartFiles: files.filter(file => file.path.match(chartsRegex)).map(file => file.content),
                 sharedStringsFile: files.filter(file => file.path == stringsFilePath).map(file => file.content)[0],
             };
         })
@@ -514,9 +1695,9 @@ function parseExcel(file, callback, config) {
  */
 function parseOpenOffice(file, callback, config) {
     /** The target content xml file for the openoffice file. */
-    const mainContentFilePath     = 'content.xml';
+    const mainContentFilePath = 'content.xml';
     const objectContentFilesRegex = /Object \d+\/content.xml/g;
-    const mediaFileRegex          = /Pictures\//g;
+    const mediaFileRegex = /Pictures\//g;
     const objectReplacementsRegex = /ObjectReplacements\/Object \d+/g;
 
     const filesToExtract = [mainContentFilePath, objectContentFilesRegex];
@@ -534,9 +1715,9 @@ function parseOpenOffice(file, callback, config) {
                 throw ERRORMSG.fileCorrupted(file);
 
             const result = {
-                mainContentFile:    files.filter(file => file.path == mainContentFilePath).map(file => file.content.toString())[0],
+                mainContentFile: files.filter(file => file.path == mainContentFilePath).map(file => file.content.toString())[0],
                 objectContentFiles: files.filter(file => file.path.match(objectContentFilesRegex)).map(file => file.content.toString()),
-                mediaFiles:         config.extractImages ? files.filter(file => file.path.match(mediaFileRegex) || file.path.match(objectReplacementsRegex)) : []
+                mediaFiles: config.extractImages ? files.filter(file => file.path.match(mediaFileRegex) || file.path.match(objectReplacementsRegex)) : []
             };
 
             return result;
@@ -815,7 +1996,7 @@ function parseOffice(srcFile, callback, config = {}) {
                 throw ERRORMSG.fileDoesNotExist(file);
 
             // resolve promise
-            res({ file: file, ext: file.split('.').pop() });
+            res({ file: file, ext: file.split('.').pop()?.toLowerCase() || '' });
         } else
             rej(ERRORMSG.invalidInput);
     });
@@ -860,9 +2041,12 @@ function parseOffice(srcFile, callback, config = {}) {
                     if (!data.text) {
                         data.text = data.blocks.filter(b => b.type === 'text').map(b => b.content).join(internalConfig.newlineDelimiter ?? '\n');
                     }
+                    // Ensure tables and charts are always present for consistent API (Word returns these; other formats get [])
+                    if (data.tables === undefined) data.tables = [];
+                    if (data.charts === undefined) data.charts = [];
                     callback(data, undefined);
                 } else {
-                    callback({ text: data, blocks: data ? [{type: 'text', content: data }] : [] }, undefined);
+                    callback({ text: data, blocks: data ? [{ type: 'text', content: data }] : [], tables: [], charts: [] }, undefined);
                 }
             }
         })
@@ -960,7 +2144,7 @@ function handleError(error, callback, outputErrorToConsole) {
 
 
 // Export functions
-module.exports.parseOffice      = parseOffice;
+module.exports.parseOffice = parseOffice;
 module.exports.parseOfficeAsync = parseOfficeAsync;
 
 
@@ -1029,6 +2213,9 @@ if ((typeof process.argv[0] === 'string' && (process.argv[0].split('/').pop() ==
                     case '--extractImages':
                         config.extractImages = value.toLowerCase() === 'true';
                         break;
+                    case '--extractCharts':
+                        config.extractCharts = value.toLowerCase() === 'true';
+                        break;
                 }
             });
 
@@ -1041,7 +2228,6 @@ if ((typeof process.argv[0] === 'string' && (process.argv[0].split('/').pop() ==
         // Execute parseOfficeAsync with file and config
         parseOfficeAsync(fileArg, config)
             .then(result => {
-                console.log(result.text)
                 if (result.blocks && result.blocks.length > 0) {
                     const imageBlocks = result.blocks.filter(b => b.type === 'image');
                     console.log(`\n[Extracted ${result.blocks.length} block(s), ${imageBlocks.length} image(s)]`);
@@ -1062,7 +2248,7 @@ if ((typeof process.argv[0] === 'string' && (process.argv[0].split('/').pop() ==
         console.error(ERRORMSG.improperArguments);
 
         const CLI_INSTRUCTIONS =
-`
+            `
 === How to Use officeParser CLI ===
 
 Usage:
