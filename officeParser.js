@@ -1443,7 +1443,7 @@ function parseOffice(srcFile, callback, config = {}) {
                 throw ERRORMSG.fileDoesNotExist(file);
 
             // resolve promise
-            res({ file: file, ext: file.split('.').pop() });
+            res({ file: file, ext: file.split('.').pop()?.toLowerCase() || '' });
         } else
             rej(ERRORMSG.invalidInput);
     });
