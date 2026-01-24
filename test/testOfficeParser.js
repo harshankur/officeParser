@@ -57,6 +57,13 @@ const structuredContentTestFiles = [
     { filename: "docwithimages_with_chart.docx", expectedTables: { min: 0 }, expectedCharts: { min: 0 } }
 ];
 
+/** List of files with uppercase extensions for testing case-insensitive parsing */
+const caseInsensitiveTestFiles = [
+    { filename: "docwithimages.DOCX", expectedTextFile: "docwithimages.docx.txt" },
+    { filename: "guide.PPTX", expectedTextFile: null }, // No expected text, just verify parsing works
+    { filename: "test.ODP", expectedTextFile: "test.odp.txt" }
+];
+
 /** Config file for performing tests */
 const config = {
     preserveTempFiles: true,
@@ -519,6 +526,38 @@ async function runPowerPointElementsTest(testFile) {
         .catch(error => console.log(`[${testFile.padEnd(30)}] => Error: ${error.message}`));
 }
 
+/** Test case-insensitive file extension handling */
+async function runCaseInsensitiveTest(testFile) {
+    const testConfig = { ...config, extractImages: false };
+    return officeParser.parseOfficeAsync(`test/files/${testFile.filename}`, testConfig)
+        .then(result => {
+            // Handle case where result might be a string (backwards compatibility)
+            const text = typeof result === 'string' ? result : result.text;
+
+            // If we have an expected text file, compare content
+            if (testFile.expectedTextFile) {
+                const expectedText = fs.readFileSync(`test/files/${testFile.expectedTextFile}`, 'utf8').trim();
+                const actualText = text.replace(/<image [^>]+\/>\n?/g, '').trim();
+                const textMatch = expectedText === actualText;
+
+                if (textMatch) {
+                    console.log(`[${testFile.filename.padEnd(25)}] => Passed (text matches ${testFile.expectedTextFile})`);
+                } else {
+                    console.log(`[${testFile.filename.padEnd(25)}] => Failed (text mismatch with ${testFile.expectedTextFile})`);
+                }
+            } else {
+                // Just verify parsing succeeded and returned text
+                const parsed = text && text.length > 0;
+                if (parsed) {
+                    console.log(`[${testFile.filename.padEnd(25)}] => Passed (parsed successfully, ${text.length} chars)`);
+                } else {
+                    console.log(`[${testFile.filename.padEnd(25)}] => Failed (no text extracted)`);
+                }
+            }
+        })
+        .catch(error => console.log(`[${testFile.filename.padEnd(25)}] => Failed (Error: ${error.message})`));
+}
+
 /** Test PowerPoint notes handling */
 async function runPowerPointNotesTest(testFile) {
     // Test with notes included (default)
@@ -601,6 +640,11 @@ async function runAllTests() {
     console.log("\n=== Running structured content tests (tables & charts) ===");
     for (let i = 0; i < structuredContentTestFiles.length; i++) {
         await runStructuredContentTest(structuredContentTestFiles[i]);
+    }
+
+    console.log("\n=== Running case-insensitive extension tests ===");
+    for (let i = 0; i < caseInsensitiveTestFiles.length; i++) {
+        await runCaseInsensitiveTest(caseInsensitiveTestFiles[i]);
     }
 }
 
