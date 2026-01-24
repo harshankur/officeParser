@@ -12,7 +12,75 @@ export type ImageBlock = {
     filename?: string;
 }
 
-export type Block = TextBlock | ImageBlock;
+export type HierarchicalCategory = {
+    levels: string[];
+    value: string;
+}
+
+export type TableBlock = {
+    type: 'table';
+    name: string;
+    rows: Array<{ cols: Array<{ value: string }> }>;
+}
+
+export type ChartBlock = {
+    type: 'chart';
+    chartType: string;
+    series: Array<{ categories: Array<string | HierarchicalCategory>, values: Array<number> }>;
+}
+
+export type Block = TextBlock | ImageBlock | TableBlock | ChartBlock;
+
+export type CoordinateData = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation?: number;
+    zIndex?: number;
+}
+
+export type PowerPointTextElement = {
+    type: 'text';
+    content: string;
+    coordinates: CoordinateData;
+    slideNumber?: string;
+}
+
+export type PowerPointImageElement = {
+    type: 'image';
+    buffer: Buffer;
+    mimeType: string;
+    filename?: string;
+    coordinates: CoordinateData;
+    slideNumber?: string;
+}
+
+export type PowerPointShapeElement = {
+    type: 'shape';
+    text?: string;
+    shapeType: string;
+    coordinates: CoordinateData;
+    slideNumber?: string;
+}
+
+export type PowerPointElement = PowerPointTextElement | PowerPointImageElement | PowerPointShapeElement;
+
+export type Table = {
+    name: string;
+    rows: Array<{ cols: Array<{ value: string }> }>;
+}
+
+export type Chart = {
+    chartType: string;
+    series: Array<{ categories: Array<string | HierarchicalCategory>, values: Array<number> }>;
+}
+
+export type Image = {
+    buffer: Buffer;
+    mimeType: string;
+    filename?: string;
+}
 
 export type OfficeParserConfig = {
     /**
@@ -35,11 +103,20 @@ export type OfficeParserConfig = {
      * Flag to extract images from files. Default is false. If set to true, the blocks array will contain image blocks alongside text blocks.
      */
     extractImages?: boolean;
-};
+    /**
+     * Flag to extract charts from files. Default is false. If set to true, the return object will contain a 'charts' array.
+     */
+    extractCharts?: boolean;
+}
 
 export type ParseOfficeResult = {
     text: string;
     blocks: Block[];
+    elements?: PowerPointElement[];
+    slides?: { [key: string]: PowerPointElement[] };
+    tables?: Table[];
+    charts?: Chart[];
+    images?: Image[];
 }
 
 /** Main async function with callback to execute parseOffice for supported files
