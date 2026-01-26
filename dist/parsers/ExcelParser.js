@@ -966,7 +966,7 @@ const parseExcel = async (buffer, config) => {
     const blocks = extractBlocksFromContent(content, attachments, elementMap);
     // Extract images
     const images = extractImagesList(attachments);
-    console.log('Excel Document blocks', blocks.filter((x) => x.type === 'chart').map(x => x.chartData));
+    console.log('Excel Document blocks', blocks.filter((x) => x.type === 'chart'));
     return {
         type: 'xlsx',
         metadata: metadata,

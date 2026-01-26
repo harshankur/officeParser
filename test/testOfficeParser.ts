@@ -1201,6 +1201,7 @@ function compareTextBaseline(
 /** Run feature tests for a single file */
 async function testFile(ext: string): Promise<FeatureTest[]> {
     const filePath = getFilePath(ext);
+    console.log(`[TEST] Processing file: ${filePath} ${ext}`)
     if (!fs.existsSync(filePath)) {
         return [{
             category: 'File',
@@ -1296,6 +1297,7 @@ async function testGroupParity(group: string[], groupName: string): Promise<Feat
         if (ext === baselineFormat) continue;
 
         const filePath = getFilePath(ext);
+        console.log(`[PARITY] Processing ${ext} vs ${baselineFormat} (${groupName})`)
         if (!fs.existsSync(filePath)) {
             results.push({
                 category: `${groupName} Parity`,
@@ -1312,6 +1314,7 @@ async function testGroupParity(group: string[], groupName: string): Promise<Feat
         }
 
         try {
+            console.log(`[PARITY] Parsing ${ext}...`);
             const actualAST = await OfficeParser.parseOffice(filePath, FULL_CONFIG);
             const actualMetrics = extractMetrics(actualAST);
 
@@ -1383,6 +1386,7 @@ async function testGroupParity(group: string[], groupName: string): Promise<Feat
 /** Run config permutation tests */
 async function testConfigs(ext: string): Promise<FeatureTest[]> {
     const filePath = getFilePath(ext);
+    console.log(`[CONFIG] Testing configs for: ${filePath} (${ext})`);
     if (!fs.existsSync(filePath)) {
         return [];
     }
@@ -1390,6 +1394,7 @@ async function testConfigs(ext: string): Promise<FeatureTest[]> {
     const results: FeatureTest[] = [];
 
     for (const configTest of CONFIG_TESTS) {
+        console.log(`[CONFIG] Testing ${configTest.id} (${configTest.name}) for ${ext}`);
         try {
             const ast = await OfficeParser.parseOffice(filePath, { ...FULL_CONFIG, ...configTest.config });
 
@@ -1787,6 +1792,7 @@ async function runAllTests() {
     // 1. Individual file tests
     console.log('Running individual file tests...');
     for (const ext of Object.keys(BASELINE_STATUS)) {
+        console.log(`\n[TEST SUITE] Testing ${ext.toUpperCase()}...`);
         const results = await testFile(ext);
         allResults.push(...results);
     }
@@ -1800,6 +1806,7 @@ async function runAllTests() {
     // 3. Config tests
     console.log('Running config permutation tests...');
     for (const ext of Object.keys(BASELINE_STATUS)) {
+        console.log(`\n[CONFIG] Testing configs for ${ext.toUpperCase()}...`);
         const results = await testConfigs(ext);
         allResults.push(...results);
     }

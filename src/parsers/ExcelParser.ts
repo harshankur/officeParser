@@ -1039,7 +1039,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
     // Extract images
     const images = extractImagesList(attachments);
 
-    console.log('Excel Document blocks', blocks.filter((x): x is ChartBlock => x.type === 'chart').map(x => x.chartData));
+    console.log('Excel Document blocks', blocks.filter((x): x is ChartBlock => x.type === 'chart'));
 
     return {
         type: 'xlsx',

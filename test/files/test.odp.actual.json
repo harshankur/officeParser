@@ -19588,6 +19588,7 @@
             "attachmentName": "Object 1",
             "chartData": {
               "title": "Chart Title",
+              "chartType": "bar",
               "dataSets": [
                 {
                   "name": "Series 1",
@@ -19676,6 +19677,7 @@
       "extension": "xml",
       "chartData": {
         "title": "Chart Title",
+        "chartType": "bar",
         "dataSets": [
           {
             "name": "Series 1",
@@ -41507,6 +41509,7 @@
       "type": "chart",
       "chartData": {
         "title": "Chart Title",
+        "chartType": "bar",
         "dataSets": [
           {
             "name": "Series 1",
@@ -41575,7 +41578,8 @@
           "3",
           "5"
         ]
-      }
+      },
+      "chartType": "bar"
     }
   ],
   "images": [

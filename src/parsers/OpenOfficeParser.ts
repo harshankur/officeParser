@@ -1624,7 +1624,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
 
     // Extract images
     const images = extractImagesList(attachments);
-    console.log("Document blocks", blocks.filter(x => x.type == "table"))
+    console.log("Word blocks", blocks.filter(x => x.type == "chart"))
     return {
         type: fileType,
         metadata: {
