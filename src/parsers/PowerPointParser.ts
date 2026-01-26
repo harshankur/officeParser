@@ -1071,7 +1071,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     // Extract images
     const images = extractImagesList(attachments);
 
-    console.log("Chart blocks", blocks.filter(x => x.type === "chart"))
+    console.log("PowerpointChart blocks", blocks.filter(x => x.type === "chart"))
 
     return {
         type: 'pptx',

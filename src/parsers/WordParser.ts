@@ -973,6 +973,8 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
     // Extract images
     const images = extractImagesList(attachments);
 
+    console.log("Word Chart blocks", blocks.filter(x => x.type == "chart"))
+
     return {
         type: 'docx',
         metadata: { ...metadata, formatting: docDefaults, styleMap: styleMap },
