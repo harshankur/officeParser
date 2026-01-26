@@ -57,7 +57,8 @@
  * @see https://www.adobe.com/devnet/pdf/pdf_reference.html PDF Reference
  */
 
-import { ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types';
+import { Block, ChartBlock, ChartMetadata, ImageBlock, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeParserConfig, TableBlock, TextBlock, TextFormatting, TextMetadata } from '../types';
+import { extractChartData } from '../utils/chartUtils';
 import { getOfficeError, logWarning, OfficeErrorType } from '../utils/errorUtils';
 import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';
@@ -880,12 +881,117 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
         });
     }
 
+    /**
+     * Converts a chart node to a ChartBlock.
+     */
+    const convertChartToBlock = (chartNode: OfficeContentNode, attachments: OfficeAttachment[]): ChartBlock | null => {
+        if (chartNode.type !== 'chart') return null;
+        
+        const chartMetadata = chartNode.metadata as ChartMetadata | undefined;
+        
+        if (chartMetadata?.attachmentName) {
+            const attachment = attachments.find(a => a.name === chartMetadata.attachmentName && a.type === 'chart');
+            if (attachment?.chartData) {
+                return {
+                    type: 'chart',
+                    chartData: attachment.chartData,
+                    chartType: attachment.chartData.chartType
+                };
+            }
+        }
+        
+        return null;
+    };
+
+    /**
+     * Extracts blocks from content nodes in document order.
+     */
+    const extractBlocksFromContent = (nodes: OfficeContentNode[], attachments: OfficeAttachment[]): Block[] => {
+        const blocks: Block[] = [];
+        
+        const traverse = (node: OfficeContentNode) => {
+            // Process node based on type
+            if (node.type === 'chart') {
+                const chartBlock = convertChartToBlock(node, attachments);
+                if (chartBlock) {
+                    blocks.push(chartBlock);
+                }
+                // Don't traverse children of charts
+                return;
+            } else if (node.type === 'image') {
+                const imageMetadata = node.metadata as ImageMetadata | undefined;
+                const attachmentName = imageMetadata?.attachmentName;
+                
+                if (attachmentName) {
+                    const attachment = attachments.find(a => a.name === attachmentName && a.type === 'image');
+                    if (attachment) {
+                        const buffer = Buffer.from(attachment.data, 'base64');
+                        blocks.push({
+                            type: 'image',
+                            buffer,
+                            mimeType: attachment.mimeType,
+                            filename: attachment.name
+                        });
+                    }
+                }
+                // Don't traverse children of images
+                return;
+            } else if (node.text && node.text.trim() && 
+                (node.type === 'text' || node.type === 'paragraph' || node.type === 'heading')) {
+                // Create text block for content nodes
+                blocks.push({
+                    type: 'text',
+                    content: node.text.trim()
+                });
+            }
+            
+            // Recursively process children
+            if (node.children) {
+                for (const child of node.children) {
+                    traverse(child);
+                }
+            }
+        };
+        
+        // Traverse all top-level nodes
+        for (const node of nodes) {
+            traverse(node);
+        }
+        
+        return blocks;
+    };
+
+    /**
+     * Extracts images list from attachments.
+     */
+    const extractImagesList = (attachments: OfficeAttachment[]): Array<{ buffer: Buffer; mimeType: string; filename?: string }> => {
+        return attachments
+            .filter(att => att.type === 'image')
+            .map(att => ({
+                buffer: Buffer.from(att.data, 'base64'),
+                mimeType: att.mimeType,
+                filename: att.name
+            }));
+    };
+
+    // Generate fullText
+    const fullText = content.map(c => c.text).join(config.newlineDelimiter ?? '\n\n');
+
+    // Extract blocks
+    const blocks = extractBlocksFromContent(content, attachments);
+
+    // Extract images
+    const images = extractImagesList(attachments);
+
     return {
         type: 'pdf',
         metadata: metadata,
         content: content,
         attachments: attachments,
-        toText: () => content.map(c => c.text).join(config.newlineDelimiter ?? '\n\n')
+        fullText,
+        blocks,
+        images,
+        toText: () => fullText
     };
 };
 

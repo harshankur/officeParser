@@ -12,9 +12,15 @@
     "dist"
   ],
   "scripts": {
-    "test": "node test/testOfficeParser.js",
+    "build": "tsc && node build_browser.js && npm run sync:docs",
+    "build:node": "tsc",
+    "build:browser": "node build_browser.js && npm run sync:docs",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "sync:docs": "mkdir -p docs/dist && cp dist/officeparser.browser.js docs/dist/",
+    "test": "npm run test:clean && npm run build && npx tsx test/testOfficeParser.ts",
+    "test:clean": "rm -rf test/results",
+    "clean": "rm -rf dist && npm run test:clean"
   },
   "repository": {
     "type": "git",
@@ -62,6 +68,8 @@
   "dependencies": {
     "@xmldom/xmldom": "^0.8.10",
     "concat-stream": "^2.0.0",
+    "esbuild": "^0.27.2",
+    "esbuild-plugin-polyfill-node": "^0.3.0",
     "file-type": "^16.5.4",
     "pdfjs-dist": "5.4.530",
     "tesseract.js": "^6.0.0",

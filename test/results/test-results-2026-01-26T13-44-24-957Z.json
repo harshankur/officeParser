@@ -1,0 +1,3331 @@
+{
+  "timestamp": "2026-01-26T13:44:24.958Z",
+  "summary": {
+    "total": 253,
+    "passed": 247,
+    "failed": 0,
+    "warned": 6,
+    "skipped": 0
+  },
+  "results": [
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Not Empty",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 characters",
+        "actual": "7048 characters",
+        "details": "Extracted 7048 characters"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Line Count",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 lines",
+        "actual": "190 lines",
+        "details": "190 lines extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Heading Content",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "Heading text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - List Content",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "List text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Table Content",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "Table text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - OCR Text",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": "2 images with OCR",
+        "actual": "Check manually",
+        "details": "2 images have OCR text"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Whitespace",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": "Normal",
+        "actual": "Normal",
+        "details": "Whitespace is normal"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Total",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": 19,
+        "actual": 19,
+        "details": "Lists match: 19"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - With listId",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": 19,
+        "actual": 19,
+        "details": "19/19 have listId"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Types",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": "12 ordered, 7 unordered",
+        "actual": "12 ordered, 7 unordered",
+        "details": "Type distribution matches"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Total",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": 6,
+        "actual": 6,
+        "details": "Expected 6, got 6"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Rows",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": 36,
+        "actual": 36,
+        "details": "Expected 36 rows, got 36"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Cells",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": 243,
+        "actual": 243,
+        "details": "Cells match: 243"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Headings",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": 17,
+        "actual": 17,
+        "details": "Expected 17, got 17"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Images",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1, got 1"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Links - Total",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": 36,
+        "actual": 36,
+        "details": "Expected 36, got 36"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - Total",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - With OCR",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "2/2 have OCR"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "StyleMap",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "42 entries"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Length",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": "7048 chars (±10%)",
+        "actual": "7048 chars (100.0% similar)",
+        "details": "Length matches baseline (100.0% similar)"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Exact Match",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": "Exact match",
+        "actual": "Exact match",
+        "details": "Text exactly matches baseline"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Not Empty",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 characters",
+        "actual": "7070 characters",
+        "details": "Extracted 7070 characters"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Line Count",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 lines",
+        "actual": "195 lines",
+        "details": "195 lines extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Heading Content",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "Heading text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - List Content",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "List text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Table Content",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "Table text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - OCR Text",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "2 images with OCR",
+        "actual": "Check manually",
+        "details": "2 images have OCR text"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Whitespace",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "Normal",
+        "actual": "Normal",
+        "details": "Whitespace is normal"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Total",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 19,
+        "actual": 19,
+        "details": "Lists match: 19"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - With listId",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 19,
+        "actual": 19,
+        "details": "19/19 have listId"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Types",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "12 ordered, 7 unordered",
+        "actual": "12 ordered, 7 unordered",
+        "details": "Type distribution matches"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Total",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 6,
+        "actual": 6,
+        "details": "Expected 6, got 6"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Rows",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 36,
+        "actual": 36,
+        "details": "Expected 36 rows, got 36"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Cells",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 243,
+        "actual": 243,
+        "details": "Cells match: 243"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Headings",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 17,
+        "actual": 17,
+        "details": "Expected 17, got 17"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Images",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1, got 1"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Links - Total",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 53,
+        "actual": 53,
+        "details": "Expected 53, got 53"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - Total",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - With OCR",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "2/2 have OCR"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "StyleMap",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "267 entries"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Length",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "7070 chars (±10%)",
+        "actual": "7070 chars (100.0% similar)",
+        "details": "Length matches baseline (100.0% similar)"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Exact Match",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "Exact match",
+        "actual": "Exact match",
+        "details": "Text exactly matches baseline"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Not Empty",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 characters",
+        "actual": "6969 characters",
+        "details": "Extracted 6969 characters"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Line Count",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 lines",
+        "actual": "351 lines",
+        "details": "351 lines extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - OCR Text",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": "1 images with OCR",
+        "actual": "Check manually",
+        "details": "1 images have OCR text"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Whitespace",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": "Normal",
+        "actual": "Normal",
+        "details": "Whitespace is normal"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Total",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "Lists match: 0"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Total",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "Expected 0, got 0"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Headings",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "Expected 0, got 0"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Images",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1, got 1"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - Total",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - With OCR",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "1/2 have OCR"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Charts",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1 charts, got 1"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Length",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": "6969 chars (±10%)",
+        "actual": "6969 chars (100.0% similar)",
+        "details": "Length matches baseline (100.0% similar)"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Exact Match",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": "Exact match",
+        "actual": "Exact match",
+        "details": "Text exactly matches baseline"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Not Empty",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 characters",
+        "actual": "5563 characters",
+        "details": "Extracted 5563 characters"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Line Count",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 lines",
+        "actual": "320 lines",
+        "details": "320 lines extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - OCR Text",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": "1 images with OCR",
+        "actual": "Check manually",
+        "details": "1 images have OCR text"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Whitespace",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": "Normal",
+        "actual": "Normal",
+        "details": "Whitespace is normal"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Total",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "Lists match: 0"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Total",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "Expected 0, got 0"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Headings",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "Expected 0, got 0"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Images",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1, got 1"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - Total",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - With OCR",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "1/2 have OCR"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Charts",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1 charts, got 1"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "StyleMap",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "88 entries"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Length",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": "5563 chars (±10%)",
+        "actual": "5563 chars (100.0% similar)",
+        "details": "Length matches baseline (100.0% similar)"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Exact Match",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": "Exact match",
+        "actual": "Exact match",
+        "details": "Text exactly matches baseline"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Not Empty",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 characters",
+        "actual": "6844 characters",
+        "details": "Extracted 6844 characters"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Line Count",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 lines",
+        "actual": "339 lines",
+        "details": "339 lines extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Heading Content",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "Heading text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - List Content",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "List text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Table Content",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "Table text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - OCR Text",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": "1 images with OCR",
+        "actual": "Check manually",
+        "details": "1 images have OCR text"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Whitespace",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": "Normal",
+        "actual": "Normal",
+        "details": "Whitespace is normal"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Total",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": 21,
+        "actual": 21,
+        "details": "Lists match: 21"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - With listId",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": 21,
+        "actual": 21,
+        "details": "21/21 have listId"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Types",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": "14 ordered, 7 unordered",
+        "actual": "14 ordered, 7 unordered",
+        "details": "Type distribution matches"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Total",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": 6,
+        "actual": 6,
+        "details": "Expected 6, got 6"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Rows",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": 36,
+        "actual": 36,
+        "details": "Expected 36 rows, got 36"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Cells",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": 268,
+        "actual": 268,
+        "details": "Cells match: 268"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Headings",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": 6,
+        "actual": 6,
+        "details": "Expected 6, got 6"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Images",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1, got 1"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Links - Total",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Expected 2, got 2"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - Total",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - With OCR",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "1/2 have OCR"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Charts",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1 charts, got 1"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Length",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": "6844 chars (±10%)",
+        "actual": "6844 chars (100.0% similar)",
+        "details": "Length matches baseline (100.0% similar)"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Exact Match",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": "Exact match",
+        "actual": "Exact match",
+        "details": "Text exactly matches baseline"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Not Empty",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 characters",
+        "actual": "6843 characters",
+        "details": "Extracted 6843 characters"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Line Count",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 lines",
+        "actual": "334 lines",
+        "details": "334 lines extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Heading Content",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "Heading text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - List Content",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "List text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Table Content",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "Table text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - OCR Text",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "7 images with OCR",
+        "actual": "Check manually",
+        "details": "7 images have OCR text"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Whitespace",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "Normal",
+        "actual": "Normal",
+        "details": "Whitespace is normal"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Total",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 23,
+        "actual": 23,
+        "details": "Lists match: 23"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - With listId",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 23,
+        "actual": 23,
+        "details": "23/23 have listId"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Types",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "14 ordered, 9 unordered",
+        "actual": "14 ordered, 9 unordered",
+        "details": "Type distribution matches"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Total",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 6,
+        "actual": 6,
+        "details": "Expected 6, got 6"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Rows",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 36,
+        "actual": 36,
+        "details": "Expected 36 rows, got 36"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Cells",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 243,
+        "actual": 243,
+        "details": "Cells match: 243"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Headings",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 6,
+        "actual": 6,
+        "details": "Expected 6, got 6"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Images",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1, got 1"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Links - Total",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Expected 2, got 2"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - Total",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 8,
+        "actual": 8,
+        "details": "Attachments match: 8"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - With OCR",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 7,
+        "actual": 7,
+        "details": "7/8 have OCR"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Charts",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1 charts, got 1"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "StyleMap",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "1270 entries"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Length",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "6843 chars (±10%)",
+        "actual": "6843 chars (100.0% similar)",
+        "details": "Length matches baseline (100.0% similar)"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Exact Match",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "Exact match",
+        "actual": "Exact match",
+        "details": "Text exactly matches baseline"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Not Empty",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 characters",
+        "actual": "9717 characters",
+        "details": "Extracted 9717 characters"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Line Count",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 lines",
+        "actual": "174 lines",
+        "details": "174 lines extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Heading Content",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "Heading text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - OCR Text",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": "2 images with OCR",
+        "actual": "Check manually",
+        "details": "2 images have OCR text"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Whitespace",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": "Normal",
+        "actual": "Normal",
+        "details": "Whitespace is normal"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Total",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "Lists match: 0"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Total",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "Expected 0, got 0"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Headings",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": 9,
+        "actual": 9,
+        "details": "Expected 9, got 9"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Images",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Expected 2, got 2"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Links - Total",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": 127,
+        "actual": 127,
+        "details": "Expected 127, got 127"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - Total",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - With OCR",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "2/2 have OCR"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Length",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": "9717 chars (±10%)",
+        "actual": "9717 chars (100.0% similar)",
+        "details": "Length matches baseline (100.0% similar)"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Exact Match",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": "Exact match",
+        "actual": "Exact match",
+        "details": "Text exactly matches baseline"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Not Empty",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 characters",
+        "actual": "7060 characters",
+        "details": "Extracted 7060 characters"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Line Count",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "> 0 lines",
+        "actual": "194 lines",
+        "details": "194 lines extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Heading Content",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "Heading text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - List Content",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "List text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Table Content",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "Table text extracted"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - OCR Text",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "2 images with OCR",
+        "actual": "Check manually",
+        "details": "2 images have OCR text"
+      }
+    },
+    {
+      "category": "Text Extraction",
+      "feature": "Text Extraction - Whitespace",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "Normal",
+        "actual": "Normal",
+        "details": "Whitespace is normal"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Total",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 19,
+        "actual": 19,
+        "details": "Lists match: 19"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - With listId",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 19,
+        "actual": 19,
+        "details": "19/19 have listId"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Lists - Types",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "12 ordered, 7 unordered",
+        "actual": "12 ordered, 7 unordered",
+        "details": "Type distribution matches"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Total",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 5,
+        "actual": 5,
+        "details": "Expected 5, got 5"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Rows",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 36,
+        "actual": 36,
+        "details": "Expected 36 rows, got 36"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Tables - Cells",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 243,
+        "actual": 243,
+        "details": "Cells match: 243"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Headings",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 16,
+        "actual": 16,
+        "details": "Expected 16, got 16"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Images",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1, got 1"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Links - Total",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 53,
+        "actual": 53,
+        "details": "Expected 53, got 53"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - Total",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Full Extraction",
+      "feature": "Attachments - With OCR",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "2/2 have OCR"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Length",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "7060 chars (±10%)",
+        "actual": "7060 chars (100.0% similar)",
+        "details": "Length matches baseline (100.0% similar)"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Exact Match",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "Exact match",
+        "actual": "Exact match",
+        "details": "Text exactly matches baseline"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Lists - Total",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 19,
+        "actual": 19,
+        "details": "Lists match: 19"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Lists - With listId",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 19,
+        "actual": 19,
+        "details": "19/19 have listId"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Lists - Types",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "12 ordered, 7 unordered",
+        "actual": "12 ordered, 7 unordered",
+        "details": "Type distribution matches"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Tables - Total",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 6,
+        "actual": 6,
+        "details": "Expected 6, got 6"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Tables - Rows",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 36,
+        "actual": 36,
+        "details": "Expected 36 rows, got 36"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Tables - Cells",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 243,
+        "actual": 243,
+        "details": "Cells match: 243"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Headings",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 17,
+        "actual": 17,
+        "details": "Expected 17, got 17"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Images",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1, got 1"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Links - Total",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 36,
+        "actual": 36,
+        "details": "Adjusted for 17 TOC tab-character links"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Attachments - Total",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Attachments - With OCR",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "2/2 have OCR"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "StyleMap",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": "Present",
+        "actual": "Present",
+        "details": "267 entries"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Lists - Total",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "PDF has no list structure (expected)"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Tables - Total",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "PDF has no table structure (expected)"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Headings",
+      "fileType": "pdf",
+      "result": {
+        "status": "WARN",
+        "expected": 17,
+        "actual": 9,
+        "details": "Font-size heuristic: 9 detected (DOCX: 17)"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Images",
+      "fileType": "pdf",
+      "result": {
+        "status": "WARN",
+        "expected": 1,
+        "actual": 2,
+        "details": "PDF has 2 images (DOCX: 1) - may include rendered charts"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Links - Total",
+      "fileType": "pdf",
+      "result": {
+        "status": "WARN",
+        "expected": 36,
+        "actual": 127,
+        "details": "PDF annotation layer: 127 links (DOCX: 36) - includes TOC/internal refs"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Attachments - Total",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Attachments - With OCR",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "2/2 have OCR"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "StyleMap",
+      "fileType": "pdf",
+      "result": {
+        "status": "WARN",
+        "expected": "N/A for PDF",
+        "actual": "None",
+        "details": "PDF has no style definitions (expected)"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Lists - Total",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 19,
+        "actual": 19,
+        "details": "Expected 19, got 19"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Lists - With listId",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 19,
+        "actual": 19,
+        "details": "19/19 have listId"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Lists - Types",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "12 ordered, 7 unordered",
+        "actual": "12 ordered, 7 unordered",
+        "details": "Type distribution matches"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Tables - Total",
+      "fileType": "rtf",
+      "result": {
+        "status": "WARN",
+        "expected": 6,
+        "actual": 5,
+        "details": "RTF table detection: 5 (DOCX: 6) - boundary heuristics"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Tables - Rows",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "36 rows",
+        "actual": "36 rows",
+        "details": "Rows match: 36"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Tables - Cells",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "243 cells",
+        "actual": "243 cells",
+        "details": "Cells match: 243"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Headings",
+      "fileType": "rtf",
+      "result": {
+        "status": "WARN",
+        "expected": 17,
+        "actual": 16,
+        "details": "RTF heading detection: 16 (DOCX: 17)"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Images",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Images match: 1"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Links - Total",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 36,
+        "actual": 36,
+        "details": "Links match: 36"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Attachments - Total",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "Attachments - With OCR",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "2/2",
+        "actual": "2/2",
+        "details": "2/2 have OCR"
+      }
+    },
+    {
+      "category": "Documents Parity",
+      "feature": "StyleMap",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": "42 entries",
+        "actual": "None",
+        "details": "RTF uses inline formatting (no style definitions)"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Lists - Total",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 21,
+        "actual": 21,
+        "details": "Lists match: 21"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Lists - With listId",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 21,
+        "actual": 21,
+        "details": "21/21 have listId"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Lists - Types",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": "14 ordered, 7 unordered",
+        "actual": "14 ordered, 7 unordered",
+        "details": "Type distribution matches"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Tables - Total",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 6,
+        "actual": 6,
+        "details": "Expected 6, got 6"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Tables - Rows",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 36,
+        "actual": 36,
+        "details": "Expected 36 rows, got 36"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Tables - Cells",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 268,
+        "actual": 268,
+        "details": "Cells match: 268"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Headings",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 6,
+        "actual": 6,
+        "details": "Expected 6, got 6"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Images",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1, got 1"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Links - Total",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Expected 2, got 2"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Attachments - Total",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Attachments - With OCR",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "1/2 have OCR"
+      }
+    },
+    {
+      "category": "Presentations Parity",
+      "feature": "Charts",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1 charts, got 1"
+      }
+    },
+    {
+      "category": "Spreadsheets Parity",
+      "feature": "Lists - Total",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "Lists match: 0"
+      }
+    },
+    {
+      "category": "Spreadsheets Parity",
+      "feature": "Tables - Total",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "Expected 0, got 0"
+      }
+    },
+    {
+      "category": "Spreadsheets Parity",
+      "feature": "Headings",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 0,
+        "actual": 0,
+        "details": "Expected 0, got 0"
+      }
+    },
+    {
+      "category": "Spreadsheets Parity",
+      "feature": "Images",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1, got 1"
+      }
+    },
+    {
+      "category": "Spreadsheets Parity",
+      "feature": "Attachments - Total",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 2,
+        "actual": 2,
+        "details": "Attachments match: 2"
+      }
+    },
+    {
+      "category": "Spreadsheets Parity",
+      "feature": "Attachments - With OCR",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "1/2 have OCR"
+      }
+    },
+    {
+      "category": "Spreadsheets Parity",
+      "feature": "Charts",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": 1,
+        "actual": 1,
+        "details": "Expected 1 charts, got 1"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C1: Minimal (all disabled)",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": false,
+          "ignoreNotes": false
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C2: Attachments only",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": false,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C3: Attachments + OCR",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C4: Raw content only",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C5: Full extraction",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C6: Ignore Notes",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "ignoreNotes": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C7: Notes at Last",
+      "fileType": "docx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "putNotesAtLast": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": true
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C1: Minimal (all disabled)",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": false,
+          "ignoreNotes": false
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C2: Attachments only",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": false,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C3: Attachments + OCR",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C4: Raw content only",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C5: Full extraction",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C6: Ignore Notes",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "ignoreNotes": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C7: Notes at Last",
+      "fileType": "odt",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "putNotesAtLast": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": true
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C1: Minimal (all disabled)",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": false,
+          "ignoreNotes": false
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C2: Attachments only",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": false,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C3: Attachments + OCR",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C4: Raw content only",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C5: Full extraction",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C6: Ignore Notes",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "ignoreNotes": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C7: Notes at Last",
+      "fileType": "xlsx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "putNotesAtLast": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C1: Minimal (all disabled)",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": false,
+          "ignoreNotes": false
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C2: Attachments only",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": false,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C3: Attachments + OCR",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C4: Raw content only",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C5: Full extraction",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C6: Ignore Notes",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "ignoreNotes": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C7: Notes at Last",
+      "fileType": "ods",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "putNotesAtLast": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C1: Minimal (all disabled)",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": false,
+          "ignoreNotes": false
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C2: Attachments only",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": false,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C3: Attachments + OCR",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C4: Raw content only",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C5: Full extraction",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C6: Ignore Notes",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "ignoreNotes": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C7: Notes at Last",
+      "fileType": "pptx",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "putNotesAtLast": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": true
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C1: Minimal (all disabled)",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": false,
+          "ignoreNotes": false
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C2: Attachments only",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": false,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C3: Attachments + OCR",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C4: Raw content only",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C5: Full extraction",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C6: Ignore Notes",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "ignoreNotes": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C7: Notes at Last",
+      "fileType": "odp",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "putNotesAtLast": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": true
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C1: Minimal (all disabled)",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": false,
+          "ignoreNotes": false
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C2: Attachments only",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": false,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C3: Attachments + OCR",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C4: Raw content only",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C5: Full extraction",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C6: Ignore Notes",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "ignoreNotes": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C7: Notes at Last",
+      "fileType": "pdf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "putNotesAtLast": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": false,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C1: Minimal (all disabled)",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": false,
+          "ignoreNotes": false
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": true
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C2: Attachments only",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": false,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": false,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": true
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C3: Attachments + OCR",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": false
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": false,
+          "hasNotes": true,
+          "notesAtEnd": true
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C4: Raw content only",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": false,
+          "ocr": false,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": false,
+          "hasOCR": false,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": true
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C5: Full extraction",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "extractAttachments": true,
+          "ocr": true,
+          "includeRawContent": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": true
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C6: Ignore Notes",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "ignoreNotes": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": false,
+          "notesAtEnd": false
+        },
+        "details": "Config behavior correct"
+      }
+    },
+    {
+      "category": "Config Test",
+      "feature": "C7: Notes at Last",
+      "fileType": "rtf",
+      "result": {
+        "status": "PASS",
+        "expected": {
+          "putNotesAtLast": true
+        },
+        "actual": {
+          "hasAttachments": true,
+          "hasOCR": true,
+          "hasRaw": true,
+          "hasNotes": true,
+          "notesAtEnd": true
+        },
+        "details": "Config behavior correct"
+      }
+    }
+  ]
+}

@@ -60,7 +60,8 @@
  */
 
 import { XMLSerializer } from '@xmldom/xmldom';
-import { ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types';
+import { Block, ChartBlock, ChartMetadata, ImageBlock, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TableBlock, TextBlock, TextFormatting, TextMetadata } from '../types';
+import { extractChartData } from '../utils/chartUtils';
 import { logWarning } from '../utils/errorUtils';
 import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';
@@ -812,24 +813,176 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         content.push(...collectedNotes);
     }
 
+    /**
+     * Converts a table node to a TableBlock.
+     */
+    const convertTableToBlock = (tableNode: OfficeContentNode): TableBlock => {
+        const rows: Array<{ cols: Array<{ value: string }> }> = [];
+        
+        if (tableNode.children) {
+            for (const rowNode of tableNode.children) {
+                if (rowNode.type === 'row' && rowNode.children) {
+                    const cols: Array<{ value: string }> = [];
+                    
+                    for (const cellNode of rowNode.children) {
+                        if (cellNode.type === 'cell') {
+                            // Extract text from cell (including nested content)
+                            const getCellText = (node: OfficeContentNode): string => {
+                                let text = node.text || '';
+                                if (node.children && node.children.length > 0) {
+                                    const childTexts = node.children.map(getCellText).filter(t => t !== '');
+                                    if (childTexts.length > 0) {
+                                        text += (text ? ' ' : '') + childTexts.join(' ');
+                                    }
+                                }
+                                return text;
+                            };
+                            
+                            const cellText = getCellText(cellNode);
+                            cols.push({ value: cellText });
+                        }
+                    }
+                    
+                    if (cols.length > 0) {
+                        rows.push({ cols });
+                    }
+                }
+            }
+        }
+        
+        return {
+            type: 'table',
+            rows
+        };
+    };
+
+    /**
+     * Converts a chart node to a ChartBlock.
+     */
+    const convertChartToBlock = (chartNode: OfficeContentNode, attachments: OfficeAttachment[]): ChartBlock | null => {
+        if (chartNode.type !== 'chart') return null;
+        
+        const chartMetadata = chartNode.metadata as ChartMetadata | undefined;
+        
+        if (chartMetadata?.attachmentName) {
+            const attachment = attachments.find(a => a.name === chartMetadata.attachmentName && a.type === 'chart');
+            if (attachment?.chartData) {
+                return {
+                    type: 'chart',
+                    chartData: attachment.chartData,
+                    chartType: attachment.chartData.chartType
+                };
+            }
+        }
+        
+        return null;
+    };
+
+    /**
+     * Extracts blocks from content nodes in document order.
+     */
+    const extractBlocksFromContent = (nodes: OfficeContentNode[], attachments: OfficeAttachment[]): Block[] => {
+        const blocks: Block[] = [];
+        
+        const traverse = (node: OfficeContentNode) => {
+            // Process node based on type
+            if (node.type === 'table') {
+                blocks.push(convertTableToBlock(node));
+                // Don't traverse children of tables (already processed)
+                return;
+            } else if (node.type === 'chart') {
+                const chartBlock = convertChartToBlock(node, attachments);
+                if (chartBlock) {
+                    blocks.push(chartBlock);
+                }
+                // Don't traverse children of charts
+                return;
+            } else if (node.type === 'image') {
+                const imageMetadata = node.metadata as ImageMetadata | undefined;
+                const attachmentName = imageMetadata?.attachmentName;
+                
+                if (attachmentName) {
+                    const attachment = attachments.find(a => a.name === attachmentName && a.type === 'image');
+                    if (attachment) {
+                        const buffer = Buffer.from(attachment.data, 'base64');
+                        blocks.push({
+                            type: 'image',
+                            buffer,
+                            mimeType: attachment.mimeType,
+                            filename: attachment.name
+                        });
+                    }
+                }
+                // Don't traverse children of images
+                return;
+            } else if (node.text && node.text.trim() && 
+                (node.type === 'text' || node.type === 'paragraph' || node.type === 'heading')) {
+                // Create text block for content nodes
+                blocks.push({
+                    type: 'text',
+                    content: node.text.trim()
+                });
+            }
+            
+            // Recursively process children
+            if (node.children) {
+                for (const child of node.children) {
+                    traverse(child);
+                }
+            }
+        };
+        
+        // Traverse all top-level nodes
+        for (const node of nodes) {
+            traverse(node);
+        }
+        
+        return blocks;
+    };
+
+    /**
+     * Extracts images list from attachments.
+     */
+    const extractImagesList = (attachments: OfficeAttachment[]): Array<{ buffer: Buffer; mimeType: string; filename?: string }> => {
+        return attachments
+            .filter(att => att.type === 'image')
+            .map(att => ({
+                buffer: Buffer.from(att.data, 'base64'),
+                mimeType: att.mimeType,
+                filename: att.name
+            }));
+    };
+
+    // Generate fullText
+    const fullText = content.map(c => {
+        // Recursive text extraction
+        const getText = (node: OfficeContentNode): string => {
+            let t = '';
+            if (node.children) {
+                t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter ?? '\n');
+            }
+            else
+                t += node.text || '';
+            return t;
+        };
+        return getText(c);
+    }).filter(t => t != '').join(config.newlineDelimiter ?? '\n');
+
+    // Extract blocks
+    const blocks = extractBlocksFromContent(content, attachments);
+
+    // Extract images
+    const images = extractImagesList(attachments);
+
     return {
         type: 'docx',
         metadata: { ...metadata, formatting: docDefaults, styleMap: styleMap },
         content: content,
         attachments: attachments,
-        toText: () => content.map(c => {
-            // Recursive text extraction
-            const getText = (node: OfficeContentNode): string => {
-                let t = '';
-                if (node.children) {
-                    t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter ?? '\n');
-                }
-                else
-                    t += node.text || '';
-                return t;
-            };
-            return getText(c);
-        }).filter(t => t != '').join(config.newlineDelimiter ?? '\n')
+        fullText,
+        blocks,
+        images,
+        toText: () => fullText
     };
 };
 

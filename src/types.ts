@@ -475,6 +475,9 @@ export interface ChartData {
     /** Chart title (if any) */
     title?: string;
 
+    /** Chart type (e.g., 'bar', 'line', 'pie', 'column', 'area', 'scatter', etc.) */
+    chartType?: string;
+
     /** X-axis title (for continuous or categorical axes) */
     xAxisTitle?: string;
 
@@ -506,11 +509,32 @@ export interface ChartData {
 }
 
 /**
+ * Coordinate data for positioning blocks on slides/pages.
+ * Values are typically in EMU (English Metric Units) where 1 inch = 914400 EMU.
+ */
+export interface CoordinateData {
+    /** X coordinate (horizontal position) */
+    x: number;
+    /** Y coordinate (vertical position) */
+    y: number;
+    /** Width of the element */
+    width: number;
+    /** Height of the element */
+    height: number;
+    /** Rotation angle in degrees (optional) */
+    rotation?: number;
+    /** Z-index for layering (optional) */
+    zIndex?: number;
+}
+
+/**
  * Text block extracted from document content.
  */
 export interface TextBlock {
     type: 'text';
     content: string;
+    /** Positioning data (optional, typically available for PowerPoint) */
+    position?: CoordinateData;
 }
 
 /**
@@ -521,6 +545,8 @@ export interface ImageBlock {
     buffer: Buffer;
     mimeType: string;
     filename?: string;
+    /** Positioning data (optional, typically available for PowerPoint) */
+    position?: CoordinateData;
 }
 
 /**
@@ -529,6 +555,8 @@ export interface ImageBlock {
 export interface TableBlock {
     type: 'table';
     rows: Array<{ cols: Array<{ value: string }> }>;
+    /** Positioning data (optional, typically available for PowerPoint) */
+    position?: CoordinateData;
 }
 
 /**
@@ -537,6 +565,10 @@ export interface TableBlock {
 export interface ChartBlock {
     type: 'chart';
     chartData: ChartData;
+    /** Chart type (e.g., 'bar', 'line', 'pie', 'column', 'area', 'scatter', etc.) */
+    chartType?: string;
+    /** Positioning data (optional, typically available for PowerPoint) */
+    position?: CoordinateData;
 }
 
 /**
@@ -715,23 +747,26 @@ export interface OfficeParserAST {
     /**
      * Full text content of the document.
      * Equivalent to calling `toText()`.
+     * Currently only populated by OpenOfficeParser.
      * @example "Hello world\nChapter 1\n..."
      */
-    fullText: string;
+    fullText?: string;
 
     /**
      * Flat array of content blocks in document order.
      * Blocks represent the document structure as a sequence of text, images, tables, and charts.
+     * Currently only populated by OpenOfficeParser.
      * @example [{ type: 'text', content: 'Hello' }, { type: 'table', rows: [...] }]
      */
-    blocks: Block[];
+    blocks?: Block[];
 
     /**
      * List of image attachments extracted from the document.
      * Only populated when `config.extractAttachments` is true.
+     * Currently only populated by OpenOfficeParser.
      * @example [{ buffer: Buffer, mimeType: 'image/png', filename: 'image1.png' }]
      */
-    images: Array<{ buffer: Buffer; mimeType: string; filename?: string }>;
+    images?: Array<{ buffer: Buffer; mimeType: string; filename?: string }>;
 
     /**
      * Converts the entire AST to plain text.

@@ -23,7 +23,7 @@
  */
 
 import { XMLSerializer } from '@xmldom/xmldom';
-import { ChartMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, SlideMetadata, TextFormatting } from '../types';
+import { Block, ChartBlock, ChartData, ChartMetadata, CoordinateData, ImageBlock, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, SlideMetadata, TableBlock, TextBlock, TextFormatting } from '../types';
 import { extractChartData } from '../utils/chartUtils';
 import { logWarning } from '../utils/errorUtils';
 import { createAttachment } from '../utils/imageUtils';
@@ -71,6 +71,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     const content: OfficeContentNode[] = [];
     const rawContents: string[] = [];
     const slideRelsMap: Record<number, Record<string, { type: string, target: string }>> = {};
+    // Map to track OfficeContentNode -> XML Element for position extraction
+    const elementMap = new Map<OfficeContentNode, Element>();
 
     let currentListId = 0;
     let runningListIndex = 0;
@@ -81,6 +83,49 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
 
     // per indent counters (for nested lists)
     const levelCounters: { [level: number]: number } = {};
+
+    /**
+     * Extracts coordinate data from PPTX XML transform elements.
+     * Looks for a:xfrm or p:xfrm containing a:off (x, y) and a:ext (width, height).
+     * Values are in EMU (English Metric Units): 1 inch = 914400 EMU.
+     */
+    const extractCoordinates = (element: Element): CoordinateData | undefined => {
+        // Try p:xfrm first (PowerPoint namespace), then a:xfrm (DrawingML namespace)
+        let xfrm = getElementsByTagName(element, "p:xfrm")[0];
+        if (!xfrm) {
+            xfrm = getElementsByTagName(element, "a:xfrm")[0];
+        }
+        if (!xfrm) {
+            return undefined;
+        }
+
+        // Extract offset (x, y)
+        const off = getElementsByTagName(xfrm, "a:off")[0];
+        const x = off ? parseInt(off.getAttribute("x") || "0", 10) : 0;
+        const y = off ? parseInt(off.getAttribute("y") || "0", 10) : 0;
+
+        // Extract extent (width, height)
+        const ext = getElementsByTagName(xfrm, "a:ext")[0];
+        const width = ext ? parseInt(ext.getAttribute("cx") || "0", 10) : 0;
+        const height = ext ? parseInt(ext.getAttribute("cy") || "0", 10) : 0;
+
+        // Extract rotation (in 60000ths of a degree)
+        const rot = xfrm.getAttribute("rot");
+        const rotation = rot ? parseInt(rot, 10) / 60000 : undefined;
+
+        // Only return if we have valid dimensions
+        if (width > 0 && height > 0) {
+            return {
+                x,
+                y,
+                width,
+                height,
+                ...(rotation !== undefined ? { rotation } : {})
+            };
+        }
+
+        return undefined;
+    };
 
     // Helper to parse a table node
     const parseTable = (tblNode: Element): OfficeContentNode => {
@@ -201,7 +246,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
 
         const altText = cNvPr?.getAttribute("descr") || undefined;
 
-        return {
+        const node: OfficeContentNode = {
             type: "image",
             text: '',
             metadata:
@@ -210,6 +255,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                 altText,
             }
         };
+        
+        // Track element for position extraction
+        elementMap.set(node, imageNode);
+        
+        return node;
     }
 
     /**
@@ -280,6 +330,9 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
             chartNode.rawContent = xmlSerializer.serializeToString(frameNode);
         }
 
+        // Track element for position extraction
+        elementMap.set(chartNode, frameNode);
+
         return chartNode;
     };
 
@@ -288,6 +341,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
         const tbl = getElementsByTagName(frameNode, "a:tbl")[0];
         if (tbl) {
             const tableNode = parseTable(tbl);
+            // Track element for position extraction
+            elementMap.set(tableNode, frameNode);
             if (config.includeRawContent) {
                 tableNode.rawContent = xmlSerializer.serializeToString(frameNode);
             }
@@ -327,6 +382,10 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                     children: [],
                     metadata: isTitle ? { level: 1 } : {}
                 };
+                
+                // Track element for position extraction (use spNode for shape position)
+                // All paragraphs in the same shape share the shape's position
+                elementMap.set(pNode, spNode);
 
                 // Paragraph Alignment and List Detection
                 const pPr = getElementsByTagName(p, "a:pPr")[0];
@@ -823,23 +882,205 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
         });
     }
 
+    /**
+     * Converts a table node to a TableBlock.
+     */
+    const convertTableToBlock = (tableNode: OfficeContentNode, position?: CoordinateData): TableBlock => {
+        const rows: Array<{ cols: Array<{ value: string }> }> = [];
+        
+        if (tableNode.children) {
+            for (const rowNode of tableNode.children) {
+                if (rowNode.type === 'row' && rowNode.children) {
+                    const cols: Array<{ value: string }> = [];
+                    
+                    for (const cellNode of rowNode.children) {
+                        if (cellNode.type === 'cell') {
+                            // Extract text from cell (including nested content)
+                            const getCellText = (node: OfficeContentNode): string => {
+                                let text = node.text || '';
+                                if (node.children && node.children.length > 0) {
+                                    const childTexts = node.children.map(getCellText).filter(t => t !== '');
+                                    if (childTexts.length > 0) {
+                                        text += (text ? ' ' : '') + childTexts.join(' ');
+                                    }
+                                }
+                                return text;
+                            };
+                            
+                            const cellText = getCellText(cellNode);
+                            cols.push({ value: cellText });
+                        }
+                    }
+                    
+                    if (cols.length > 0) {
+                        rows.push({ cols });
+                    }
+                }
+            }
+        }
+        
+        return {
+            type: 'table',
+            rows,
+            ...(position ? { position } : {})
+        };
+    };
+
+    /**
+     * Converts a chart node to a ChartBlock.
+     */
+    const convertChartToBlock = (chartNode: OfficeContentNode, attachments: OfficeAttachment[], position?: CoordinateData): ChartBlock | null => {
+        if (chartNode.type !== 'chart') return null;
+        
+        const chartMetadata = chartNode.metadata as ChartMetadata | undefined;
+        
+        // Try to get chartData from metadata first (if it was stored there)
+        const metadataWithChartData = chartMetadata as (ChartMetadata & { chartData?: ChartData }) | undefined;
+        if (metadataWithChartData?.chartData) {
+            return {
+                type: 'chart',
+                chartData: metadataWithChartData.chartData,
+                chartType: metadataWithChartData.chartData.chartType,
+                ...(position ? { position } : {})
+            };
+        }
+        
+        // Otherwise, try to find it from attachments
+        if (chartMetadata?.attachmentName) {
+            const attachment = attachments.find(a => a.name === chartMetadata.attachmentName && a.type === 'chart');
+            if (attachment?.chartData) {
+                return {
+                    type: 'chart',
+                    chartData: attachment.chartData,
+                    chartType: attachment.chartData.chartType,
+                    ...(position ? { position } : {})
+                };
+            }
+        }
+        
+        return null;
+    };
+
+    /**
+     * Extracts blocks from content nodes in document order.
+     * Ensures all content types (tables, charts, images, text) are captured as blocks.
+     */
+    const extractBlocksFromContent = (nodes: OfficeContentNode[], attachments: OfficeAttachment[], elementMap: Map<OfficeContentNode, Element>): Block[] => {
+        const blocks: Block[] = [];
+        
+        const traverse = (node: OfficeContentNode) => {
+            // Get position from element map
+            const element = elementMap.get(node);
+            const position = element ? extractCoordinates(element) : undefined;
+            
+            // Process node based on type - prioritize specific block types
+            if (node.type === 'table') {
+                blocks.push(convertTableToBlock(node, position));
+                // Don't traverse children of tables (already processed in convertTableToBlock)
+                return;
+            } else if (node.type === 'chart') {
+                const chartBlock = convertChartToBlock(node, attachments, position);
+                if (chartBlock) {
+                    blocks.push(chartBlock);
+                }
+                // Don't traverse children of charts
+                return;
+            } else if (node.type === 'image') {
+                const imageMetadata = node.metadata as ImageMetadata | undefined;
+                const attachmentName = imageMetadata?.attachmentName;
+                
+                if (attachmentName) {
+                    const attachment = attachments.find(a => a.name === attachmentName && a.type === 'image');
+                    if (attachment) {
+                        const buffer = Buffer.from(attachment.data, 'base64');
+                        blocks.push({
+                            type: 'image',
+                            buffer,
+                            mimeType: attachment.mimeType,
+                            filename: attachment.name,
+                            ...(position ? { position } : {})
+                        });
+                    }
+                }
+                // Don't traverse children of images
+                return;
+            }
+            
+            // For text content: create text blocks for paragraphs, headings, lists, and text nodes
+            // Skip slides/notes containers and other structural nodes that are just containers
+            if (node.text && node.text.trim()) {
+                // Create text blocks for content nodes (not containers like slide/note/row/cell)
+                if (node.type === 'text' || node.type === 'paragraph' || node.type === 'heading' || node.type === 'list') {
+                    // Create text block - include all text content
+                    blocks.push({
+                        type: 'text',
+                        content: node.text.trim(),
+                        ...(position ? { position } : {})
+                    });
+                }
+            }
+            
+            // Recursively process children (for slides, notes, and other container nodes)
+            // This ensures we traverse the entire tree and don't miss any content
+            if (node.children) {
+                for (const child of node.children) {
+                    traverse(child);
+                }
+            }
+        };
+        
+        // Traverse all top-level nodes (slides, notes)
+        for (const node of nodes) {
+            traverse(node);
+        }
+        
+        return blocks;
+    };
+
+    /**
+     * Extracts images list from attachments.
+     */
+    const extractImagesList = (attachments: OfficeAttachment[]): Array<{ buffer: Buffer; mimeType: string; filename?: string }> => {
+        return attachments
+            .filter(att => att.type === 'image')
+            .map(att => ({
+                buffer: Buffer.from(att.data, 'base64'),
+                mimeType: att.mimeType,
+                filename: att.name
+            }));
+    };
+
+    // Generate fullText
+    const fullText = content.map(c => {
+        // Recursive text extraction
+        const getText = (node: OfficeContentNode): string => {
+            let t = '';
+            if (node.children) {
+                t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter ?? '\n');
+            }
+            else
+                t += node.text || '';
+            return t;
+        };
+        return getText(c);
+    }).filter(t => t != '').join(config.newlineDelimiter ?? '\n');
+
+    // Extract blocks
+    const blocks = extractBlocksFromContent(content, attachments, elementMap);
+
+    // Extract images
+    const images = extractImagesList(attachments);
+
+    console.log("Document blocks", blocks.filter(x => x.type === "table"))
+
     return {
         type: 'pptx',
         metadata: metadata,
         content: content,
         attachments: attachments,
-        toText: () => content.map(c => {
-            // Recursive text extraction
-            const getText = (node: OfficeContentNode): string => {
-                let t = '';
-                if (node.children) {
-                    t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter ?? '\n');
-                }
-                else
-                    t += node.text || '';
-                return t;
-            };
-            return getText(c);
-        }).filter(t => t != '').join(config.newlineDelimiter ?? '\n')
+        fullText,
+        blocks,
+        images,
+        toText: () => fullText
     };
 };

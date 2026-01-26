@@ -48,6 +48,25 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
 
     const title = extractOpenXmlRichText(root, "c:title");
 
+    // Extract chart type from plotArea
+    let chartType: string | undefined = undefined;
+    const plotArea = root.getElementsByTagName("c:plotArea")[0];
+    if (plotArea) {
+        // Check for common chart types in plotArea
+        const chartTypeElements = [
+            'c:barChart', 'c:lineChart', 'c:pieChart', 'c:columnChart',
+            'c:areaChart', 'c:scatterChart', 'c:bubbleChart', 'c:doughnutChart',
+            'c:radarChart', 'c:surfaceChart', 'c:ofPieChart', 'c:stockChart'
+        ];
+        for (const tagName of chartTypeElements) {
+            if (plotArea.getElementsByTagName(tagName).length > 0) {
+                // Extract base name (e.g., 'barChart' -> 'bar')
+                chartType = tagName.replace('c:', '').replace('Chart', '').toLowerCase();
+                break;
+            }
+        }
+    }
+
     // Axis titles
     let xAxisTitle: string | undefined = undefined;
     let yAxisTitle: string | undefined = undefined;
@@ -115,6 +134,7 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
 
     return {
         title,
+        chartType,
         xAxisTitle,
         yAxisTitle,
         dataSets,
@@ -241,6 +261,14 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
         else if (dimension === 'y') yAxisTitle = axisTitle;
     }
 
+    // Extract chart type from chart:class attribute or chart type elements
+    let chartType: string | undefined = undefined;
+    const chartClass = chart.getAttribute("chart:class");
+    if (chartClass) {
+        // chart:class values like "chart:bar", "chart:line", "chart:pie", etc.
+        chartType = chartClass.replace('chart:', '').toLowerCase();
+    }
+
     // Structured rawTexts: title + series info
     if (title) rawTexts.push(title);
     for (const ds of dataSets) {
@@ -251,6 +279,7 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
 
     return {
         title,
+        chartType,
         xAxisTitle,
         yAxisTitle,
         dataSets,
@@ -295,9 +324,11 @@ const extractChartexChartData = (xmlBuffer: Buffer): ChartData => {
 
     // Extract chart type from first series layoutId
     const seriesNodes = getElementsByTagName(plotAreaRegion, "cx:series");
+    let chartType: string | undefined = undefined;
     if (seriesNodes.length === 0) {
         return {
             title: undefined,
+            chartType: undefined,
             xAxisTitle: undefined,
             yAxisTitle: undefined,
             dataSets: [],
@@ -305,12 +336,29 @@ const extractChartexChartData = (xmlBuffer: Buffer): ChartData => {
             rawTexts: []
         };
     }
+    
+    // Extract chart type from first series layoutId
+    if (seriesNodes.length > 0) {
+        const firstSeries = seriesNodes[0];
+        const layoutId = firstSeries.getAttribute("layoutId");
+        if (layoutId) {
+            // layoutId values map to chart types (e.g., "100" = column, "101" = bar, etc.)
+            // Common mappings: 100=column, 101=bar, 102=line, 103=pie, 104=area, etc.
+            const layoutIdMap: Record<string, string> = {
+                '100': 'column', '101': 'bar', '102': 'line', '103': 'pie',
+                '104': 'area', '105': 'scatter', '106': 'bubble', '107': 'doughnut',
+                '108': 'radar', '109': 'surface'
+            };
+            chartType = layoutIdMap[layoutId] || undefined;
+        }
+    }
 
     // Extract chartData
     const chartData = getElementsByTagName(dom, "cx:chartData")[0];
     if (!chartData) {
         return {
             title: undefined,
+            chartType: undefined,
             xAxisTitle: undefined,
             yAxisTitle: undefined,
             dataSets: [],
@@ -452,6 +500,7 @@ const extractChartexChartData = (xmlBuffer: Buffer): ChartData => {
 
     return {
         title,
+        chartType,
         xAxisTitle,
         yAxisTitle,
         dataSets,
