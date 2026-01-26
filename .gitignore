@@ -3,5 +3,4 @@ officeParserTemp/
 officeParser.bk.js
 *.DS_Store
 .vscode/
-dist/
 .idea/
