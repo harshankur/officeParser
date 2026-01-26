@@ -31,7 +31,7 @@ export type ChartBlock = {
 
 export type Block = TextBlock | ImageBlock | TableBlock | ChartBlock;
 
-type DocImage = { buffer: Buffer; type: string; filename?: string }
+export type DocImage = { buffer: Buffer; type: string; filename?: string }
 
 export type CoordinateData = {
     x: number;

@@ -45,7 +45,7 @@
  * @module officeparser
  */
 import { OfficeParser } from './OfficeParser';
-import { OfficeParserConfig, OfficeParserAST, OfficeContentNode, OfficeAttachment, OfficeMetadata, TextFormatting, SupportedFileType, OfficeContentNodeType, OfficeMimeType, SlideMetadata, SheetMetadata, HeadingMetadata, ListMetadata, CellMetadata, ImageMetadata, PageMetadata, ContentMetadata } from './types';
+import { OfficeParserConfig, OfficeParserAST, OfficeContentNode, OfficeAttachment, OfficeMetadata, TextFormatting, SupportedFileType, OfficeContentNodeType, OfficeMimeType, SlideMetadata, SheetMetadata, HeadingMetadata, ListMetadata, CellMetadata, ImageMetadata, PageMetadata, ContentMetadata, DocImage, Block, TextBlock, ImageBlock, TableBlock, ChartBlock, ChartData, ChartMetadata, CoordinateData, ParagraphMetadata, TextMetadata, NoteMetadata } from './types';
 declare const parseOffice: typeof OfficeParser.parseOffice;
-export { OfficeParser, parseOffice, OfficeParserConfig, OfficeParserAST, OfficeContentNode, OfficeAttachment, OfficeMetadata, TextFormatting, SupportedFileType, OfficeContentNodeType, OfficeMimeType, SlideMetadata, SheetMetadata, HeadingMetadata, ListMetadata, CellMetadata, ImageMetadata, PageMetadata, ContentMetadata };
+export { OfficeParser, parseOffice, OfficeParserConfig, OfficeParserAST, OfficeContentNode, OfficeAttachment, OfficeMetadata, TextFormatting, SupportedFileType, OfficeContentNodeType, OfficeMimeType, SlideMetadata, SheetMetadata, HeadingMetadata, ListMetadata, CellMetadata, ImageMetadata, PageMetadata, ContentMetadata, DocImage, Block, TextBlock, ImageBlock, TableBlock, ChartBlock, ChartData, ChartMetadata, CoordinateData, ParagraphMetadata, TextMetadata, NoteMetadata };
 export default OfficeParser;

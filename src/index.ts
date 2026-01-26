@@ -63,7 +63,19 @@ import {
     CellMetadata,
     ImageMetadata,
     PageMetadata,
-    ContentMetadata
+    ContentMetadata,
+    DocImage,
+    Block,
+    TextBlock,
+    ImageBlock,
+    TableBlock,
+    ChartBlock,
+    ChartData,
+    ChartMetadata,
+    CoordinateData,
+    ParagraphMetadata,
+    TextMetadata,
+    NoteMetadata
 } from './types';
 
 const parseOffice = OfficeParser.parseOffice;
@@ -87,7 +99,19 @@ export {
     CellMetadata,
     ImageMetadata,
     PageMetadata,
-    ContentMetadata
+    ContentMetadata,
+    DocImage,
+    Block,
+    TextBlock,
+    ImageBlock,
+    TableBlock,
+    ChartBlock,
+    ChartData,
+    ChartMetadata,
+    CoordinateData,
+    ParagraphMetadata,
+    TextMetadata,
+    NoteMetadata
 };
 
 
