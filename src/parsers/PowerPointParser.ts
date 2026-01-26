@@ -839,7 +839,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
 
             // Extract text from chart XML
             try {
-                const chartData = await extractChartData(chart.content);
+                const chartData = extractChartData(chart.content);
                 // Assign chartData to attachment
                 attachment.chartData = chartData;
             }

@@ -41,7 +41,6 @@
  */
 
 import { Block, ChartBlock, ChartMetadata, ImageBlock, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TableBlock, TextBlock, TextFormatting } from '../types';
-import { extractChartData } from '../utils/chartUtils';
 import { logWarning } from '../utils/errorUtils';
 import { performOcr } from '../utils/ocrUtils';
 

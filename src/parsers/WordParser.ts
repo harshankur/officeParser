@@ -61,7 +61,6 @@
 
 import { XMLSerializer } from '@xmldom/xmldom';
 import { Block, ChartBlock, ChartMetadata, ImageBlock, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TableBlock, TextBlock, TextFormatting, TextMetadata } from '../types';
-import { extractChartData } from '../utils/chartUtils';
 import { logWarning } from '../utils/errorUtils';
 import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';

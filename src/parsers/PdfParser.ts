@@ -58,7 +58,6 @@
  */
 
 import { Block, ChartBlock, ChartMetadata, ImageBlock, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeParserConfig, TableBlock, TextBlock, TextFormatting, TextMetadata } from '../types';
-import { extractChartData } from '../utils/chartUtils';
 import { getOfficeError, logWarning, OfficeErrorType } from '../utils/errorUtils';
 import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';
