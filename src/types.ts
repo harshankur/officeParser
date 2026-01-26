@@ -684,6 +684,8 @@ export interface OfficeMetadata {
     styleMap?: Record<string, Partial<TextFormatting>>;
 }
 
+export type DocImage = { buffer: Buffer; mimeType: string; filename?: string }
+
 /**
  * The Abstract Syntax Tree (AST) returned by the parser.
  * This is the root data structure representing the entire parsed document.
