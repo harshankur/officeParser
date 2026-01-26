@@ -48,11 +48,13 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     const corePropsFileRegex = /docProps\/core\.xml/;
     const xmlSerializer = new XMLSerializer();
 
+    // Always extract chart files (needed for blocks), but only extract media files if extractAttachments is true
     const files = await extractFiles(buffer, x =>
         !!x.match(config.ignoreNotes ? slidesRegex : allFilesRegex) ||
         !!x.match(corePropsFileRegex) ||
         !!x.match(slideRelsRegex) ||
-        (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(chartFileRegex)))
+        !!x.match(chartFileRegex) || // Always extract chart files for blocks
+        (!!config.extractAttachments && !!x.match(mediaFileRegex)) // Only extract media if extractAttachments is true
     );
 
     // Extract metadata
@@ -808,6 +810,24 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     const mediaFiles = files.filter(f => f.path.match(/ppt\/media\/.*/));
     const chartFiles = files.filter(f => f.path.match(/ppt\/charts\/chart\d+\.xml/));
 
+    // Chart data map: always extract chart data for blocks, even if extractAttachments is false
+    // Key: attachment name (e.g., "chart1.xml"), Value: ChartData
+    const chartDataMap = new Map<string, ChartData>();
+
+    // Always extract chart data for blocks (even if extractAttachments is false)
+    for (const chart of chartFiles) {
+        const attachmentName = chart.path.split('/').pop() || '';
+        
+        // Extract chart data
+        try {
+            const chartData = extractChartData(chart.content);
+            chartDataMap.set(attachmentName, chartData);
+        }
+        catch (e) {
+            logWarning(`Failed to extract text from chart ${chart.path}:`, config, e);
+        }
+    }
+
     // First run to extract attachments and to assign ocr to image files.
     if (config.extractAttachments) {
         // Extract media files as attachments
@@ -826,26 +846,20 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
             }
         }
 
-        // Extract chart files as attachments
+        // Extract chart files as attachments (chartData already extracted above)
         for (const chart of chartFiles) {
+            const attachmentName = chart.path.split('/').pop() || '';
+            const chartData = chartDataMap.get(attachmentName);
+            
             const attachment: OfficeAttachment = {
                 type: 'chart',
                 mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // Generic XML type for now
                 data: chart.content.toString('base64'),
-                name: chart.path.split('/').pop() || '',
-                extension: 'xml'
+                name: attachmentName,
+                extension: 'xml',
+                chartData: chartData
             };
-            attachments.push(attachment);
-
-            // Extract text from chart XML
-            try {
-                const chartData = extractChartData(chart.content);
-                // Assign chartData to attachment
-                attachment.chartData = chartData;
-            }
-            catch (e) {
-                logWarning(`Failed to extract text from chart ${chart.path}:`, config, e);
-            }
+                attachments.push(attachment);
         }
 
         // Loop through nodes to find images and charts and link their text and chartData
@@ -945,14 +959,26 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
             };
         }
         
-        // Otherwise, try to find it from attachments
+        // Try to find it from attachments first
         if (chartMetadata?.attachmentName) {
             const attachment = attachments.find(a => a.name === chartMetadata.attachmentName && a.type === 'chart');
+            
             if (attachment?.chartData) {
                 return {
                     type: 'chart',
                     chartData: attachment.chartData,
                     chartType: attachment.chartData.chartType,
+                    ...(position ? { position } : {})
+                };
+            }
+            
+            // If not in attachments, try chartDataMap (for when extractAttachments is false)
+            const chartData = chartDataMap.get(chartMetadata.attachmentName);
+            if (chartData) {
+                return {
+                    type: 'chart',
+                    chartData: chartData,
+                    chartType: chartData.chartType,
                     ...(position ? { position } : {})
                 };
             }
@@ -1070,8 +1096,6 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
 
     // Extract images
     const images = extractImagesList(attachments);
-
-    console.log("PowerpointChart blocks", blocks.filter(x => x.type === "chart"))
 
     return {
         type: 'pptx',
