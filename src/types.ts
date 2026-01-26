@@ -506,6 +506,45 @@ export interface ChartData {
 }
 
 /**
+ * Text block extracted from document content.
+ */
+export interface TextBlock {
+    type: 'text';
+    content: string;
+}
+
+/**
+ * Image block extracted from document content.
+ */
+export interface ImageBlock {
+    type: 'image';
+    buffer: Buffer;
+    mimeType: string;
+    filename?: string;
+}
+
+/**
+ * Table block extracted from document content.
+ */
+export interface TableBlock {
+    type: 'table';
+    rows: Array<{ cols: Array<{ value: string }> }>;
+}
+
+/**
+ * Chart block extracted from document content.
+ */
+export interface ChartBlock {
+    type: 'chart';
+    chartData: ChartData;
+}
+
+/**
+ * Union type of all block types.
+ */
+export type Block = TextBlock | ImageBlock | TableBlock | ChartBlock;
+
+/**
  * Represents an attachment extracted from the document (image, chart, etc.).
  * Attachments are binary resources embedded in the document.
  * Only populated when `config.extractAttachments` is true.
@@ -672,6 +711,27 @@ export interface OfficeParserAST {
      * @example [{ type: 'image', mimeType: 'image/png', data: 'base64...', name: 'image1.png' }]
      */
     attachments: OfficeAttachment[];
+
+    /**
+     * Full text content of the document.
+     * Equivalent to calling `toText()`.
+     * @example "Hello world\nChapter 1\n..."
+     */
+    fullText: string;
+
+    /**
+     * Flat array of content blocks in document order.
+     * Blocks represent the document structure as a sequence of text, images, tables, and charts.
+     * @example [{ type: 'text', content: 'Hello' }, { type: 'table', rows: [...] }]
+     */
+    blocks: Block[];
+
+    /**
+     * List of image attachments extracted from the document.
+     * Only populated when `config.extractAttachments` is true.
+     * @example [{ buffer: Buffer, mimeType: 'image/png', filename: 'image1.png' }]
+     */
+    images: Array<{ buffer: Buffer; mimeType: string; filename?: string }>;
 
     /**
      * Converts the entire AST to plain text.

@@ -335,6 +335,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 }
             }
         }
+        console.log('fullText', fullText);
+        console.log('children', children);
         return { text: fullText, children };
     };
 
