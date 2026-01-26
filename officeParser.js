@@ -1611,7 +1611,7 @@ function parseExcel(file, callback, config) {
 
             /** Find text nodes with t tags in sharedStrings.xml file. If the sharedStringsFile is not present, we return an empty array. */
             const sharedStringsXmlSiNodesList = xmlContentFilesObject.sharedStringsFile != undefined
-                ? parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName('si')
+                ? parseString(typeof xmlContentFilesObject.sharedStringsFile === 'string' ? xmlContentFilesObject.sharedStringsFile : xmlContentFilesObject.sharedStringsFile.toString()).getElementsByTagName('si')
                 : [];
 
             /** Create shared string array. This will be used as a map to get strings from within sheet files. */
@@ -1626,7 +1626,7 @@ function parseExcel(file, callback, config) {
             // Parse Sheet files
             xmlContentFilesObject.sheetFiles.forEach(sheetXmlContent => {
                 /** Find text nodes with c tags in sharedStrings xml file */
-                const sheetsXmlCNodesList = parseString(sheetXmlContent).getElementsByTagName('c');
+                const sheetsXmlCNodesList = parseString(typeof sheetXmlContent === 'string' ? sheetXmlContent : sheetXmlContent.toString()).getElementsByTagName('c');
                 // Traverse through the nodes list and fill responseText with either the number value in its v node or find a mapped string from sharedStrings or an inline string.
                 responseText.push(
                     Array.from(sheetsXmlCNodesList)
@@ -1661,7 +1661,7 @@ function parseExcel(file, callback, config) {
 
             // Parse Drawing files
             xmlContentFilesObject.drawingFiles.forEach(drawingXmlContent => {
-                const xmlDoc = parseString(drawingXmlContent);
+                const xmlDoc = parseString(typeof drawingXmlContent === 'string' ? drawingXmlContent : drawingXmlContent.toString());
                 const text = extractTextFromXmlParagraphs(xmlDoc, 'a:p', 'a:t', config.newlineDelimiter ?? '\n');
                 responseText.push(text);
             });
@@ -1669,7 +1669,7 @@ function parseExcel(file, callback, config) {
             // Parse Chart files
             xmlContentFilesObject.chartFiles.forEach(chartXmlContent => {
                 /** Find text nodes with c:v tags */
-                const chartsXmlCVNodesList = parseString(chartXmlContent).getElementsByTagName('c:v');
+                const chartsXmlCVNodesList = parseString(typeof chartXmlContent === 'string' ? chartXmlContent : chartXmlContent.toString()).getElementsByTagName('c:v');
                 /** Store all the text content to respond */
                 responseText.push(
                     Array.from(chartsXmlCVNodesList)
@@ -1995,7 +1995,7 @@ function parseOffice(srcFile, callback, config = {}) {
             if (!fs.existsSync(file))
                 throw ERRORMSG.fileDoesNotExist(file);
 
-            // resolve promise
+            
             res({ file: file, ext: file.split('.').pop()?.toLowerCase() || '' });
         } else
             rej(ERRORMSG.invalidInput);
@@ -2056,7 +2056,7 @@ function parseOffice(srcFile, callback, config = {}) {
 /** Main async function that can be used with await to execute parseOffice. Or it can be used with promises.
  * @param {string | Buffer | ArrayBuffer} srcFile     File path or file buffers or Javascript ArrayBuffer
  * @param {OfficeParserConfig}            [config={}] [OPTIONAL]: Config Object for officeParser
- * @returns {Promise<string>}
+ * @returns {Promise<ParseOfficeResult>}
  */
 function parseOfficeAsync(srcFile, config = {}) {
     return new Promise((res, rej) => {
@@ -2237,6 +2237,7 @@ if ((typeof process.argv[0] === 'string' && (process.argv[0].split('/').pop() ==
                         imageBlocks.forEach((image, index) => {
                             const extension = image.mimeType.split('/')[1] || 'bin';
                             const filename = image.filename || `image_${index + 1}.${extension}`;
+                            // @ts-ignore - Buffer is valid for fs.writeFileSync in Node.js
                             fs.writeFileSync(filename, image.buffer);
                             console.log(`  Saved: ${filename}`);
                         });

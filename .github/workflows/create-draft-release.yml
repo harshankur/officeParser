@@ -1,76 +1,70 @@
 # Workflow Name: Create Draft Release
 # This workflow performs the following tasks:
-# - Checks current version in the most recent commit on master and gets the last version from previous tag.
-# - If the current version is different from the last, it creates a draft release
+# - Monitors pushes to the master branch specifically for package.json changes
+# - Extracts the current version from package.json
+# - Compares the extracted version against the latest Git tag
+# - If a version increment is detected, it automatically prepares a Draft Release on GitHub
+# - Generates a comparison link in the release body to show the delta since the last version
 
 name: Create Draft Release
 
 # Trigger Events:
+# Runs only when package.json is updated on the master branch
 on:
-  # Triggers the workflow on pushes to the master branch
   push:
     branches:
       - master
+    paths:
+      - "package.json"
+
+# Job Permissions:
+# - contents: write (Required to create a release in the repository)
+permissions:
+  contents: write
 
 jobs:
-  # Step 1: Version Check and Release Creation
+  # Job to detect version shifts and initialize the release drafting process
   version-check-and-release:
-    # Only runs on push events, to automate release creation based on version change
+    # Safely skip if the event is somehow not a push (extra validation)
     if: github.event_name == 'push'
-    # Use the latest Ubuntu runner for this job
     runs-on: ubuntu-latest
 
     steps:
-      # Step to check out the repository's code to access files
+      # Step 1: Check out the code with full history for tag detection
       - name: Checkout Repository Code
         uses: actions/checkout@v4
-
-      # Set up Node.js with a specified version
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          fetch-depth: 0
 
-      # Install the project's dependencies using clean install
-      - name: Install Dependencies
-        run: npm ci
-
-      # Fetch current version from package.json and the latest Git tag
+      # Step 2: Extract current version and find the previous tag for comparison
       - name: Get Package Version and Latest Tag
-        # ID to reference this step's outputs
         id: version
-
-        # Extract package.json version
-        # Set output variable `new_version` using environment file
-        # Fetch all tags from the repository
-        # Get the most recent tag
-        # Strip the "v" prefix for comparison
         run: |
+          # Read version from package.json using jq
           NEW_VERSION=$(jq -r '.version' package.json)
-          echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
-          git fetch --tags
-          LAST_TAG=$(git tag --sort=-v:refname | head -n 1)
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          
+          # Retrieve the most recent tag matching the 'v*' pattern
+          LAST_TAG=$(git tag -l "v*" --sort=-v:refname | head -n 1)
           LAST_VERSION=${LAST_TAG#v}
-          echo "last_version=$LAST_VERSION" >> $GITHUB_ENV
+          # Default to 0.0.0 if no tags exist yet
+          echo "last_version=${LAST_VERSION:-0.0.0}" >> $GITHUB_OUTPUT
+          
+          # Generate a formatted date for the release header
+          echo "date=$(date +'%d.%m.%Y')" >> $GITHUB_OUTPUT
         shell: bash
 
-      # Gets the current date in the correct format - DD-MM-YYYY.
-      - name: Get current date
-        id: date
-        run: echo "::set-output name=date::$(date +'%d.%m.%Y')"
-      # Compare versions and create a draft release if version has changed
+      # Step 3: Instantiate a Draft Release if a new version is detected
       - name: Create Draft GitHub Release
-        if: ${{ env.new_version != env.last_version }}
+        if: steps.version.outputs.new_version != steps.version.outputs.last_version
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.new_version }}
-          name: "v${{ env.new_version }}"
+          tag_name: v${{ steps.version.outputs.new_version }}
+          name: "v${{ steps.version.outputs.new_version }}"
           body: |
-            # v${{ env.new_version }} - ${{ steps.date.outputs.date }}
-            ## Changes: [v${{ env.last_version }}..v${{ env.new_version }}](https://github.com/${{ github.repository }}/compare/v${{ env.last_version }}..v${{ env.new_version }})
+            # v${{ steps.version.outputs.new_version }} - ${{ steps.version.outputs.date }}
+            ## Changes: [v${{ steps.version.outputs.last_version }}..v${{ steps.version.outputs.new_version }}](https://github.com/${{ github.repository }}/compare/v${{ steps.version.outputs.last_version }}..v${{ steps.version.outputs.new_version }})
           draft: true
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          new_version: ${{ env.new_version }}
-          last_version: ${{ env.last_version }}
