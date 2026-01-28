@@ -1052,7 +1052,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "ITEM",
+              "text": "ITEM ITEM ITEM",
               "children": [
                 {
                   "type": "paragraph",
@@ -1079,7 +1079,7 @@
             },
             {
               "type": "cell",
-              "text": "NEEDED",
+              "text": "NEEDED NEEDED NEEDED",
               "children": [
                 {
                   "type": "paragraph",
@@ -1111,7 +1111,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Books",
+              "text": "Books Books Books",
               "children": [
                 {
                   "type": "paragraph",
@@ -1138,7 +1138,7 @@
             },
             {
               "type": "cell",
-              "text": "1",
+              "text": "1 1 1",
               "children": [
                 {
                   "type": "paragraph",
@@ -1170,7 +1170,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Pens",
+              "text": "Pens Pens Pens",
               "children": [
                 {
                   "type": "paragraph",
@@ -1197,7 +1197,7 @@
             },
             {
               "type": "cell",
-              "text": "3",
+              "text": "3 3 3",
               "children": [
                 {
                   "type": "paragraph",
@@ -1229,7 +1229,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Pencils",
+              "text": "Pencils Pencils Pencils",
               "children": [
                 {
                   "type": "paragraph",
@@ -1256,7 +1256,7 @@
             },
             {
               "type": "cell",
-              "text": "2",
+              "text": "2 2 2",
               "children": [
                 {
                   "type": "paragraph",
@@ -1288,7 +1288,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Highlighter",
+              "text": "Highlighter Highlighter Highlighter",
               "children": [
                 {
                   "type": "paragraph",
@@ -1315,7 +1315,7 @@
             },
             {
               "type": "cell",
-              "text": "2 colors",
+              "text": "2 colors 2 colors 2 colors",
               "children": [
                 {
                   "type": "paragraph",
@@ -1347,7 +1347,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Scissors",
+              "text": "Scissors Scissors Scissors",
               "children": [
                 {
                   "type": "paragraph",
@@ -1374,7 +1374,7 @@
             },
             {
               "type": "cell",
-              "text": "1 pair",
+              "text": "1 pair 1 pair 1 pair",
               "children": [
                 {
                   "type": "paragraph",
@@ -1481,7 +1481,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "City or Town",
+              "text": "City or Town City or Town City or Town",
               "children": [
                 {
                   "type": "paragraph",
@@ -1510,7 +1510,7 @@
             },
             {
               "type": "cell",
-              "text": "Point A",
+              "text": "Point A Point A Point A",
               "children": [
                 {
                   "type": "paragraph",
@@ -1541,7 +1541,7 @@
             },
             {
               "type": "cell",
-              "text": "Point B",
+              "text": "Point B Point B Point B",
               "children": [
                 {
                   "type": "paragraph",
@@ -1572,7 +1572,7 @@
             },
             {
               "type": "cell",
-              "text": "Point C",
+              "text": "Point C Point C Point C",
               "children": [
                 {
                   "type": "paragraph",
@@ -1603,7 +1603,7 @@
             },
             {
               "type": "cell",
-              "text": "Point D",
+              "text": "Point D Point D Point D",
               "children": [
                 {
                   "type": "paragraph",
@@ -1634,7 +1634,7 @@
             },
             {
               "type": "cell",
-              "text": "Point E",
+              "text": "Point E Point E Point E",
               "children": [
                 {
                   "type": "paragraph",
@@ -1670,7 +1670,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Point A",
+              "text": "Point A Point A Point A",
               "children": [
                 {
                   "type": "paragraph",
@@ -1697,7 +1697,7 @@
             },
             {
               "type": "cell",
-              "text": "—",
+              "text": "— — —",
               "children": [
                 {
                   "type": "paragraph",
@@ -1807,7 +1807,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Point B",
+              "text": "Point B Point B Point B",
               "children": [
                 {
                   "type": "paragraph",
@@ -1834,7 +1834,7 @@
             },
             {
               "type": "cell",
-              "text": "87",
+              "text": "87 87 87",
               "children": [
                 {
                   "type": "paragraph",
@@ -1863,7 +1863,7 @@
             },
             {
               "type": "cell",
-              "text": "—",
+              "text": "— — —",
               "children": [
                 {
                   "type": "paragraph",
@@ -1954,7 +1954,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Point C",
+              "text": "Point C Point C Point C",
               "children": [
                 {
                   "type": "paragraph",
@@ -1981,7 +1981,7 @@
             },
             {
               "type": "cell",
-              "text": "64",
+              "text": "64 64 64",
               "children": [
                 {
                   "type": "paragraph",
@@ -2010,7 +2010,7 @@
             },
             {
               "type": "cell",
-              "text": "56",
+              "text": "56 56 56",
               "children": [
                 {
                   "type": "paragraph",
@@ -2039,7 +2039,7 @@
             },
             {
               "type": "cell",
-              "text": "—",
+              "text": "— — —",
               "children": [
                 {
                   "type": "paragraph",
@@ -2111,7 +2111,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Point D",
+              "text": "Point D Point D Point D",
               "children": [
                 {
                   "type": "paragraph",
@@ -2138,7 +2138,7 @@
             },
             {
               "type": "cell",
-              "text": "37",
+              "text": "37 37 37",
               "children": [
                 {
                   "type": "paragraph",
@@ -2167,7 +2167,7 @@
             },
             {
               "type": "cell",
-              "text": "32",
+              "text": "32 32 32",
               "children": [
                 {
                   "type": "paragraph",
@@ -2196,7 +2196,7 @@
             },
             {
               "type": "cell",
-              "text": "91",
+              "text": "91 91 91",
               "children": [
                 {
                   "type": "paragraph",
@@ -2225,7 +2225,7 @@
             },
             {
               "type": "cell",
-              "text": "—",
+              "text": "— — —",
               "children": [
                 {
                   "type": "paragraph",
@@ -2278,7 +2278,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Point E",
+              "text": "Point E Point E Point E",
               "children": [
                 {
                   "type": "paragraph",
@@ -2305,7 +2305,7 @@
             },
             {
               "type": "cell",
-              "text": "93",
+              "text": "93 93 93",
               "children": [
                 {
                   "type": "paragraph",
@@ -2334,7 +2334,7 @@
             },
             {
               "type": "cell",
-              "text": "35",
+              "text": "35 35 35",
               "children": [
                 {
                   "type": "paragraph",
@@ -2363,7 +2363,7 @@
             },
             {
               "type": "cell",
-              "text": "54",
+              "text": "54 54 54",
               "children": [
                 {
                   "type": "paragraph",
@@ -2392,7 +2392,7 @@
             },
             {
               "type": "cell",
-              "text": "43",
+              "text": "43 43 43",
               "children": [
                 {
                   "type": "paragraph",
@@ -2421,7 +2421,7 @@
             },
             {
               "type": "cell",
-              "text": "—",
+              "text": "— — —",
               "children": [
                 {
                   "type": "paragraph",
@@ -2502,7 +2502,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "College",
+              "text": "College College College",
               "children": [
                 {
                   "type": "paragraph",
@@ -2529,7 +2529,7 @@
             },
             {
               "type": "cell",
-              "text": "New students",
+              "text": "New students New students New students",
               "children": [
                 {
                   "type": "paragraph",
@@ -2556,7 +2556,7 @@
             },
             {
               "type": "cell",
-              "text": "Graduating students",
+              "text": "Graduating students Graduating students Graduating students",
               "children": [
                 {
                   "type": "paragraph",
@@ -2583,7 +2583,7 @@
             },
             {
               "type": "cell",
-              "text": "Change",
+              "text": "Change Change Change",
               "children": [
                 {
                   "type": "paragraph",
@@ -2632,7 +2632,7 @@
             },
             {
               "type": "cell",
-              "text": "Undergraduate",
+              "text": "Undergraduate Undergraduate Undergraduate",
               "children": [
                 {
                   "type": "paragraph",
@@ -2701,7 +2701,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Cedar University",
+              "text": "Cedar University Cedar University Cedar University",
               "children": [
                 {
                   "type": "paragraph",
@@ -2728,7 +2728,7 @@
             },
             {
               "type": "cell",
-              "text": "110",
+              "text": "110 110 110",
               "children": [
                 {
                   "type": "paragraph",
@@ -2759,7 +2759,7 @@
             },
             {
               "type": "cell",
-              "text": "103",
+              "text": "103 103 103",
               "children": [
                 {
                   "type": "paragraph",
@@ -2790,7 +2790,7 @@
             },
             {
               "type": "cell",
-              "text": "+7",
+              "text": "+7 +7 +7",
               "children": [
                 {
                   "type": "paragraph",
@@ -2826,7 +2826,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Oak Institute",
+              "text": "Oak Institute Oak Institute Oak Institute",
               "children": [
                 {
                   "type": "paragraph",
@@ -2853,7 +2853,7 @@
             },
             {
               "type": "cell",
-              "text": "202",
+              "text": "202 202 202",
               "children": [
                 {
                   "type": "paragraph",
@@ -2884,7 +2884,7 @@
             },
             {
               "type": "cell",
-              "text": "210",
+              "text": "210 210 210",
               "children": [
                 {
                   "type": "paragraph",
@@ -2915,7 +2915,7 @@
             },
             {
               "type": "cell",
-              "text": "-8",
+              "text": "-8 -8 -8",
               "children": [
                 {
                   "type": "paragraph",
@@ -2968,7 +2968,7 @@
             },
             {
               "type": "cell",
-              "text": "Graduate",
+              "text": "Graduate Graduate Graduate",
               "children": [
                 {
                   "type": "paragraph",
@@ -3037,7 +3037,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Cedar University",
+              "text": "Cedar University Cedar University Cedar University",
               "children": [
                 {
                   "type": "paragraph",
@@ -3064,7 +3064,7 @@
             },
             {
               "type": "cell",
-              "text": "24",
+              "text": "24 24 24",
               "children": [
                 {
                   "type": "paragraph",
@@ -3095,7 +3095,7 @@
             },
             {
               "type": "cell",
-              "text": "20",
+              "text": "20 20 20",
               "children": [
                 {
                   "type": "paragraph",
@@ -3126,7 +3126,7 @@
             },
             {
               "type": "cell",
-              "text": "+4",
+              "text": "+4 +4 +4",
               "children": [
                 {
                   "type": "paragraph",
@@ -3162,7 +3162,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Elm College",
+              "text": "Elm College Elm College Elm College",
               "children": [
                 {
                   "type": "paragraph",
@@ -3189,7 +3189,7 @@
             },
             {
               "type": "cell",
-              "text": "43",
+              "text": "43 43 43",
               "children": [
                 {
                   "type": "paragraph",
@@ -3220,7 +3220,7 @@
             },
             {
               "type": "cell",
-              "text": "53",
+              "text": "53 53 53",
               "children": [
                 {
                   "type": "paragraph",
@@ -3251,7 +3251,7 @@
             },
             {
               "type": "cell",
-              "text": "-10",
+              "text": "-10 -10 -10",
               "children": [
                 {
                   "type": "paragraph",
@@ -3287,7 +3287,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Total",
+              "text": "Total Total Total",
               "children": [
                 {
                   "type": "paragraph",
@@ -3314,7 +3314,7 @@
             },
             {
               "type": "cell",
-              "text": "998",
+              "text": "998 998 998",
               "children": [
                 {
                   "type": "paragraph",
@@ -3345,7 +3345,7 @@
             },
             {
               "type": "cell",
-              "text": "908",
+              "text": "908 908 908",
               "children": [
                 {
                   "type": "paragraph",
@@ -3376,7 +3376,7 @@
             },
             {
               "type": "cell",
-              "text": "90",
+              "text": "90 90 90",
               "children": [
                 {
                   "type": "paragraph",
@@ -3486,7 +3486,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "",
+              "text": "OneThree One One Three Three One One Three Three Two Two Two Two Two Four Four Four Four Four",
               "children": [
                 {
                   "type": "table",
@@ -3496,7 +3496,7 @@
                       "children": [
                         {
                           "type": "cell",
-                          "text": "OneThree",
+                          "text": "OneThree One One Three Three",
                           "children": [
                             {
                               "type": "paragraph",
@@ -3540,7 +3540,7 @@
                         },
                         {
                           "type": "cell",
-                          "text": "Two",
+                          "text": "Two Two Two",
                           "children": [
                             {
                               "type": "paragraph",
@@ -3589,7 +3589,7 @@
                         },
                         {
                           "type": "cell",
-                          "text": "Four",
+                          "text": "Four Four Four",
                           "children": [
                             {
                               "type": "paragraph",
@@ -3633,7 +3633,7 @@
             },
             {
               "type": "cell",
-              "text": "To the left is a table inside a table, with some cells merged.",
+              "text": "To the left is a table inside a table, with some cells merged. To the left is a table inside a table, with some cells merged. To the left is a table inside a table, with some cells merged.",
               "children": [
                 {
                   "type": "paragraph",
@@ -3748,7 +3748,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "December 2007",
+              "text": "December 2007 December 2007 December 2007",
               "children": [
                 {
                   "type": "paragraph",
@@ -3780,7 +3780,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "Sun",
+              "text": "Sun Sun Sun",
               "children": [
                 {
                   "type": "paragraph",
@@ -3824,7 +3824,7 @@
             },
             {
               "type": "cell",
-              "text": "Mon",
+              "text": "Mon Mon Mon",
               "children": [
                 {
                   "type": "paragraph",
@@ -3868,7 +3868,7 @@
             },
             {
               "type": "cell",
-              "text": "Tue",
+              "text": "Tue Tue Tue",
               "children": [
                 {
                   "type": "paragraph",
@@ -3912,7 +3912,7 @@
             },
             {
               "type": "cell",
-              "text": "Wed",
+              "text": "Wed Wed Wed",
               "children": [
                 {
                   "type": "paragraph",
@@ -3956,7 +3956,7 @@
             },
             {
               "type": "cell",
-              "text": "Thu",
+              "text": "Thu Thu Thu",
               "children": [
                 {
                   "type": "paragraph",
@@ -4000,7 +4000,7 @@
             },
             {
               "type": "cell",
-              "text": "Fri",
+              "text": "Fri Fri Fri",
               "children": [
                 {
                   "type": "paragraph",
@@ -4044,7 +4044,7 @@
             },
             {
               "type": "cell",
-              "text": "Sat",
+              "text": "Sat Sat Sat",
               "children": [
                 {
                   "type": "paragraph",
@@ -4280,7 +4280,7 @@
             },
             {
               "type": "cell",
-              "text": "1",
+              "text": "1 1 1",
               "children": [
                 {
                   "type": "paragraph",
@@ -4538,7 +4538,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "2",
+              "text": "2 2 2",
               "children": [
                 {
                   "type": "paragraph",
@@ -4582,7 +4582,7 @@
             },
             {
               "type": "cell",
-              "text": "3",
+              "text": "3 3 3",
               "children": [
                 {
                   "type": "paragraph",
@@ -4626,7 +4626,7 @@
             },
             {
               "type": "cell",
-              "text": "4",
+              "text": "4 4 4",
               "children": [
                 {
                   "type": "paragraph",
@@ -4670,7 +4670,7 @@
             },
             {
               "type": "cell",
-              "text": "5",
+              "text": "5 5 5",
               "children": [
                 {
                   "type": "paragraph",
@@ -4714,7 +4714,7 @@
             },
             {
               "type": "cell",
-              "text": "6",
+              "text": "6 6 6",
               "children": [
                 {
                   "type": "paragraph",
@@ -4758,7 +4758,7 @@
             },
             {
               "type": "cell",
-              "text": "7",
+              "text": "7 7 7",
               "children": [
                 {
                   "type": "paragraph",
@@ -4802,7 +4802,7 @@
             },
             {
               "type": "cell",
-              "text": "8",
+              "text": "8 8 8",
               "children": [
                 {
                   "type": "paragraph",
@@ -5060,7 +5060,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "9",
+              "text": "9 9 9",
               "children": [
                 {
                   "type": "paragraph",
@@ -5104,7 +5104,7 @@
             },
             {
               "type": "cell",
-              "text": "10",
+              "text": "10 10 10",
               "children": [
                 {
                   "type": "paragraph",
@@ -5148,7 +5148,7 @@
             },
             {
               "type": "cell",
-              "text": "11",
+              "text": "11 11 11",
               "children": [
                 {
                   "type": "paragraph",
@@ -5192,7 +5192,7 @@
             },
             {
               "type": "cell",
-              "text": "12",
+              "text": "12 12 12",
               "children": [
                 {
                   "type": "paragraph",
@@ -5236,7 +5236,7 @@
             },
             {
               "type": "cell",
-              "text": "13",
+              "text": "13 13 13",
               "children": [
                 {
                   "type": "paragraph",
@@ -5280,7 +5280,7 @@
             },
             {
               "type": "cell",
-              "text": "14",
+              "text": "14 14 14",
               "children": [
                 {
                   "type": "paragraph",
@@ -5324,7 +5324,7 @@
             },
             {
               "type": "cell",
-              "text": "15",
+              "text": "15 15 15",
               "children": [
                 {
                   "type": "paragraph",
@@ -5582,7 +5582,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "16",
+              "text": "16 16 16",
               "children": [
                 {
                   "type": "paragraph",
@@ -5626,7 +5626,7 @@
             },
             {
               "type": "cell",
-              "text": "17",
+              "text": "17 17 17",
               "children": [
                 {
                   "type": "paragraph",
@@ -5670,7 +5670,7 @@
             },
             {
               "type": "cell",
-              "text": "18",
+              "text": "18 18 18",
               "children": [
                 {
                   "type": "paragraph",
@@ -5714,7 +5714,7 @@
             },
             {
               "type": "cell",
-              "text": "19",
+              "text": "19 19 19",
               "children": [
                 {
                   "type": "paragraph",
@@ -5758,7 +5758,7 @@
             },
             {
               "type": "cell",
-              "text": "20",
+              "text": "20 20 20",
               "children": [
                 {
                   "type": "paragraph",
@@ -5802,7 +5802,7 @@
             },
             {
               "type": "cell",
-              "text": "21",
+              "text": "21 21 21",
               "children": [
                 {
                   "type": "paragraph",
@@ -5846,7 +5846,7 @@
             },
             {
               "type": "cell",
-              "text": "22",
+              "text": "22 22 22",
               "children": [
                 {
                   "type": "paragraph",
@@ -6104,7 +6104,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "23",
+              "text": "23 23 23",
               "children": [
                 {
                   "type": "paragraph",
@@ -6148,7 +6148,7 @@
             },
             {
               "type": "cell",
-              "text": "24",
+              "text": "24 24 24",
               "children": [
                 {
                   "type": "paragraph",
@@ -6192,7 +6192,7 @@
             },
             {
               "type": "cell",
-              "text": "25",
+              "text": "25 25 25",
               "children": [
                 {
                   "type": "paragraph",
@@ -6236,7 +6236,7 @@
             },
             {
               "type": "cell",
-              "text": "26",
+              "text": "26 26 26",
               "children": [
                 {
                   "type": "paragraph",
@@ -6280,7 +6280,7 @@
             },
             {
               "type": "cell",
-              "text": "27",
+              "text": "27 27 27",
               "children": [
                 {
                   "type": "paragraph",
@@ -6324,7 +6324,7 @@
             },
             {
               "type": "cell",
-              "text": "28",
+              "text": "28 28 28",
               "children": [
                 {
                   "type": "paragraph",
@@ -6368,7 +6368,7 @@
             },
             {
               "type": "cell",
-              "text": "29",
+              "text": "29 29 29",
               "children": [
                 {
                   "type": "paragraph",
@@ -6626,7 +6626,7 @@
           "children": [
             {
               "type": "cell",
-              "text": "30",
+              "text": "30 30 30",
               "children": [
                 {
                   "type": "paragraph",
@@ -6670,7 +6670,7 @@
             },
             {
               "type": "cell",
-              "text": "31",
+              "text": "31 31 31",
               "children": [
                 {
                   "type": "paragraph",
@@ -8838,23 +8838,11 @@
       "altText": "165 Inspirational Quotes To Keep You Motivated In Life"
     }
   ],
-  "fullText": "Demonstration of DOCX support in calibre\nThis document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action.\nThere is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting.\nTo see the DOCX conversion in action, simply add this file to calibre using the “Add Books” button and then click “Convert”.  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click “OK”.\nText Formatting\nInline formatting\nHere, we demonstrate various types of inline text formatting and the use of embedded fonts.\nHere is some bold, italic, bold-italic, underlined and struck out  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.\nA paragraph with styled text: subtle emphasis  followed by strong text and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.\nFun with fonts\nThis document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion. \nParagraph level formatting\nYou can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.\nFor the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.\nTables\nITEM\nNEEDED\nBooks\n1\nPens\n3\nPencils\n2\nHighlighter\n2 colors\nScissors\n1 pair\nTables in Word can vary from the extremely simple to the extremely complex. calibre tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section. Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units.  To the left of this paragraph is a floating two column table with a nice green border and header row.\nNow let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.\nCity or Town\nPoint A\nPoint B\nPoint C\nPoint D\nPoint E\nPoint A\n—\nPoint B\n87\n—\nPoint C\n64\n56\n—\nPoint D\n37\n32\n91\n—\nPoint E\n93\n35\n54\n43\n—\nNext, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.\nCollege\nNew students\nGraduating students\nChange\nUndergraduate\nCedar University\n110\n103\n+7\nOak Institute\n202\n210\n-8\nGraduate\nCedar University\n24\n20\n+4\nElm College\n43\n53\n-10\nTotal\n998\n908\n90\nSource: Fictitious data, for illustration purposes only\nNext, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.\nOne\nThree\nTwo\nFour\nTo the left is a table inside a table, with some cells merged.\nWe end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.\nDecember 2007\nSun\nMon\nTue\nWed\nThu\nFri\nSat\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\nStructural Elements\nMiscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like. \nFootnotes & Endnotes\nFootnotes In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre. and endnotes Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note. are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.\nDropcaps\nD\nrop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to specify how many lines of text a drop-cap should use.\nLinks\nTwo kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the calibre download page. Then we have a link that points back to the section on paragraph level formatting in this document.\nTable of Contents\n You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook. \nDemonstration of DOCX support in calibre1\nText Formatting1\nInline formatting2\nFun with fonts2\nParagraph level formatting2\nTables2\nStructural Elements4\nFootnotes & Endnotes5\nDropcaps5\nLinks5\nTable of Contents5\nImages6\nLists7\nBulleted List8\nNumbered List8\nMulti-level Lists8\nContinued Lists8\nImages\nCentered images like this are useful for large pictures that should be a focus of attention. \nBethe change\nthat youwish to\nseein the world.\nThere is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was inserted, not necessarily where it appears on the page in Word.\nLists\nAll types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.\nBulleted List\nOne\nTwo\nNumbered List\nOne, with a very long line to demonstrate that the hanging indent for the list is working correctly\nTwo\nMulti-level Lists\nOne\nTwo\nThree\nFour with a very long line to demonstrate that the hanging indent for the list is working correctly.\nFive\nSix\nA Multi-level list with bullets:\nOne\nTwo\nThis bullet uses an image as the bullet item\nFour\nFive\nContinued Lists\nOne\nTwo\nAn interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.\nWe now resume our normal programming\nFour",
+  "fullText": "Demonstration of DOCX support in calibre\nThis document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action.\nThere is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting.\nTo see the DOCX conversion in action, simply add this file to calibre using the “Add Books” button and then click “Convert”.  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click “OK”.\nText Formatting\nInline formatting\nHere, we demonstrate various types of inline text formatting and the use of embedded fonts.\nHere is some bold, italic, bold-italic, underlined and struck out  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.\nA paragraph with styled text: subtle emphasis  followed by strong text and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.\nFun with fonts\nThis document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion.\nParagraph level formatting\nYou can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.\nFor the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.\nTables\nITEM ITEM ITEM\tNEEDED NEEDED NEEDED\nBooks Books Books\t1 1 1\nPens Pens Pens\t3 3 3\nPencils Pencils Pencils\t2 2 2\nHighlighter Highlighter Highlighter\t2 colors 2 colors 2 colors\nScissors Scissors Scissors\t1 pair 1 pair 1 pair\nTables in Word can vary from the extremely simple to the extremely complex. calibre tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section. Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units.  To the left of this paragraph is a floating two column table with a nice green border and header row.\nNow let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.\nCity or Town City or Town City or Town\tPoint A Point A Point A\tPoint B Point B Point B\tPoint C Point C Point C\tPoint D Point D Point D\tPoint E Point E Point E\nPoint A Point A Point A\t— — —\t\t\t\t\nPoint B Point B Point B\t87 87 87\t— — —\t\t\t\nPoint C Point C Point C\t64 64 64\t56 56 56\t— — —\t\t\nPoint D Point D Point D\t37 37 37\t32 32 32\t91 91 91\t— — —\t\nPoint E Point E Point E\t93 93 93\t35 35 35\t54 54 54\t43 43 43\t— — —\nNext, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.\nCollege College College\tNew students New students New students\tGraduating students Graduating students Graduating students\tChange Change Change\n\tUndergraduate Undergraduate Undergraduate\t\t\nCedar University Cedar University Cedar University\t110 110 110\t103 103 103\t+7 +7 +7\nOak Institute Oak Institute Oak Institute\t202 202 202\t210 210 210\t-8 -8 -8\n\tGraduate Graduate Graduate\t\t\nCedar University Cedar University Cedar University\t24 24 24\t20 20 20\t+4 +4 +4\nElm College Elm College Elm College\t43 43 43\t53 53 53\t-10 -10 -10\nTotal Total Total\t998 998 998\t908 908 908\t90 90 90\nSource: Fictitious data, for illustration purposes only\nNext, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.\nOneThree One One Three Three One One Three Three Two Two Two Two Two Four Four Four Four Four\tTo the left is a table inside a table, with some cells merged. To the left is a table inside a table, with some cells merged. To the left is a table inside a table, with some cells merged.\nWe end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.\nDecember 2007 December 2007 December 2007\nSun Sun Sun\t\tMon Mon Mon\t\tTue Tue Tue\t\tWed Wed Wed\t\tThu Thu Thu\t\tFri Fri Fri\t\tSat Sat Sat\n\t\t\t\t\t\t\t\t\t\t\t\t1 1 1\n\t\t\t\t\t\t\t\t\t\t\t\t\n2 2 2\t\t3 3 3\t\t4 4 4\t\t5 5 5\t\t6 6 6\t\t7 7 7\t\t8 8 8\n\t\t\t\t\t\t\t\t\t\t\t\t\n9 9 9\t\t10 10 10\t\t11 11 11\t\t12 12 12\t\t13 13 13\t\t14 14 14\t\t15 15 15\n\t\t\t\t\t\t\t\t\t\t\t\t\n16 16 16\t\t17 17 17\t\t18 18 18\t\t19 19 19\t\t20 20 20\t\t21 21 21\t\t22 22 22\n\t\t\t\t\t\t\t\t\t\t\t\t\n23 23 23\t\t24 24 24\t\t25 25 25\t\t26 26 26\t\t27 27 27\t\t28 28 28\t\t29 29 29\n\t\t\t\t\t\t\t\t\t\t\t\t\n30 30 30\t\t31 31 31\t\t\t\t\t\t\t\t\t\t\nStructural Elements\nMiscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.\nFootnotes & Endnotes\nFootnotes and endnotes are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.\nDropcaps\nD\nrop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to specify how many lines of text a drop-cap should use.\nLinks\nTwo kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the calibre download page. Then we have a link that points back to the section on paragraph level formatting in this document.\nTable of Contents\nYou can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook.\nDemonstration of DOCX support in calibre1\nText Formatting1\nInline formatting2\nFun with fonts2\nParagraph level formatting2\nTables2\nStructural Elements4\nFootnotes & Endnotes5\nDropcaps5\nLinks5\nTable of Contents5\nImages6\nLists7\nBulleted List8\nNumbered List8\nMulti-level Lists8\nContinued Lists8\nImages\nCentered images like this are useful for large pictures that should be a focus of attention.\nThere is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was inserted, not necessarily where it appears on the page in Word.\nLists\nAll types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.\nBulleted List\nOne\nTwo\nNumbered List\nOne, with a very long line to demonstrate that the hanging indent for the list is working correctly\nTwo\nMulti-level Lists\nOne\nTwo\nThree\nFour with a very long line to demonstrate that the hanging indent for the list is working correctly.\nFive\nSix\nA Multi-level list with bullets:\nOne\nTwo\nThis bullet uses an image as the bullet item\nFour\nFive\nContinued Lists\nOne\nTwo\nAn interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.\nWe now resume our normal programming\nFour",
   "blocks": [
     {
       "type": "text",
       "content": "Demonstration of DOCX support in calibre"
-    },
-    {
-      "type": "text",
-      "content": "Demonstration of DOCX support in"
-    },
-    {
-      "type": "text",
-      "content": "calibre"
-    },
-    {
-      "type": "text",
-      "content": "This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action."
     },
     {
       "type": "text",
@@ -8866,71 +8854,15 @@
     },
     {
       "type": "text",
-      "content": "There is support for images, tables, lists, footnotes, endnotes,"
-    },
-    {
-      "type": "text",
-      "content": "links, dropcaps and"
-    },
-    {
-      "type": "text",
-      "content": "various"
-    },
-    {
-      "type": "text",
-      "content": "types of text and paragraph level formatting."
-    },
-    {
-      "type": "text",
       "content": "To see the DOCX conversion in action, simply add this file to calibre using the “Add Books” button and then click “Convert”.  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click “OK”."
     },
     {
       "type": "text",
-      "content": "To see the DOCX conversion in action, simply add this file to calibre using the"
-    },
-    {
-      "type": "text",
-      "content": "“Add Books”"
-    },
-    {
-      "type": "text",
-      "content": "button and then click “"
-    },
-    {
-      "type": "text",
-      "content": "Convert”."
-    },
-    {
-      "type": "text",
-      "content": "Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click"
-    },
-    {
-      "type": "text",
-      "content": "“OK”"
-    },
-    {
-      "type": "text",
-      "content": "."
-    },
-    {
-      "type": "text",
-      "content": "Text Formatting"
-    },
-    {
-      "type": "text",
       "content": "Text Formatting"
     },
     {
       "type": "text",
       "content": "Inline formatting"
-    },
-    {
-      "type": "text",
-      "content": "Inline formatting"
-    },
-    {
-      "type": "text",
-      "content": "Here, we demonstrate various types of inline text formatting and the use of embedded fonts."
     },
     {
       "type": "text",
@@ -8942,159 +8874,7 @@
     },
     {
       "type": "text",
-      "content": "Here is some"
-    },
-    {
-      "type": "text",
-      "content": "bold,"
-    },
-    {
-      "type": "text",
-      "content": "italic,"
-    },
-    {
-      "type": "text",
-      "content": "bold-italic,"
-    },
-    {
-      "type": "text",
-      "content": "underlined"
-    },
-    {
-      "type": "text",
-      "content": "and"
-    },
-    {
-      "type": "text",
-      "content": "struck out"
-    },
-    {
-      "type": "text",
-      "content": "text. Then, we have a super"
-    },
-    {
-      "type": "text",
-      "content": "script"
-    },
-    {
-      "type": "text",
-      "content": "and a sub"
-    },
-    {
-      "type": "text",
-      "content": "script"
-    },
-    {
-      "type": "text",
-      "content": ". Now we see some"
-    },
-    {
-      "type": "text",
-      "content": "red"
-    },
-    {
-      "type": "text",
-      "content": ","
-    },
-    {
-      "type": "text",
-      "content": "green"
-    },
-    {
-      "type": "text",
-      "content": "and"
-    },
-    {
-      "type": "text",
-      "content": "blue"
-    },
-    {
-      "type": "text",
-      "content": "text. Some text with a"
-    },
-    {
-      "type": "text",
-      "content": "yellow highlight"
-    },
-    {
-      "type": "text",
-      "content": ". Some text in a"
-    },
-    {
-      "type": "text",
-      "content": "box"
-    },
-    {
-      "type": "text",
-      "content": ". Some text"
-    },
-    {
-      "type": "text",
-      "content": "in"
-    },
-    {
-      "type": "text",
-      "content": "inverse video"
-    },
-    {
-      "type": "text",
-      "content": "."
-    },
-    {
-      "type": "text",
       "content": "A paragraph with styled text: subtle emphasis  followed by strong text and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease."
-    },
-    {
-      "type": "text",
-      "content": "A paragraph with styled text:"
-    },
-    {
-      "type": "text",
-      "content": "subtle emphasis"
-    },
-    {
-      "type": "text",
-      "content": "f"
-    },
-    {
-      "type": "text",
-      "content": "ollowed by"
-    },
-    {
-      "type": "text",
-      "content": "strong text"
-    },
-    {
-      "type": "text",
-      "content": "a"
-    },
-    {
-      "type": "text",
-      "content": "nd"
-    },
-    {
-      "type": "text",
-      "content": "intense emphasis"
-    },
-    {
-      "type": "text",
-      "content": "."
-    },
-    {
-      "type": "text",
-      "content": "This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph"
-    },
-    {
-      "type": "text",
-      "content": "—"
-    },
-    {
-      "type": "text",
-      "content": "calibre can handle both with equal ease."
-    },
-    {
-      "type": "text",
-      "content": "Fun with fonts"
     },
     {
       "type": "text",
@@ -9106,26 +8886,6 @@
     },
     {
       "type": "text",
-      "content": "This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is"
-    },
-    {
-      "type": "text",
-      "content": "some text in the Ubuntu Mono typeface"
-    },
-    {
-      "type": "text",
-      "content": ", notice how every letter has the same width, even i and m"
-    },
-    {
-      "type": "text",
-      "content": ". Every embedded font will automatically be embedded in the output ebook during conversion."
-    },
-    {
-      "type": "text",
-      "content": "Paragraph level formatting"
-    },
-    {
-      "type": "text",
       "content": "Paragraph level formatting"
     },
     {
@@ -9134,19 +8894,7 @@
     },
     {
       "type": "text",
-      "content": "You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background."
-    },
-    {
-      "type": "text",
       "content": "For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph."
-    },
-    {
-      "type": "text",
-      "content": "For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph."
-    },
-    {
-      "type": "text",
-      "content": "Tables"
     },
     {
       "type": "text",
@@ -9220,30 +8968,6 @@
     {
       "type": "text",
       "content": "Tables in Word can vary from the extremely simple to the extremely complex. calibre tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section. Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units.  To the left of this paragraph is a floating two column table with a nice green border and header row."
-    },
-    {
-      "type": "text",
-      "content": "Tables in Word can vary from the extremely simple to the extremely complex."
-    },
-    {
-      "type": "text",
-      "content": "calibre"
-    },
-    {
-      "type": "text",
-      "content": "tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section."
-    },
-    {
-      "type": "text",
-      "content": "Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units."
-    },
-    {
-      "type": "text",
-      "content": "To the left of this paragraph is a floating two column table with a nice green border and header row."
-    },
-    {
-      "type": "text",
-      "content": "Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width."
     },
     {
       "type": "text",
@@ -9391,18 +9115,6 @@
       "content": "Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved."
     },
     {
-      "type": "text",
-      "content": "Next, we see a table with special formatting in various locations. Notice how the f"
-    },
-    {
-      "type": "text",
-      "content": "ormatting for the h"
-    },
-    {
-      "type": "text",
-      "content": "eader row and sub header rows is preserved."
-    },
-    {
       "type": "table",
       "rows": [
         {
@@ -9541,27 +9253,7 @@
     },
     {
       "type": "text",
-      "content": "Source:"
-    },
-    {
-      "type": "text",
-      "content": "Fictitious data, for illustration purposes only"
-    },
-    {
-      "type": "text",
       "content": "Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered."
-    },
-    {
-      "type": "text",
-      "content": "Next"
-    },
-    {
-      "type": "text",
-      "content": ", we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged."
-    },
-    {
-      "type": "text",
-      "content": "The table is displayed horizontally centered."
     },
     {
       "type": "table",
@@ -9569,7 +9261,7 @@
         {
           "cols": [
             {
-              "value": "OneThree One One Three Three Two Two Two Four Four Four"
+              "value": "OneThree One One Three Three One One Three Three Two Two Two Two Two Four Four Four Four Four"
             },
             {
               "value": "To the left is a table inside a table, with some cells merged. To the left is a table inside a table, with some cells merged. To the left is a table inside a table, with some cells merged."
@@ -9581,34 +9273,6 @@
     {
       "type": "text",
       "content": "We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks."
-    },
-    {
-      "type": "text",
-      "content": "W"
-    },
-    {
-      "type": "text",
-      "content": "e end with a"
-    },
-    {
-      "type": "text",
-      "content": "fancy"
-    },
-    {
-      "type": "text",
-      "content": "calendar, note how"
-    },
-    {
-      "type": "text",
-      "content": "much of the original formatting is preserved"
-    },
-    {
-      "type": "text",
-      "content": "."
-    },
-    {
-      "type": "text",
-      "content": "Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks."
     },
     {
       "type": "table",
@@ -10144,19 +9808,7 @@
     },
     {
       "type": "text",
-      "content": "Structural Elements"
-    },
-    {
-      "type": "text",
       "content": "Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like."
-    },
-    {
-      "type": "text",
-      "content": "Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like."
-    },
-    {
-      "type": "text",
-      "content": "Footnotes & Endnotes"
     },
     {
       "type": "text",
@@ -10168,43 +9820,7 @@
     },
     {
       "type": "text",
-      "content": "Footnotes"
-    },
-    {
-      "type": "text",
-      "content": "In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre."
-    },
-    {
-      "type": "text",
-      "content": "In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre."
-    },
-    {
-      "type": "text",
-      "content": "and endnotes"
-    },
-    {
-      "type": "text",
-      "content": "Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note."
-    },
-    {
-      "type": "text",
-      "content": "Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note."
-    },
-    {
-      "type": "text",
-      "content": "are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices."
-    },
-    {
-      "type": "text",
       "content": "Dropcaps"
-    },
-    {
-      "type": "text",
-      "content": "Dropcaps"
-    },
-    {
-      "type": "text",
-      "content": "D"
     },
     {
       "type": "text",
@@ -10216,75 +9832,11 @@
     },
     {
       "type": "text",
-      "content": "rop"
-    },
-    {
-      "type": "text",
-      "content": "caps are used to emphasize the leading paragraph at the start of a section. In"
-    },
-    {
-      "type": "text",
-      "content": "Word"
-    },
-    {
-      "type": "text",
-      "content": "it is possible to s"
-    },
-    {
-      "type": "text",
-      "content": "p"
-    },
-    {
-      "type": "text",
-      "content": "ecify how many lines of text a drop-cap should use."
-    },
-    {
-      "type": "text",
-      "content": "Links"
-    },
-    {
-      "type": "text",
       "content": "Links"
     },
     {
       "type": "text",
       "content": "Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the calibre download page. Then we have a link that points back to the section on paragraph level formatting in this document."
-    },
-    {
-      "type": "text",
-      "content": "Two kinds of links are possible, those that refer to an external website and those that refer to"
-    },
-    {
-      "type": "text",
-      "content": "locations"
-    },
-    {
-      "type": "text",
-      "content": "inside the document itself. Both are supported by calibre. For example, here is a link pointing to the"
-    },
-    {
-      "type": "text",
-      "content": "calibre download page"
-    },
-    {
-      "type": "text",
-      "content": "."
-    },
-    {
-      "type": "text",
-      "content": "Then we have a link that points back to the section on"
-    },
-    {
-      "type": "text",
-      "content": "paragraph level formatting"
-    },
-    {
-      "type": "text",
-      "content": "in this document."
-    },
-    {
-      "type": "text",
-      "content": "Table of Contents"
     },
     {
       "type": "text",
@@ -10296,31 +9848,7 @@
     },
     {
       "type": "text",
-      "content": "You can see the"
-    },
-    {
-      "type": "text",
-      "content": "Table of Contents"
-    },
-    {
-      "type": "text",
-      "content": "created by calibre"
-    },
-    {
-      "type": "text",
-      "content": "by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook."
-    },
-    {
-      "type": "text",
       "content": "Demonstration of DOCX support in calibre1"
-    },
-    {
-      "type": "text",
-      "content": "Demonstration of DOCX support in calibre"
-    },
-    {
-      "type": "text",
-      "content": "1"
     },
     {
       "type": "text",
@@ -10328,23 +9856,7 @@
     },
     {
       "type": "text",
-      "content": "Text Formatting"
-    },
-    {
-      "type": "text",
-      "content": "1"
-    },
-    {
-      "type": "text",
       "content": "Inline formatting2"
-    },
-    {
-      "type": "text",
-      "content": "Inline formatting"
-    },
-    {
-      "type": "text",
-      "content": "2"
     },
     {
       "type": "text",
@@ -10352,23 +9864,7 @@
     },
     {
       "type": "text",
-      "content": "Fun with fonts"
-    },
-    {
-      "type": "text",
-      "content": "2"
-    },
-    {
-      "type": "text",
       "content": "Paragraph level formatting2"
-    },
-    {
-      "type": "text",
-      "content": "Paragraph level formatting"
-    },
-    {
-      "type": "text",
-      "content": "2"
     },
     {
       "type": "text",
@@ -10376,23 +9872,7 @@
     },
     {
       "type": "text",
-      "content": "Tables"
-    },
-    {
-      "type": "text",
-      "content": "2"
-    },
-    {
-      "type": "text",
       "content": "Structural Elements4"
-    },
-    {
-      "type": "text",
-      "content": "Structural Elements"
-    },
-    {
-      "type": "text",
-      "content": "4"
     },
     {
       "type": "text",
@@ -10400,23 +9880,7 @@
     },
     {
       "type": "text",
-      "content": "Footnotes & Endnotes"
-    },
-    {
-      "type": "text",
-      "content": "5"
-    },
-    {
-      "type": "text",
       "content": "Dropcaps5"
-    },
-    {
-      "type": "text",
-      "content": "Dropcaps"
-    },
-    {
-      "type": "text",
-      "content": "5"
     },
     {
       "type": "text",
@@ -10424,23 +9888,7 @@
     },
     {
       "type": "text",
-      "content": "Links"
-    },
-    {
-      "type": "text",
-      "content": "5"
-    },
-    {
-      "type": "text",
       "content": "Table of Contents5"
-    },
-    {
-      "type": "text",
-      "content": "Table of Contents"
-    },
-    {
-      "type": "text",
-      "content": "5"
     },
     {
       "type": "text",
@@ -10448,23 +9896,7 @@
     },
     {
       "type": "text",
-      "content": "Images"
-    },
-    {
-      "type": "text",
-      "content": "6"
-    },
-    {
-      "type": "text",
       "content": "Lists7"
-    },
-    {
-      "type": "text",
-      "content": "Lists"
-    },
-    {
-      "type": "text",
-      "content": "7"
     },
     {
       "type": "text",
@@ -10472,23 +9904,7 @@
     },
     {
       "type": "text",
-      "content": "Bulleted List"
-    },
-    {
-      "type": "text",
-      "content": "8"
-    },
-    {
-      "type": "text",
       "content": "Numbered List8"
-    },
-    {
-      "type": "text",
-      "content": "Numbered List"
-    },
-    {
-      "type": "text",
-      "content": "8"
     },
     {
       "type": "text",
@@ -10496,35 +9912,11 @@
     },
     {
       "type": "text",
-      "content": "Multi-level Lists"
-    },
-    {
-      "type": "text",
-      "content": "8"
-    },
-    {
-      "type": "text",
       "content": "Continued Lists8"
     },
     {
       "type": "text",
-      "content": "Continued Lists"
-    },
-    {
-      "type": "text",
-      "content": "8"
-    },
-    {
-      "type": "text",
       "content": "Images"
-    },
-    {
-      "type": "text",
-      "content": "Images"
-    },
-    {
-      "type": "text",
-      "content": "Centered images like this are useful for large pictures that should be a focus of attention."
     },
     {
       "type": "text",
@@ -85649,43 +85041,11 @@
     },
     {
       "type": "text",
-      "content": "There is no analogous technology in"
-    },
-    {
-      "type": "text",
-      "content": "ebooks"
-    },
-    {
-      "type": "text",
-      "content": ", so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was"
-    },
-    {
-      "type": "text",
-      "content": "inserted"
-    },
-    {
-      "type": "text",
-      "content": ", not necessarily where it appears on the page in Word."
-    },
-    {
-      "type": "text",
-      "content": "Lists"
-    },
-    {
-      "type": "text",
       "content": "Lists"
     },
     {
       "type": "text",
       "content": "All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets."
-    },
-    {
-      "type": "text",
-      "content": "All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets."
-    },
-    {
-      "type": "text",
-      "content": "Bulleted List"
     },
     {
       "type": "text",
@@ -85705,10 +85065,6 @@
     },
     {
       "type": "text",
-      "content": "Numbered List"
-    },
-    {
-      "type": "text",
       "content": "One, with a very long line to demonstrate that the hanging indent for the list is working correctly"
     },
     {
@@ -85718,14 +85074,6 @@
     {
       "type": "text",
       "content": "Multi-level Lists"
-    },
-    {
-      "type": "text",
-      "content": "Multi-level List"
-    },
-    {
-      "type": "text",
-      "content": "s"
     },
     {
       "type": "text",
@@ -85757,10 +85105,6 @@
     },
     {
       "type": "text",
-      "content": "A Multi-level list with bullets:"
-    },
-    {
-      "type": "text",
       "content": "One"
     },
     {
@@ -85785,19 +85129,11 @@
     },
     {
       "type": "text",
-      "content": "Continued Lists"
-    },
-    {
-      "type": "text",
       "content": "One"
     },
     {
       "type": "text",
       "content": "Two"
-    },
-    {
-      "type": "text",
-      "content": "An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement."
     },
     {
       "type": "text",

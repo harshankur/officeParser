@@ -93,26 +93,29 @@ const parseWord = async (buffer, config) => {
     const relsFileRegex = /word\/_rels\/document[\d+]?.xml\.rels/;
     const stylesFileRegex = /word\/styles[\d+]?.xml/;
     const xmlSerializer = new xmldom_1.XMLSerializer();
+    // Pre-compiled regexes for run-property boolean tags (used in hot path)
+    const REGEX_W_B = /<w:b(?:\s+w:val="([^"]+)")?\s*\/?>/;
+    const REGEX_W_I = /<w:i(?:\s+w:val="([^"]+)")?\s*\/?>/;
+    const REGEX_W_STRIKE = /<w:strike(?:\s+w:val="([^"]+)")?\s*\/?>/;
+    const REGEX_W_DSTRIKE = /<w:dstrike(?:\s+w:val="([^"]+)")?\s*\/?>/;
+    const getBoolValFromRegex = (xmlSnippet, regex) => {
+        const match = xmlSnippet.match(regex);
+        if (match) {
+            const val = match[1];
+            if (val === undefined)
+                return true;
+            return val === '1' || val === 'true' || val === 'on';
+        }
+        return null;
+    };
     // Helper to extract formatting from run properties XML string
     const extractFormattingFromXml = (rPr) => {
         const formatting = {};
         const rPrString = xmlSerializer.serializeToString(rPr);
-        // Helper to check boolean properties
-        const getBoolVal = (xmlSnippet, tagName) => {
-            const regex = new RegExp(`<${tagName}(?:\\s+w:val="([^"]+)")?\\s*\\/?>`);
-            const match = xmlSnippet.match(regex);
-            if (match) {
-                const val = match[1];
-                if (val === undefined)
-                    return true;
-                return val === '1' || val === 'true' || val === 'on';
-            }
-            return null;
-        };
-        const bold = getBoolVal(rPrString, 'w:b');
+        const bold = getBoolValFromRegex(rPrString, REGEX_W_B);
         if (bold !== null)
             formatting.bold = bold;
-        const italic = getBoolVal(rPrString, 'w:i');
+        const italic = getBoolValFromRegex(rPrString, REGEX_W_I);
         if (italic !== null)
             formatting.italic = italic;
         const underlineMatch = rPrString.match(/<w:u(?: w:val="([^"]+)")?\/?>/);
@@ -124,8 +127,8 @@ const parseWord = async (buffer, config) => {
                 formatting.underline = true;
             }
         }
-        const strike = getBoolVal(rPrString, 'w:strike');
-        const dstrike = getBoolVal(rPrString, 'w:dstrike');
+        const strike = getBoolValFromRegex(rPrString, REGEX_W_STRIKE);
+        const dstrike = getBoolValFromRegex(rPrString, REGEX_W_DSTRIKE);
         if (strike !== null)
             formatting.strikethrough = strike;
         else if (dstrike !== null)
@@ -181,16 +184,35 @@ const parseWord = async (buffer, config) => {
         !!x.match(relsFileRegex) ||
         !!x.match(stylesFileRegex) ||
         (!!config.extractAttachments && !!x.match(mediaFileRegex)));
+    let corePropsFile;
+    let relsFile;
+    let numberingFile;
+    let stylesFile;
+    let footnotesFile;
+    let endnotesFile;
+    for (const f of files) {
+        if (f.path.match(corePropsFileRegex))
+            corePropsFile = f;
+        else if (f.path.match(relsFileRegex))
+            relsFile = f;
+        else if (f.path.match(numberingFileRegex))
+            numberingFile = f;
+        else if (f.path.match(stylesFileRegex))
+            stylesFile = f;
+        else if (f.path.match(footnotesFileRegex))
+            footnotesFile = f;
+        else if (f.path.match(endnotesFileRegex))
+            endnotesFile = f;
+    }
     // Extract metadata
-    const corePropsFile = files.find(f => f.path.match(corePropsFileRegex));
     const metadata = corePropsFile ? (0, xmlUtils_1.parseOfficeMetadata)(corePropsFile.content.toString()) : {};
     const footnoteMap = new Map();
     const endnoteMap = new Map();
     const collectedNotes = [];
     const attachments = [];
+    const attachmentByNameAndType = new Map();
     const mediaFiles = files.filter(f => f.path.match(mediaFileRegex));
     // Extract relationships
-    const relsFile = files.find(f => f.path.match(relsFileRegex));
     const relsMap = {};
     if (relsFile) {
         const relsXml = (0, xmlUtils_1.parseXmlString)(relsFile.content.toString());
@@ -203,7 +225,6 @@ const parseWord = async (buffer, config) => {
             }
         }
     }
-    const numberingFile = files.find(f => f.path.match(numberingFileRegex));
     const numberingMap = {};
     if (numberingFile) {
         const numberingXml = (0, xmlUtils_1.parseXmlString)(numberingFile.content.toString());
@@ -237,9 +258,10 @@ const parseWord = async (buffer, config) => {
             }
         }
     }
-    // Parse Styles
-    const stylesFile = files.find(f => f.path.match(stylesFileRegex));
+    // Parse Styles once and derive styleMap, docDefaults, defaultParaStyleId
     const styleMap = {};
+    let docDefaults = {};
+    let defaultParaStyleId = undefined;
     if (stylesFile) {
         const stylesXml = (0, xmlUtils_1.parseXmlString)(stylesFile.content.toString());
         const styles = (0, xmlUtils_1.getElementsByTagName)(stylesXml, "w:style");
@@ -267,13 +289,14 @@ const parseWord = async (buffer, config) => {
                     }
                 }
                 styleMap[styleId] = { formatting, alignment, backgroundColor };
+                // Detect default paragraph style (w:type="paragraph" and w:default="1")
+                const styleType = styles[i].getAttribute("w:type");
+                const isDefault = styles[i].getAttribute("w:default");
+                if (styleType === "paragraph" && isDefault === "1" && !defaultParaStyleId) {
+                    defaultParaStyleId = styleId;
+                }
             }
         }
-    }
-    // Extract document defaults
-    let docDefaults = {};
-    if (stylesFile) {
-        const stylesXml = (0, xmlUtils_1.parseXmlString)(stylesFile.content.toString());
         const docDefaultsNode = (0, xmlUtils_1.getElementsByTagName)(stylesXml, "w:docDefaults")[0];
         if (docDefaultsNode) {
             const rPrDefaultNode = (0, xmlUtils_1.getElementsByTagName)(docDefaultsNode, "w:rPrDefault")[0];
@@ -284,23 +307,6 @@ const parseWord = async (buffer, config) => {
                 }
             }
         }
-    }
-    // Detect the default paragraph style (for international compatibility)
-    let defaultParaStyleId = undefined;
-    if (stylesFile) {
-        const stylesXml = (0, xmlUtils_1.parseXmlString)(stylesFile.content.toString());
-        const styles = (0, xmlUtils_1.getElementsByTagName)(stylesXml, "w:style");
-        // Look for a style with w:type="paragraph" and w:default="1"
-        for (let i = 0; i < styles.length; i++) {
-            const styleType = styles[i].getAttribute("w:type");
-            const isDefault = styles[i].getAttribute("w:default");
-            const styleId = styles[i].getAttribute("w:styleId");
-            if (styleType === "paragraph" && isDefault === "1" && styleId) {
-                defaultParaStyleId = styleId;
-                break;
-            }
-        }
-        // Fallback: if no default found, try "Normal"
         if (!defaultParaStyleId && styleMap["Normal"]) {
             defaultParaStyleId = "Normal";
         }
@@ -648,12 +654,23 @@ const parseWord = async (buffer, config) => {
                         // Don't add nested table text to cell text - it will be handled recursively
                     }
                 }
+                const getCellText = (node) => {
+                    let text = node.text || '';
+                    if (node.children && node.children.length > 0) {
+                        const childTexts = node.children.map(getCellText).filter(t => t !== '');
+                        if (childTexts.length > 0) {
+                            text += (text ? ' ' : '') + childTexts.join(' ');
+                        }
+                    }
+                    return text;
+                };
                 const cellNode = {
                     type: 'cell',
                     text: cellText,
                     children: cellChildren,
                     metadata: { row: rIndex, col: cIndex }
                 };
+                cellNode.text = getCellText(cellNode);
                 cells.push(cellNode);
             }
             const rowNode = {
@@ -669,7 +686,6 @@ const parseWord = async (buffer, config) => {
     };
     // Pre-process footnotes and endnotes to be inserted inline later
     if (!config.ignoreNotes) {
-        const footnotesFile = files.find(f => f.path.match(footnotesFileRegex));
         if (footnotesFile) {
             const footnotesDoc = (0, xmlUtils_1.parseXmlString)(footnotesFile.content.toString());
             const footnoteNodes = (0, xmlUtils_1.getElementsByTagName)(footnotesDoc, "w:footnote");
@@ -681,7 +697,6 @@ const parseWord = async (buffer, config) => {
                 footnoteMap.set(id, pNodes.map(p => parseParagraph(p)));
             }
         }
-        const endnotesFile = files.find(f => f.path.match(endnotesFileRegex));
         if (endnotesFile) {
             const endnotesDoc = (0, xmlUtils_1.parseXmlString)(endnotesFile.content.toString());
             const endnoteNodes = (0, xmlUtils_1.getElementsByTagName)(endnotesDoc, "w:endnote");
@@ -741,13 +756,16 @@ const parseWord = async (buffer, config) => {
                 }
             }
         }
+        for (const a of attachments) {
+            attachmentByNameAndType.set(`${a.type}:${a.name}`, a);
+        }
         // Assign OCR text to image nodes
         if (config.ocr) {
             const assignOcr = (nodes) => {
                 for (const node of nodes) {
                     if (node.type === 'image' && 'attachmentName' in (node.metadata || {})) {
                         const meta = node.metadata;
-                        const attachment = attachments.find(a => a.name === meta.attachmentName);
+                        const attachment = attachmentByNameAndType.get(`image:${meta.attachmentName}`);
                         if (attachment && attachment.ocrText) {
                             node.text = attachment.ocrText;
                             attachment.altText = meta.altText;
@@ -775,19 +793,7 @@ const parseWord = async (buffer, config) => {
                     const cols = [];
                     for (const cellNode of rowNode.children) {
                         if (cellNode.type === 'cell') {
-                            // Extract text from cell (including nested content)
-                            const getCellText = (node) => {
-                                let text = node.text || '';
-                                if (node.children && node.children.length > 0) {
-                                    const childTexts = node.children.map(getCellText).filter(t => t !== '');
-                                    if (childTexts.length > 0) {
-                                        text += (text ? ' ' : '') + childTexts.join(' ');
-                                    }
-                                }
-                                return text;
-                            };
-                            const cellText = getCellText(cellNode);
-                            cols.push({ value: cellText });
+                            cols.push({ value: cellNode.text || '' });
                         }
                     }
                     if (cols.length > 0) {
@@ -804,12 +810,12 @@ const parseWord = async (buffer, config) => {
     /**
      * Converts a chart node to a ChartBlock.
      */
-    const convertChartToBlock = (chartNode, attachments) => {
+    const convertChartToBlock = (chartNode, attachmentMap) => {
         if (chartNode.type !== 'chart')
             return null;
         const chartMetadata = chartNode.metadata;
         if (chartMetadata?.attachmentName) {
-            const attachment = attachments.find(a => a.name === chartMetadata.attachmentName && a.type === 'chart');
+            const attachment = attachmentMap.get(`chart:${chartMetadata.attachmentName}`);
             if (attachment?.chartData) {
                 return {
                     type: 'chart',
@@ -821,64 +827,51 @@ const parseWord = async (buffer, config) => {
         return null;
     };
     /**
-     * Extracts blocks from content nodes in document order.
+     * Extracts blocks and fullText from content nodes in a single traversal (document order).
      */
-    const extractBlocksFromContent = (nodes, attachments) => {
-        const blocks = [];
-        const traverse = (node) => {
-            // Process node based on type
-            if (node.type === 'table') {
-                blocks.push(convertTableToBlock(node));
-                // Don't traverse children of tables (already processed)
-                return;
-            }
-            else if (node.type === 'chart') {
-                const chartBlock = convertChartToBlock(node, attachments);
-                if (chartBlock) {
-                    blocks.push(chartBlock);
-                }
-                // Don't traverse children of charts
-                return;
-            }
-            else if (node.type === 'image') {
-                const imageMetadata = node.metadata;
-                const attachmentName = imageMetadata?.attachmentName;
-                if (attachmentName) {
-                    const attachment = attachments.find(a => a.name === attachmentName && a.type === 'image');
-                    if (attachment) {
-                        const buffer = Buffer.from(attachment.data, 'base64');
-                        blocks.push({
-                            type: 'image',
-                            buffer,
-                            mimeType: attachment.mimeType,
-                            filename: attachment.name
-                        });
-                    }
-                }
-                // Don't traverse children of images
-                return;
-            }
-            else if (node.text && node.text.trim() &&
-                (node.type === 'text' || node.type === 'paragraph' || node.type === 'heading')) {
-                // Create text block for content nodes
-                blocks.push({
-                    type: 'text',
-                    content: node.text.trim()
-                });
-            }
-            // Recursively process children
-            if (node.children) {
-                for (const child of node.children) {
-                    traverse(child);
-                }
-            }
-        };
-        // Traverse all top-level nodes
-        for (const node of nodes) {
-            traverse(node);
+    const newline = config.newlineDelimiter ?? '\n';
+    const blocks = [];
+    const traverseBlocksAndText = (node) => {
+        if (node.type === 'table') {
+            const tableBlock = convertTableToBlock(node);
+            blocks.push(tableBlock);
+            const tableText = tableBlock.rows.map(r => r.cols.map(c => c.value).join('\t')).join(newline);
+            return tableText;
         }
-        return blocks;
+        if (node.type === 'chart') {
+            const chartBlock = convertChartToBlock(node, attachmentByNameAndType);
+            if (chartBlock)
+                blocks.push(chartBlock);
+            return '';
+        }
+        if (node.type === 'image') {
+            const imageMetadata = node.metadata;
+            const attachmentName = imageMetadata?.attachmentName;
+            if (attachmentName) {
+                const attachment = attachmentByNameAndType.get(`image:${attachmentName}`);
+                if (attachment) {
+                    blocks.push({
+                        type: 'image',
+                        buffer: Buffer.from(attachment.data, 'base64'),
+                        mimeType: attachment.mimeType,
+                        filename: attachment.name
+                    });
+                }
+            }
+            return '';
+        }
+        if (node.text && node.text.trim() && (node.type === 'text' || node.type === 'paragraph' || node.type === 'heading')) {
+            blocks.push({ type: 'text', content: node.text.trim() });
+            return node.text.trim();
+        }
+        if (node.children) {
+            const parts = node.children.map(traverseBlocksAndText).filter(t => t !== '');
+            const delimiter = !node.children[0]?.children ? '' : newline;
+            return parts.join(delimiter);
+        }
+        return '';
     };
+    const fullText = content.map(traverseBlocksAndText).filter(t => t !== '').join(newline);
     /**
      * Extracts images list from attachments.
      */
@@ -891,23 +884,6 @@ const parseWord = async (buffer, config) => {
             filename: att.name
         }));
     };
-    // Generate fullText
-    const fullText = content.map(c => {
-        // Recursive text extraction
-        const getText = (node) => {
-            let t = '';
-            if (node.children) {
-                t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter ?? '\n');
-            }
-            else
-                t += node.text || '';
-            return t;
-        };
-        return getText(c);
-    }).filter(t => t != '').join(config.newlineDelimiter ?? '\n');
-    // Extract blocks
-    const blocks = extractBlocksFromContent(content, attachments);
-    // Extract images
     const images = extractImagesList(attachments);
     return {
         type: 'docx',

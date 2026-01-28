@@ -338,9 +338,12 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
         return chartNode;
     };
 
-    /** Extract an AST node for p:graphicFrame */
+    /** Extract an AST node for p:graphicFrame. Uses a single a:graphicData lookup when present, then branches on a:tbl vs c:chart. */
     const extractGraphicFrameNode = (frameNode: Element, slideNumber: number): OfficeContentNode | null => {
-        const tbl = getElementsByTagName(frameNode, "a:tbl")[0];
+        const graphicData = getElementsByTagName(frameNode, "a:graphicData")[0];
+        const container = graphicData ?? frameNode;
+
+        const tbl = getElementsByTagName(container, "a:tbl")[0];
         if (tbl) {
             const tableNode = parseTable(tbl);
             // Track element for position extraction
@@ -352,7 +355,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                 return tableNode;
             }
         }
-        if (frameNode.getElementsByTagName("c:chart").length > 0) {
+        const cChart = getElementsByTagName(container, "c:chart")[0];
+        if (cChart) {
             const chartNode = extractChartNode(frameNode, slideNumber);
             if (chartNode) {
                 return chartNode;
@@ -807,6 +811,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     }
 
     const attachments: OfficeAttachment[] = [];
+    let attachmentByTypeAndName = new Map<string, OfficeAttachment>();
     const mediaFiles = files.filter(f => f.path.match(/ppt\/media\/.*/));
     const chartFiles = files.filter(f => f.path.match(/ppt\/charts\/chart\d+\.xml/));
 
@@ -862,12 +867,14 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                 attachments.push(attachment);
         }
 
+        attachmentByTypeAndName = new Map(attachments.map(a => [`${a.type}:${a.name}`, a]));
+
         // Loop through nodes to find images and charts and link their text and chartData
         const assignAttachmentData = (nodes: OfficeContentNode[]) => {
             for (const node of nodes) {
                 if ('attachmentName' in (node.metadata || {})) {
                     const meta = node.metadata as ImageMetadata | ChartMetadata;
-                    const attachment = attachments.find(a => a.name === meta.attachmentName);
+                    const attachment = attachmentByTypeAndName.get(`${node.type}:${meta.attachmentName}`);
                     if (attachment) {
                         if (node.type === 'image') {
                             attachment.altText = (meta as ImageMetadata).altText;
@@ -943,7 +950,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     /**
      * Converts a chart node to a ChartBlock.
      */
-    const convertChartToBlock = (chartNode: OfficeContentNode, attachments: OfficeAttachment[], position?: CoordinateData): ChartBlock | null => {
+    const convertChartToBlock = (chartNode: OfficeContentNode, attachmentByTypeAndName: Map<string, OfficeAttachment>, position?: CoordinateData): ChartBlock | null => {
         if (chartNode.type !== 'chart') return null;
         
         const chartMetadata = chartNode.metadata as ChartMetadata | undefined;
@@ -959,9 +966,9 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
             };
         }
         
-        // Try to find it from attachments first
+        // Try to find it from attachments first (O(1) via map)
         if (chartMetadata?.attachmentName) {
-            const attachment = attachments.find(a => a.name === chartMetadata.attachmentName && a.type === 'chart');
+            const attachment = attachmentByTypeAndName.get(`chart:${chartMetadata.attachmentName}`);
             
             if (attachment?.chartData) {
                 return {
@@ -991,7 +998,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
      * Extracts blocks from content nodes in document order.
      * Ensures all content types (tables, charts, images, text) are captured as blocks.
      */
-    const extractBlocksFromContent = (nodes: OfficeContentNode[], attachments: OfficeAttachment[], elementMap: Map<OfficeContentNode, Element>): Block[] => {
+    const extractBlocksFromContent = (nodes: OfficeContentNode[], attachmentByTypeAndName: Map<string, OfficeAttachment>, elementMap: Map<OfficeContentNode, Element>): Block[] => {
         const blocks: Block[] = [];
         
         const traverse = (node: OfficeContentNode) => {
@@ -1005,7 +1012,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                 // Don't traverse children of tables (already processed in convertTableToBlock)
                 return;
             } else if (node.type === 'chart') {
-                const chartBlock = convertChartToBlock(node, attachments, position);
+                const chartBlock = convertChartToBlock(node, attachmentByTypeAndName, position);
                 if (chartBlock) {
                     blocks.push(chartBlock);
                 }
@@ -1016,7 +1023,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                 const attachmentName = imageMetadata?.attachmentName;
                 
                 if (attachmentName) {
-                    const attachment = attachments.find(a => a.name === attachmentName && a.type === 'image');
+                    const attachment = attachmentByTypeAndName.get(`image:${attachmentName}`);
                     if (attachment) {
                         const buffer = Buffer.from(attachment.data, 'base64');
                         blocks.push({
@@ -1092,7 +1099,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     }).filter(t => t != '').join(config.newlineDelimiter ?? '\n');
 
     // Extract blocks
-    const blocks = extractBlocksFromContent(content, attachments, elementMap);
+    const blocks = extractBlocksFromContent(content, attachmentByTypeAndName, elementMap);
 
     // Extract images
     const images = extractImagesList(attachments);

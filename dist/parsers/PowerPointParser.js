@@ -297,9 +297,11 @@ const parsePowerPoint = async (buffer, config) => {
         elementMap.set(chartNode, frameNode);
         return chartNode;
     };
-    /** Extract an AST node for p:graphicFrame */
+    /** Extract an AST node for p:graphicFrame. Uses a single a:graphicData lookup when present, then branches on a:tbl vs c:chart. */
     const extractGraphicFrameNode = (frameNode, slideNumber) => {
-        const tbl = (0, xmlUtils_1.getElementsByTagName)(frameNode, "a:tbl")[0];
+        const graphicData = (0, xmlUtils_1.getElementsByTagName)(frameNode, "a:graphicData")[0];
+        const container = graphicData ?? frameNode;
+        const tbl = (0, xmlUtils_1.getElementsByTagName)(container, "a:tbl")[0];
         if (tbl) {
             const tableNode = parseTable(tbl);
             // Track element for position extraction
@@ -311,7 +313,8 @@ const parsePowerPoint = async (buffer, config) => {
                 return tableNode;
             }
         }
-        if (frameNode.getElementsByTagName("c:chart").length > 0) {
+        const cChart = (0, xmlUtils_1.getElementsByTagName)(container, "c:chart")[0];
+        if (cChart) {
             const chartNode = extractChartNode(frameNode, slideNumber);
             if (chartNode) {
                 return chartNode;
@@ -736,6 +739,7 @@ const parsePowerPoint = async (buffer, config) => {
         }
     }
     const attachments = [];
+    let attachmentByTypeAndName = new Map();
     const mediaFiles = files.filter(f => f.path.match(/ppt\/media\/.*/));
     const chartFiles = files.filter(f => f.path.match(/ppt\/charts\/chart\d+\.xml/));
     // Chart data map: always extract chart data for blocks, even if extractAttachments is false
@@ -784,12 +788,13 @@ const parsePowerPoint = async (buffer, config) => {
             };
             attachments.push(attachment);
         }
+        attachmentByTypeAndName = new Map(attachments.map(a => [`${a.type}:${a.name}`, a]));
         // Loop through nodes to find images and charts and link their text and chartData
         const assignAttachmentData = (nodes) => {
             for (const node of nodes) {
                 if ('attachmentName' in (node.metadata || {})) {
                     const meta = node.metadata;
-                    const attachment = attachments.find(a => a.name === meta.attachmentName);
+                    const attachment = attachmentByTypeAndName.get(`${node.type}:${meta.attachmentName}`);
                     if (attachment) {
                         if (node.type === 'image') {
                             attachment.altText = meta.altText;
@@ -857,7 +862,7 @@ const parsePowerPoint = async (buffer, config) => {
     /**
      * Converts a chart node to a ChartBlock.
      */
-    const convertChartToBlock = (chartNode, attachments, position) => {
+    const convertChartToBlock = (chartNode, attachmentByTypeAndName, position) => {
         if (chartNode.type !== 'chart')
             return null;
         const chartMetadata = chartNode.metadata;
@@ -871,9 +876,9 @@ const parsePowerPoint = async (buffer, config) => {
                 ...(position ? { position } : {})
             };
         }
-        // Try to find it from attachments first
+        // Try to find it from attachments first (O(1) via map)
         if (chartMetadata?.attachmentName) {
-            const attachment = attachments.find(a => a.name === chartMetadata.attachmentName && a.type === 'chart');
+            const attachment = attachmentByTypeAndName.get(`chart:${chartMetadata.attachmentName}`);
             if (attachment?.chartData) {
                 return {
                     type: 'chart',
@@ -899,7 +904,7 @@ const parsePowerPoint = async (buffer, config) => {
      * Extracts blocks from content nodes in document order.
      * Ensures all content types (tables, charts, images, text) are captured as blocks.
      */
-    const extractBlocksFromContent = (nodes, attachments, elementMap) => {
+    const extractBlocksFromContent = (nodes, attachmentByTypeAndName, elementMap) => {
         const blocks = [];
         const traverse = (node) => {
             // Get position from element map
@@ -912,7 +917,7 @@ const parsePowerPoint = async (buffer, config) => {
                 return;
             }
             else if (node.type === 'chart') {
-                const chartBlock = convertChartToBlock(node, attachments, position);
+                const chartBlock = convertChartToBlock(node, attachmentByTypeAndName, position);
                 if (chartBlock) {
                     blocks.push(chartBlock);
                 }
@@ -923,7 +928,7 @@ const parsePowerPoint = async (buffer, config) => {
                 const imageMetadata = node.metadata;
                 const attachmentName = imageMetadata?.attachmentName;
                 if (attachmentName) {
-                    const attachment = attachments.find(a => a.name === attachmentName && a.type === 'image');
+                    const attachment = attachmentByTypeAndName.get(`image:${attachmentName}`);
                     if (attachment) {
                         const buffer = Buffer.from(attachment.data, 'base64');
                         blocks.push({
@@ -992,7 +997,7 @@ const parsePowerPoint = async (buffer, config) => {
         return getText(c);
     }).filter(t => t != '').join(config.newlineDelimiter ?? '\n');
     // Extract blocks
-    const blocks = extractBlocksFromContent(content, attachments, elementMap);
+    const blocks = extractBlocksFromContent(content, attachmentByTypeAndName, elementMap);
     // Extract images
     const images = extractImagesList(attachments);
     return {

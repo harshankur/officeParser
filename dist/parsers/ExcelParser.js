@@ -28,6 +28,7 @@ const chartUtils_1 = require("../utils/chartUtils");
 const errorUtils_1 = require("../utils/errorUtils");
 const imageUtils_1 = require("../utils/imageUtils");
 const ocrUtils_1 = require("../utils/ocrUtils");
+const xmldom_1 = require("@xmldom/xmldom");
 const xmlUtils_1 = require("../utils/xmlUtils");
 const zipUtils_1 = require("../utils/zipUtils");
 /**
@@ -333,6 +334,8 @@ const parseExcel = async (buffer, config) => {
             attachments.push(attachment);
         }
     }
+    // O(1) attachment lookup by type and name (chart and image can share a name)
+    const attachmentByTypeAndName = new Map(attachments.map(a => [`${a.type}:${a.name}`, a]));
     // Build map of drawing rId -> chart attachment name for linking
     const drawingChartMap = {};
     if (config.extractAttachments) {
@@ -406,107 +409,103 @@ const parseExcel = async (buffer, config) => {
         if (file.path.match(drawingRelsRegex))
             continue;
         if (file.path.match(sheetsRegex)) {
+            const sheetStr = file.content.toString();
             if (config.includeRawContent) {
-                rawContents.push(file.content.toString());
+                rawContents.push(sheetStr);
             }
             const rows = [];
-            const rowRegex = /<row.*?>[\s\S]*?<\/row>/g;
-            const rowMatches = file.content.toString().match(rowRegex);
-            if (rowMatches) {
-                for (const rowXml of rowMatches) {
-                    const cells = [];
-                    const cRegex = /<c.*?>[\s\S]*?<\/c>/g;
-                    const cMatches = rowXml.match(cRegex);
-                    const rMatch = rowXml.match(/r="(\d+)"/);
-                    const rowIndex = rMatch ? parseInt(rMatch[1]) - 1 : 0;
-                    if (cMatches) {
-                        for (const cXml of cMatches) {
-                            // Extract cell value
-                            const typeMatch = cXml.match(/t="([a-z]+)"/);
-                            const type = typeMatch ? typeMatch[1] : 'n'; // n = number (default)
-                            const vMatch = cXml.match(/<v>(.*?)<\/v>/);
-                            const tMatch = cXml.match(/<t>(.*?)<\/t>/);
-                            let text = '';
-                            let cellNodes = [];
-                            if (type === 's' && vMatch) {
-                                const idx = parseInt(vMatch[1]);
-                                const content = sharedStrings[idx];
-                                if (Array.isArray(content)) {
-                                    // Rich text runs
-                                    // Deep copy runs to avoid reference issues if reused
-                                    cellNodes = JSON.parse(JSON.stringify(content));
-                                    text = cellNodes.map(n => n.text).join('');
-                                }
-                                else {
-                                    text = content || '';
-                                }
-                            }
-                            else if (type === 'inlineStr' && tMatch) {
-                                text = tMatch[1];
-                            }
-                            else if (vMatch) {
-                                text = vMatch[1];
-                            }
-                            // Parse cell coordinate
-                            const coordMatch = cXml.match(/r="([A-Z]+)(\d+)"/);
-                            const colStr = coordMatch ? coordMatch[1] : '';
-                            const colIndex = colStr.charCodeAt(0) - 'A'.charCodeAt(0);
-                            if (text || cellNodes.length > 0) {
-                                // Extract cell style index
-                                const styleMatch = cXml.match(/s="(\d+)"/);
-                                const styleIdx = styleMatch ? parseInt(styleMatch[1]) : undefined;
-                                const cellFormatting = (styleIdx !== undefined && cellFormatMap[styleIdx]) ? cellFormatMap[styleIdx] : {};
-                                if (cellNodes.length > 0) {
-                                    // If we have specific runs, merge cell styles into them if run style is missing
-                                    // But usually run style overrides cell style (except maybe background)
-                                    for (const node of cellNodes) {
-                                        if (!node.formatting)
-                                            node.formatting = {};
-                                        // Cell background always applies
-                                        if (cellFormatting.backgroundColor)
-                                            node.formatting.backgroundColor = cellFormatting.backgroundColor;
-                                        // Cell alignment always applies
-                                        if (cellFormatting.alignment)
-                                            node.formatting.alignment = cellFormatting.alignment;
-                                        // Font defaults from cell style if not in run
-                                        if (!node.formatting.font && cellFormatting.font)
-                                            node.formatting.font = cellFormatting.font;
-                                        if (!node.formatting.size && cellFormatting.size)
-                                            node.formatting.size = cellFormatting.size;
-                                    }
-                                }
-                                else {
-                                    // Simple text node
-                                    cellNodes.push({
-                                        type: 'text',
-                                        text: text,
-                                        formatting: cellFormatting
-                                    });
-                                }
-                                const cellNode = {
-                                    type: 'cell',
-                                    text: text,
-                                    children: cellNodes,
-                                    metadata: { row: rowIndex, col: colIndex }
-                                };
-                                if (config.includeRawContent) {
-                                    cellNode.rawContent = cXml;
-                                }
-                                cells.push(cellNode);
-                            }
+            const xml = (0, xmlUtils_1.parseXmlString)(sheetStr);
+            const rowElements = (0, xmlUtils_1.getElementsByTagName)(xml, "row");
+            const colLettersToIndex = (colStr) => {
+                let n = 0;
+                for (let i = 0; i < colStr.length; i++) {
+                    n = n * 26 + (colStr.charCodeAt(i) - 64);
+                }
+                return n - 1;
+            };
+            const xmlSerializer = config.includeRawContent ? new xmldom_1.XMLSerializer() : null;
+            for (const rowEl of rowElements) {
+                const rowR = rowEl.getAttribute("r");
+                const rowIndex = rowR ? parseInt(rowR, 10) - 1 : 0;
+                const cellElements = (0, xmlUtils_1.getElementsByTagName)(rowEl, "c");
+                const cells = [];
+                for (const cEl of cellElements) {
+                    const type = cEl.getAttribute("t") || "n";
+                    const vEl = (0, xmlUtils_1.getElementsByTagName)(cEl, "v")[0];
+                    const isEl = (0, xmlUtils_1.getElementsByTagName)(cEl, "is")[0];
+                    let text = '';
+                    let cellNodes = [];
+                    if (type === "s" && vEl?.textContent) {
+                        const idx = parseInt(vEl.textContent, 10);
+                        const content = sharedStrings[idx];
+                        if (Array.isArray(content)) {
+                            cellNodes = JSON.parse(JSON.stringify(content));
+                            text = cellNodes.map((n) => n.text).join('');
+                        }
+                        else {
+                            text = content || '';
                         }
                     }
-                    if (cells.length > 0) {
-                        const rowNode = {
-                            type: 'row',
-                            children: cells,
-                            metadata: undefined
+                    else if (type === "inlineStr" && isEl) {
+                        const tEls = (0, xmlUtils_1.getElementsByTagName)(isEl, "t");
+                        for (const t of tEls) {
+                            text += t.textContent || '';
+                        }
+                    }
+                    else if (vEl?.textContent) {
+                        text = vEl.textContent;
+                    }
+                    const rAttr = cEl.getAttribute("r");
+                    const coordMatch = rAttr ? rAttr.match(/^([A-Z]+)(\d+)$/) : null;
+                    const colStr = coordMatch ? coordMatch[1] : '';
+                    const colIndex = colStr ? colLettersToIndex(colStr) : 0;
+                    if (text || cellNodes.length > 0) {
+                        const sAttr = cEl.getAttribute("s");
+                        const styleIdx = sAttr !== null ? parseInt(sAttr, 10) : undefined;
+                        const cellFormatting = (styleIdx !== undefined && cellFormatMap[styleIdx]) ? cellFormatMap[styleIdx] : {};
+                        if (cellNodes.length > 0) {
+                            for (const node of cellNodes) {
+                                if (!node.formatting)
+                                    node.formatting = {};
+                                if (cellFormatting.backgroundColor)
+                                    node.formatting.backgroundColor = cellFormatting.backgroundColor;
+                                if (cellFormatting.alignment)
+                                    node.formatting.alignment = cellFormatting.alignment;
+                                if (!node.formatting.font && cellFormatting.font)
+                                    node.formatting.font = cellFormatting.font;
+                                if (!node.formatting.size && cellFormatting.size)
+                                    node.formatting.size = cellFormatting.size;
+                            }
+                        }
+                        else {
+                            cellNodes.push({
+                                type: 'text',
+                                text: text,
+                                formatting: cellFormatting
+                            });
+                        }
+                        const cellNode = {
+                            type: 'cell',
+                            text: text,
+                            children: cellNodes,
+                            metadata: { row: rowIndex, col: colIndex }
                         };
-                        if (config.includeRawContent) {
-                            rowNode.rawContent = rowXml;
+                        if (xmlSerializer && config.includeRawContent) {
+                            cellNode.rawContent = xmlSerializer.serializeToString(cEl);
                         }
-                        rows.push(rowNode);
+                        cells.push(cellNode);
                     }
+                }
+                if (cells.length > 0) {
+                    const rowNode = {
+                        type: 'row',
+                        children: cells,
+                        metadata: undefined
+                    };
+                    if (xmlSerializer && config.includeRawContent) {
+                        rowNode.rawContent = xmlSerializer.serializeToString(rowEl);
+                    }
+                    rows.push(rowNode);
                 }
             }
             // Handle Drawings in Sheet (images and charts)
@@ -528,7 +527,7 @@ const parseExcel = async (buffer, config) => {
                         }
                     }
                 }
-                const drawingMatches = file.content.toString().match(/<drawing r:id="(.*?)"/g);
+                const drawingMatches = sheetStr.match(/<drawing r:id="(.*?)"/g);
                 if (drawingMatches) {
                     for (const match of drawingMatches) {
                         const rIdMatch = match.match(/r:id="(.*?)"/);
@@ -540,7 +539,8 @@ const parseExcel = async (buffer, config) => {
                             if (images) {
                                 for (const imgId in images) {
                                     const imgInfo = images[imgId];
-                                    const attachment = attachments.find(a => a.name === imgInfo.path.split('/').pop());
+                                    const imgName = imgInfo.path.split('/').pop();
+                                    const attachment = imgName ? attachmentByTypeAndName.get(`image:${imgName}`) : undefined;
                                     if (attachment) {
                                         const imageNode = {
                                             type: 'image',
@@ -560,7 +560,7 @@ const parseExcel = async (buffer, config) => {
                             if (charts) {
                                 for (const chartRId in charts) {
                                     const chartName = charts[chartRId];
-                                    const attachment = attachments.find(a => a.name === chartName);
+                                    const attachment = attachmentByTypeAndName.get(`chart:${chartName}`);
                                     if (attachment) {
                                         const chartNode = {
                                             type: 'chart',
@@ -596,7 +596,7 @@ const parseExcel = async (buffer, config) => {
         for (const node of nodes) {
             if ('attachmentName' in (node.metadata || {})) {
                 const meta = node.metadata;
-                const attachment = attachments.find(a => a.name === meta.attachmentName);
+                const attachment = attachmentByTypeAndName.get(`${node.type}:${meta.attachmentName}`);
                 if (attachment) {
                     if (node.type === 'image') {
                         // Link OCR text to image node
@@ -677,6 +677,26 @@ const parseExcel = async (buffer, config) => {
         }
         return undefined;
     };
+    // Build maps of chart/image nodes by attachment name for O(1) position lookup (one tree walk)
+    const chartNodesByAttachmentName = new Map();
+    const imageNodesByAttachmentName = new Map();
+    const buildChartImageNodeMaps = (nodes) => {
+        for (const node of nodes) {
+            if (node.type === 'chart') {
+                const meta = node.metadata;
+                if (meta?.attachmentName)
+                    chartNodesByAttachmentName.set(meta.attachmentName, node);
+            }
+            else if (node.type === 'image') {
+                const meta = node.metadata;
+                if (meta?.attachmentName)
+                    imageNodesByAttachmentName.set(meta.attachmentName, node);
+            }
+            if (node.children)
+                buildChartImageNodeMaps(node.children);
+        }
+    };
+    buildChartImageNodeMaps(content);
     // Parse drawing files to map chart/image nodes to their anchor elements for position extraction
     if (config.extractAttachments) {
         const drawingFiles = files.filter(f => f.path.match(drawingsRegex));
@@ -692,33 +712,14 @@ const parseExcel = async (buffer, config) => {
                 const chart = (0, xmlUtils_1.getElementsByTagName)(anchor, "xdr:graphicFrame")[0];
                 const pic = (0, xmlUtils_1.getElementsByTagName)(anchor, "xdr:pic")[0];
                 if (chart) {
-                    // Find the chart node in content that matches this chart
                     const cChart = (0, xmlUtils_1.getElementsByTagName)(chart, "c:chart")[0];
                     const rId = cChart?.getAttribute("r:id");
                     if (rId) {
-                        // Find chart node by matching attachment name
                         const drawingPath = drawingFile.path;
                         const charts = drawingChartMap[drawingPath];
                         if (charts && charts[rId]) {
                             const chartName = charts[rId];
-                            // Find the chart node in content
-                            const findChartNode = (nodes) => {
-                                for (const node of nodes) {
-                                    if (node.type === 'chart') {
-                                        const meta = node.metadata;
-                                        if (meta?.attachmentName === chartName) {
-                                            return node;
-                                        }
-                                    }
-                                    if (node.children) {
-                                        const found = findChartNode(node.children);
-                                        if (found)
-                                            return found;
-                                    }
-                                }
-                                return null;
-                            };
-                            const chartNode = findChartNode(content);
+                            const chartNode = chartNodesByAttachmentName.get(chartName);
                             if (chartNode) {
                                 elementMap.set(chartNode, anchor);
                             }
@@ -726,7 +727,6 @@ const parseExcel = async (buffer, config) => {
                     }
                 }
                 if (pic) {
-                    // Find the image node in content that matches this picture
                     const blipFill = (0, xmlUtils_1.getElementsByTagName)(pic, "xdr:blipFill")[0];
                     const blip = blipFill ? (0, xmlUtils_1.getElementsByTagName)(blipFill, "a:blip")[0] : null;
                     const embedId = blip ? blip.getAttribute("r:embed") : null;
@@ -736,24 +736,7 @@ const parseExcel = async (buffer, config) => {
                         if (images && images[embedId]) {
                             const imgPath = images[embedId].path;
                             const imgName = imgPath.split('/').pop();
-                            // Find the image node in content
-                            const findImageNode = (nodes) => {
-                                for (const node of nodes) {
-                                    if (node.type === 'image') {
-                                        const meta = node.metadata;
-                                        if (meta?.attachmentName === imgName) {
-                                            return node;
-                                        }
-                                    }
-                                    if (node.children) {
-                                        const found = findImageNode(node.children);
-                                        if (found)
-                                            return found;
-                                    }
-                                }
-                                return null;
-                            };
-                            const imageNode = findImageNode(content);
+                            const imageNode = imageNodesByAttachmentName.get(imgName ?? '');
                             if (imageNode) {
                                 elementMap.set(imageNode, anchor);
                             }
@@ -764,52 +747,32 @@ const parseExcel = async (buffer, config) => {
         }
     }
     /**
-     * Converts a sheet node to a table block.
+     * Converts a sheet node to a table block (uses cellNode.text set at parse time).
      */
     const convertSheetToTableBlock = (sheetNode, position) => {
         const rows = [];
         if (sheetNode.children) {
             for (const rowNode of sheetNode.children) {
                 if (rowNode.type === 'row' && rowNode.children) {
-                    const cols = [];
-                    for (const cellNode of rowNode.children) {
-                        if (cellNode.type === 'cell') {
-                            // Extract text from cell (including nested content)
-                            const getCellText = (node) => {
-                                let text = node.text || '';
-                                if (node.children && node.children.length > 0) {
-                                    const childTexts = node.children.map(getCellText).filter(t => t !== '');
-                                    if (childTexts.length > 0) {
-                                        text += (text ? ' ' : '') + childTexts.join(' ');
-                                    }
-                                }
-                                return text;
-                            };
-                            const cellText = getCellText(cellNode);
-                            cols.push({ value: cellText });
-                        }
-                    }
-                    if (cols.length > 0) {
+                    const cols = rowNode.children
+                        .filter((c) => c.type === 'cell')
+                        .map(c => ({ value: c.text || '' }));
+                    if (cols.length > 0)
                         rows.push({ cols });
-                    }
                 }
             }
         }
-        return {
-            type: 'table',
-            rows,
-            ...(position ? { position } : {})
-        };
+        return { type: 'table', rows, ...(position ? { position } : {}) };
     };
     /**
      * Converts a chart node to a ChartBlock.
      */
-    const convertChartToBlock = (chartNode, attachments, position) => {
+    const convertChartToBlock = (chartNode, attachmentByTypeAndName, position) => {
         if (chartNode.type !== 'chart')
             return null;
         const chartMetadata = chartNode.metadata;
         if (chartMetadata?.attachmentName) {
-            const attachment = attachments.find(a => a.name === chartMetadata.attachmentName && a.type === 'chart');
+            const attachment = attachmentByTypeAndName.get(`chart:${chartMetadata.attachmentName}`);
             if (attachment?.chartData) {
                 return {
                     type: 'chart',
@@ -825,7 +788,7 @@ const parseExcel = async (buffer, config) => {
      * Extracts blocks from content nodes in document order.
      * Ensures all content types (tables, charts, images, text) are captured as blocks.
      */
-    const extractBlocksFromContent = (nodes, attachments, elementMap) => {
+    const extractBlocksFromContent = (nodes, attachmentByTypeAndName, elementMap) => {
         const blocks = [];
         const traverse = (node) => {
             // Get position from element map
@@ -833,7 +796,7 @@ const parseExcel = async (buffer, config) => {
             const position = element ? extractCoordinates(element) : undefined;
             // Process node based on type - prioritize specific block types
             if (node.type === 'chart') {
-                const chartBlock = convertChartToBlock(node, attachments, position);
+                const chartBlock = convertChartToBlock(node, attachmentByTypeAndName, position);
                 if (chartBlock) {
                     blocks.push(chartBlock);
                 }
@@ -844,7 +807,7 @@ const parseExcel = async (buffer, config) => {
                 const imageMetadata = node.metadata;
                 const attachmentName = imageMetadata?.attachmentName;
                 if (attachmentName) {
-                    const attachment = attachments.find(a => a.name === attachmentName && a.type === 'image');
+                    const attachment = attachmentByTypeAndName.get(`image:${attachmentName}`);
                     if (attachment) {
                         const buffer = Buffer.from(attachment.data, 'base64');
                         blocks.push({
@@ -860,58 +823,52 @@ const parseExcel = async (buffer, config) => {
                 return;
             }
             else if (node.type === 'sheet') {
-                // For sheets, extract table block from rows/cells, but also traverse to find charts/images
-                // First, collect rows that contain only cells (for table block)
+                // Single pass: classify rows, build table block and collect text blocks from cells
                 const tableRows = [];
                 const otherRows = [];
                 if (node.children) {
                     for (const rowNode of node.children) {
                         if (rowNode.type === 'row') {
-                            // Check if row contains only cells (no charts/images)
                             const hasOnlyCells = !rowNode.children || rowNode.children.every(child => child.type === 'cell');
-                            if (hasOnlyCells) {
+                            if (hasOnlyCells)
                                 tableRows.push(rowNode);
-                            }
-                            else {
+                            else
                                 otherRows.push(rowNode);
-                            }
                         }
                         else {
-                            // Charts/images are added directly to rows array
                             otherRows.push(rowNode);
                         }
                     }
                 }
-                // Create table block from rows with cells
-                if (tableRows.length > 0) {
-                    const sheetWithTableRows = {
-                        ...node,
-                        children: tableRows
-                    };
-                    const tableBlock = convertSheetToTableBlock(sheetWithTableRows, position);
-                    if (tableBlock.rows.length > 0) {
-                        blocks.push(tableBlock);
-                    }
-                }
-                // Traverse other rows (which may contain charts/images) and cells for text blocks
-                for (const rowNode of otherRows) {
-                    traverse(rowNode);
-                }
-                // Also traverse table rows for text blocks from cells
+                // Build table block rows and emit text blocks in one pass over tableRows
+                const tableBlockRows = [];
                 for (const rowNode of tableRows) {
+                    const cols = [];
                     if (rowNode.children) {
                         for (const cellNode of rowNode.children) {
-                            if (cellNode.type === 'cell' && cellNode.text && cellNode.text.trim()) {
-                                const cellElement = elementMap.get(cellNode);
-                                const cellPosition = cellElement ? extractCoordinates(cellElement) : undefined;
-                                blocks.push({
-                                    type: 'text',
-                                    content: cellNode.text.trim(),
-                                    ...(cellPosition ? { position: cellPosition } : {})
-                                });
+                            if (cellNode.type === 'cell') {
+                                const cellText = cellNode.text || '';
+                                cols.push({ value: cellText });
+                                if (cellText.trim()) {
+                                    const cellElement = elementMap.get(cellNode);
+                                    const cellPosition = cellElement ? extractCoordinates(cellElement) : undefined;
+                                    blocks.push({
+                                        type: 'text',
+                                        content: cellText.trim(),
+                                        ...(cellPosition ? { position: cellPosition } : {})
+                                    });
+                                }
                             }
                         }
                     }
+                    if (cols.length > 0)
+                        tableBlockRows.push({ cols });
+                }
+                if (tableBlockRows.length > 0) {
+                    blocks.push({ type: 'table', rows: tableBlockRows, ...(position ? { position } : {}) });
+                }
+                for (const rowNode of otherRows) {
+                    traverse(rowNode);
                 }
                 return;
             }
@@ -963,7 +920,7 @@ const parseExcel = async (buffer, config) => {
         return getText(c);
     }).filter(t => t != '').join(config.newlineDelimiter ?? '\n');
     // Extract blocks
-    const blocks = extractBlocksFromContent(content, attachments, elementMap);
+    const blocks = extractBlocksFromContent(content, attachmentByTypeAndName, elementMap);
     // Extract images
     const images = extractImagesList(attachments);
     return {

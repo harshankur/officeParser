@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-01-26T17:34:32.766Z",
+  "timestamp": "2026-01-28T11:57:20.848Z",
   "summary": {
-    "total": 253,
-    "passed": 247,
-    "failed": 0,
+    "total": 254,
+    "passed": 245,
+    "failed": 3,
     "warned": 6,
     "skipped": 0
   },
@@ -15,8 +15,8 @@
       "result": {
         "status": "PASS",
         "expected": "> 0 characters",
-        "actual": "7048 characters",
-        "details": "Extracted 7048 characters"
+        "actual": "7915 characters",
+        "details": "Extracted 7915 characters"
       }
     },
     {
@@ -26,8 +26,8 @@
       "result": {
         "status": "PASS",
         "expected": "> 0 lines",
-        "actual": "190 lines",
-        "details": "190 lines extracted"
+        "actual": "113 lines",
+        "details": "113 lines extracted"
       }
     },
     {
@@ -222,21 +222,32 @@
       "feature": "Text Baseline - Length",
       "fileType": "docx",
       "result": {
-        "status": "PASS",
+        "status": "FAIL",
         "expected": "7048 chars (±10%)",
-        "actual": "7048 chars (100.0% similar)",
-        "details": "Length matches baseline (100.0% similar)"
+        "actual": "7915 chars (89.0% similar)",
+        "details": "Length differs from baseline (89.0% similar, expected ≥90%)"
       }
     },
     {
       "category": "Text Baseline",
-      "feature": "Text Baseline - Exact Match",
+      "feature": "Text Baseline - Character Similarity",
       "fileType": "docx",
       "result": {
-        "status": "PASS",
-        "expected": "Exact match",
-        "actual": "Exact match",
-        "details": "Text exactly matches baseline"
+        "status": "FAIL",
+        "expected": "≥95%",
+        "actual": "24.4%",
+        "details": "Character similarity below threshold (24.4%, expected ≥95%)"
+      }
+    },
+    {
+      "category": "Text Baseline",
+      "feature": "Text Baseline - Word Count",
+      "fileType": "docx",
+      "result": {
+        "status": "FAIL",
+        "expected": "1217 words (±5%)",
+        "actual": "1422 words (85.6% similar)",
+        "details": "Word count differs (85.6% similar, expected ≥95%)"
       }
     },
     {

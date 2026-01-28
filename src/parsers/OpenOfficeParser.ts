@@ -1283,6 +1283,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
     // Helper: Resolve ODS chart cell references to actual values
     // ODS charts often link to cell ranges (e.g., [Sheet1.$A$1:.$A$5]) instead of embedding values
     const resolveChartReferences = (chartData: ChartData, nodes: OfficeContentNode[]) => {
+        // O(1) sheet lookup by name (used by getValuesFromReference for each reference)
+        const sheetByName = new Map<string, OfficeContentNode>();
+        for (const n of nodes) {
+            if (n.type === 'sheet') {
+                const name = (n.metadata as SheetMetadata)?.sheetName;
+                if (name) sheetByName.set(name, n);
+            }
+        }
+
         const getValuesFromReference = (ref: string): string[] => {
             // Remove brackets: [Sheet.$A$1:.$A$5] -> Sheet.$A$1:.$A$5
             const cleanRef = ref.replace(/^\[|\]$/g, '');
@@ -1324,7 +1333,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
 
             if (!start || !end) return [ref];
 
-            const sheet = nodes.find(n => n.type === 'sheet' && (n.metadata as SheetMetadata)?.sheetName === sheetName);
+            const sheet = sheetByName.get(sheetName);
             if (!sheet || !sheet.children) return [ref];
 
             const values: string[] = [];
@@ -1377,6 +1386,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         }
     }
 
+    // O(1) attachment lookup by name (used by assignAttachmentData, extractBlocksFromContent, convertChartToBlock)
+    const attachmentByName = new Map<string, OfficeAttachment>();
+    for (const a of attachments) {
+        if (a.name) attachmentByName.set(a.name, a);
+    }
+
     // Link OCR and Chart text to content nodes
     // Link OCR and Chart text to content nodes (with heuristic for unlinked images)
     const assignAttachmentData = (nodes: OfficeContentNode[]) => {
@@ -1408,7 +1423,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 }
 
                 if (attachmentName) {
-                    const attachment = attachments.find(a => a.name === attachmentName);
+                    const attachment = attachmentByName.get(attachmentName);
 
                     if (attachment) {
                         if (attachment.ocrText) {
@@ -1499,7 +1514,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
     /**
      * Converts a chart node to a ChartBlock.
      */
-    const convertChartToBlock = (chartNode: OfficeContentNode, attachments: OfficeAttachment[]): ChartBlock | null => {
+    const convertChartToBlock = (chartNode: OfficeContentNode, attachmentByName: Map<string, OfficeAttachment>): ChartBlock | null => {
         if (chartNode.type !== 'chart') return null;
         
         const chartMetadata = chartNode.metadata as ChartMetadata | undefined;
@@ -1516,8 +1531,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         
         // Otherwise, try to find it from attachments
         if (chartMetadata?.attachmentName) {
-            const attachment = attachments.find(a => a.name === chartMetadata.attachmentName && a.type === 'chart');
-            if (attachment?.chartData) {
+            const attachment = attachmentByName.get(chartMetadata.attachmentName);
+            if (attachment?.type === 'chart' && attachment?.chartData) {
                 return {
                     type: 'chart',
                     chartData: attachment.chartData,
@@ -1530,27 +1545,29 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
     };
 
     /**
-     * Extracts blocks from content nodes in document order.
+     * Extracts blocks and subtree text in one traversal (document order).
+     * Returns the subtree text for the given node; pushes blocks to the shared array.
      */
-    const extractBlocksFromContent = (nodes: OfficeContentNode[], attachments: OfficeAttachment[]): Block[] => {
+    const extractBlocksAndText = (nodes: OfficeContentNode[], attachmentByName: Map<string, OfficeAttachment>): { blocks: Block[], fullText: string } => {
         const blocks: Block[] = [];
-        
-        const traverse = (node: OfficeContentNode) => {
-            // Process node based on type
+        const newline = config.newlineDelimiter ?? '\n';
+
+        const traverseWithText = (node: OfficeContentNode): string => {
+            // Push blocks for this node
             if (node.type === 'table') {
                 blocks.push(convertTableToBlock(node));
             } else if (node.type === 'chart') {
-                const chartBlock = convertChartToBlock(node, attachments);
+                const chartBlock = convertChartToBlock(node, attachmentByName);
                 if (chartBlock) {
                     blocks.push(chartBlock);
                 }
             } else if (node.type === 'image') {
                 const imageMetadata = node.metadata as ImageMetadata | undefined;
                 const attachmentName = imageMetadata?.attachmentName;
-                
+
                 if (attachmentName) {
-                    const attachment = attachments.find(a => a.name === attachmentName && a.type === 'image');
-                    if (attachment) {
+                    const attachment = attachmentByName.get(attachmentName);
+                    if (attachment?.type === 'image') {
                         const buffer = Buffer.from(attachment.data, 'base64');
                         blocks.push({
                             type: 'image',
@@ -1561,29 +1578,31 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     }
                 }
             } else if (node.text && node.text.trim()) {
-                // Create text block for nodes with text content
                 // Only create text blocks for leaf nodes or nodes with meaningful text
-                if (!node.children || node.children.length === 0 || node.text.trim()) {
+                if (!node.children || node.children.length === 0) {
                     blocks.push({
                         type: 'text',
                         content: node.text
                     });
                 }
             }
-            
-            // Recursively process children
-            if (node.children) {
-                for (const child of node.children) {
-                    traverse(child);
-                }
+
+            // Compute and return subtree text (same semantics as previous getText)
+            if (node.children && node.children.length > 0) {
+                const hasGrandChildren = node.children.some(child => child.children && child.children.length > 0);
+                const separator = hasGrandChildren ? newline : '';
+                const childTexts = node.children.map(traverseWithText).filter(t => t != '');
+                return childTexts.join(separator);
             }
+            return node.text || '';
         };
-        
+
+        const rootTexts: string[] = [];
         for (const node of nodes) {
-            traverse(node);
+            rootTexts.push(traverseWithText(node));
         }
-        
-        return blocks;
+        const fullText = rootTexts.filter(t => t != '').join(newline);
+        return { blocks, fullText };
     };
 
     /**
@@ -1599,28 +1618,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
             }));
     };
 
-    // Generate fullText
-    const fullText = content.map(c => {
-        const getText = (node: OfficeContentNode): string => {
-            let t = '';
-            if (node.children && node.children.length > 0) {
-                // Check if children have their own children (container vs leaf)
-                // If children are leaf nodes (text/image), join with empty string
-                // If children are container nodes (paragraphs/rows), join with newline
-                const hasGrandChildren = node.children.some(child => child.children && child.children.length > 0);
-                const separator = hasGrandChildren ? (config.newlineDelimiter ?? '\n') : '';
-
-                t += node.children.map(getText).filter(t => t != '').join(separator);
-            } else {
-                t += node.text || '';
-            }
-            return t;
-        };
-        return getText(c);
-    }).filter(t => t != '').join(config.newlineDelimiter ?? '\n');
-
-    // Extract blocks
-    const blocks = extractBlocksFromContent(content, attachments);
+    // Single traversal: extract blocks and fullText together
+    const { blocks, fullText } = extractBlocksAndText(content, attachmentByName);
 
     // Extract images
     const images = extractImagesList(attachments);

@@ -27,6 +27,7 @@ import { extractChartData } from '../utils/chartUtils';
 import { logWarning } from '../utils/errorUtils';
 import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';
+import { XMLSerializer } from '@xmldom/xmldom';
 import { getElementsByTagName, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils';
 import { extractFiles } from '../utils/zipUtils';
 
@@ -349,6 +350,11 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
         }
     }
 
+    // O(1) attachment lookup by type and name (chart and image can share a name)
+    const attachmentByTypeAndName = new Map<string, OfficeAttachment>(
+        attachments.map(a => [`${a.type}:${a.name}`, a])
+    );
+
     // Build map of drawing rId -> chart attachment name for linking
     const drawingChartMap: Record<string, Record<string, string>> = {};
     if (config.extractAttachments) {
@@ -426,111 +432,106 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
         if (file.path.match(drawingRelsRegex)) continue;
 
         if (file.path.match(sheetsRegex)) {
+            const sheetStr = file.content.toString();
             if (config.includeRawContent) {
-                rawContents.push(file.content.toString());
+                rawContents.push(sheetStr);
             }
 
             const rows: OfficeContentNode[] = [];
-            const rowRegex = /<row.*?>[\s\S]*?<\/row>/g;
-            const rowMatches = file.content.toString().match(rowRegex);
+            const xml = parseXmlString(sheetStr);
+            const rowElements = getElementsByTagName(xml, "row");
 
-            if (rowMatches) {
-                for (const rowXml of rowMatches) {
-                    const cells: OfficeContentNode[] = [];
-                    const cRegex = /<c.*?>[\s\S]*?<\/c>/g;
-                    const cMatches = rowXml.match(cRegex);
+            const colLettersToIndex = (colStr: string): number => {
+                let n = 0;
+                for (let i = 0; i < colStr.length; i++) {
+                    n = n * 26 + (colStr.charCodeAt(i) - 64);
+                }
+                return n - 1;
+            };
 
-                    const rMatch = rowXml.match(/r="(\d+)"/);
-                    const rowIndex = rMatch ? parseInt(rMatch[1]) - 1 : 0;
+            const xmlSerializer = config.includeRawContent ? new XMLSerializer() : null;
 
-                    if (cMatches) {
-                        for (const cXml of cMatches) {
-                            // Extract cell value
-                            const typeMatch = cXml.match(/t="([a-z]+)"/);
-                            const type = typeMatch ? typeMatch[1] : 'n'; // n = number (default)
+            for (const rowEl of rowElements) {
+                const rowR = rowEl.getAttribute("r");
+                const rowIndex = rowR ? parseInt(rowR, 10) - 1 : 0;
+                const cellElements = getElementsByTagName(rowEl, "c");
+                const cells: OfficeContentNode[] = [];
 
-                            const vMatch = cXml.match(/<v>(.*?)<\/v>/);
-                            const tMatch = cXml.match(/<t>(.*?)<\/t>/);
+                for (const cEl of cellElements) {
+                    const type = cEl.getAttribute("t") || "n";
+                    const vEl = getElementsByTagName(cEl, "v")[0];
+                    const isEl = getElementsByTagName(cEl, "is")[0];
 
-                            let text = '';
-                            let cellNodes: OfficeContentNode[] = [];
+                    let text = '';
+                    let cellNodes: OfficeContentNode[] = [];
 
-                            if (type === 's' && vMatch) {
-                                const idx = parseInt(vMatch[1]);
-                                const content = sharedStrings[idx];
-                                if (Array.isArray(content)) {
-                                    // Rich text runs
-                                    // Deep copy runs to avoid reference issues if reused
-                                    cellNodes = JSON.parse(JSON.stringify(content));
-                                    text = cellNodes.map(n => n.text).join('');
-                                } else {
-                                    text = content || '';
-                                }
-                            } else if (type === 'inlineStr' && tMatch) {
-                                text = tMatch[1];
-                            } else if (vMatch) {
-                                text = vMatch[1];
-                            }
-
-                            // Parse cell coordinate
-                            const coordMatch = cXml.match(/r="([A-Z]+)(\d+)"/);
-                            const colStr = coordMatch ? coordMatch[1] : '';
-                            const colIndex = colStr.charCodeAt(0) - 'A'.charCodeAt(0);
-
-                            if (text || cellNodes.length > 0) {
-                                // Extract cell style index
-                                const styleMatch = cXml.match(/s="(\d+)"/);
-                                const styleIdx = styleMatch ? parseInt(styleMatch[1]) : undefined;
-                                const cellFormatting = (styleIdx !== undefined && cellFormatMap[styleIdx]) ? cellFormatMap[styleIdx] : {};
-
-                                if (cellNodes.length > 0) {
-                                    // If we have specific runs, merge cell styles into them if run style is missing
-                                    // But usually run style overrides cell style (except maybe background)
-                                    for (const node of cellNodes) {
-                                        if (!node.formatting) node.formatting = {};
-                                        // Cell background always applies
-                                        if (cellFormatting.backgroundColor) node.formatting.backgroundColor = cellFormatting.backgroundColor;
-                                        // Cell alignment always applies
-                                        if (cellFormatting.alignment) node.formatting.alignment = cellFormatting.alignment;
-
-                                        // Font defaults from cell style if not in run
-                                        if (!node.formatting.font && cellFormatting.font) node.formatting.font = cellFormatting.font;
-                                        if (!node.formatting.size && cellFormatting.size) node.formatting.size = cellFormatting.size;
-                                    }
-                                } else {
-                                    // Simple text node
-                                    cellNodes.push({
-                                        type: 'text',
-                                        text: text,
-                                        formatting: cellFormatting
-                                    });
-                                }
-
-                                const cellNode: OfficeContentNode = {
-                                    type: 'cell',
-                                    text: text,
-                                    children: cellNodes,
-                                    metadata: { row: rowIndex, col: colIndex }
-                                };
-                                if (config.includeRawContent) {
-                                    cellNode.rawContent = cXml;
-                                }
-                                cells.push(cellNode);
-                            }
+                    if (type === "s" && vEl?.textContent) {
+                        const idx = parseInt(vEl.textContent, 10);
+                        const content = sharedStrings[idx];
+                        if (Array.isArray(content)) {
+                            cellNodes = JSON.parse(JSON.stringify(content));
+                            text = cellNodes.map((n: OfficeContentNode) => n.text).join('');
+                        } else {
+                            text = (content as string) || '';
                         }
+                    } else if (type === "inlineStr" && isEl) {
+                        const tEls = getElementsByTagName(isEl, "t");
+                        for (const t of tEls) {
+                            text += t.textContent || '';
+                        }
+                    } else if (vEl?.textContent) {
+                        text = vEl.textContent;
                     }
 
-                    if (cells.length > 0) {
-                        const rowNode: OfficeContentNode = {
-                            type: 'row',
-                            children: cells,
-                            metadata: undefined
+                    const rAttr = cEl.getAttribute("r");
+                    const coordMatch = rAttr ? rAttr.match(/^([A-Z]+)(\d+)$/) : null;
+                    const colStr = coordMatch ? coordMatch[1] : '';
+                    const colIndex = colStr ? colLettersToIndex(colStr) : 0;
+
+                    if (text || cellNodes.length > 0) {
+                        const sAttr = cEl.getAttribute("s");
+                        const styleIdx = sAttr !== null ? parseInt(sAttr, 10) : undefined;
+                        const cellFormatting = (styleIdx !== undefined && cellFormatMap[styleIdx]) ? cellFormatMap[styleIdx] : {};
+
+                        if (cellNodes.length > 0) {
+                            for (const node of cellNodes) {
+                                if (!node.formatting) node.formatting = {};
+                                if (cellFormatting.backgroundColor) node.formatting.backgroundColor = cellFormatting.backgroundColor;
+                                if (cellFormatting.alignment) node.formatting.alignment = cellFormatting.alignment;
+                                if (!node.formatting.font && cellFormatting.font) node.formatting.font = cellFormatting.font;
+                                if (!node.formatting.size && cellFormatting.size) node.formatting.size = cellFormatting.size;
+                            }
+                        } else {
+                            cellNodes.push({
+                                type: 'text',
+                                text: text,
+                                formatting: cellFormatting
+                            });
+                        }
+
+                        const cellNode: OfficeContentNode = {
+                            type: 'cell',
+                            text: text,
+                            children: cellNodes,
+                            metadata: { row: rowIndex, col: colIndex }
                         };
-                        if (config.includeRawContent) {
-                            rowNode.rawContent = rowXml;
+                        if (xmlSerializer && config.includeRawContent) {
+                            cellNode.rawContent = xmlSerializer.serializeToString(cEl);
                         }
-                        rows.push(rowNode);
+                        cells.push(cellNode);
                     }
+                }
+
+                if (cells.length > 0) {
+                    const rowNode: OfficeContentNode = {
+                        type: 'row',
+                        children: cells,
+                        metadata: undefined
+                    };
+                    if (xmlSerializer && config.includeRawContent) {
+                        rowNode.rawContent = xmlSerializer.serializeToString(rowEl);
+                    }
+                    rows.push(rowNode);
                 }
             }
 
@@ -556,7 +557,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                     }
                 }
 
-                const drawingMatches = file.content.toString().match(/<drawing r:id="(.*?)"/g);
+                const drawingMatches = sheetStr.match(/<drawing r:id="(.*?)"/g);
                 if (drawingMatches) {
                     for (const match of drawingMatches) {
                         const rIdMatch = match.match(/r:id="(.*?)"/);
@@ -570,7 +571,8 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                             if (images) {
                                 for (const imgId in images) {
                                     const imgInfo = images[imgId];
-                                    const attachment = attachments.find(a => a.name === imgInfo.path.split('/').pop());
+                                    const imgName = imgInfo.path.split('/').pop();
+                                    const attachment = imgName ? attachmentByTypeAndName.get(`image:${imgName}`) : undefined;
                                     if (attachment) {
                                         const imageNode: OfficeContentNode = {
                                             type: 'image',
@@ -591,7 +593,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                             if (charts) {
                                 for (const chartRId in charts) {
                                     const chartName = charts[chartRId];
-                                    const attachment = attachments.find(a => a.name === chartName);
+                                    const attachment = attachmentByTypeAndName.get(`chart:${chartName}`);
                                     if (attachment) {
                                         const chartNode: OfficeContentNode = {
                                             type: 'chart',
@@ -631,7 +633,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
         for (const node of nodes) {
             if ('attachmentName' in (node.metadata || {})) {
                 const meta = node.metadata as ImageMetadata | ChartMetadata;
-                const attachment = attachments.find(a => a.name === meta.attachmentName);
+                const attachment = attachmentByTypeAndName.get(`${node.type}:${meta.attachmentName}`);
                 if (attachment) {
                     if (node.type === 'image') {
                         // Link OCR text to image node
@@ -725,6 +727,23 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
         return undefined;
     };
 
+    // Build maps of chart/image nodes by attachment name for O(1) position lookup (one tree walk)
+    const chartNodesByAttachmentName = new Map<string, OfficeContentNode>();
+    const imageNodesByAttachmentName = new Map<string, OfficeContentNode>();
+    const buildChartImageNodeMaps = (nodes: OfficeContentNode[]) => {
+        for (const node of nodes) {
+            if (node.type === 'chart') {
+                const meta = node.metadata as ChartMetadata | undefined;
+                if (meta?.attachmentName) chartNodesByAttachmentName.set(meta.attachmentName, node);
+            } else if (node.type === 'image') {
+                const meta = node.metadata as ImageMetadata | undefined;
+                if (meta?.attachmentName) imageNodesByAttachmentName.set(meta.attachmentName, node);
+            }
+            if (node.children) buildChartImageNodeMaps(node.children);
+        }
+    };
+    buildChartImageNodeMaps(content);
+
     // Parse drawing files to map chart/image nodes to their anchor elements for position extraction
     if (config.extractAttachments) {
         const drawingFiles = files.filter(f => f.path.match(drawingsRegex));
@@ -744,32 +763,14 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                 const pic = getElementsByTagName(anchor, "xdr:pic")[0];
                 
                 if (chart) {
-                    // Find the chart node in content that matches this chart
                     const cChart = getElementsByTagName(chart, "c:chart")[0];
                     const rId = cChart?.getAttribute("r:id");
                     if (rId) {
-                        // Find chart node by matching attachment name
                         const drawingPath = drawingFile.path;
                         const charts = drawingChartMap[drawingPath];
                         if (charts && charts[rId]) {
                             const chartName = charts[rId];
-                            // Find the chart node in content
-                            const findChartNode = (nodes: OfficeContentNode[]): OfficeContentNode | null => {
-                                for (const node of nodes) {
-                                    if (node.type === 'chart') {
-                                        const meta = node.metadata as ChartMetadata;
-                                        if (meta?.attachmentName === chartName) {
-                                            return node;
-                                        }
-                                    }
-                                    if (node.children) {
-                                        const found = findChartNode(node.children);
-                                        if (found) return found;
-                                    }
-                                }
-                                return null;
-                            };
-                            const chartNode = findChartNode(content);
+                            const chartNode = chartNodesByAttachmentName.get(chartName);
                             if (chartNode) {
                                 elementMap.set(chartNode, anchor);
                             }
@@ -778,7 +779,6 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                 }
                 
                 if (pic) {
-                    // Find the image node in content that matches this picture
                     const blipFill = getElementsByTagName(pic, "xdr:blipFill")[0];
                     const blip = blipFill ? getElementsByTagName(blipFill, "a:blip")[0] : null;
                     const embedId = blip ? blip.getAttribute("r:embed") : null;
@@ -789,23 +789,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                         if (images && images[embedId]) {
                             const imgPath = images[embedId].path;
                             const imgName = imgPath.split('/').pop();
-                            // Find the image node in content
-                            const findImageNode = (nodes: OfficeContentNode[]): OfficeContentNode | null => {
-                                for (const node of nodes) {
-                                    if (node.type === 'image') {
-                                        const meta = node.metadata as ImageMetadata;
-                                        if (meta?.attachmentName === imgName) {
-                                            return node;
-                                        }
-                                    }
-                                    if (node.children) {
-                                        const found = findImageNode(node.children);
-                                        if (found) return found;
-                                    }
-                                }
-                                return null;
-                            };
-                            const imageNode = findImageNode(content);
+                            const imageNode = imageNodesByAttachmentName.get(imgName ?? '');
                             if (imageNode) {
                                 elementMap.set(imageNode, anchor);
                             }
@@ -817,59 +801,33 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
     }
 
     /**
-     * Converts a sheet node to a table block.
+     * Converts a sheet node to a table block (uses cellNode.text set at parse time).
      */
     const convertSheetToTableBlock = (sheetNode: OfficeContentNode, position?: CoordinateData): TableBlock => {
         const rows: Array<{ cols: Array<{ value: string }> }> = [];
-        
         if (sheetNode.children) {
             for (const rowNode of sheetNode.children) {
                 if (rowNode.type === 'row' && rowNode.children) {
-                    const cols: Array<{ value: string }> = [];
-                    
-                    for (const cellNode of rowNode.children) {
-                        if (cellNode.type === 'cell') {
-                            // Extract text from cell (including nested content)
-                            const getCellText = (node: OfficeContentNode): string => {
-                                let text = node.text || '';
-                                if (node.children && node.children.length > 0) {
-                                    const childTexts = node.children.map(getCellText).filter(t => t !== '');
-                                    if (childTexts.length > 0) {
-                                        text += (text ? ' ' : '') + childTexts.join(' ');
-                                    }
-                                }
-                                return text;
-                            };
-                            
-                            const cellText = getCellText(cellNode);
-                            cols.push({ value: cellText });
-                        }
-                    }
-                    
-                    if (cols.length > 0) {
-                        rows.push({ cols });
-                    }
+                    const cols = rowNode.children
+                        .filter((c): c is OfficeContentNode & { type: 'cell' } => c.type === 'cell')
+                        .map(c => ({ value: c.text || '' }));
+                    if (cols.length > 0) rows.push({ cols });
                 }
             }
         }
-        
-        return {
-            type: 'table',
-            rows,
-            ...(position ? { position } : {})
-        };
+        return { type: 'table', rows, ...(position ? { position } : {}) };
     };
 
     /**
      * Converts a chart node to a ChartBlock.
      */
-    const convertChartToBlock = (chartNode: OfficeContentNode, attachments: OfficeAttachment[], position?: CoordinateData): ChartBlock | null => {
+    const convertChartToBlock = (chartNode: OfficeContentNode, attachmentByTypeAndName: Map<string, OfficeAttachment>, position?: CoordinateData): ChartBlock | null => {
         if (chartNode.type !== 'chart') return null;
         
         const chartMetadata = chartNode.metadata as ChartMetadata | undefined;
         
         if (chartMetadata?.attachmentName) {
-            const attachment = attachments.find(a => a.name === chartMetadata.attachmentName && a.type === 'chart');
+            const attachment = attachmentByTypeAndName.get(`chart:${chartMetadata.attachmentName}`);
             if (attachment?.chartData) {
                 return {
                     type: 'chart',
@@ -887,7 +845,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
      * Extracts blocks from content nodes in document order.
      * Ensures all content types (tables, charts, images, text) are captured as blocks.
      */
-    const extractBlocksFromContent = (nodes: OfficeContentNode[], attachments: OfficeAttachment[], elementMap: Map<OfficeContentNode, Element>): Block[] => {
+    const extractBlocksFromContent = (nodes: OfficeContentNode[], attachmentByTypeAndName: Map<string, OfficeAttachment>, elementMap: Map<OfficeContentNode, Element>): Block[] => {
         const blocks: Block[] = [];
         
         const traverse = (node: OfficeContentNode) => {
@@ -897,7 +855,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
             
             // Process node based on type - prioritize specific block types
             if (node.type === 'chart') {
-                const chartBlock = convertChartToBlock(node, attachments, position);
+                const chartBlock = convertChartToBlock(node, attachmentByTypeAndName, position);
                 if (chartBlock) {
                     blocks.push(chartBlock);
                 }
@@ -908,7 +866,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                 const attachmentName = imageMetadata?.attachmentName;
                 
                 if (attachmentName) {
-                    const attachment = attachments.find(a => a.name === attachmentName && a.type === 'image');
+                    const attachment = attachmentByTypeAndName.get(`image:${attachmentName}`);
                     if (attachment) {
                         const buffer = Buffer.from(attachment.data, 'base64');
                         blocks.push({
@@ -923,62 +881,49 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                 // Don't traverse children of images
                 return;
             } else if (node.type === 'sheet') {
-                // For sheets, extract table block from rows/cells, but also traverse to find charts/images
-                // First, collect rows that contain only cells (for table block)
+                // Single pass: classify rows, build table block and collect text blocks from cells
                 const tableRows: OfficeContentNode[] = [];
                 const otherRows: OfficeContentNode[] = [];
-                
                 if (node.children) {
                     for (const rowNode of node.children) {
                         if (rowNode.type === 'row') {
-                            // Check if row contains only cells (no charts/images)
                             const hasOnlyCells = !rowNode.children || rowNode.children.every(child => child.type === 'cell');
-                            if (hasOnlyCells) {
-                                tableRows.push(rowNode);
-                            } else {
-                                otherRows.push(rowNode);
-                            }
+                            if (hasOnlyCells) tableRows.push(rowNode);
+                            else otherRows.push(rowNode);
                         } else {
-                            // Charts/images are added directly to rows array
                             otherRows.push(rowNode);
                         }
                     }
                 }
-                
-                // Create table block from rows with cells
-                if (tableRows.length > 0) {
-                    const sheetWithTableRows: OfficeContentNode = {
-                        ...node,
-                        children: tableRows
-                    };
-                    const tableBlock = convertSheetToTableBlock(sheetWithTableRows, position);
-                    if (tableBlock.rows.length > 0) {
-                        blocks.push(tableBlock);
-                    }
-                }
-                
-                // Traverse other rows (which may contain charts/images) and cells for text blocks
-                for (const rowNode of otherRows) {
-                    traverse(rowNode);
-                }
-                
-                // Also traverse table rows for text blocks from cells
+                // Build table block rows and emit text blocks in one pass over tableRows
+                const tableBlockRows: Array<{ cols: Array<{ value: string }> }> = [];
                 for (const rowNode of tableRows) {
+                    const cols: Array<{ value: string }> = [];
                     if (rowNode.children) {
                         for (const cellNode of rowNode.children) {
-                            if (cellNode.type === 'cell' && cellNode.text && cellNode.text.trim()) {
-                                const cellElement = elementMap.get(cellNode);
-                                const cellPosition = cellElement ? extractCoordinates(cellElement) : undefined;
-                                blocks.push({
-                                    type: 'text',
-                                    content: cellNode.text.trim(),
-                                    ...(cellPosition ? { position: cellPosition } : {})
-                                });
+                            if (cellNode.type === 'cell') {
+                                const cellText = cellNode.text || '';
+                                cols.push({ value: cellText });
+                                if (cellText.trim()) {
+                                    const cellElement = elementMap.get(cellNode);
+                                    const cellPosition = cellElement ? extractCoordinates(cellElement) : undefined;
+                                    blocks.push({
+                                        type: 'text',
+                                        content: cellText.trim(),
+                                        ...(cellPosition ? { position: cellPosition } : {})
+                                    });
+                                }
                             }
                         }
                     }
+                    if (cols.length > 0) tableBlockRows.push({ cols });
                 }
-                
+                if (tableBlockRows.length > 0) {
+                    blocks.push({ type: 'table', rows: tableBlockRows, ...(position ? { position } : {}) });
+                }
+                for (const rowNode of otherRows) {
+                    traverse(rowNode);
+                }
                 return;
             } else if (node.type === 'cell' && node.text && node.text.trim()) {
                 // Create text block for cells with text content
@@ -1034,7 +979,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
     }).filter(t => t != '').join(config.newlineDelimiter ?? '\n');
 
     // Extract blocks
-    const blocks = extractBlocksFromContent(content, attachments, elementMap);
+    const blocks = extractBlocksFromContent(content, attachmentByTypeAndName, elementMap);
 
     // Extract images
     const images = extractImagesList(attachments);
