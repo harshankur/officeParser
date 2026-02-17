@@ -15,12 +15,14 @@
     "build": "tsc && node build_browser.js && npm run sync:docs",
     "build:node": "tsc",
     "build:browser": "node build_browser.js && npm run sync:docs",
+    "prepublishOnly": "npm run build:node",
+    "prepack": "npm run build:node",
+    "lint": "eslint .",
+    "lint:fix": "eslint --fix .",
     "sync:docs": "mkdir -p docs/dist && cp dist/officeparser.browser.js docs/dist/",
     "test": "npm run test:clean && npm run build && npx tsx test/testOfficeParser.ts",
     "test:clean": "rm -rf test/results",
-    "clean": "rm -rf dist && npm run test:clean",
-    "prepublishOnly": "npm run build",
-    "prepare": "husky"
+    "clean": "rm -rf dist && npm run test:clean"
   },
   "repository": {
     "type": "git",
@@ -68,6 +70,8 @@
   "dependencies": {
     "@xmldom/xmldom": "^0.8.10",
     "concat-stream": "^2.0.0",
+    "esbuild": "^0.27.2",
+    "esbuild-plugin-polyfill-node": "^0.3.0",
     "file-type": "^16.5.4",
     "pdfjs-dist": "5.4.530",
     "tesseract.js": "^6.0.0",
@@ -78,10 +82,8 @@
     "@types/node": "^18.16.1",
     "@types/xmldom": "^0.1.33",
     "@types/yauzl": "^2.10.3",
-    "esbuild": "^0.27.0",
-    "esbuild-plugin-polyfill-node": "^0.3.0",
-    "husky": "^9.1.7",
-    "tsx": "^4.21.0",
+    "eslint": "^9.39.1",
+    "globals": "^16.5.0",
     "typescript": "^5.0.3"
   }
 }

@@ -48,6 +48,25 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
 
     const title = extractOpenXmlRichText(root, "c:title");
 
+    // Extract chart type from plotArea
+    let chartType: string | undefined = undefined;
+    const plotArea = root.getElementsByTagName("c:plotArea")[0];
+    if (plotArea) {
+        // Check for common chart types in plotArea
+        const chartTypeElements = [
+            'c:barChart', 'c:lineChart', 'c:pieChart', 'c:columnChart',
+            'c:areaChart', 'c:scatterChart', 'c:bubbleChart', 'c:doughnutChart',
+            'c:radarChart', 'c:surfaceChart', 'c:ofPieChart', 'c:stockChart'
+        ];
+        for (const tagName of chartTypeElements) {
+            if (plotArea.getElementsByTagName(tagName).length > 0) {
+                // Extract base name (e.g., 'barChart' -> 'bar')
+                chartType = tagName.replace('c:', '').replace('Chart', '').toLowerCase();
+                break;
+            }
+        }
+    }
+
     // Axis titles
     let xAxisTitle: string | undefined = undefined;
     let yAxisTitle: string | undefined = undefined;
@@ -115,6 +134,7 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
 
     return {
         title,
+        chartType,
         xAxisTitle,
         yAxisTitle,
         dataSets,
@@ -241,6 +261,14 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
         else if (dimension === 'y') yAxisTitle = axisTitle;
     }
 
+    // Extract chart type from chart:class attribute or chart type elements
+    let chartType: string | undefined = undefined;
+    const chartClass = chart.getAttribute("chart:class");
+    if (chartClass) {
+        // chart:class values like "chart:bar", "chart:line", "chart:pie", etc.
+        chartType = chartClass.replace('chart:', '').toLowerCase();
+    }
+
     // Structured rawTexts: title + series info
     if (title) rawTexts.push(title);
     for (const ds of dataSets) {
@@ -251,6 +279,228 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
 
     return {
         title,
+        chartType,
+        xAxisTitle,
+        yAxisTitle,
+        dataSets,
+        labels,
+        rawTexts
+    };
+};
+
+/**
+ * Extracts chart data from chartex (cx:) namespace charts with hierarchical categories.
+ * @param xmlBuffer Chart XML buffer
+ */
+const extractChartexChartData = (xmlBuffer: Buffer): ChartData => {
+    const xml = xmlBuffer.toString("utf8");
+    const dom = parseXmlString(xml);
+
+    // Find plotArea
+    const plotArea = getElementsByTagName(dom, "cx:plotArea")[0];
+    if (!plotArea) {
+        // Fallback: try to extract basic info
+        return {
+            title: undefined,
+            xAxisTitle: undefined,
+            yAxisTitle: undefined,
+            dataSets: [],
+            labels: [],
+            rawTexts: []
+        };
+    }
+
+    const plotAreaRegion = getElementsByTagName(plotArea, "cx:plotAreaRegion")[0];
+    if (!plotAreaRegion) {
+        return {
+            title: undefined,
+            xAxisTitle: undefined,
+            yAxisTitle: undefined,
+            dataSets: [],
+            labels: [],
+            rawTexts: []
+        };
+    }
+
+    // Extract chart type from first series layoutId
+    const seriesNodes = getElementsByTagName(plotAreaRegion, "cx:series");
+    let chartType: string | undefined = undefined;
+    if (seriesNodes.length === 0) {
+        return {
+            title: undefined,
+            chartType: undefined,
+            xAxisTitle: undefined,
+            yAxisTitle: undefined,
+            dataSets: [],
+            labels: [],
+            rawTexts: []
+        };
+    }
+    
+    // Extract chart type from first series layoutId
+    if (seriesNodes.length > 0) {
+        const firstSeries = seriesNodes[0];
+        const layoutId = firstSeries.getAttribute("layoutId");
+        if (layoutId) {
+            // layoutId values map to chart types (e.g., "100" = column, "101" = bar, etc.)
+            // Common mappings: 100=column, 101=bar, 102=line, 103=pie, 104=area, etc.
+            const layoutIdMap: Record<string, string> = {
+                '100': 'column', '101': 'bar', '102': 'line', '103': 'pie',
+                '104': 'area', '105': 'scatter', '106': 'bubble', '107': 'doughnut',
+                '108': 'radar', '109': 'surface'
+            };
+            chartType = layoutIdMap[layoutId] || undefined;
+        }
+    }
+
+    // Extract chartData
+    const chartData = getElementsByTagName(dom, "cx:chartData")[0];
+    if (!chartData) {
+        return {
+            title: undefined,
+            chartType: undefined,
+            xAxisTitle: undefined,
+            yAxisTitle: undefined,
+            dataSets: [],
+            labels: [],
+            rawTexts: []
+        };
+    }
+
+    // Build a map of data by id
+    const dataMap: { [key: string]: Element } = {};
+    const dataElements = getElementsByTagName(chartData, "cx:data");
+    for (const dataEl of dataElements) {
+        const dataId = dataEl.getAttribute("id") || '0';
+        dataMap[dataId] = dataEl;
+    }
+
+    const dataSets: ChartData['dataSets'] = [];
+    const labels: string[] = [];
+    const rawTexts: string[] = [];
+
+    // Process each series
+    for (const serNode of seriesNodes) {
+        const dataIdNode = getElementsByTagName(serNode, "cx:dataId")[0];
+        const dataId = dataIdNode ? (dataIdNode.getAttribute("val") || '0') : '0';
+
+        const dataEl = dataMap[dataId];
+        if (!dataEl) {
+            continue;
+        }
+
+        // Parse categories
+        const categories: string[] = [];
+
+        // Check for string categories (cx:strDim type="cat")
+        const strDim = getElementsByTagName(dataEl, "cx:strDim")[0];
+        if (strDim && strDim.getAttribute("type") === 'cat') {
+            const lvlNodes = getElementsByTagName(strDim, "cx:lvl");
+            const levelCount = lvlNodes.length;
+
+            if (levelCount > 0) {
+                // Get ptCount from first level
+                const firstLvl = lvlNodes[0];
+                const ptCount = parseInt(firstLvl.getAttribute("ptCount") || '0', 10);
+
+                // Build hierarchical structure
+                // In XML, first level is innermost (e.g., Leaf), last level is outermost (e.g., Branch)
+                // We want to extract the innermost value for each category
+                for (let idx = 0; idx < ptCount; idx++) {
+                    const levelValues: string[] = [];
+
+                    // Extract from each level (innermost to outermost)
+                    for (const lvl of lvlNodes) {
+                        const pts = getElementsByTagName(lvl, "cx:pt");
+                        const pt = Array.from(pts).find(
+                            p => parseInt(p.getAttribute("idx") || '-1', 10) === idx
+                        );
+
+                        if (pt) {
+                            const ptText = pt.textContent || '';
+                            levelValues.push(ptText);
+                        }
+                    }
+
+                    if (levelValues.length > 0) {
+                        // The first element is the innermost (value)
+                        const value = levelValues[0];
+                        categories.push(value);
+                    }
+                }
+            }
+        }
+
+        // Check for numeric categories (cx:numDim type="catVal")
+        if (categories.length === 0) {
+            const numDimCat = Array.from(getElementsByTagName(dataEl, "cx:numDim")).find(
+                dim => dim.getAttribute("type") === 'catVal'
+            );
+            if (numDimCat) {
+                const lvl = getElementsByTagName(numDimCat, "cx:lvl")[0];
+                if (lvl) {
+                    const pts = getElementsByTagName(lvl, "cx:pt");
+                    for (const pt of pts) {
+                        const ptText = pt.textContent || '';
+                        if (ptText) categories.push(ptText);
+                    }
+                }
+            }
+        }
+
+        // Parse values (cx:numDim type="size" or type="val")
+        const values: string[] = [];
+        const numDimVal = Array.from(getElementsByTagName(dataEl, "cx:numDim")).find(
+            dim => dim.getAttribute("type") === 'size' || dim.getAttribute("type") === 'val'
+        );
+        if (numDimVal) {
+            const lvl = getElementsByTagName(numDimVal, "cx:lvl")[0];
+            if (lvl) {
+                const pts = getElementsByTagName(lvl, "cx:pt");
+                for (const pt of pts) {
+                    const ptText = pt.textContent || '';
+                    if (ptText) values.push(ptText);
+                }
+            }
+        }
+
+        // Extract series name if available
+        let name: string | undefined = undefined;
+        const txNode = getElementsByTagName(serNode, "c:tx")[0];
+        if (txNode) {
+            name = extractOpenXmlRichText(txNode, "c:tx");
+        }
+
+        if (categories.length > 0 || values.length > 0) {
+            dataSets.push({ name, values, pointLabels: [] });
+            if (categories.length > 0 && labels.length === 0) {
+                labels.push(...categories);
+            }
+        }
+    }
+
+    // Extract title
+    const title = extractOpenXmlRichText(dom.documentElement, "c:title");
+
+    // Extract axis titles
+    let xAxisTitle: string | undefined = undefined;
+    let yAxisTitle: string | undefined = undefined;
+    const catAxes = getElementsByTagName(dom.documentElement, "c:catAx");
+    if (catAxes.length > 0) xAxisTitle = extractOpenXmlRichText(catAxes[0], "c:title");
+    const valAxes = getElementsByTagName(dom.documentElement, "c:valAx");
+    if (valAxes.length > 0) yAxisTitle = extractOpenXmlRichText(valAxes[0], "c:title");
+
+    // Build rawTexts
+    if (title) rawTexts.push(title);
+    for (const ds of dataSets) {
+        if (ds.name) rawTexts.push(ds.name);
+        rawTexts.push(...labels);
+        rawTexts.push(...ds.values);
+    }
+
+    return {
+        title,
+        chartType,
         xAxisTitle,
         yAxisTitle,
         dataSets,
@@ -265,9 +515,17 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
  */
 export const extractChartData = (xmlBuffer: Buffer): ChartData => {
     const head = xmlBuffer.toString("utf8", 0, 500);
+    
+    // Check for chartex/chartx namespace (cx:)
+    if (head.includes("cx:") || head.includes("cx:plotArea") || head.includes("cx:chartData")) {
+        return extractChartexChartData(xmlBuffer);
+    }
+    
+    // Check for ODF namespace
     if (head.includes("urn:oasis:names:tc:opendocument:xmlns:chart:1.0")) {
         return extractOdfChartData(xmlBuffer);
-    } else {
-        return extractOpenXmlChartData(xmlBuffer);
     }
+    
+    // Default to OpenXML
+    return extractOpenXmlChartData(xmlBuffer);
 };

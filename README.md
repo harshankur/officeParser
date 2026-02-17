@@ -124,6 +124,7 @@ console.log(text);
 We still support callbacks, but the data returned is now the AST object.
 ```js
 const officeParser = require('officeparser');
+const fs = require('fs');
 
 officeParser.parseOffice("/path/to/officeFile.docx", function(ast, err) {
     if (err) {
