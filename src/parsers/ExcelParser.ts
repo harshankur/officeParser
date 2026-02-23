@@ -27,7 +27,7 @@ import { extractChartData } from '../utils/chartUtils';
 import { logWarning } from '../utils/errorUtils';
 import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';
-import { getElementsByTagName, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils';
+import { getElementsByTagName, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils';
 import { extractFiles } from '../utils/zipUtils';
 
 /**
@@ -44,6 +44,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
     const stringsFilePath = 'xl/sharedStrings.xml';
     const mediaFileRegex = /xl\/media\/.*/;
     const corePropsFileRegex = /docProps\/core\.xml/;
+    const customPropsFileRegex = /docProps\/custom\.xml/;
 
     const relsRegex = /xl\/worksheets\/_rels\/sheet\d+\.xml\.rels/g;
     const drawingRelsRegex = /xl\/drawings\/_rels\/drawing\d+\.xml\.rels/g;
@@ -57,6 +58,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
         x === 'xl/workbook.xml' ||
         x === 'xl/_rels/workbook.xml.rels' ||
         !!x.match(corePropsFileRegex) ||
+        !!x.match(customPropsFileRegex) ||
         (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(relsRegex) || !!x.match(drawingRelsRegex)))
     );
 
@@ -623,6 +625,11 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
 
     const corePropsFile = files.find(f => f.path.match(corePropsFileRegex));
     const metadata = corePropsFile ? parseOfficeMetadata(corePropsFile.content.toString()) : {};
+    const customPropsFile = files.find(f => f.path.match(customPropsFileRegex));
+    if (customPropsFile) {
+        const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString());
+        if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
+    }
 
     // Link OCR text and chart data to content nodes (like PPTX parser)
     const assignAttachmentData = (nodes: OfficeContentNode[]) => {
