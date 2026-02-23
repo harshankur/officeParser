@@ -21,6 +21,7 @@
  * @module OpenOfficeParser
  */
 
+import { createWorker } from 'tesseract.js';
 import { CellMetadata, ChartData, ChartMetadata, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types';
 import { extractChartData } from '../utils/chartUtils';
 import { logWarning } from '../utils/errorUtils';
@@ -1262,18 +1263,28 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
     }
 
     if (config.extractAttachments) {
-        for (const media of mediaFiles) {
-            const attachment = createAttachment(media.path.split('/').pop() || 'image', media.content);
-            attachments.push(attachment);
+        const language = config.ocrLanguage || 'eng';
+        let worker = config.ocr && mediaFiles.length > 0 ? await createWorker(language, 1, {
+            logger: () => { }
+        }) : undefined;
+        try {
+            for (const media of mediaFiles) {
+                const attachment = createAttachment(media.path.split('/').pop() || 'image', media.content);
+                attachments.push(attachment);
 
-            if (config.ocr) {
-                if (attachment.mimeType.startsWith('image/')) {
-                    try {
-                        attachment.ocrText = (await performOcr(media.content, config.ocrLanguage)).trim();
-                    } catch (e) {
-                        logWarning(`OCR failed for ${attachment.name}:`, config, e);
+                if (config.ocr) {
+                    if (attachment.mimeType.startsWith('image/')) {
+                        try {
+                            attachment.ocrText = (await performOcr(media.content, worker!)).trim();
+                        } catch (e) {
+                            logWarning(`OCR failed for ${attachment.name}:`, config, e);
+                        }
                     }
                 }
+            }
+        } finally {
+            if (worker) {
+                await worker.terminate();
             }
         }
     }
