@@ -141,7 +141,7 @@ interface FeatureMetrics {
     notes: { total: number; footnotes: number; endnotes: number };
     attachments: { total: number; withOCR: number; charts: number };
     formatting: Record<string, number>;
-    metadata: { hasStyleMap: boolean; styleMapSize: number; hasTitle: boolean; hasAuthor: boolean };
+    metadata: { hasStyleMap: boolean; styleMapSize: number; hasTitle: boolean; hasAuthor: boolean; hasCustomProperties: boolean; customPropertyCount: number };
 }
 
 // ============================================================================
@@ -190,7 +190,9 @@ function extractMetrics(ast: OfficeParserAST): FeatureMetrics {
             hasStyleMap: !!ast.metadata?.styleMap,
             styleMapSize: Object.keys(ast.metadata?.styleMap || {}).length,
             hasTitle: !!ast.metadata?.title,
-            hasAuthor: !!ast.metadata?.author
+            hasAuthor: !!ast.metadata?.author,
+            hasCustomProperties: Object.keys(ast.metadata?.customProperties || {}).length > 0,
+            customPropertyCount: Object.keys(ast.metadata?.customProperties || {}).length
         }
     };
 
@@ -1231,6 +1233,26 @@ async function testFile(ext: string): Promise<FeatureTest[]> {
             // Add metrics comparison
             const baselineMetrics = extractMetrics(baseline);
             results.push(...compareMetrics('Full Extraction', ext, baselineMetrics, metrics));
+
+            // Custom properties: check count matches baseline.
+            // Kept separate from compareMetrics so parity tests (which compare across formats
+            // that may not support custom properties) are not affected.
+            if (baselineMetrics.metadata.hasCustomProperties || metrics.metadata.hasCustomProperties) {
+                const countMatch = baselineMetrics.metadata.customPropertyCount === metrics.metadata.customPropertyCount;
+                results.push({
+                    category: 'Full Extraction',
+                    feature: 'Custom Properties',
+                    fileType: ext,
+                    result: {
+                        status: countMatch ? 'PASS' : 'FAIL',
+                        expected: baselineMetrics.metadata.customPropertyCount,
+                        actual: metrics.metadata.customPropertyCount,
+                        details: countMatch
+                            ? `${metrics.metadata.customPropertyCount} custom properties`
+                            : `Expected ${baselineMetrics.metadata.customPropertyCount}, got ${metrics.metadata.customPropertyCount}`
+                    }
+                });
+            }
 
             // Add text baseline comparison
             const extractedText = ast.toText();
