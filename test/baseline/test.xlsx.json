@@ -2,7 +2,12 @@
   "type": "xlsx",
   "metadata": {
     "created": "2025-11-28T15:36:44.000Z",
-    "modified": "2025-12-26T10:08:56.000Z"
+    "modified": "2025-12-26T10:08:56.000Z",
+    "customProperties": {
+      "TestString": "Hello from custom props",
+      "TestNumber": 42,
+      "TestBool": true
+    }
   },
   "content": [
     {

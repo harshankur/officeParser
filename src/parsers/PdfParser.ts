@@ -444,6 +444,39 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
         // The Author field only tracks original author.
     };
 
+    // Extract non-standard entries from the PDF Info dictionary as custom properties.
+    // The standard keys are defined by the PDF spec; anything else is user/tool-defined.
+    const standardPdfInfoKeys = new Set([
+        'Title', 'Author', 'Subject', 'Keywords', 'Creator', 'Producer',
+        'CreationDate', 'ModDate', 'Trapped', 'IsAcroFormPresent', 'IsXFAPresent',
+        'IsCollectionPresent', 'IsSignaturesPresent', 'PDFFormatVersion'
+    ]);
+    if (info) {
+        const customProperties: Record<string, string | number | boolean | Date> = {};
+        for (const key of Object.keys(info)) {
+            if (standardPdfInfoKeys.has(key)) continue;
+            const val = info[key];
+            if (val === null || val === undefined) continue;
+            // pdf.js groups document-level custom metadata under a 'Custom' object.
+            // Flatten its entries directly into customProperties.
+            if (key === 'Custom' && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
+                for (const [customKey, customVal] of Object.entries(val)) {
+                    if (customVal === null || customVal === undefined) continue;
+                    if (typeof customVal === 'string' || typeof customVal === 'number' || typeof customVal === 'boolean' || customVal instanceof Date) {
+                        customProperties[customKey] = customVal;
+                    }
+                }
+                continue;
+            }
+            if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val instanceof Date) {
+                customProperties[key] = val;
+            }
+        }
+        if (Object.keys(customProperties).length > 0) {
+            metadata.customProperties = customProperties;
+        }
+    }
+
     // --- Embedded File Attachment Extraction ---
     /**
      * PDF can contain embedded files (not images in content, but attached files).

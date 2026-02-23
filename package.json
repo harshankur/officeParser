@@ -67,17 +67,14 @@
   "homepage": "https://harshankur.github.io/officeParser/",
   "dependencies": {
     "@xmldom/xmldom": "^0.8.10",
-    "concat-stream": "^2.0.0",
+    "fflate": "^0.8.2",
     "file-type": "^16.5.4",
     "pdfjs-dist": "5.4.530",
-    "tesseract.js": "^6.0.0",
-    "yauzl": "^3.1.3"
+    "tesseract.js": "^6.0.0"
   },
   "devDependencies": {
-    "@types/concat-stream": "^2.0.3",
     "@types/node": "^18.16.1",
     "@types/xmldom": "^0.1.33",
-    "@types/yauzl": "^2.10.3",
     "esbuild": "^0.27.0",
     "esbuild-plugin-polyfill-node": "^0.3.0",
     "husky": "^9.1.7",

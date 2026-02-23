@@ -30,13 +30,9 @@ if (typeof setImmediate === 'undefined') {
         polyfillNode({
             polyfills: {
                 fs: true,
-                crypto: true,
                 stream: true,
                 buffer: true,
-                util: true,
-                events: true,
-                timers: true,
-                path: true
+                events: true
             }
         })
     ]
