@@ -130,6 +130,13 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
         const modified = getElementsByTagName(coreProperties, "dcterms:modified")[0];
         if (modified && modified.textContent) metadata.modified = new Date(modified.textContent);
 
+        // Step 8: Extract description and subject (Dublin Core elements)
+        const description = getElementsByTagName(coreProperties, "dc:description")[0];
+        if (description && description.textContent) metadata.description = description.textContent;
+
+        const subject = getElementsByTagName(coreProperties, "dc:subject")[0];
+        if (subject && subject.textContent) metadata.subject = subject.textContent;
+
         return metadata;
     }
 
@@ -153,7 +160,96 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
 
         const modified = getElementsByTagName(officeMeta, "dc:date")[0];
         if (modified && modified.textContent) metadata.modified = new Date(modified.textContent);
+
+        // Extract user-defined custom properties (meta:user-defined)
+        const userDefined = getElementsByTagName(officeMeta, "meta:user-defined");
+        if (userDefined.length > 0) {
+            const customProperties: Record<string, string | number | boolean | Date> = {};
+            for (const el of userDefined) {
+                const name = el.getAttribute("meta:name");
+                if (!name || !el.textContent) continue;
+                const valueType = el.getAttribute("meta:value-type") || "string";
+                const raw = el.textContent;
+                if (valueType === "boolean") {
+                    customProperties[name] = raw.toLowerCase() === "true";
+                } else if (valueType === "float") {
+                    const num = Number(raw);
+                    if (!isNaN(num)) customProperties[name] = num;
+                } else if (valueType === "date" || valueType === "time") {
+                    const date = new Date(raw);
+                    if (!isNaN(date.getTime())) customProperties[name] = date;
+                    else customProperties[name] = raw;
+                } else {
+                    customProperties[name] = raw;
+                }
+            }
+            if (Object.keys(customProperties).length > 0) {
+                metadata.customProperties = customProperties;
+            }
+        }
     }
 
     return metadata;
+};
+
+/**
+ * Parses OOXML custom document properties from `docProps/custom.xml`.
+ *
+ * Custom properties are user-defined key/value pairs that authors can attach to OOXML documents
+ * (DOCX, XLSX, PPTX). They are stored in `docProps/custom.xml` inside the ZIP archive.
+ *
+ * Property values are typed using the `vt:` namespace (docPropsVTypes):
+ * - `vt:lpwstr` / `vt:lpstr` / `vt:bstr` → string
+ * - `vt:bool` → boolean
+ * - `vt:i1`..`vt:i8`, `vt:int`, `vt:r4`, `vt:r8`, `vt:decimal` → number
+ * - `vt:filetime` / `vt:date` → Date
+ *
+ * @param xmlContent - Raw XML string from `docProps/custom.xml`
+ * @returns A record of property name → typed value (empty object if none found)
+ * @example
+ * ```typescript
+ * const customXml = files.find(f => f.path === 'docProps/custom.xml').content.toString();
+ * const props = parseOOXMLCustomProperties(customXml);
+ * console.log(props['Department']); // "Engineering"
+ * console.log(props['Priority']);   // 1  (number)
+ * console.log(props['Reviewed']);   // true (boolean)
+ * ```
+ */
+export const parseOOXMLCustomProperties = (xmlContent: string): Record<string, string | number | boolean | Date> => {
+    const xml = parseXmlString(xmlContent);
+    const result: Record<string, string | number | boolean | Date> = {};
+
+    const properties = getElementsByTagName(xml, "property");
+    for (const prop of properties) {
+        const name = prop.getAttribute("name");
+        if (!name) continue;
+
+        // The value is the first child element (typed using vt: namespace)
+        for (let i = 0; i < prop.childNodes.length; i++) {
+            const child = prop.childNodes[i];
+            if (child.nodeType !== 1) continue; // skip non-elements
+            const el = child as Element;
+            const tag = el.tagName || '';
+            const text = el.textContent || '';
+
+            if (/vt:lpwstr|vt:lpstr|vt:bstr/.test(tag)) {
+                result[name] = text;
+            } else if (/vt:bool/.test(tag)) {
+                result[name] = text.toLowerCase() === 'true';
+            } else if (/vt:(i[1248]|ui[1248]|int|uint|r4|r8|decimal)/.test(tag)) {
+                const num = Number(text);
+                if (!isNaN(num)) result[name] = num;
+            } else if (/vt:filetime|vt:date/.test(tag)) {
+                const date = new Date(text);
+                if (!isNaN(date.getTime())) result[name] = date;
+                else result[name] = text;
+            } else if (text) {
+                // Fallback: store as string for any other vt: type
+                result[name] = text;
+            }
+            break; // only one value element per property
+        }
+    }
+
+    return result;
 };

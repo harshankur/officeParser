@@ -28,7 +28,7 @@ import { extractChartData } from '../utils/chartUtils';
 import { logWarning } from '../utils/errorUtils';
 import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';
-import { getElementsByTagName, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils';
+import { getElementsByTagName, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils';
 import { extractFiles } from '../utils/zipUtils';
 
 /**
@@ -46,11 +46,13 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     const mediaFileRegex = /ppt\/media\/.*/;
     const chartFileRegex = /ppt\/charts\/chart\d+\.xml/;
     const corePropsFileRegex = /docProps\/core\.xml/;
+    const customPropsFileRegex = /docProps\/custom\.xml/;
     const xmlSerializer = new XMLSerializer();
 
     const files = await extractFiles(buffer, x =>
         !!x.match(config.ignoreNotes ? slidesRegex : allFilesRegex) ||
         !!x.match(corePropsFileRegex) ||
+        !!x.match(customPropsFileRegex) ||
         !!x.match(slideRelsRegex) ||
         (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(chartFileRegex)))
     );
@@ -58,6 +60,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     // Extract metadata
     const corePropsFile = files.find(f => f.path.match(corePropsFileRegex));
     const metadata = corePropsFile ? parseOfficeMetadata(corePropsFile.content.toString()) : {};
+    const customPropsFile = files.find(f => f.path.match(customPropsFileRegex));
+    if (customPropsFile) {
+        const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString());
+        if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
+    }
 
     // Sort files
     files.sort((a, b) => {

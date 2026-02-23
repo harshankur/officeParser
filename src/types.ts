@@ -611,6 +611,16 @@ export interface OfficeMetadata {
     formatting?: Partial<TextFormatting>;
     /** Style map for styles in the document. */
     styleMap?: Record<string, Partial<TextFormatting>>;
+    /**
+     * User-defined custom properties embedded in the document.
+     * Sources by format:
+     * - DOCX/XLSX/PPTX: `docProps/custom.xml` (Office custom document properties)
+     * - ODT/ODP/ODS: `meta:user-defined` elements in `meta.xml`
+     * - RTF: `\info` sub-destinations such as `\manager`, `\company`, `\keywords`, `\category`
+     * - PDF: non-standard entries in the PDF Info dictionary
+     * Values are typed as string, number, boolean, or Date where the source format provides type information.
+     */
+    customProperties?: Record<string, string | number | boolean | Date>;
 }
 
 /**

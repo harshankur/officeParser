@@ -64,7 +64,7 @@ import { ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, Offic
 import { logWarning } from '../utils/errorUtils';
 import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';
-import { getDirectChildren, getElementsByTagName, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils';
+import { getDirectChildren, getElementsByTagName, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils';
 import { extractFiles } from '../utils/zipUtils';
 
 /**
@@ -90,6 +90,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
     const numberingFileRegex = /word\/numbering[\d+]?.xml/;
     const mediaFileRegex = /(word\/)?media\/.*/;
     const corePropsFileRegex = /docProps\/core[\d+]?.xml/;
+    const customPropsFileRegex = /docProps\/custom\.xml/;
     const relsFileRegex = /word\/_rels\/document[\d+]?.xml\.rels/;
     const stylesFileRegex = /word\/styles[\d+]?.xml/;
 
@@ -182,6 +183,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         !!x.match(endnotesFileRegex) ||
         !!x.match(numberingFileRegex) ||
         !!x.match(corePropsFileRegex) ||
+        !!x.match(customPropsFileRegex) ||
         !!x.match(relsFileRegex) ||
         !!x.match(stylesFileRegex) ||
         (!!config.extractAttachments && !!x.match(mediaFileRegex))
@@ -190,6 +192,11 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
     // Extract metadata
     const corePropsFile = files.find(f => f.path.match(corePropsFileRegex));
     const metadata = corePropsFile ? parseOfficeMetadata(corePropsFile.content.toString()) : {};
+    const customPropsFile = files.find(f => f.path.match(customPropsFileRegex));
+    if (customPropsFile) {
+        const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString());
+        if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
+    }
 
     const footnoteMap = new Map<string, OfficeContentNode[]>();
     const endnoteMap = new Map<string, OfficeContentNode[]>();
