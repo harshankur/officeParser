@@ -14,8 +14,7 @@
  * @module zipUtils
  */
 
-import yauzl from 'yauzl';
-import concat from 'concat-stream';
+import { unzip } from 'fflate';
 
 /**
  * Represents a file extracted from a ZIP archive.
@@ -77,52 +76,12 @@ interface ZipFileContent {
  */
 export const extractFiles = (zipInput: Buffer, filterFn: (fileName: string) => boolean): Promise<ZipFileContent[]> => {
     return new Promise((resolve, reject) => {
-        // Step 1: Open the ZIP archive from the buffer
-        // lazyEntries: true means we manually control when to read each entry (better memory usage)
-        yauzl.fromBuffer(zipInput, { lazyEntries: true }, (err, zipfile) => {
+        unzip(new Uint8Array(zipInput), { filter: (file) => filterFn(file.name) }, (err, decompressed) => {
             if (err) return reject(err);
-            if (!zipfile) return reject(new Error("Failed to open zip file"));
-
-            // Array to collect all extracted files
-            const extractedFiles: ZipFileContent[] = [];
-
-            // Step 2: Start reading the first entry
-            // This triggers the 'entry' event
-            zipfile.readEntry();
-
-            // Step 3: Handle each entry (file or directory) in the ZIP
-            zipfile.on('entry', (entry: yauzl.Entry) => {
-                // Step 3a: Check if this file should be extracted using the filter function
-                if (filterFn(entry.fileName)) {
-                    // Step 3b: Open a read stream for this entry
-                    zipfile.openReadStream(entry, (err, readStream) => {
-                        if (err) return reject(err);
-                        if (!readStream) return reject(new Error("Failed to open read stream"));
-
-                        // Step 3c: Pipe the stream through concat to collect all data into a single Buffer
-                        // This is necessary because streams deliver data in chunks
-                        readStream.pipe(concat((data: Buffer) => {
-                            // Step 3d: Add the extracted file to our results
-                            extractedFiles.push({
-                                path: entry.fileName,
-                                content: data
-                            });
-
-                            // Step 3e: Continue to the next entry
-                            zipfile.readEntry();
-                        }));
-                    });
-                } else {
-                    // Step 3f: Skip this entry and move to the next one
-                    zipfile.readEntry();
-                }
-            });
-
-            // Step 4: All entries have been processed
-            zipfile.on('end', () => resolve(extractedFiles));
-
-            // Step 5: Handle any errors during extraction
-            zipfile.on('error', reject);
+            resolve(Object.entries(decompressed).map(([path, data]) => ({
+                path,
+                content: Buffer.from(data)
+            })));
         });
     });
 };
