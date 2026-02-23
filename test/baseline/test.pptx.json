@@ -2,7 +2,12 @@
   "type": "pptx",
   "metadata": {
     "created": "2025-11-25T16:36:03.000Z",
-    "modified": "2025-12-07T10:15:57.000Z"
+    "modified": "2025-12-07T10:15:57.000Z",
+    "customProperties": {
+      "TestString": "Hello from custom props",
+      "TestNumber": 42,
+      "TestBool": true
+    }
   },
   "content": [
     {

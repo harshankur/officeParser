@@ -1,6 +1,11 @@
 {
   "type": "docx",
   "metadata": {
+    "customProperties": {
+      "TestString": "Hello from custom props",
+      "TestNumber": 42,
+      "TestBool": true
+    },
     "formatting": {
       "size": "11pt"
     },
