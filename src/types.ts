@@ -63,7 +63,7 @@ export interface OfficeParserConfig {
 /**
  * Supported file types for parsing.
  */
-export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods' | 'pdf' | 'rtf';
+export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods' | 'pdf' | 'rtf' | 'doc' | 'xls' | 'ppt';
 
 /**
  * Types of content nodes in the AST.

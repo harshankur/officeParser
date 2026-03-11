@@ -7,6 +7,7 @@
  * 
  * **Supported Formats:**
  * - Microsoft Office: DOCX, XLSX, PPTX (Office Open XML)
+ * - Microsoft Office Legacy: DOC, XLS, PPT (Office 97-2003)
  * - OpenDocument: ODT, ODP, ODS (ODF)
  * - Legacy: RTF (Rich Text Format)
  * - Portable: PDF

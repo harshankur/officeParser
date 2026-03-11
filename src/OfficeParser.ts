@@ -8,6 +8,9 @@
  * - DOCX (Word documents)
  * - XLSX (Excel spreadsheets)
  * - PPTX (PowerPoint presentations)
+ * - DOC (Word 97-2003)
+ * - XLS (Excel 97-2003)
+ * - PPT (PowerPoint 97-2003)
  * - ODT, ODP, ODS (OpenDocument formats)
  * - PDF (Portable Document Format)
  * - RTF (Rich Text Format)
@@ -41,6 +44,10 @@ import { parsePdf } from './parsers/PdfParser';
 import { parsePowerPoint } from './parsers/PowerPointParser';
 import { parseRtf } from './parsers/RtfParser';
 import { parseWord } from './parsers/WordParser';
+import { parseDoc } from './parsers/legacy/doc';
+import { parseXls } from './parsers/legacy/xls';
+import { parsePpt } from './parsers/legacy/ppt';
+import { isOLE2, parseOLE2, detectOLE2Format } from './parsers/legacy/ole2';
 import { OfficeParserAST, OfficeParserConfig } from './types';
 import { getOfficeError, getWrappedError, OfficeErrorType } from './utils/errorUtils';
 
@@ -68,6 +75,9 @@ export class OfficeParser {
      * - `.docx` → WordParser (OOXML)
      * - `.xlsx` → ExcelParser (OOXML)
      * - `.pptx` → PowerPointParser (OOXML)
+     * - `.doc` → DocParser (OLE2/HWPF)
+     * - `.xls` → XlsParser (OLE2/BIFF8)
+     * - `.ppt` → PptParser (OLE2/HSLF)
      * - `.odt`, `.odp`, `.ods` → OpenOfficeParser (ODF)
      * - `.pdf` → PdfParser (PDF.js)
      * - `.rtf` → RtfParser (custom RTF parser)
@@ -156,6 +166,18 @@ export class OfficeParser {
                 }
             }
 
+            // For OLE2/CFB files detected by magic bytes (file-type returns 'cfb'),
+            // inspect the container to determine the specific format
+            if (ext === 'cfb') {
+                if (isOLE2(buffer)) {
+                    const ole2 = parseOLE2(buffer);
+                    const detectedFormat = detectOLE2Format(ole2);
+                    if (detectedFormat) {
+                        ext = detectedFormat;
+                    }
+                }
+            }
+
             let result: OfficeParserAST;
             switch (ext) {
                 case 'docx':
@@ -177,6 +199,15 @@ export class OfficeParser {
                     break;
                 case 'rtf':
                     result = await parseRtf(buffer, internalConfig);
+                    break;
+                case 'doc':
+                    result = await parseDoc(buffer, internalConfig);
+                    break;
+                case 'xls':
+                    result = await parseXls(buffer, internalConfig);
+                    break;
+                case 'ppt':
+                    result = await parsePpt(buffer, internalConfig);
                     break;
                 default:
                     throw getOfficeError(OfficeErrorType.EXTENSION_UNSUPPORTED, internalConfig, ext);
