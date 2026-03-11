@@ -1,102 +1,75 @@
-# officeParser 📄🚀
+# Docstream
 
-A robust, strictly-typed Node.js and Browser library for parsing office files ([`docx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`odt`](https://en.wikipedia.org/wiki/OpenDocument), [`odp`](https://en.wikipedia.org/wiki/OpenDocument), [`ods`](https://en.wikipedia.org/wiki/OpenDocument), [`pdf`](https://en.wikipedia.org/wiki/PDF), [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format)). It produces a clean, hierarchical Abstract Syntax Tree (AST) with rich metadata, text formatting, and full attachment support.
+A universal Node.js & Browser library to parse any office document — legacy or modern — into structured text, AST or Markdown. Supports doc, xls, ppt, docx, xlsx, pptx, odt, ods, odp, pdf, rtf and more.
 
-[![npm version](https://badge.fury.io/js/officeparser.svg)](https://badge.fury.io/js/officeparser)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
 
-### 🌟 [Live Interactive AST Visualizer & Documentation](https://harshankur.github.io/officeParser/) 🌟
-*Test any office file in your browser and see the extracted AST, text, and preview in real-time which is rebuilt from the AST!*
+## Supported Formats
 
-**What you can do there:**
-- **AST Visualizer**: Upload any office file and inspect the hierarchical AST structure, metadata, and raw content.
-- **Config Configurator**: Tweak parsing options (like `ignoreNotes`, `ocr`, `newlineDelimiter`) and see the results instantly.
-- **Debugging**: Use the visualizer to debug parsing issues by inspecting exactly how nodes are interpreted.
-- **Format Specs**: Read detailed specifications for the AST structure and configuration options.
+| Format | Extension | Type |
+|--------|-----------|------|
+| Word (OOXML) | `.docx` | Modern |
+| Excel (OOXML) | `.xlsx` | Modern |
+| PowerPoint (OOXML) | `.pptx` | Modern |
+| OpenDocument Text | `.odt` | Modern |
+| OpenDocument Spreadsheet | `.ods` | Modern |
+| OpenDocument Presentation | `.odp` | Modern |
+| PDF | `.pdf` | Modern |
+| Rich Text Format | `.rtf` | Legacy |
+| Word 97-2003 | `.doc` | Legacy (planned) |
+| Excel 97-2003 | `.xls` | Legacy (planned) |
+| PowerPoint 97-2003 | `.ppt` | Legacy (planned) |
 
-*(Legacy Visualizer: If you prefer the [old simple visualizer](https://harshankur.github.io/officeParser/visualizer_old.html), it is still available.)*
-
----
-
-
-#### Update
-* 2025/12/29 - **v6.0.0 Release**: Major overhaul of the library. Transitioned from simple text extraction to a rich **Abstract Syntax Tree (AST)** output.
-    - Simplified API: Use `parseOffice` for all parsing needs (returns a Promise).
-    - Structured Output: Access hierarchical document structure (paragraphs, headings, tables, lists, etc.).
-    - Rich Metadata: Extracted document properties (author, title, creation date).
-    - Enhanced Formatting: Support for bold, italic, colors, fonts, alignment, etc.
-    - Attachment Handling: Extract images, charts, and embedded files as Base64.
-    - OCR Integration: Optional OCR for images using Tesseract.js.
-    - RTF Support: Added full support for Rich Text Format files.
-    - Improved Type Definitions: Full TypeScript support with detailed interfaces.
-* 2024/11/12 - Added ArrayBuffer as a type of file input. Generating bundle files now which exposes namespace officeParser to be able to access parseOffice directly on the browser.
-* 2024/10/21 - Replaced extracting zip files from decompress to yauzl. This means that we now extract files in memory and we no longer need to write them to disk. Removed config flags related to extracted files. Added flags for CLI execution.
-* 2024/10/15 - Fixed erroring out while deleting temp files when multiple worker threads make parallel executions resulting in same file name for multiple files. Fixed erroring out when multiple executions are made without waiting for the previous execution to finish which resulted in deleting the file from other execution. Upgraded dependencies.
-* 2024/10/13 - Fixed parsing text from xlsx files which contain no shared strings file and files which have inlineStr based strings.
-* 2024/05/06 - Replaced pdf parsing support from pdf-parse library to natively building it using pdf.js library from Mozilla by analyzing its output. Added pdfjs-dist build as a local library.
-* 2023/11/25 - Fixed error catching when an error occurs within the parsing of a file, especially after decompressing it. Also fixed the problem with parallel parsing of files as we were using only timestamp in file names.
-* 2023/10/24 - Revamped content parsing code. Fixed order of content in files, especially in word files where table information would always land up at the end of the text. Added config object as argument for parseOffice which can be used to set new line delimiter and multiple other configurations. Added support for parsing pdf files using the popular npm library pdf-parse. Removed support for individual file parsing functions.
-* 2023/04/26 - Added support for file buffers as argument for filepath for parseOffice and parseOfficeAsync
-* 2023/04/07 - Added typings to methods to help with Typescript projects.
-* 2022/12/28 - Added command line method to use officeParser with or without installing it and instantly get parsed content on the console.
-* 2022/12/10 - Fixed memory leak issues, bugs related to parsing open document files and improved error handling.
-* 2021/11/21 - Added promise way to existing callback functions.
-* 2020/06/01 - Added error handling and console.log enable/disable methods. Default is set at enabled. Everything backward compatible.
-* 2019/06/17 - Added method to change location for decompressing office files in places with restricted write access.
-* 2019/04/30 - Removed case sensitive file extension bug. File names with capital lettered extensions now supported.
-* 2019/04/23 - Added support for open office files *.odt, *.odp, *.ods through parseOffice function. Created a new method parseOpenOffice for those who prefer targetted functions. 
-* 2019/04/23 - Added feature to delete the generated dist folder after function callback.
-* 2019/04/22 - Added parseOffice method to avoid confusion between type of file and their extension.
-* 2019/04/22 - Added file extension validations. Removed errors for excel files with no drawing elements.
-* 2019/04/19 - Support added for *.xlsx files.
-* 2019/04/18 - Support added for *.pptx files.
-
-## Install via npm
+## Install
 
 ```bash
-npm i officeparser
+npm i docstream
 ```
 
-## Command Line usage
-You can use `officeparser` directly from the terminal to get either the full AST (as JSON) or plain text.
+## Command Line Usage
+
+Parse any office file directly from the terminal. Returns the full AST as JSON by default, or plain text with `--toText`.
 
 ```bash
 # Get full AST as JSON (default)
-npx officeparser /path/to/officeFile.docx
+npx docstream /path/to/officeFile.docx
 
 # Get plain text only
-npx officeparser /path/to/officeFile.docx --toText=true
+npx docstream /path/to/officeFile.docx --toText=true
 
 # Use configuration options
-npx officeparser /path/to/officeFile.docx --ignoreNotes=true --newlineDelimiter=" "
+npx docstream /path/to/officeFile.docx --ignoreNotes=true --newlineDelimiter=" "
 ```
 
-### Config Options:
-- `--toText=[true|false]`              Flag to output only plain text instead of JSON AST.
-- `--ignoreNotes=[true|false]`          Flag to ignore notes from files like PowerPoint. Default is false.
-- `--newlineDelimiter=[delimiter]`      The delimiter to use for new lines. Default is `\n`.
-- `--putNotesAtLast=[true|false]`       Flag to collect notes at the end of files like PowerPoint. Default is false.
-- `--outputErrorToConsole=[true|false]` Flag to output errors to the console. Default is false.
-- `--extractAttachments=[true|false]`   Flag to extract images/charts as Base64. Default is false.
-- `--ocr=[true|false]`                  Flag to enable OCR for extracted images. Default is false.
-- `--includeRawContent=[true|false]`    Flag to include raw XML/RTF content in nodes. Default is false.
+### CLI Config Options
 
+| Option | Description |
+|--------|-------------|
+| `--toText=[true\|false]` | Output plain text instead of JSON AST |
+| `--ignoreNotes=[true\|false]` | Ignore notes (e.g. PowerPoint speaker notes). Default: `false` |
+| `--newlineDelimiter=[delimiter]` | Delimiter for new lines. Default: `\n` |
+| `--putNotesAtLast=[true\|false]` | Collect notes at end of document. Default: `false` |
+| `--outputErrorToConsole=[true\|false]` | Log errors to console. Default: `false` |
+| `--extractAttachments=[true\|false]` | Extract images/charts as Base64. Default: `false` |
+| `--ocr=[true\|false]` | Enable OCR for extracted images. Default: `false` |
+| `--includeRawContent=[true\|false]` | Include raw XML/RTF content in nodes. Default: `false` |
 
 ## Library Usage
-In **v6.0.0**, the library has moved to a structured AST output. While this is a change for those expecting a string directly, it provides significantly more power and flexibility.
 
 ### Getting Started (Async/Await)
+
 ```js
-const officeParser = require('officeparser');
+const docstream = require('docstream');
 
 async function parseMyFile() {
     try {
         // parseOffice returns an OfficeParserAST object
-        const ast = await officeParser.parseOffice("/path/to/officeFile.docx");
-        
-        // Use the built-in helper to get plain text (similar to old behavior)
+        const ast = await docstream.parseOffice("/path/to/officeFile.docx");
+
+        // Get plain text
         const text = ast.toText();
         console.log(text);
 
@@ -109,49 +82,48 @@ async function parseMyFile() {
 }
 ```
 
-### Helper Function for Text Extraction (Modern simple way)
-If you only need the text and want to maintain a simple one-liner, you can use this pattern:
-```js
-// Simple helper to get text directly
-const getText = async (file, config) => (await officeParser.parseOffice(file, config)).toText();
+### Quick Text Extraction
 
-// usage
+```js
+const getText = async (file, config) => (await docstream.parseOffice(file, config)).toText();
+
 const text = await getText("/path/to/officeFile.docx");
 console.log(text);
 ```
 
-### Using Callbacks (Backward Compatibility Support)
-We still support callbacks, but the data returned is now the AST object.
-```js
-const officeParser = require('officeparser');
+### Using Callbacks
 
-officeParser.parseOffice("/path/to/officeFile.docx", function(ast, err) {
+Callbacks are supported for backward compatibility. The data returned is the AST object.
+
+```js
+const docstream = require('docstream');
+
+docstream.parseOffice("/path/to/officeFile.docx", function(ast, err) {
     if (err) {
         console.error(err);
         return;
     }
-    // Get text from AST
     console.log(ast.toText());
 });
 ```
 
 ### Using File Buffers or ArrayBuffers
+
 You can pass a file path string, a Node.js `Buffer`, or an `ArrayBuffer`.
+
 ```js
 const fs = require('fs');
-const officeParser = require('officeparser');
+const docstream = require('docstream');
 const buffer = fs.readFileSync("/path/to/officeFile.pdf");
 
-officeParser.parseOffice(buffer)
+docstream.parseOffice(buffer)
     .then(ast => console.log(ast.toText()))
     .catch(console.error);
 ```
 
 ## The AST Structure
-The `OfficeParserAST` provides a format-agnostic representation of your document, allowing you to traverse and manipulate content as a tree.
 
-### Visualizing the AST
-The `OfficeParserAST` provides a format-agnostic representation of your document. Below is a simplified visualization of how the tree is structured:
+`OfficeParserAST` provides a format-agnostic representation of any document, allowing you to traverse and manipulate content as a tree.
 
 ```text
 OfficeParserAST
@@ -170,10 +142,12 @@ OfficeParserAST
 │   ├── data: "base64..."
 │   ├── ocrText: "Text extracted via OCR"
 │   └── chartData: { title, dataSets, labels, ... }
-└── toText(): Function -> returns full plain text
+├── toText(): returns full plain text
+└── toMarkdown(): returns Markdown representation
 ```
 
-#### Representative JSON Snippet
+### Representative JSON
+
 ```json
 {
   "type": "docx",
@@ -204,30 +178,32 @@ OfficeParserAST
 
 ## Deep Dive: Document Components
 
-### 1. Working with Lists
+### Lists
+
 Lists are represented as sequential `list` nodes. To reconstruct or track a list, use the `metadata` fields:
 
 ```text
 List Node
 ├── type: "list"
-├── metadata: { 
-    listId: "1", 
-    listType: "ordered", 
-    indentation: 0, 
-    itemIndex: 0 
-}
+├── metadata: {
+│   listId: "1",
+│   listType: "ordered",
+│   indentation: 0,
+│   itemIndex: 0
+│ }
 └── children: [ Text Content... ]
 ```
 
-- **`listId`**: A unique identifier for the list definition. Multiple items with the same `listId` belong to the same logical list.
-- **`indentation`**: The nesting level (0-based).
-- **`itemIndex`**: The sequential position within that list level.
+- **`listId`**: Unique identifier for the list definition. Items with the same `listId` belong to the same logical list.
+- **`indentation`**: Nesting level (0-based).
+- **`itemIndex`**: Sequential position within that list level.
 - **`listType`**: Either `ordered` (numbered) or `unordered` (bulleted).
 
 > [!TIP]
 > Even if a list is interrupted by a regular paragraph, the `itemIndex` will continue to increment for the same `listId`, allowing you to maintain correct numbering.
 
-### 2. Navigating Tables
+### Tables
+
 Tables follow a strict hierarchy: `table` -> `row` -> `cell`.
 
 ```text
@@ -242,10 +218,11 @@ Table Node
 ```
 
 - **`row` / `col`**: Zero-based indices for grid positioning.
-- **`rowSpan` / `colSpan`** (Optional): Integer values indicating merged cells (primarily in ODF formats). If absent, the cell is not merged.
-- **Recursive Content**: Cells contain their own `children` array, which can include paragraphs, lists, or even other nested tables.
+- **`rowSpan` / `colSpan`** (Optional): Integer values indicating merged cells. If absent, the cell is not merged.
+- Cells contain their own `children` array, which can include paragraphs, lists, or nested tables.
 
-### 3. Charts & Data
+### Charts & Data
+
 When a chart is discovered, it's added as a `chart` node in the content and a corresponding `OfficeAttachment`.
 
 ```text
@@ -256,11 +233,7 @@ Chart Node
     └── chartData: { title, dataSets: [...], labels: [...] }
 ```
 
-- **`attachmentName`**: Links the content node to the `attachments` array.
-- **`chartData`**: A structured object containing titles, axis labels, and category/series data.
-
-### 4. Images, OCR & Alt Text
-Images are linked via `attachmentName` and can contain valuable metadata:
+### Images, OCR & Alt Text
 
 ```text
 Image Node
@@ -271,81 +244,153 @@ Image Node
     └── ocrText: "Extracted via OCR"
 ```
 
-- **OCR Text**: If `ocr: true` is set in config, `ocrText` will contain the text found within the image.
+- **OCR Text**: Set `ocr: true` in config to extract text from images via Tesseract.js.
 - **Alt Text**: Extracted from the document's internal image descriptions.
-- **Formatting**: `OfficeContentNode` images may also have parent alignment metadata.
 
-### 5. Text Formatting
-Each `OfficeContentNode` can have a `formatting` object that defines how the text should be styled.
+### Text Formatting
+
+Each `OfficeContentNode` can have a `formatting` object:
 
 ```text
 Text Node
 └── formatting: {
-    bold: boolean,
-    italic: boolean,
-    underline: boolean,
-    strikethrough: boolean,
-    color: "#hex",
-    backgroundColor: "#hex",
-    size: "12pt",
-    font: "Arial",
-    subscript: boolean,
-    superscript: boolean,
+    bold, italic, underline, strikethrough,
+    color: "#hex", backgroundColor: "#hex",
+    size: "12pt", font: "Arial",
+    subscript, superscript,
     alignment: "left" | "center" | "right" | "justify"
 }
 ```
 
-Formatting can be found at two levels:
-1.  **Node Level**: Applied directly to a text run or paragraph.
-2.  **Document Level**: Found in `ast.metadata.formatting` (defaults) or `ast.metadata.styleMap` (named styles).
+Formatting appears at two levels:
+1. **Node Level**: Applied directly to a text run or paragraph.
+2. **Document Level**: Found in `ast.metadata.formatting` (defaults) or `ast.metadata.styleMap` (named styles).
 
-### 6. Advanced Metadata
-The `ast.metadata` object provides document-wide context:
-- **`styleMap`**: A dictionary of style names to their `TextFormatting` definitions found in the document.
-- **`formatting`**: Document-wide default settings (e.g., default font or font size).
+## Configuration: `OfficeParserConfig`
 
-### Advanced AST Usage
-Beyond using `ast.toText()`, you can interact with the structural data directly:
+Pass an optional config object as the second argument to `parseOffice`.
 
-#### 1. Extract all images and their OCR text
-```javascript
-const ast = await officeParser.parseOffice("report.docx", { ocr: true });
-const images = ast.attachments.filter(a => a.mimeType.startsWith('image/'));
-images.forEach(img => {
-    console.log(`Image: ${img.name} (OCR: ${img.ocrText || 'N/A'})`);
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `outputErrorToConsole` | boolean | `false` | Log errors to console |
+| `newlineDelimiter` | string | `\n` | Delimiter for new lines in text output |
+| `ignoreNotes` | boolean | `false` | Ignore notes in PowerPoint/ODP files |
+| `putNotesAtLast` | boolean | `false` | Append notes at end of document (not supported for RTF) |
+| `extractAttachments` | boolean | `false` | Extract images and charts as Base64 |
+| `ocr` | boolean | `false` | Enable OCR for images (requires `extractAttachments: true`) |
+| `ocrLanguage` | string | `eng` | OCR language(s), e.g. `'eng+fra+esp'`. See [language codes](https://tesseract-ocr.github.io/tessdoc/Data-Files#data-files-for-version-400-november-29-2016) |
+| `includeRawContent` | boolean | `false` | Include raw XML/RTF markup in nodes |
+| `pdfWorkerSrc` | string | CDN | Path to PDF.js worker. Defaults to CDN for `pdfjs-dist@5.4.530` |
+
+```js
+const config = {
+    newlineDelimiter: "\n\n",
+    extractAttachments: true,
+    ocr: true,
+    ocrLanguage: 'eng+fra+esp'
+};
+
+const ast = await docstream.parseOffice("report.docx", config);
+console.log(`Extracted ${ast.attachments.length} images`);
+```
+
+## Markdown Output
+
+The `toMarkdown()` method on the AST result converts the parsed document into clean Markdown, preserving headings, lists, tables, bold/italic formatting, images (as references), and footnotes.
+
+```js
+const docstream = require('docstream');
+
+const ast = await docstream.parseOffice("report.docx");
+const markdown = ast.toMarkdown();
+console.log(markdown);
+```
+
+Output:
+
+```markdown
+# Introduction
+
+This is the **first paragraph** with *italic text* and a [link](https://example.com).
+
+## Section 1
+
+- Item one
+- Item two
+- Item three
+
+| Name  | Score |
+|-------|-------|
+| Alice | 95    |
+| Bob   | 87    |
+```
+
+`toMarkdown()` works with all supported formats. Combined with `extractAttachments: true`, image nodes are rendered as `![alt](attachment-name)` references.
+
+## Legacy Format Support
+
+docstream adds native support for `.doc`, `.xls`, and `.ppt` (Office 97-2003 binary formats) without requiring LibreOffice or any external dependency. These parsers read the OLE2 Compound Binary File (CFB) container directly and extract content from the underlying binary streams (Word Binary, BIFF8, and PowerPoint Binary respectively).
+
+This means you can parse legacy Office files in the same way as modern formats — no system-level dependencies, no subprocess spawning, and full cross-platform compatibility including the browser.
+
+```js
+// Works exactly the same as modern formats
+const ast = await docstream.parseOffice("legacy-report.doc");
+console.log(ast.toText());
+
+const ast2 = await docstream.parseOffice("budget.xls");
+console.log(ast2.content); // Tables with rows and cells
+```
+
+## Examples
+
+**Search for a term (TypeScript)**
+
+```ts
+import { OfficeParser } from 'docstream';
+
+async function hasSearchTerm(filePath: string, term: string): Promise<boolean> {
+    const ast = await OfficeParser.parseOffice(filePath);
+    return ast.toText().includes(term);
+}
+```
+
+**Extract images with OCR**
+
+```js
+const docstream = require('docstream');
+
+const config = { extractAttachments: true, ocr: true };
+docstream.parseOffice("presentation.pptx", config).then(ast => {
+    ast.attachments.forEach(attachment => {
+        if (attachment.type === 'image') {
+            console.log(`Image: ${attachment.name}`);
+            console.log(`OCR Text: ${attachment.ocrText}`);
+            fs.writeFileSync(attachment.name, Buffer.from(attachment.data, 'base64'));
+        }
+    });
 });
 ```
 
-#### 2. Find specific headings
-```javascript
+**Find specific headings**
+
+```js
+const ast = await docstream.parseOffice("document.docx");
 const headings = ast.content.filter(node => node.type === 'heading' && node.metadata?.level === 1);
 console.log("Main Chapters:", headings.map(h => h.text));
 ```
 
-#### 3. Custom output (e.g., Simple Markdown conversion)
-```javascript
-const toMarkdown = (nodes) => {
-    return nodes.map(node => {
-        if (node.type === 'heading') return `${'#'.repeat(node.metadata?.level || 1)} ${node.text}`;
-        if (node.type === 'list') return `- ${node.text}`;
-        if (node.type === 'table') return "[Table Data]"; // expand children for actual table
-        return node.text;
-    }).join('\n\n');
-};
-console.log(toMarkdown(ast.content));
-```
+**Extract tables to CSV**
 
-#### 4. Extracting Tables to CSV
-Iterate through table nodes and their children (rows -> cells) to build a CSV string.
-```javascript
+```js
 const tables = ast.content.filter(node => node.type === 'table');
 tables.forEach((table, index) => {
     const csv = table.children
         .filter(row => row.type === 'row')
-        .map(row => 
+        .map(row =>
             row.children
                 .filter(cell => cell.type === 'cell')
-                .map(cell => `"${cell.text.replace(/"/g, '""')}"`) // Escape quotes
+                .map(cell => `"${cell.text.replace(/"/g, '""')}"`)
                 .join(',')
         )
         .join('\n');
@@ -353,9 +398,9 @@ tables.forEach((table, index) => {
 });
 ```
 
-#### 5. Filtering by Formatting (e.g., Bold Text)
-Find all text nodes that have specific formatting applied.
-```javascript
+**Find bold text**
+
+```js
 function findBoldText(nodes) {
     let results = [];
     nodes.forEach(node => {
@@ -373,9 +418,9 @@ const boldStrings = findBoldText(ast.content);
 console.log("Bold Text Found:", boldStrings);
 ```
 
-#### 6. Processing Footnotes/Endnotes
-If you kept notes inline (default behavior), you can extract them into a separate list for processing.
-```javascript
+**Extract footnotes/endnotes**
+
+```js
 function extractNotes(nodes) {
     let notes = [];
     nodes.forEach(node => {
@@ -393,72 +438,15 @@ const allNotes = extractNotes(ast.content);
 console.log("Document Notes:", allNotes);
 ```
 
-## Configuration Object: OfficeParserConfig
-Pass an optional config object as the second argument to `parseOffice`.
-
-| Flag | DataType | Default | Explanation |
-|------|----------|---------|-------------|
-| `outputErrorToConsole` | boolean | `false` | Show logs to console in case of an error. |
-| `newlineDelimiter` | string | `\n` | Delimiter for new lines in text output. |
-| `ignoreNotes` | boolean | `false` | Ignore notes in files like PowerPoint/ODP. |
-| `putNotesAtLast` | boolean | `false` | Put notes text at the end of the document. (Note: Does not work for RTF. It is treated as true always.) |
-| `extractAttachments` | boolean | `false` | Extract images and charts as Base64. |
-| `ocr` | boolean | `false` | Enable OCR for images (requires `extractAttachments: true`). |
-| `ocrLanguage` | string | `eng` | Language for OCR (e.g., 'eng', 'fra'). Supports multiple languages with '+'. See [Language Codes](https://tesseract-ocr.github.io/tessdoc/Data-Files#data-files-for-version-400-november-29-2016). |
-| `includeRawContent` | boolean | `false` | Include raw XML/RTF markup in the nodes. |
-| `pdfWorkerSrc` | string | `(see below)` | Path to PDF.js worker. Defaults to a CDN link if not provided. |
-
-```js
-const config = {
-    newlineDelimiter: "\n\n",
-    extractAttachments: true,
-    ocr: true,
-    ocrLanguage: 'eng+fra+esp' // Supports English, French, and Spanish simultaneously
-};
-
-const ast = await officeParser.parseOffice("report.docx", config);
-console.log(`Extracted ${ast.attachments.length} images`);
-```
-
-## Examples
-
-**Search for a term in a document (TypeScript)**
-```ts
-import { OfficeParser } from 'officeparser';
-
-async function hasSearchTerm(filePath: string, term: string): Promise<boolean> {
-    const ast = await OfficeParser.parseOffice(filePath);
-    return ast.toText().includes(term);
-}
-```
-
-**Extracting Images and their OCR text**
-```js
-const officeParser = require('officeparser');
-
-const config = { extractAttachments: true, ocr: true };
-officeParser.parseOffice("presentation.pptx", config).then(ast => {
-    ast.attachments.forEach(attachment => {
-        if (attachment.type === 'image') {
-            console.log(`Image: ${attachment.name}`);
-            console.log(`OCR Text: ${attachment.ocrText}`);
-            fs.writeFileSync(attachment.name, Buffer.from(attachment.data, 'base64'));
-        }
-    });
-});
-```
-
 ## Browser Usage
-The browser bundle exposes the `officeParser` namespace. Include the bundle file available in the release assets.
+
+The browser bundle exposes the `officeParser` namespace. Include the bundle file from the release assets.
 
 ```html
 <script src="dist/officeparser.browser.js"></script>
 <script>
     async function handleFile(file) {
-        // file can be a File object from an input element or an ArrayBuffer
-        // The browser bundle exposes the global variable `officeParser`
-        // which contains the `OfficeParser` class.
-        
+        // file: a File object from <input> or an ArrayBuffer
         try {
             const ast = await officeParser.parseOffice(file, { ocr: true });
             console.log(ast.toText());
@@ -471,37 +459,59 @@ The browser bundle exposes the `officeParser` namespace. Include the bundle file
 ```
 
 ### PDF Worker Configuration in Browser
-When using `officeparser` in a browser environment to parse PDF files, you may provide the `pdfWorkerSrc` configuration option. If not provided, it defaults to a CDN link for `pdfjs-dist@5.4.530`.
 
-```javascript
-const file = ...; // File object or ArrayBuffer
+When parsing PDFs in the browser, you can provide `pdfWorkerSrc` in the config. If omitted, it defaults to a CDN link for `pdfjs-dist@5.4.530`.
 
-// It will use the default CDN worker if pdfWorkerSrc is omitted
+```js
+// Uses default CDN worker
 const ast = await officeParser.parseOffice(file);
 
-// Or override it with your own path or a different version:
+// Override with your own path
 const ast2 = await officeParser.parseOffice(file, {
     pdfWorkerSrc: "https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.min.mjs"
 });
 ```
 
-> **Note:** The version of `pdfjs-dist` in the worker source should match the version used by `officeparser` (currently `5.4.530`).
+> **Note:** The `pdfjs-dist` version in the worker source should match the version used by docstream (currently `5.4.530`).
 
 ## Known Limitations
-1. **ODT/ODS Charts**: Extraction may occasionally show inaccurate data when referencing external cell ranges or complex layout-based data.
-2. **PDF Images**: PDF images are extracted as BMP files in the browser for compatibility. This conversion happens automatically.
-3. **RTF Footnotes**: The `putNotesAtLast` configuration is currently not supported for RTF files; footnotes and endnotes are always collected and appended to the end of the content.
 
-----------
+1. **ODT/ODS Charts**: Extraction may show inaccurate data when referencing external cell ranges or complex layouts.
+2. **PDF Images**: PDF images are extracted as BMP in the browser for compatibility.
+3. **RTF Footnotes**: `putNotesAtLast` is not supported for RTF; notes are always appended at the end.
 
-**npm**: [https://npmjs.com/package/officeparser](https://npmjs.com/package/officeparser)
+## Roadmap
 
-**github**: [https://github.com/harshankur/officeParser](https://github.com/harshankur/officeParser)
+- [x] DOCX, XLSX, PPTX, ODF, PDF, RTF parsing (from officeParser)
+- [x] AST output with metadata, formatting and attachments
+- [ ] Markdown output (`toMarkdown()`)
+- [ ] Legacy `.doc` support (Word 97-2003 Binary)
+- [ ] Legacy `.xls` support (Excel BIFF8)
+- [ ] Legacy `.ppt` support (PowerPoint 97-2003 Binary)
+- [ ] Fix: `process is not defined` in browser environments ([issue #67](https://github.com/harshankur/officeParser/issues/67))
+- [ ] Fix: background process leak on top-level require ([issue #59](https://github.com/harshankur/officeParser/issues/59))
+- [ ] Page numbers in Word documents ([issue #71](https://github.com/harshankur/officeParser/issues/71))
+
+## Credits & References
+
+This project builds on the work of several open-source projects and specifications:
+
+- **[officeParser](https://github.com/harshankur/officeParser)** by harshankur — The original parser this project is forked from. Provides DOCX, XLSX, PPTX, ODF, PDF, and RTF parsing with AST output. (MIT)
+- **[mammoth.js](https://github.com/mwilliamson/mammoth.js)** by mwilliamson — DOCX to semantic HTML conversion, referenced for the Markdown output pipeline. (MIT)
+- **[turndown](https://github.com/mixmark-io/turndown)** by mixmark-io — HTML to Markdown conversion engine. (MIT)
+- **[markitdown](https://github.com/microsoft/markitdown)** by Microsoft — Modular document converter architecture, used as design inspiration. (MIT)
+- **[olefile](https://github.com/decalage2/olefile)** by decalage2 — OLE2/Compound Binary File format parsing algorithms, ported to TypeScript for legacy format support. (BSD-2-Clause)
+- **[Apache POI](https://github.com/apache/poi)** — Java reference implementation for BIFF8 (XLS), Word Binary (DOC), and PPT binary format structures. (Apache 2.0)
+- **[pdf.js](https://github.com/mozilla/pdf.js)** by Mozilla — PDF text and image extraction engine. (Apache 2.0)
+- **Microsoft Open Specifications** — Official binary format documentation:
+  [MS-DOC](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc),
+  [MS-XLS](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xls),
+  [MS-PPT](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt)
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to get started.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
