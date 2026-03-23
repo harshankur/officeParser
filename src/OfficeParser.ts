@@ -33,7 +33,6 @@
  * @module OfficeParser
  */
 
-import * as fileType from 'file-type';
 import * as fs from 'fs';
 import { parseExcel } from './parsers/ExcelParser';
 import { parseOpenOffice } from './parsers/OpenOfficeParser';
@@ -43,6 +42,7 @@ import { parseRtf } from './parsers/RtfParser';
 import { parseWord } from './parsers/WordParser';
 import { OfficeParserAST, OfficeParserConfig } from './types';
 import { getOfficeError, getWrappedError, OfficeErrorType } from './utils/errorUtils';
+import { loadFileType } from './utils/moduleLoader';
 
 /**
  * Main parser class providing office document parsing functionality.
@@ -148,7 +148,8 @@ export class OfficeParser {
             }
 
             if (!ext) {
-                const type = await fileType.fromBuffer(buffer);
+                const { fileTypeFromBuffer } = await loadFileType();
+                const type = await fileTypeFromBuffer(buffer);
                 if (type) {
                     ext = type.ext.toLowerCase();
                 } else {

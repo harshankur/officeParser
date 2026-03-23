@@ -71,21 +71,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Step 7: Push the package to npmjs.com
-      # Uses local .npmrc configuration to avoid global credentials leakage
-      - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          npm publish --access public
+      # Step 7: Push the package to npmjs.com (Passwordless OIDC)
+      - name: Setup Node.js for npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
 
-      # Step 8: Push the package to GitHub Packages (ghcr.io compatibility)
-      # Temporarily modifies the package name to follow @harshankur scope
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+
+      # Step 8: Push the package to GitHub Packages
+      - name: Setup GitHub Packages Registry
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@harshankur'
+
       - name: Publish to GitHub Packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm pkg set name="@harshankur/officeparser"
-          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          npm publish --registry=https://npm.pkg.github.com/
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

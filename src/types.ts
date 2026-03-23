@@ -54,7 +54,7 @@ export interface OfficeParserConfig {
      * The URL/path to the PDF.js worker script.
      * 
      * **Mandatory** when using PDF parsing in browser environments to avoid worker configuration errors.
-     * If not provided, it defaults to `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.min.mjs`.
+     * If not provided, it defaults to `https://unpkg.com/pdfjs-dist@5.5.207/build/pdf.worker.min.mjs`.
      * You can override this with your own local path or a different CDN link.
      */
     pdfWorkerSrc?: string;

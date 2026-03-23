@@ -61,6 +61,7 @@ import { ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, Off
 import { getOfficeError, logWarning, OfficeErrorType } from '../utils/errorUtils';
 import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';
+import { loadPdfJs } from '../utils/moduleLoader';
 
 /** Represents a text item with position and formatting */
 interface TextPageItem {
@@ -356,25 +357,7 @@ function convertToRgbaBuffer(data: Uint8Array | Uint8ClampedArray, width: number
  * @returns Promise resolving to the parsed AST
  */
 export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Promise<OfficeParserAST> => {
-    let pdfjs: any;
-
-    // Check if we are in a Node.js environment
-    // @ts-ignore
-    if (typeof window === 'undefined') {
-        // Helper to bypass TS/Webpack/Other transpilers converting import() to require() when compiling to CJS
-        // Defined here to avoid CSP 'unsafe-eval' issues in browser environments
-        const dynamicImport = new Function('specifier', 'return import(specifier)');
-
-        try {
-            // Use legacy build for Node.js (required for pdfjs-dist v5+)
-            pdfjs = await dynamicImport('pdfjs-dist/legacy/build/pdf.mjs');
-        } catch (e) {
-            // Fallback to standard if legacy not found (e.g. older versions)
-            pdfjs = await dynamicImport('pdfjs-dist');
-        }
-    } else {
-        pdfjs = await import('pdfjs-dist');
-    }
+    const pdfjs = await loadPdfJs();
 
     // Configure worker
 
@@ -385,7 +368,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
         // @ts-ignore
         if (typeof window !== 'undefined') {
             // Browser: Default to CDN
-            pdfjs.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.min.mjs';
+            pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
         } else {
             // Node.js: Try to auto-resolve local worker path to avoid remote fetch errors
             try {

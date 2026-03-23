@@ -471,7 +471,7 @@ The browser bundle exposes the `officeParser` namespace. Include the bundle file
 ```
 
 ### PDF Worker Configuration in Browser
-When using `officeparser` in a browser environment to parse PDF files, you may provide the `pdfWorkerSrc` configuration option. If not provided, it defaults to a CDN link for `pdfjs-dist@5.4.530`.
+When using `officeparser` in a browser environment to parse PDF files, you may provide the `pdfWorkerSrc` configuration option. If not provided, it defaults to a CDN link for `pdfjs-dist@5.5.207`.
 
 ```javascript
 const file = ...; // File object or ArrayBuffer
@@ -481,7 +481,7 @@ const ast = await officeParser.parseOffice(file);
 
 // Or override it with your own path or a different version:
 const ast2 = await officeParser.parseOffice(file, {
-    pdfWorkerSrc: "https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.min.mjs"
+    pdfWorkerSrc: "https://unpkg.com/pdfjs-dist@5.5.207/build/pdf.worker.min.mjs"
 });
 ```
 
