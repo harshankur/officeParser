@@ -39,7 +39,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: 'npm'
 
       # Step 3: Clean install dependencies based on package-lock.json
@@ -63,11 +63,13 @@ jobs:
           cp dist/officeparser.browser.js "dist/$BUNDLE_NAME"
           echo "BUNDLE_NAME=$BUNDLE_NAME" >> $GITHUB_ENV
 
-      # Step 6: Attach the versioned .js bundle to the GitHub Release
-      - name: Upload Bundle as Release Asset
+      # Step 6: Attach the versioned assets to the GitHub Release
+      - name: Upload Assets as Release Asset
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ env.BUNDLE_NAME }}
+          files: |
+            dist/${{ env.BUNDLE_NAME }}
+            dist/officeparser.browser.d.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -75,17 +77,19 @@ jobs:
       - name: Setup Node.js for npm
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: 'https://registry.npmjs.org'
 
       - name: Publish to npm
-        run: npm publish --access public --provenance
+        run: npm publish
+        env:
+          NPM_CONFIG_PROVENANCE: true
 
       # Step 8: Push the package to GitHub Packages
       - name: Setup GitHub Packages Registry
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: 'https://npm.pkg.github.com'
           scope: '@harshankur'
 

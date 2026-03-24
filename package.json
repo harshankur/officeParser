@@ -1,6 +1,6 @@
 {
   "name": "officeparser",
-  "version": "6.0.6",
+  "version": "6.0.7",
   "description": "A robust, strictly-typed Node.js and Browser library for parsing office files (.docx, .pptx, .xlsx, .odt, .odp, .ods, .pdf, .rtf) into structured AST with rich metadata, formatting, and attachment support.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,8 +12,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "npm run sync:versions && npm run build:node && npm run build:browser",
+    "build": "npm run sync:versions && npm run build:node && npm run build:browser:types && npm run build:browser",
     "build:node": "tsc",
+    "build:browser:types": "dts-bundle-generator --no-check -o dist/officeparser.browser.d.ts src/index.ts",
     "build:browser": "node build_browser.js && npm run sync:docs",
     "sync:versions": "node scripts/sync-pdfjs-versions.js",
     "sync:docs": "mkdir -p docs/dist && cp dist/officeparser.browser.js docs/dist/",
@@ -29,6 +30,10 @@
   },
   "bin": {
     "officeparser": "dist/index.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "keywords": [
     "office",
@@ -67,24 +72,25 @@
   "bugs": {
     "url": "https://github.com/harshankur/officeParser/issues"
   },
-  "homepage": "https://harshankur.github.io/officeParser/",
+  "homepage": "https://officeparser.harshankur.com",
   "dependencies": {
     "@xmldom/xmldom": "^0.8.11",
     "concat-stream": "^2.0.0",
-    "file-type": "^19.6.0",
+    "file-type": "^21.3.4",
     "pdfjs-dist": "^5.5.207",
     "tesseract.js": "^7.0.0",
     "yauzl": "^3.2.1"
   },
   "devDependencies": {
     "@types/concat-stream": "^2.0.3",
-    "@types/node": "^22.13.10",
+    "@types/node": "^22.15.5",
     "@types/xmldom": "^0.1.34",
     "@types/yauzl": "^2.10.3",
+    "dts-bundle-generator": "^9.5.1",
     "esbuild": "^0.27.4",
     "esbuild-plugin-polyfill-node": "^0.3.0",
     "husky": "^9.1.7",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.2"
   }
 }

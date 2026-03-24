@@ -9,7 +9,7 @@ esbuild.build({
     globalName: 'officeParser',
     platform: 'browser',
     target: ['es2020'],
-    sourcemap: true,
+    sourcemap: false,
     minify: true,
     define: {
         'process.env.NODE_ENV': '"production"',
