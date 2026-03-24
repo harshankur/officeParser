@@ -59,17 +59,16 @@ jobs:
           npm run build
           VERSION=${{ github.event.release.tag_name }}
           VERSION_CLEAN=${VERSION#v}
-          BUNDLE_NAME="officeParserBundle@$VERSION_CLEAN.js"
-          cp dist/officeparser.browser.js "dist/$BUNDLE_NAME"
-          echo "BUNDLE_NAME=$BUNDLE_NAME" >> $GITHUB_ENV
+          mkdir -p release_assets
+          cp dist/officeparser.browser.js "release_assets/officeparser@$VERSION_CLEAN.bundle.js"
+          cp dist/officeparser.browser.d.ts "release_assets/officeparser@$VERSION_CLEAN.bundle.d.ts"
 
       # Step 6: Attach the versioned assets to the GitHub Release
       - name: Upload Assets as Release Asset
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/${{ env.BUNDLE_NAME }}
-            dist/officeparser.browser.d.ts
+            release_assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
