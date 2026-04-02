@@ -1576,6 +1576,11 @@
       "P586": {
         "formatting": {}
       }
+    },
+    "customProperties": {
+      "TestString": "Hello from custom props",
+      "TestNumber": 42,
+      "TestBool": true
     }
   },
   "content": [
@@ -1684,7 +1689,7 @@
     },
     {
       "type": "paragraph",
-      "text": "To see the DOCX conversion in action, simply add this file to calibre using the “Add Books” button and then click “Convert”.  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click “OK”.",
+      "text": "To see the DOCX conversion in action, simply add this file to calibre using the \u201cAdd Books\u201d button and then click \u201cConvert\u201d.  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click \u201cOK\u201d.",
       "children": [
         {
           "type": "text",
@@ -1704,7 +1709,7 @@
         },
         {
           "type": "text",
-          "text": "“Add Books”",
+          "text": "\u201cAdd Books\u201d",
           "formatting": {
             "bold": true
           },
@@ -1724,7 +1729,7 @@
         },
         {
           "type": "text",
-          "text": "button and then click “",
+          "text": "button and then click \u201c",
           "formatting": {},
           "metadata": {
             "style": "Normal"
@@ -1732,7 +1737,7 @@
         },
         {
           "type": "text",
-          "text": "Convert”.",
+          "text": "Convert\u201d.",
           "formatting": {
             "bold": true
           },
@@ -1776,7 +1781,7 @@
         },
         {
           "type": "text",
-          "text": "“OK”",
+          "text": "\u201cOK\u201d",
           "formatting": {
             "bold": true
           },
@@ -1796,7 +1801,7 @@
       "metadata": {
         "style": "Normal"
       },
-      "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"Normal\">To see the DOCX conversion in action, simply add this file to calibre using the<text:s/><text:span text:style-name=\"T2\">“Add Books”<text:s/></text:span>button and then click “<text:span text:style-name=\"T3\">Convert”.<text:s/></text:span><text:s/>Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click<text:s/><text:span text:style-name=\"T4\">“OK”</text:span>.</text:p>"
+      "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"Normal\">To see the DOCX conversion in action, simply add this file to calibre using the<text:s/><text:span text:style-name=\"T2\">\u201cAdd Books\u201d<text:s/></text:span>button and then click \u201c<text:span text:style-name=\"T3\">Convert\u201d.<text:s/></text:span><text:s/>Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click<text:s/><text:span text:style-name=\"T4\">\u201cOK\u201d</text:span>.</text:p>"
     },
     {
       "type": "paragraph",
@@ -2249,7 +2254,7 @@
     },
     {
       "type": "paragraph",
-      "text": "A paragraph with styled text: subtle emphasis  followed by strong text and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.",
+      "text": "A paragraph with styled text: subtle emphasis  followed by strong text and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph \u2014 calibre can handle both with equal ease.",
       "children": [
         {
           "type": "text",
@@ -2387,7 +2392,7 @@
         },
         {
           "type": "text",
-          "text": "—",
+          "text": "\u2014",
           "formatting": {},
           "metadata": {
             "style": "Normal"
@@ -2413,7 +2418,7 @@
       "metadata": {
         "style": "Normal"
       },
-      "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"Normal\">A paragraph with styled text:<text:s/><text:span text:style-name=\"SubtleEmphasis\">subtle emphasis</text:span><text:span text:style-name=\"SubtleEmphasis\"><text:s text:c=\"2\"/></text:span>followed by<text:s/><text:span text:style-name=\"Strong\">strong text<text:s/></text:span>and<text:s/><text:span text:style-name=\"IntenseEmphasis\">intense emphasis</text:span>.<text:s/>This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph<text:s/>—<text:s/>calibre can handle both with equal ease.</text:p>"
+      "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"Normal\">A paragraph with styled text:<text:s/><text:span text:style-name=\"SubtleEmphasis\">subtle emphasis</text:span><text:span text:style-name=\"SubtleEmphasis\"><text:s text:c=\"2\"/></text:span>followed by<text:s/><text:span text:style-name=\"Strong\">strong text<text:s/></text:span>and<text:s/><text:span text:style-name=\"IntenseEmphasis\">intense emphasis</text:span>.<text:s/>This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph<text:s/>\u2014<text:s/>calibre can handle both with equal ease.</text:p>"
     },
     {
       "type": "heading",
@@ -3072,11 +3077,11 @@
     },
     {
       "type": "paragraph",
-      "text": "Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.",
+      "text": "Now let\u2019s look at a fancier table\u2014one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.",
       "children": [
         {
           "type": "text",
-          "text": "Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.",
+          "text": "Now let\u2019s look at a fancier table\u2014one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.",
           "formatting": {},
           "metadata": {
             "style": "Normal"
@@ -3086,7 +3091,7 @@
       "metadata": {
         "style": "Normal"
       },
-      "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"Normal\">Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.</text:p>"
+      "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"Normal\">Now let\u2019s look at a fancier table\u2014one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.</text:p>"
     },
     {
       "type": "table",
@@ -3310,15 +3315,15 @@
             },
             {
               "type": "cell",
-              "text": "—",
+              "text": "\u2014",
               "children": [
                 {
                   "type": "paragraph",
-                  "text": "—",
+                  "text": "\u2014",
                   "children": [
                     {
                       "type": "text",
-                      "text": "—",
+                      "text": "\u2014",
                       "formatting": {},
                       "metadata": {
                         "style": "P79"
@@ -3329,14 +3334,14 @@
                     "alignment": "center",
                     "style": "P79"
                   },
-                  "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P79\">—</text:p>"
+                  "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P79\">\u2014</text:p>"
                 }
               ],
               "metadata": {
                 "row": 1,
                 "col": 1
               },
-              "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell78\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P79\">—</text:p></table:table-cell>"
+              "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell78\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P79\">\u2014</text:p></table:table-cell>"
             },
             {
               "type": "cell",
@@ -3423,7 +3428,7 @@
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell86\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P87\"/></table:table-cell>"
             }
           ],
-          "rawContent": "<table:table-row xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableRow75\"><table:table-cell table:style-name=\"TableCell76\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P77\">Point A</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell78\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P79\">—</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell80\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P81\"/></table:table-cell><table:table-cell table:style-name=\"TableCell82\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P83\"/></table:table-cell><table:table-cell table:style-name=\"TableCell84\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P85\"/></table:table-cell><table:table-cell table:style-name=\"TableCell86\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P87\"/></table:table-cell></table:table-row>"
+          "rawContent": "<table:table-row xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableRow75\"><table:table-cell table:style-name=\"TableCell76\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P77\">Point A</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell78\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P79\">\u2014</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell80\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P81\"/></table:table-cell><table:table-cell table:style-name=\"TableCell82\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P83\"/></table:table-cell><table:table-cell table:style-name=\"TableCell84\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P85\"/></table:table-cell><table:table-cell table:style-name=\"TableCell86\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P87\"/></table:table-cell></table:table-row>"
         },
         {
           "type": "row",
@@ -3489,15 +3494,15 @@
             },
             {
               "type": "cell",
-              "text": "—",
+              "text": "\u2014",
               "children": [
                 {
                   "type": "paragraph",
-                  "text": "—",
+                  "text": "\u2014",
                   "children": [
                     {
                       "type": "text",
-                      "text": "—",
+                      "text": "\u2014",
                       "formatting": {},
                       "metadata": {
                         "style": "P94"
@@ -3508,14 +3513,14 @@
                     "alignment": "center",
                     "style": "P94"
                   },
-                  "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P94\">—</text:p>"
+                  "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P94\">\u2014</text:p>"
                 }
               ],
               "metadata": {
                 "row": 2,
                 "col": 2
               },
-              "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell93\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P94\">—</text:p></table:table-cell>"
+              "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell93\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P94\">\u2014</text:p></table:table-cell>"
             },
             {
               "type": "cell",
@@ -3581,7 +3586,7 @@
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell99\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P100\"/></table:table-cell>"
             }
           ],
-          "rawContent": "<table:table-row xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableRow88\"><table:table-cell table:style-name=\"TableCell89\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P90\">Point B</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell91\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P92\">87</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell93\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P94\">—</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell95\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P96\"/></table:table-cell><table:table-cell table:style-name=\"TableCell97\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P98\"/></table:table-cell><table:table-cell table:style-name=\"TableCell99\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P100\"/></table:table-cell></table:table-row>"
+          "rawContent": "<table:table-row xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableRow88\"><table:table-cell table:style-name=\"TableCell89\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P90\">Point B</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell91\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P92\">87</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell93\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P94\">\u2014</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell95\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P96\"/></table:table-cell><table:table-cell table:style-name=\"TableCell97\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P98\"/></table:table-cell><table:table-cell table:style-name=\"TableCell99\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P100\"/></table:table-cell></table:table-row>"
         },
         {
           "type": "row",
@@ -3677,15 +3682,15 @@
             },
             {
               "type": "cell",
-              "text": "—",
+              "text": "\u2014",
               "children": [
                 {
                   "type": "paragraph",
-                  "text": "—",
+                  "text": "\u2014",
                   "children": [
                     {
                       "type": "text",
-                      "text": "—",
+                      "text": "\u2014",
                       "formatting": {},
                       "metadata": {
                         "style": "P109"
@@ -3696,14 +3701,14 @@
                     "alignment": "center",
                     "style": "P109"
                   },
-                  "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P109\">—</text:p>"
+                  "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P109\">\u2014</text:p>"
                 }
               ],
               "metadata": {
                 "row": 3,
                 "col": 3
               },
-              "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell108\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P109\">—</text:p></table:table-cell>"
+              "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell108\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P109\">\u2014</text:p></table:table-cell>"
             },
             {
               "type": "cell",
@@ -3748,7 +3753,7 @@
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell112\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P113\"/></table:table-cell>"
             }
           ],
-          "rawContent": "<table:table-row xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableRow101\"><table:table-cell table:style-name=\"TableCell102\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P103\">Point C</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell104\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P105\">64</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell106\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P107\">56</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell108\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P109\">—</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell110\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P111\"/></table:table-cell><table:table-cell table:style-name=\"TableCell112\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P113\"/></table:table-cell></table:table-row>"
+          "rawContent": "<table:table-row xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableRow101\"><table:table-cell table:style-name=\"TableCell102\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P103\">Point C</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell104\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P105\">64</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell106\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P107\">56</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell108\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P109\">\u2014</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell110\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P111\"/></table:table-cell><table:table-cell table:style-name=\"TableCell112\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P113\"/></table:table-cell></table:table-row>"
         },
         {
           "type": "row",
@@ -3874,15 +3879,15 @@
             },
             {
               "type": "cell",
-              "text": "—",
+              "text": "\u2014",
               "children": [
                 {
                   "type": "paragraph",
-                  "text": "—",
+                  "text": "\u2014",
                   "children": [
                     {
                       "type": "text",
-                      "text": "—",
+                      "text": "\u2014",
                       "formatting": {},
                       "metadata": {
                         "style": "P124"
@@ -3893,14 +3898,14 @@
                     "alignment": "center",
                     "style": "P124"
                   },
-                  "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P124\">—</text:p>"
+                  "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P124\">\u2014</text:p>"
                 }
               ],
               "metadata": {
                 "row": 4,
                 "col": 4
               },
-              "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell123\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P124\">—</text:p></table:table-cell>"
+              "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell123\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P124\">\u2014</text:p></table:table-cell>"
             },
             {
               "type": "cell",
@@ -3924,7 +3929,7 @@
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell125\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P126\"/></table:table-cell>"
             }
           ],
-          "rawContent": "<table:table-row xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableRow114\"><table:table-cell table:style-name=\"TableCell115\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P116\">Point D</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell117\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P118\">37</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell119\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P120\">32</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell121\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P122\">91</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell123\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P124\">—</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell125\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P126\"/></table:table-cell></table:table-row>"
+          "rawContent": "<table:table-row xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableRow114\"><table:table-cell table:style-name=\"TableCell115\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P116\">Point D</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell117\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P118\">37</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell119\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P120\">32</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell121\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P122\">91</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell123\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P124\">\u2014</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell125\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P126\"/></table:table-cell></table:table-row>"
         },
         {
           "type": "row",
@@ -4080,15 +4085,15 @@
             },
             {
               "type": "cell",
-              "text": "—",
+              "text": "\u2014",
               "children": [
                 {
                   "type": "paragraph",
-                  "text": "—",
+                  "text": "\u2014",
                   "children": [
                     {
                       "type": "text",
-                      "text": "—",
+                      "text": "\u2014",
                       "formatting": {},
                       "metadata": {
                         "style": "P139"
@@ -4099,20 +4104,20 @@
                     "alignment": "center",
                     "style": "P139"
                   },
-                  "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P139\">—</text:p>"
+                  "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P139\">\u2014</text:p>"
                 }
               ],
               "metadata": {
                 "row": 5,
                 "col": 5
               },
-              "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell138\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P139\">—</text:p></table:table-cell>"
+              "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell138\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P139\">\u2014</text:p></table:table-cell>"
             }
           ],
-          "rawContent": "<table:table-row xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableRow127\"><table:table-cell table:style-name=\"TableCell128\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P129\">Point E</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell130\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P131\">93</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell132\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P133\">35</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell134\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P135\">54</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell136\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P137\">43</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell138\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P139\">—</text:p></table:table-cell></table:table-row>"
+          "rawContent": "<table:table-row xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableRow127\"><table:table-cell table:style-name=\"TableCell128\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P129\">Point E</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell130\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P131\">93</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell132\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P133\">35</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell134\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P135\">54</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell136\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P137\">43</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell138\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P139\">\u2014</text:p></table:table-cell></table:table-row>"
         }
       ],
-      "rawContent": "<table:table xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"Table55\"><table:table-columns><table:table-column table:style-name=\"TableColumn56\"/><table:table-column table:style-name=\"TableColumn57\"/><table:table-column table:style-name=\"TableColumn58\"/><table:table-column table:style-name=\"TableColumn59\"/><table:table-column table:style-name=\"TableColumn60\"/><table:table-column table:style-name=\"TableColumn61\"/></table:table-columns><table:table-row table:style-name=\"TableRow62\"><table:table-cell table:style-name=\"TableCell63\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P64\">City or Town</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell65\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P66\">Point A</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell67\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P68\">Point B</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell69\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P70\">Point C</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell71\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P72\">Point D</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell73\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P74\">Point E</text:p></table:table-cell></table:table-row><table:table-row table:style-name=\"TableRow75\"><table:table-cell table:style-name=\"TableCell76\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P77\">Point A</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell78\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P79\">—</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell80\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P81\"/></table:table-cell><table:table-cell table:style-name=\"TableCell82\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P83\"/></table:table-cell><table:table-cell table:style-name=\"TableCell84\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P85\"/></table:table-cell><table:table-cell table:style-name=\"TableCell86\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P87\"/></table:table-cell></table:table-row><table:table-row table:style-name=\"TableRow88\"><table:table-cell table:style-name=\"TableCell89\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P90\">Point B</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell91\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P92\">87</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell93\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P94\">—</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell95\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P96\"/></table:table-cell><table:table-cell table:style-name=\"TableCell97\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P98\"/></table:table-cell><table:table-cell table:style-name=\"TableCell99\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P100\"/></table:table-cell></table:table-row><table:table-row table:style-name=\"TableRow101\"><table:table-cell table:style-name=\"TableCell102\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P103\">Point C</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell104\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P105\">64</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell106\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P107\">56</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell108\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P109\">—</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell110\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P111\"/></table:table-cell><table:table-cell table:style-name=\"TableCell112\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P113\"/></table:table-cell></table:table-row><table:table-row table:style-name=\"TableRow114\"><table:table-cell table:style-name=\"TableCell115\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P116\">Point D</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell117\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P118\">37</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell119\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P120\">32</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell121\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P122\">91</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell123\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P124\">—</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell125\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P126\"/></table:table-cell></table:table-row><table:table-row table:style-name=\"TableRow127\"><table:table-cell table:style-name=\"TableCell128\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P129\">Point E</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell130\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P131\">93</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell132\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P133\">35</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell134\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P135\">54</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell136\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P137\">43</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell138\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P139\">—</text:p></table:table-cell></table:table-row></table:table>"
+      "rawContent": "<table:table xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"Table55\"><table:table-columns><table:table-column table:style-name=\"TableColumn56\"/><table:table-column table:style-name=\"TableColumn57\"/><table:table-column table:style-name=\"TableColumn58\"/><table:table-column table:style-name=\"TableColumn59\"/><table:table-column table:style-name=\"TableColumn60\"/><table:table-column table:style-name=\"TableColumn61\"/></table:table-columns><table:table-row table:style-name=\"TableRow62\"><table:table-cell table:style-name=\"TableCell63\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P64\">City or Town</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell65\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P66\">Point A</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell67\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P68\">Point B</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell69\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P70\">Point C</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell71\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P72\">Point D</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell73\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P74\">Point E</text:p></table:table-cell></table:table-row><table:table-row table:style-name=\"TableRow75\"><table:table-cell table:style-name=\"TableCell76\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P77\">Point A</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell78\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P79\">\u2014</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell80\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P81\"/></table:table-cell><table:table-cell table:style-name=\"TableCell82\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P83\"/></table:table-cell><table:table-cell table:style-name=\"TableCell84\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P85\"/></table:table-cell><table:table-cell table:style-name=\"TableCell86\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P87\"/></table:table-cell></table:table-row><table:table-row table:style-name=\"TableRow88\"><table:table-cell table:style-name=\"TableCell89\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P90\">Point B</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell91\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P92\">87</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell93\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P94\">\u2014</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell95\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P96\"/></table:table-cell><table:table-cell table:style-name=\"TableCell97\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P98\"/></table:table-cell><table:table-cell table:style-name=\"TableCell99\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P100\"/></table:table-cell></table:table-row><table:table-row table:style-name=\"TableRow101\"><table:table-cell table:style-name=\"TableCell102\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P103\">Point C</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell104\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P105\">64</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell106\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P107\">56</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell108\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P109\">\u2014</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell110\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P111\"/></table:table-cell><table:table-cell table:style-name=\"TableCell112\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P113\"/></table:table-cell></table:table-row><table:table-row table:style-name=\"TableRow114\"><table:table-cell table:style-name=\"TableCell115\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P116\">Point D</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell117\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P118\">37</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell119\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P120\">32</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell121\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P122\">91</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell123\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P124\">\u2014</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell125\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P126\"/></table:table-cell></table:table-row><table:table-row table:style-name=\"TableRow127\"><table:table-cell table:style-name=\"TableCell128\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P129\">Point E</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell130\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P131\">93</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell132\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P133\">35</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell134\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P135\">54</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell136\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P137\">43</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell138\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P139\">\u2014</text:p></table:table-cell></table:table-row></table:table>"
     },
     {
       "type": "paragraph",
@@ -5335,7 +5340,7 @@
     },
     {
       "type": "paragraph",
-      "text": "We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.",
+      "text": "We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don\u2019t fare well in ebooks.",
       "children": [
         {
           "type": "text",
@@ -5403,7 +5408,7 @@
         },
         {
           "type": "text",
-          "text": "Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.",
+          "text": "Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don\u2019t fare well in ebooks.",
           "formatting": {},
           "metadata": {
             "style": "P243"
@@ -5413,7 +5418,7 @@
       "metadata": {
         "style": "P243"
       },
-      "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P243\">We end with a<text:s/>fancy<text:s/>calendar, note how<text:s/>much of the original formatting is preserved.<text:s/>Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.</text:p>"
+      "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P243\">We end with a<text:s/>fancy<text:s/>calendar, note how<text:s/>much of the original formatting is preserved.<text:s/>Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don\u2019t fare well in ebooks.</text:p>"
     },
     {
       "type": "table",
