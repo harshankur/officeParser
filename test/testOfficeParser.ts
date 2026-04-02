@@ -1234,24 +1234,30 @@ async function testFile(ext: string): Promise<FeatureTest[]> {
             const baselineMetrics = extractMetrics(baseline);
             results.push(...compareMetrics('Full Extraction', ext, baselineMetrics, metrics));
 
-            // Custom properties: check count matches baseline.
+            // Custom properties: verify actual key-value pairs against baseline.
             // Kept separate from compareMetrics so parity tests (which compare across formats
             // that may not support custom properties) are not affected.
             if (baselineMetrics.metadata.hasCustomProperties || metrics.metadata.hasCustomProperties) {
-                const countMatch = baselineMetrics.metadata.customPropertyCount === metrics.metadata.customPropertyCount;
-                results.push({
-                    category: 'Full Extraction',
-                    feature: 'Custom Properties',
-                    fileType: ext,
-                    result: {
-                        status: countMatch ? 'PASS' : 'FAIL',
-                        expected: baselineMetrics.metadata.customPropertyCount,
-                        actual: metrics.metadata.customPropertyCount,
-                        details: countMatch
-                            ? `${metrics.metadata.customPropertyCount} custom properties`
-                            : `Expected ${baselineMetrics.metadata.customPropertyCount}, got ${metrics.metadata.customPropertyCount}`
-                    }
-                });
+                const expectedProps = baseline.metadata?.customProperties ?? {};
+                const actualProps = ast.metadata?.customProperties ?? {};
+                const allKeys = new Set([...Object.keys(expectedProps), ...Object.keys(actualProps)]);
+                for (const key of allKeys) {
+                    const expected = expectedProps[key];
+                    const actual = actualProps[key];
+                    // Coerce both to string for comparison to handle Date serialization
+                    const match = String(expected) === String(actual);
+                    results.push({
+                        category: 'Full Extraction',
+                        feature: `Custom Property: ${key}`,
+                        fileType: ext,
+                        result: {
+                            status: match ? 'PASS' : 'FAIL',
+                            expected,
+                            actual,
+                            details: match ? `${key} = ${actual}` : `Expected ${key} = ${expected}, got ${actual}`
+                        }
+                    });
+                }
             }
 
             // Add text baseline comparison
