@@ -616,8 +616,8 @@ export interface OfficeMetadata {
      * Sources by format:
      * - DOCX/XLSX/PPTX: `docProps/custom.xml` (Office custom document properties)
      * - ODT/ODP/ODS: `meta:user-defined` elements in `meta.xml`
-     * - RTF: `\info` sub-destinations such as `\manager`, `\company`, `\keywords`, `\category`
      * - PDF: non-standard entries in the PDF Info dictionary
+     * RTF does not support custom properties; the `\info` group is not extracted.
      * Values are typed as string, number, boolean, or Date where the source format provides type information.
      */
     customProperties?: Record<string, string | number | boolean | Date>;
