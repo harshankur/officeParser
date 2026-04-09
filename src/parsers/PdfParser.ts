@@ -62,6 +62,7 @@ import { getOfficeError, logWarning, OfficeErrorType } from '../utils/errorUtils
 import { createAttachment } from '../utils/imageUtils';
 import { performOcr } from '../utils/ocrUtils';
 import { loadPdfJs } from '../utils/moduleLoader';
+import { parseOfficeDate } from '../utils/dateUtils';
 
 /** Represents a text item with position and formatting */
 interface TextPageItem {
@@ -91,57 +92,11 @@ interface ImagePageItem {
 interface LinkAnnotation {
     rect: number[];  // [x1, y1, x2, y2]
     url?: string;
-    dest?: any;  // Internal destination
+    dest?: string | unknown[];  // Internal destination (named or explicit array)
 }
 
 type PageItem = TextPageItem | ImagePageItem;
 
-/**
- * Parses PDF creation/modification date strings.
- * PDF dates are in format: D:YYYYMMDDHHmmSSOHH'mm'
- * Where O is timezone offset direction (+/-), HH is hours, mm is minutes.
- * 
- * @param dateString - The PDF date string
- * @returns Parsed Date object or undefined if parsing fails
- */
-function parsePdfDate(dateString: string | undefined): Date | undefined {
-    if (!dateString) return undefined;
-
-    try {
-        // Remove "D:" prefix if present
-        let str = dateString.startsWith('D:') ? dateString.slice(2) : dateString;
-
-        // Extract components: YYYYMMDDHHmmSS
-        const year = parseInt(str.slice(0, 4), 10);
-        const month = parseInt(str.slice(4, 6), 10) - 1; // 0-indexed
-        const day = parseInt(str.slice(6, 8), 10) || 1;
-        const hour = parseInt(str.slice(8, 10), 10) || 0;
-        const minute = parseInt(str.slice(10, 12), 10) || 0;
-        const second = parseInt(str.slice(12, 14), 10) || 0;
-
-        // Handle timezone if present
-        const tzMatch = str.slice(14).match(/([+-Z])(\d{2})'?(\d{2})?'?/);
-        if (tzMatch) {
-            const tzSign = tzMatch[1] === '-' ? -1 : 1;
-            const tzHours = parseInt(tzMatch[2], 10) || 0;
-            const tzMinutes = parseInt(tzMatch[3], 10) || 0;
-            const offset = tzSign * (tzHours * 60 + tzMinutes);
-
-            // Create date in UTC and adjust for timezone
-            const utc = Date.UTC(year, month, day, hour, minute, second);
-            return new Date(utc - offset * 60000);
-        }
-
-        return new Date(year, month, day, hour, minute, second);
-    } catch {
-        // Fallback: try native Date parsing
-        try {
-            return new Date(dateString);
-        } catch {
-            return undefined;
-        }
-    }
-}
 
 /**
  * Calculates statistics about font sizes in the document.
@@ -392,8 +347,9 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
     let pdfDocument;
     try {
         pdfDocument = await loadingTask.promise;
-    } catch (e: any) {
-        if (e.message?.includes('workerSrc') || e.message?.includes('No "GlobalWorkerOptions.workerSrc" specified')) {
+    } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        if (message.includes('workerSrc') || message.includes('No "GlobalWorkerOptions.workerSrc" specified')) {
             throw getOfficeError(OfficeErrorType.PDF_WORKER_MISSING, config);
         }
         throw e;
@@ -413,16 +369,16 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
     // - Creator: Application that made the original document
     // - Keywords, Description are rarely present
     const meta = await pdfDocument.getMetadata().catch(() => ({ info: {} }));
-    const info = meta.info as Record<string, any>;
+    const info = meta.info as Record<string, unknown>;
 
     const metadata: OfficeMetadata = {
         pages: numPages,
-        title: info?.Title || undefined,
-        author: info?.Author || undefined,
-        subject: info?.Subject || undefined,
-        description: info?.Keywords || undefined,  // Map Keywords to description as closest match
-        created: parsePdfDate(info?.CreationDate),
-        modified: parsePdfDate(info?.ModDate),
+        title: info?.Title as string | undefined,
+        author: info?.Author as string | undefined,
+        subject: info?.Subject as string | undefined,
+        description: info?.Keywords as string | undefined,  // Map Keywords to description as closest match
+        created: parseOfficeDate(info?.CreationDate as string | undefined),
+        modified: parseOfficeDate(info?.ModDate as string | undefined),
         // Note: lastModifiedBy is not available in PDF format - there's no concept of "last modifier"
         // The Author field only tracks original author.
     };
@@ -513,11 +469,11 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                 try {
                     if (commonObjs.has(item.fontName)) {
                         // Use callback-based get to ensure safe resolution
-                        const fontData = await new Promise<any>((resolve) => {
-                            // @ts-ignore
-                            commonObjs.get(item.fontName, (data: any) => resolve(data));
-                        });
-                        if (fontData?.name) {
+                            const fontData = await new Promise<Record<string, unknown>>((resolve) => {
+                                // @ts-ignore - commonObjs.get is callback-based in legacy builds
+                                commonObjs.get(item.fontName, (data: Record<string, unknown>) => resolve(data));
+                            });
+                        if (fontData?.name && typeof fontData.name === 'string') {
                             // Remove PDF subset prefix (6 uppercase letters + '+')
                             fontName = fontData.name.replace(/^[A-Z]{6}\+/, '');
                             formatting.font = fontName;
@@ -572,7 +528,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                                         resolve();
                                     }, 500);
 
-                                    page.objs.get(dep, (data: any) => {
+                                    page.objs.get(dep, (data: unknown) => {
                                         clearTimeout(timeout);
                                         resolve();
                                     });
@@ -599,11 +555,11 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
 
                             if (hasObj) {
                                 // Use callback-based get to ensure safe resolution
-                                const rawObj = await new Promise<any>((resolve) => {
-                                    // @ts-ignore
-                                    targetObjs.get(imgName, (data: any) => resolve(data));
+                                const rawObj = await new Promise<Record<string, unknown>>((resolve) => {
+                                    // @ts-ignore - targetObjs.get is callback-based
+                                    targetObjs.get(imgName, (data: Record<string, unknown>) => resolve(data));
                                 });
-                                const imgObj = rawObj as any;
+                                const imgObj = rawObj as Record<string, unknown> & { data?: Uint8ClampedArray; bitmap?: ImageBitmap; width: number; height: number; kind?: number };
 
                                 // Browser-specific: Handle ImageBitmap if data is missing
                                 if (typeof window !== 'undefined' && !imgObj.data && imgObj.bitmap) {

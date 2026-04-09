@@ -12,6 +12,7 @@
 
 import { DOMParser } from '@xmldom/xmldom';
 import { OfficeMetadata } from '../types';
+import { parseOfficeDate } from './dateUtils';
 
 /**
  * Parses an XML string into a DOM Document object.
@@ -50,7 +51,13 @@ export const parseXmlString = (xml: string): Document => {
  * ```
  */
 export const getElementsByTagName = (element: Element | Document, tagName: string): Element[] => {
-    return Array.from(element.getElementsByTagName(tagName));
+    const results = Array.from(element.getElementsByTagName(tagName));
+    // Resilience: If prefixed tag (e.g., 'dc:title') not found, try local name (e.g., 'title')
+    if (results.length === 0 && tagName.includes(':')) {
+        const localName = tagName.split(':').pop()!;
+        return Array.from(element.getElementsByTagName(localName));
+    }
+    return results;
 };
 
 /**
@@ -124,11 +131,11 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
 
         // Step 6: Extract creation date (Dublin Core Terms element)
         const created = getElementsByTagName(coreProperties, "dcterms:created")[0];
-        if (created && created.textContent) metadata.created = new Date(created.textContent);
+        if (created && created.textContent) metadata.created = parseOfficeDate(created.textContent);
 
         // Step 7: Extract last modification date (Dublin Core Terms element)
         const modified = getElementsByTagName(coreProperties, "dcterms:modified")[0];
-        if (modified && modified.textContent) metadata.modified = new Date(modified.textContent);
+        if (modified && modified.textContent) metadata.modified = parseOfficeDate(modified.textContent);
 
         // Step 8: Extract description and subject (Dublin Core elements)
         const description = getElementsByTagName(coreProperties, "dc:description")[0];
@@ -156,10 +163,10 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
         if (subject && subject.textContent) metadata.subject = subject.textContent;
 
         const created = getElementsByTagName(officeMeta, "meta:creation-date")[0];
-        if (created && created.textContent) metadata.created = new Date(created.textContent);
+        if (created && created.textContent) metadata.created = parseOfficeDate(created.textContent);
 
         const modified = getElementsByTagName(officeMeta, "dc:date")[0];
-        if (modified && modified.textContent) metadata.modified = new Date(modified.textContent);
+        if (modified && modified.textContent) metadata.modified = parseOfficeDate(modified.textContent);
 
         // Extract user-defined custom properties (meta:user-defined)
         const userDefined = getElementsByTagName(officeMeta, "meta:user-defined");
@@ -176,8 +183,8 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
                     const num = Number(raw);
                     if (!isNaN(num)) customProperties[name] = num;
                 } else if (valueType === "date" || valueType === "time") {
-                    const date = new Date(raw);
-                    if (!isNaN(date.getTime())) customProperties[name] = date;
+                    const date = parseOfficeDate(raw);
+                    if (date) customProperties[name] = date;
                     else customProperties[name] = raw;
                 } else {
                     customProperties[name] = raw;
@@ -240,8 +247,8 @@ export const parseOOXMLCustomProperties = (xmlContent: string): Record<string, s
                 const num = Number(text);
                 if (!isNaN(num)) result[name] = num;
             } else if (/vt:filetime|vt:date/.test(tag)) {
-                const date = new Date(text);
-                if (!isNaN(date.getTime())) result[name] = date;
+                const date = parseOfficeDate(text);
+                if (date) result[name] = date;
                 else result[name] = text;
             } else if (text) {
                 // Fallback: store as string for any other vt: type

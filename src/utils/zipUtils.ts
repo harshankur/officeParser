@@ -76,7 +76,7 @@ interface ZipFileContent {
  */
 export const extractFiles = (zipInput: Buffer, filterFn: (fileName: string) => boolean): Promise<ZipFileContent[]> => {
     return new Promise((resolve, reject) => {
-        unzip(new Uint8Array(zipInput), { filter: (file) => filterFn(file.name) }, (err, decompressed) => {
+        unzip(new Uint8Array(zipInput.buffer, zipInput.byteOffset, zipInput.byteLength), { filter: (file) => filterFn(file.name) }, (err, decompressed) => {
             if (err) return reject(err);
             resolve(Object.entries(decompressed).map(([path, data]) => ({
                 path,
