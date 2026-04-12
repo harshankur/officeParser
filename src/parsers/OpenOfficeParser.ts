@@ -21,13 +21,13 @@
  * @module OpenOfficeParser
  */
 
-import { CellMetadata, ChartData, ChartMetadata, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types';
-import { extractChartData } from '../utils/chartUtils';
-import { logWarning } from '../utils/errorUtils';
-import { createAttachment } from '../utils/imageUtils';
-import { performOcr } from '../utils/ocrUtils';
-import { getDirectChildren, getElementsByTagName, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils';
-import { extractFiles } from '../utils/zipUtils';
+import { CellMetadata, ChartData, ChartMetadata, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { extractChartData } from '../utils/chartUtils.js';
+import { logWarning } from '../utils/errorUtils.js';
+import { createAttachment } from '../utils/imageUtils.js';
+import { performOcr } from '../utils/ocrUtils.js';
+import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
+import { extractFiles } from '../utils/zipUtils.js';
 
 /**
  * Parses an OpenOffice document (.odt, .odp, .ods) and extracts content.
@@ -85,7 +85,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
             const styleInfo: { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean } = {};
 
             // Parse paragraph properties for alignment and drop caps
-            const paraProps = getElementsByTagName(style, "style:paragraph-properties")[0];
+            const paraProps = getFirstElementByTagName(style, "style:paragraph-properties");
             if (paraProps) {
                 const textAlign = paraProps.getAttribute("fo:text-align");
                 if (textAlign) {
@@ -103,7 +103,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 }
 
                 // Detect Drop Caps
-                const dropCap = getElementsByTagName(paraProps, "style:drop-cap")[0];
+                const dropCap = getFirstElementByTagName(paraProps, "style:drop-cap");
                 if (dropCap) {
                     styleInfo.dropCap = true;
                 }
@@ -114,9 +114,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
             }
 
             // Parse text properties
-            const textProps = getElementsByTagName(style, "style:text-properties")[0];
+            const textProps = getFirstElementByTagName(style, "style:text-properties");
             // Parse table cell properties (for ODS background)
-            const cellProps = getElementsByTagName(style, "style:table-cell-properties")[0];
+            const cellProps = getFirstElementByTagName(style, "style:table-cell-properties");
 
             const formatting: TextFormatting = {};
 
@@ -182,7 +182,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         notes: OfficeContentNode[],
         paragraphStyleMap: Record<string, { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean }>,
         parentFormatting: TextFormatting = {},
-        linkMetadata?: { link?: string; linkType?: 'internal' | 'external' }
+        linkMetadata?: { link?: string; linkType?: 'internal' | 'external' },
+        sourceXml: string = ''
     ): { text: string; children: OfficeContentNode[] } => {
         const children: OfficeContentNode[] = [];
         let fullText = '';
@@ -203,7 +204,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                         metadata: linkMetadata ? { ...linkMetadata } : undefined
                     });
                 }
-            } else if (child.nodeType === 1) {
+            } else if (isElement(child)) {
                 const element = child as Element;
                 const tagName = element.tagName;
 
@@ -241,7 +242,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     const styleName = element.getAttribute("text:style-name");
                     const formatting = styleName ? { ...parentFormatting, ...styleMap[styleName] } : parentFormatting;
 
-                    const spanContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, formatting, linkMetadata);
+                    const spanContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, formatting, linkMetadata, sourceXml);
                     fullText += spanContent.text;
                     children.push(...spanContent.children);
                 } else if (tagName === 'text:a') {
@@ -250,14 +251,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     const linkType = href.startsWith('#') ? 'internal' : 'external';
                     const newLinkMetadata = { link: href, linkType: linkType as 'internal' | 'external' };
 
-                    const linkContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, newLinkMetadata);
+                    const linkContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, newLinkMetadata, sourceXml);
                     fullText += linkContent.text;
                     children.push(...linkContent.children);
                 } else if (tagName === 'text:note' && !config.ignoreNotes) {
                     // Footnote or endnote
                     const noteClass = (element.getAttribute('text:note-class') || 'footnote') as 'footnote' | 'endnote';
                     const noteId = element.getAttribute('text:id') || element.getAttribute('xml:id') || undefined;
-                    const noteBody = getElementsByTagName(element, "text:note-body")[0];
+                    const noteBody = getFirstElementByTagName(element, "text:note-body");
 
                     if (noteBody) {
                         // Extract note content recursively
@@ -266,7 +267,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                         let noteText = '';
 
                         for (const np of notePs) {
-                            const npContent = parseParagraphContent(np, paragraphStyleMap, styleMap, config);
+                            const npContent = parseParagraphContent(np, paragraphStyleMap, styleMap, config, sourceXml);
                             noteText += (noteText ? ' ' : '') + npContent.text;
 
                             const npNode: OfficeContentNode = {
@@ -300,8 +301,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
 
                     // Extract alt text
                     let altText = '';
-                    const svgTitle = getElementsByTagName(frame, "svg:title")[0];
-                    const svgDesc = getElementsByTagName(frame, "svg:desc")[0];
+                    const svgTitle = getFirstElementByTagName(frame, "svg:title");
+                    const svgDesc = getFirstElementByTagName(frame, "svg:desc");
                     if (svgTitle && svgTitle.textContent) {
                         altText = svgTitle.textContent;
                     } else if (svgDesc && svgDesc.textContent) {
@@ -329,7 +330,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                         }
                     };
                     if (config.includeRawContent) {
-                        imageNode.rawContent = frame.toString();
+                        imageNode.rawContent = getRawContent(frame, sourceXml, config);
                     }
                     children.push(imageNode);
                 }
@@ -352,7 +353,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         node: Element,
         paraStyleMap: Record<string, { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean }>,
         styleMap: Record<string, TextFormatting>,
-        config: OfficeParserConfig
+        config: OfficeParserConfig,
+        sourceXml: string
     ): { text: string; children: OfficeContentNode[]; alignment?: 'left' | 'center' | 'right' | 'justify'; style?: string } => {
         // Get paragraph style for alignment and drop caps
         const paraStyle = node.getAttribute("text:style-name");
@@ -361,7 +363,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         const dropCap = styleInfo?.dropCap;
 
         // Parse content recursively using the new helper
-        const content = parseInlineContent(node, styleMap, config, notes, paraStyleMap);
+        const content = parseInlineContent(node, styleMap, config, notes, paraStyleMap, {}, undefined, sourceXml);
 
         // Add style name to metadata of children if they don't have one
         if (paraStyle) {
@@ -434,7 +436,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         tableNode: Element,
         paraStyleMap: Record<string, { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean }>,
         styleMap: Record<string, TextFormatting>,
-        config: OfficeParserConfig
+        config: OfficeParserConfig,
+        sourceXml: string
     ): OfficeContentNode => {
         const rows: OfficeContentNode[] = [];
         // Use getDirectChildren to avoid nested table rows
@@ -462,11 +465,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
 
                     for (let i = 0; i < node.childNodes.length; i++) {
                         const child = node.childNodes[i];
-                        if (child.nodeType === 1) { // Element
+                        if (isElement(child)) { // Element
                             const element = child as Element;
 
                             if (element.tagName === "text:p" || element.tagName === "text:h") {
-                                const pContent = parseParagraphContent(element, paraStyleMap, styleMap, config);
+                                const pContent = parseParagraphContent(element, paraStyleMap, styleMap, config, sourceXml);
                                 const pNode: OfficeContentNode = {
                                     type: element.tagName === "text:h" ? 'heading' : 'paragraph',
                                     text: pContent.text,
@@ -486,7 +489,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                 }
 
                                 if (config.includeRawContent) {
-                                    pNode.rawContent = element.toString();
+                                    pNode.rawContent = getRawContent(element, sourceXml, config);
                                 }
 
                                 cellChildren.push(pNode);
@@ -497,7 +500,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                 }
                             } else if (element.tagName === "table:table") {
                                 // Recursive call for nested table
-                                const nestedTableNode = parseTable(element, paraStyleMap, styleMap, config);
+                                const nestedTableNode = parseTable(element, paraStyleMap, styleMap, config, sourceXml);
                                 cellChildren.push(nestedTableNode);
                             } else if (element.tagName === "draw:frame" || element.tagName === "draw:text-box") {
                                 // Recursively process container content (common in ODP)
@@ -529,7 +532,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     if (rowSpan > 1) cellMetadata.rowSpan = rowSpan;
 
                     if (config.includeRawContent) {
-                        cellNode.rawContent = cell.toString();
+                        cellNode.rawContent = getRawContent(cell, sourceXml, config);
                     }
 
                     cells.push(cellNode);
@@ -554,7 +557,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 }
 
                 if (config.includeRawContent) {
-                    rowNode.rawContent = row.toString();
+                    rowNode.rawContent = getRawContent(row, sourceXml, config);
                 }
 
                 rows.push(rowNode);
@@ -570,10 +573,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
 
 
     const parseContentXml = (xmlString: string) => {
-        const xml = parseXmlString(xmlString);
-        const body = getElementsByTagName(xml, "office:body")[0];
+        const xml = parseXmlString(xmlString, { locator: config.includeRawContent });
+        const body = getFirstElementByTagName(xml, "office:body");
+        if (!body) return;
         // Parse automatic styles (local to content.xml)
-        const automaticStyles = getElementsByTagName(xml, "office:automatic-styles")[0];
+        const automaticStyles = getFirstElementByTagName(xml, "office:automatic-styles");
         if (automaticStyles) {
             const styles = getElementsByTagName(automaticStyles, "style:style");
             for (const style of styles) {
@@ -581,7 +585,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 if (!name) continue;
 
                 // Parse paragraph properties for alignment
-                const paraProps = getElementsByTagName(style, "style:paragraph-properties")[0];
+                const paraProps = getFirstElementByTagName(style, "style:paragraph-properties");
                 const styleInfo: { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean } = {};
 
                 if (paraProps) {
@@ -600,7 +604,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                         }
                     }
 
-                    const dropCap = getElementsByTagName(paraProps, "style:drop-cap")[0];
+                    const dropCap = getFirstElementByTagName(paraProps, "style:drop-cap");
                     if (dropCap) styleInfo.dropCap = true;
                 }
 
@@ -608,7 +612,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     paragraphStyleMap[name] = styleInfo;
                 }
 
-                const textProps = getElementsByTagName(style, "style:text-properties")[0];
+                const textProps = getFirstElementByTagName(style, "style:text-properties");
                 if (textProps) {
                     const formatting: TextFormatting = {};
                     if (textProps.getAttribute("fo:font-weight") === "bold" || textProps.getAttribute("style:font-weight-asian") === "bold") formatting.bold = true;
@@ -640,6 +644,20 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
             }
         }
 
+        // Start traversal
+        const officeBody = getFirstElementByTagName(xml, "office:body");
+        if (officeBody) {
+            const bodyContent = getDirectChildren(officeBody, "office:text")[0] || 
+                                getDirectChildren(officeBody, "office:presentation")[0] || 
+                                getDirectChildren(officeBody, "office:spreadsheet")[0];
+            if (bodyContent) {
+                const bodyChildren = getDirectChildren(bodyContent, "*");
+                for (const child of bodyChildren) {
+                    traverse(child, content, false, xmlString);
+                }
+        }
+    }
+
         /**
          * Recursively traverses a node and its children to extract content.
          * Properly handles paragraphs, headings, tables, lists, and frames.
@@ -647,10 +665,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
          * @param node - The element to traverse
          * @param targetArray - The array to push extracted content nodes to
          * @param forceHeading - If true, treats all paragraphs as headings (used for slide titles)
+         * @param sourceXml - The source XML string for raw content extraction
          */
-        const traverse = (node: Element, targetArray: OfficeContentNode[], forceHeading = false) => {
+        function traverse(node: Element, targetArray: OfficeContentNode[], forceHeading = false, sourceXml: string) {
             if (node.tagName === "text:p") {
-                const pContent = parseParagraphContent(node, paragraphStyleMap, styleMap, config);
+                const pContent = parseParagraphContent(node, paragraphStyleMap, styleMap, config, sourceXml);
                 const type = (forceHeading || (node.getAttribute("text:style-name") || '').toLowerCase().includes('title')) ? 'heading' : 'paragraph';
 
                 const pNode: OfficeContentNode = {
@@ -670,12 +689,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 if (Object.keys(pNode.metadata || {}).length === 0) delete pNode.metadata;
 
                 if (config.includeRawContent) {
-                    pNode.rawContent = node.toString();
+                    pNode.rawContent = getRawContent(node, sourceXml, config);
                 }
                 targetArray.push(pNode);
             } else if (node.tagName === "text:h") {
                 const level = parseInt(node.getAttribute("text:outline-level") || "1");
-                const hContent = parseParagraphContent(node, paragraphStyleMap, styleMap, config);
+                const hContent = parseParagraphContent(node, paragraphStyleMap, styleMap, config, sourceXml);
 
                 const hNode: OfficeContentNode = {
                     type: 'heading',
@@ -688,14 +707,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     }
                 };
                 if (config.includeRawContent) {
-                    hNode.rawContent = node.toString();
+                    hNode.rawContent = getRawContent(node, sourceXml, config);
                 }
                 targetArray.push(hNode);
             } else if (node.tagName === "table:table") {
                 // Parse table with proper structure
-                const tableNode = parseTable(node, paragraphStyleMap, styleMap, config);
+                const tableNode = parseTable(node, paragraphStyleMap, styleMap, config, sourceXml);
                 if (config.includeRawContent) {
-                    tableNode.rawContent = node.toString();
+                    tableNode.rawContent = getRawContent(node, sourceXml, config);
                 }
                 targetArray.push(tableNode);
             } else if (node.tagName === "text:list") {
@@ -725,7 +744,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
 
                 // Try to find list style in automatic styles to determine type and visibility
                 if (styleNameToCheck) {
-                    const automaticStyles = getElementsByTagName(parseXmlString(mainContentFile?.content.toString() || ''), "office:automatic-styles")[0];
+                    const automaticStyles = getFirstElementByTagName(parseXmlString(mainContentFile?.content.toString() || ''), "office:automatic-styles");
                     if (automaticStyles) {
                         const listStyles = getElementsByTagName(automaticStyles, "text:list-style");
                         for (const listStyle of listStyles) {
@@ -782,8 +801,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                         if (item.childNodes) {
                             for (let j = 0; j < item.childNodes.length; j++) {
                                 const child = item.childNodes[j];
-                                if (child.nodeType === 1) { // Element
-                                    traverse(child as Element, targetArray, forceHeading);
+                                if (isElement(child)) { // Element
+                                    traverse(child, targetArray, forceHeading, sourceXml);
                                 }
                             }
                         }
@@ -829,11 +848,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     if (item.childNodes) {
                         for (let j = 0; j < item.childNodes.length; j++) {
                             const child = item.childNodes[j];
-                            if (child.nodeType === 1) { // Element
-                                const element = child as Element;
+                            if (isElement(child)) { // Element
+                                const element = child;
 
                                 if (element.tagName === "text:p") {
-                                    const pContent = parseParagraphContent(element, paragraphStyleMap, styleMap, config);
+                                    const pContent = parseParagraphContent(element, paragraphStyleMap, styleMap, config, sourceXml);
                                     const listNode: OfficeContentNode = {
                                         type: 'list',
                                         text: pContent.text,
@@ -847,11 +866,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                             style: pContent.style
                                         } as ListMetadata
                                     };
-                                    if (config.includeRawContent) listNode.rawContent = element.toString();
+                                    if (config.includeRawContent) listNode.rawContent = getRawContent(element, sourceXml, config);
                                     targetArray.push(listNode);
                                 } else if (element.tagName === "text:h") {
                                     const level = parseInt(element.getAttribute("text:outline-level") || "1");
-                                    const hContent = parseParagraphContent(element, paragraphStyleMap, styleMap, config);
+                                    const hContent = parseParagraphContent(element, paragraphStyleMap, styleMap, config, sourceXml);
                                     const listNode: OfficeContentNode = {
                                         type: 'list',
                                         text: hContent.text,
@@ -865,11 +884,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                             style: hContent.style
                                         }
                                     };
-                                    if (config.includeRawContent) listNode.rawContent = element.toString();
+                                    if (config.includeRawContent) listNode.rawContent = getRawContent(element, sourceXml, config);
                                     targetArray.push(listNode);
                                 } else if (element.tagName === "text:list") {
                                     // Recursive call for nested list
-                                    traverse(element, targetArray, forceHeading);
+                                    traverse(element, targetArray, forceHeading, sourceXml);
                                 }
                             }
                         }
@@ -880,22 +899,22 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 const isHeading = presClass === "title" || presClass === "sub-title";
 
                 // In presentations, frames often contain text-boxes, images, tables, or objects
-                const textBox = getElementsByTagName(node, "draw:text-box")[0];
-                const image = getElementsByTagName(node, "draw:image")[0];
-                const table = getElementsByTagName(node, "table:table")[0];
-                const object = getElementsByTagName(node, "draw:object")[0];
+                const textBox = getFirstElementByTagName(node, "draw:text-box");
+                const image = getFirstElementByTagName(node, "draw:image");
+                const table = getFirstElementByTagName(node, "table:table");
+                const object = getFirstElementByTagName(node, "draw:object");
 
                 if (textBox) {
-                    traverse(textBox, targetArray, isHeading || forceHeading);
+                    traverse(textBox, targetArray, isHeading || forceHeading, sourceXml);
                 } else if (table) {
-                    const tableNode = parseTable(table, paragraphStyleMap, styleMap, config);
-                    if (config.includeRawContent) tableNode.rawContent = table.toString();
+                    const tableNode = parseTable(table, paragraphStyleMap, styleMap, config, sourceXml);
+                    if (config.includeRawContent) tableNode.rawContent = getRawContent(table, sourceXml, config);
                     targetArray.push(tableNode);
                 } else if (image) {
                     // Extract alt text from svg:title or svg:desc
                     let altText = '';
-                    const svgTitle = getElementsByTagName(node, "svg:title")[0];
-                    const svgDesc = getElementsByTagName(node, "svg:desc")[0];
+                    const svgTitle = getFirstElementByTagName(node, "svg:title");
+                    const svgDesc = getFirstElementByTagName(node, "svg:desc");
                     if (svgTitle && svgTitle.textContent) {
                         altText = svgTitle.textContent;
                     } else if (svgDesc && svgDesc.textContent) {
@@ -919,7 +938,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                         }
                     };
                     if (config.includeRawContent) {
-                        imageNode.rawContent = node.toString();
+                        imageNode.rawContent = getRawContent(node, sourceXml, config);
                     }
                     targetArray.push(imageNode);
                 } else if (object) {
@@ -941,7 +960,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                     chartData
                                 } as ChartMetadata
                             };
-                            if (config.includeRawContent) chartNode.rawContent = node.toString();
+                            if (config.includeRawContent) chartNode.rawContent = getRawContent(node, sourceXml, config);
                             targetArray.push(chartNode);
                         } else {
                             const chartNode: OfficeContentNode = {
@@ -949,7 +968,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                 text: "",
                                 metadata: { attachmentName: attachmentName }
                             };
-                            if (config.includeRawContent) chartNode.rawContent = node.toString();
+                            if (config.includeRawContent) chartNode.rawContent = getRawContent(node, sourceXml, config);
                             targetArray.push(chartNode);
                         }
                     }
@@ -958,8 +977,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 if (node.childNodes) {
                     for (let i = 0; i < node.childNodes.length; i++) {
                         const child = node.childNodes[i];
-                        if (child.nodeType === 1) { // Element
-                            traverse(child as Element, targetArray, forceHeading);
+                        if (isElement(child)) { // Element
+                            traverse(child as Element, targetArray, forceHeading, sourceXml);
                         }
                     }
                 }
@@ -968,7 +987,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
 
         // ODS: Spreadsheet
         if (fileType === 'ods') {
-            const spreadsheet = getElementsByTagName(body, "office:spreadsheet")[0];
+            const spreadsheet = getFirstElementByTagName(body, "office:spreadsheet");
             if (spreadsheet) {
                 const tables = getElementsByTagName(spreadsheet, "table:table");
                 for (let i = 0; i < tables.length; i++) {
@@ -1036,8 +1055,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                             for (const frame of drawFrames) {
                                 // Extract alt text from svg:title or svg:desc
                                 let altText = '';
-                                const svgTitle = getElementsByTagName(frame, "svg:title")[0];
-                                const svgDesc = getElementsByTagName(frame, "svg:desc")[0];
+                                const svgTitle = getFirstElementByTagName(frame, "svg:title");
+                                const svgDesc = getFirstElementByTagName(frame, "svg:desc");
                                 if (svgTitle && svgTitle.textContent) {
                                     altText = svgTitle.textContent;
                                 } else if (svgDesc && svgDesc.textContent) {
@@ -1078,7 +1097,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                         } as ImageMetadata
                                     };
                                     if (config.includeRawContent) {
-                                        imageNode.rawContent = frame.toString();
+                                        imageNode.rawContent = getRawContent(frame, xmlString, config);
                                     }
                                     children.push(imageNode);
                                 } else if (chartHref) {
@@ -1107,7 +1126,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                         metadata: { row: rowIndex, col: colIndex } as CellMetadata
                                     };
                                     if (config.includeRawContent) {
-                                        cellNode.rawContent = cell.toString();
+                                        cellNode.rawContent = getRawContent(cell, xmlString, config);
                                     }
                                     cells.push(cellNode);
                                 }
@@ -1132,7 +1151,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                     });
                                 }
                                 if (config.includeRawContent) {
-                                    rowNode.rawContent = row.toString();
+                                    rowNode.rawContent = getRawContent(row, xmlString, config);
                                 }
                                 rows.push(rowNode);
                                 rowIndex++;
@@ -1148,7 +1167,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                         metadata: { sheetName } as SheetMetadata
                     };
                     if (config.includeRawContent) {
-                        sheetNode.rawContent = table.toString();
+                        sheetNode.rawContent = getRawContent(table, xmlString, config);
                     }
                     content.push(sheetNode);
                 }
@@ -1156,7 +1175,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         }
         // ODP: Presentation
         else if (fileType === 'odp') {
-            const presentation = getElementsByTagName(body, "office:presentation")[0];
+            const presentation = getFirstElementByTagName(body, "office:presentation");
             if (presentation) {
                 const pages = getDirectChildren(presentation, "draw:page");
                 const odpNotes: OfficeContentNode[] = [];
@@ -1175,7 +1194,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     if (pageChildren) {
                         for (let j = 0; j < pageChildren.length; j++) {
                             const child = pageChildren[j];
-                            if (child.nodeType === 1) { // Element
+                            if (isElement(child)) { // Element
                                 const element = child as Element;
                                 if (element.tagName === "presentation:notes") {
                                     if (!config.ignoreNotes) {
@@ -1187,17 +1206,17 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                                 noteId: `slide-note-${i + 1}`
                                             } as SlideMetadata
                                         };
-                                        traverse(element, noteNode.children!);
+                                        traverse(element, noteNode.children!, false, xmlString);
                                     }
                                     continue;
                                 }
-                                traverse(element, slideNode.children!);
+                                traverse(element, slideNode.children!, false, xmlString);
                             }
                         }
                     }
 
                     if (config.includeRawContent) {
-                        slideNode.rawContent = page.toString();
+                        slideNode.rawContent = getRawContent(page, xmlString, config);
                     }
                     content.push(slideNode);
 
@@ -1217,9 +1236,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         }
         // ODT: Text Document (and generic fallback)
         else {
-            const textDoc = getElementsByTagName(body, "office:text")[0];
+            const textDoc = getFirstElementByTagName(body, "office:text");
             if (textDoc) {
-                traverse(textDoc, content);
+                traverse(textDoc, content, false, xmlString);
             }
         }
     };

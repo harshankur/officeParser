@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * officeparser - Universal Office Document Parser
  * 
@@ -45,7 +44,7 @@
  * @module officeparser
  */
 
-import { OfficeParser } from './OfficeParser';
+import { OfficeParser } from './OfficeParser.js';
 import {
     OfficeParserConfig,
     OfficeParserAST,
@@ -95,50 +94,3 @@ export {
 // Default export for backward compatibility
 export default OfficeParser;
 
-// CLI handling - allows running as: node index.js file.docx
-if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.main === module) {
-    const args = process.argv.slice(2);
-    let fileArg: string | undefined;
-    let toText = false;
-    const configArgs: string[] = [];
-
-    function isConfigOption(arg: string) {
-        return arg.startsWith('--') && arg.includes('=');
-    }
-
-    args.forEach(arg => {
-        if (isConfigOption(arg)) {
-            configArgs.push(arg);
-        } else if (!fileArg) {
-            fileArg = arg;
-        }
-    });
-
-    if (fileArg) {
-        const config: OfficeParserConfig = {};
-        configArgs.forEach(arg => {
-            const [key, value] = arg.split('=');
-            const cleanKey = key.replace('--', '');
-            if (cleanKey === 'toText') {
-                if (value.toLowerCase() === 'true') toText = true;
-                else if (value.toLowerCase() === 'false') toText = false;
-                else console.log(`Invalid value for toText: ${value}`);
-            }
-            // @ts-ignore
-            else if (value.toLowerCase() === 'true') config[cleanKey] = true;
-            // @ts-ignore
-            else if (value.toLowerCase() === 'false') config[cleanKey] = false;
-            // @ts-ignore
-            else config[cleanKey] = value;
-        });
-
-        OfficeParser.parseOffice(fileArg, config)
-            .then((ast: OfficeParserAST) => {
-                if (toText) console.log(ast.toText());
-                else console.log(JSON.stringify(ast, null, 2));
-            })
-            .catch(console.error);
-    } else {
-        console.log("Usage: node officeparser [file] [--option=value]");
-    }
-}

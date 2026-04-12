@@ -22,14 +22,13 @@
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
  */
 
-import { XMLSerializer } from '@xmldom/xmldom';
-import { ChartMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, SlideMetadata, TextFormatting } from '../types';
-import { extractChartData } from '../utils/chartUtils';
-import { logWarning } from '../utils/errorUtils';
-import { createAttachment } from '../utils/imageUtils';
-import { performOcr } from '../utils/ocrUtils';
-import { getElementsByTagName, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils';
-import { extractFiles } from '../utils/zipUtils';
+import { ChartMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, SlideMetadata, TextFormatting } from '../types.js';
+import { extractChartData } from '../utils/chartUtils.js';
+import { logWarning } from '../utils/errorUtils.js';
+import { createAttachment } from '../utils/imageUtils.js';
+import { performOcr } from '../utils/ocrUtils.js';
+import { getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
+import { extractFiles } from '../utils/zipUtils.js';
 
 /**
  * Parses a PowerPoint presentation (.pptx) and extracts slides and notes.
@@ -47,7 +46,6 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     const chartFileRegex = /ppt\/charts\/chart\d+\.xml/;
     const corePropsFileRegex = /docProps\/core\.xml/;
     const customPropsFileRegex = /docProps\/custom\.xml/;
-    const xmlSerializer = new XMLSerializer();
 
     const files = await extractFiles(buffer, x =>
         !!x.match(config.ignoreNotes ? slidesRegex : allFilesRegex) ||
@@ -90,7 +88,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     const levelCounters: { [level: number]: number } = {};
 
     // Helper to parse a table node
-    const parseTable = (tblNode: Element): OfficeContentNode => {
+    const parseTable = (tblNode: Element, xmlContentString: string): OfficeContentNode => {
         const rows: OfficeContentNode[] = [];
         const trNodes = getElementsByTagName(tblNode, "a:tr");
 
@@ -105,7 +103,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                 let cellText = '';
 
                 // Cells contain text bodies (txBody) which contain paragraphs
-                const txBody = getElementsByTagName(tcNode, "a:txBody")[0];
+                const txBody = getFirstElementByTagName(tcNode, "a:txBody");
                 if (txBody) {
                     const paragraphs = getElementsByTagName(txBody, "a:p");
                     for (const p of paragraphs) {
@@ -119,17 +117,17 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                         };
 
                         if (config.includeRawContent) {
-                            pNode.rawContent = p.toString();
+                            pNode.rawContent = getRawContent(p, xmlContentString, config);
                         }
 
                         const runs = getElementsByTagName(p, "a:r");
                         for (const r of runs) {
-                            const t = getElementsByTagName(r, "a:t")[0];
+                            const t = getFirstElementByTagName(r, "a:t");
                             if (t && t.childNodes[0]) {
                                 const textContent = t.childNodes[0].nodeValue || '';
                                 pNode.text += textContent;
 
-                                const rPr = getElementsByTagName(r, "a:rPr")[0];
+                                const rPr = getFirstElementByTagName(r, "a:rPr");
                                 const formatting: TextFormatting = {};
                                 if (rPr) {
                                     if (rPr.getAttribute("b") === "1") formatting.bold = true;
@@ -139,16 +137,16 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                                     const sz = rPr.getAttribute("sz");
                                     if (sz) formatting.size = (parseInt(sz) / 100).toString() + 'pt';
 
-                                    const solidFill = getElementsByTagName(rPr, "a:solidFill")[0];
+                                    const solidFill = getFirstElementByTagName(rPr, "a:solidFill");
                                     if (solidFill) {
-                                        const srgbClr = getElementsByTagName(solidFill, "a:srgbClr")[0];
+                                        const srgbClr = getFirstElementByTagName(solidFill, "a:srgbClr");
                                         if (srgbClr) {
                                             const val = srgbClr.getAttribute("val");
                                             if (val) formatting.color = '#' + val;
                                         }
                                     }
 
-                                    const latin = getElementsByTagName(rPr, "a:latin")[0];
+                                    const latin = getFirstElementByTagName(rPr, "a:latin");
                                     if (latin) {
                                         const typeface = latin.getAttribute("typeface");
                                         if (typeface) formatting.font = typeface;
@@ -191,8 +189,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     };
 
     /** Extract an AST node for p:pic */
-    const extractImageNode = (imageNode: Element, slideNumber: number): OfficeContentNode | null => {
-        const blip = getElementsByTagName(imageNode, "a:blip")[0];
+    const extractImageNode = (imageNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode | null => {
+        const blip = getFirstElementByTagName(imageNode, "a:blip");
         if (!blip) return null;
 
         const rId = blip.getAttribute("r:embed");
@@ -203,8 +201,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
 
         const attachmentName = rel.target;
 
-        const nvPicPr = getElementsByTagName(imageNode, "p:nvPicPr")[0];
-        const cNvPr = nvPicPr ? getElementsByTagName(nvPicPr, "p:cNvPr")[0] : null;
+        const nvPicPr = getFirstElementByTagName(imageNode, "p:nvPicPr");
+        const cNvPr = nvPicPr ? getFirstElementByTagName(nvPicPr, "p:cNvPr") : null;
 
         const altText = cNvPr?.getAttribute("descr") || undefined;
 
@@ -221,23 +219,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
 
     /**
      * Extract an AST node for p:graphicFrame that contains a chart.
-     * This mirrors extractImageNode, but for charts instead of images.
-     *
-     * Steps:
-     * 1. Find <a:graphicData> inside the graphicFrame.
-     * 2. Check if uri is the chart namespace.
-     * 3. Extract <c:chart> and read r:id.
-     * 4. Resolve the relationship using slideRelsMap.
-     * 5. Produce a chart node with attachmentName (like images).
-     * 6. Chart text/data will be injected later in the pipeline.
-     *
-     * @param frameNode p:graphicFrame element
-     * @param slideNumber Current slide number for relationship resolution
-     * @returns A chart OfficeContentNode or null if not a chart.
+     * ... (comments omitted for brevity) ...
      */
-    const extractChartNode = (frameNode: Element, slideNumber: number): OfficeContentNode | null => {
+    const extractChartNode = (frameNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode | null => {
         // Step 1: Find <a:graphicData>
-        const graphicData = getElementsByTagName(frameNode, "a:graphicData")[0];
+        const graphicData = getFirstElementByTagName(frameNode, "a:graphicData");
         if (!graphicData) {
             return null;
         }
@@ -251,7 +237,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
         }
 
         // Step 3: Find <c:chart>
-        const cChart = getElementsByTagName(graphicData, "c:chart")[0];
+        const cChart = getFirstElementByTagName(graphicData, "c:chart");
         if (!cChart) {
             return null;
         }
@@ -284,26 +270,26 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
 
         // Optional: include raw XML of the whole frame
         if (config.includeRawContent) {
-            chartNode.rawContent = xmlSerializer.serializeToString(frameNode);
+            chartNode.rawContent = getRawContent(frameNode, xmlContentString, config);
         }
 
         return chartNode;
     };
 
     /** Extract an AST node for p:graphicFrame */
-    const extractGraphicFrameNode = (frameNode: Element, slideNumber: number): OfficeContentNode | null => {
-        const tbl = getElementsByTagName(frameNode, "a:tbl")[0];
+    const extractGraphicFrameNode = (frameNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode | null => {
+        const tbl = getFirstElementByTagName(frameNode, "a:tbl");
         if (tbl) {
-            const tableNode = parseTable(tbl);
+            const tableNode = parseTable(tbl, xmlContentString);
             if (config.includeRawContent) {
-                tableNode.rawContent = xmlSerializer.serializeToString(frameNode);
+                tableNode.rawContent = getRawContent(frameNode, xmlContentString, config);
             }
             if (tableNode.children && tableNode.children.length > 0) {
                 return tableNode;
             }
         }
         if (frameNode.getElementsByTagName("c:chart").length > 0) {
-            const chartNode = extractChartNode(frameNode, slideNumber);
+            const chartNode = extractChartNode(frameNode, slideNumber, xmlContentString);
             if (chartNode) {
                 return chartNode;
             }
@@ -312,17 +298,17 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
     }
 
     /** Extract text and hyperlinks from a p:sp shape. */
-    const extractShapeNodes = (spNode: Element, slideNumber: number): OfficeContentNode[] => {
+    const extractShapeNodes = (spNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
         // Check for placeholder type (title, body, etc.)
-        const nvSpPr = getElementsByTagName(spNode, "p:nvSpPr")[0];
-        const nvPr = nvSpPr ? getElementsByTagName(nvSpPr, "p:nvPr")[0] : null;
-        const ph = nvPr ? getElementsByTagName(nvPr, "p:ph")[0] : null;
+        const nvSpPr = getFirstElementByTagName(spNode, "p:nvSpPr");
+        const nvPr = nvSpPr ? getFirstElementByTagName(nvSpPr, "p:nvPr") : null;
+        const ph = nvPr ? getFirstElementByTagName(nvPr, "p:ph") : null;
         const type = ph ? ph.getAttribute("type") : "body";
 
         const isTitle = type === "title" || type === "ctrTitle";
 
-        const txBody = getElementsByTagName(spNode, "p:txBody")[0];
+        const txBody = getFirstElementByTagName(spNode, "p:txBody");
         if (txBody) {
             const paragraphs = getElementsByTagName(txBody, "a:p");
 
@@ -336,7 +322,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                 };
 
                 // Paragraph Alignment and List Detection
-                const pPr = getElementsByTagName(p, "a:pPr")[0];
+                const pPr = getFirstElementByTagName(p, "a:pPr");
                 let isList = false;
                 let listType: 'ordered' | 'unordered' = 'unordered';
                 let lvl = 0;
@@ -345,10 +331,10 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                     const lvlAttr = pPr.getAttribute("lvl");
                     if (lvlAttr) lvl = parseInt(lvlAttr);
 
-                    const buAutoNum = getElementsByTagName(pPr, "a:buAutoNum")[0];
-                    const buChar = getElementsByTagName(pPr, "a:buChar")[0];
-                    const buBlip = getElementsByTagName(pPr, "a:buBlip")[0];
-                    const buNode = getElementsByTagName(pPr, "a:bu")[0];
+                    const buAutoNum = getFirstElementByTagName(pPr, "a:buAutoNum");
+                    const buChar = getFirstElementByTagName(pPr, "a:buChar");
+                    const buBlip = getFirstElementByTagName(pPr, "a:buBlip");
+                    const buNode = getFirstElementByTagName(pPr, "a:bu");
 
                     if (buAutoNum) {
                         isList = true;
@@ -454,19 +440,19 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                 }
 
                 if (config.includeRawContent) {
-                    pNode.rawContent = p.toString();
+                    pNode.rawContent = getRawContent(p, xmlContentString, config);
                 }
 
                 const runs = getElementsByTagName(p, "a:r");
 
                 for (let j = 0; j < runs.length; j++) {
                     const r = runs[j];
-                    const t = getElementsByTagName(r, "a:t")[0];
+                    const t = getFirstElementByTagName(r, "a:t");
                     if (t && t.childNodes[0]) {
                         const textContent = t.childNodes[0].nodeValue || '';
                         pNode.text += textContent;
 
-                        const rPr = getElementsByTagName(r, "a:rPr")[0];
+                        const rPr = getFirstElementByTagName(r, "a:rPr");
                         const formatting: TextFormatting = {};
                         if (rPr) {
                             if (rPr.getAttribute("b") === "1") formatting.bold = true;
@@ -478,9 +464,9 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                             if (sz) formatting.size = (parseInt(sz) / 100).toString() + 'pt';
 
                             // Color extraction
-                            const solidFill = getElementsByTagName(rPr, "a:solidFill")[0];
+                            const solidFill = getFirstElementByTagName(rPr, "a:solidFill");
                             if (solidFill) {
-                                const srgbClr = getElementsByTagName(solidFill, "a:srgbClr")[0];
+                                const srgbClr = getFirstElementByTagName(solidFill, "a:srgbClr");
                                 if (srgbClr) {
                                     const val = srgbClr.getAttribute("val");
                                     if (val) formatting.color = '#' + val;
@@ -488,9 +474,9 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                             }
 
                             // Highlight extraction
-                            const highlight = getElementsByTagName(rPr, "a:highlight")[0];
+                            const highlight = getFirstElementByTagName(rPr, "a:highlight");
                             if (highlight) {
-                                const srgbClr = getElementsByTagName(highlight, "a:srgbClr")[0];
+                                const srgbClr = getFirstElementByTagName(highlight, "a:srgbClr");
                                 if (srgbClr) {
                                     const val = srgbClr.getAttribute("val");
                                     if (val) formatting.backgroundColor = '#' + val;
@@ -498,7 +484,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                             }
 
                             // Font family
-                            const latin = getElementsByTagName(rPr, "a:latin")[0];
+                            const latin = getFirstElementByTagName(rPr, "a:latin");
                             if (latin) {
                                 const typeface = latin.getAttribute("typeface");
                                 if (typeface) formatting.font = typeface;
@@ -520,7 +506,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                         };
 
                         // Check for Hyperlinks
-                        const hlinkClick = getElementsByTagName(r, "a:hlinkClick")[0];
+                        const hlinkClick = getFirstElementByTagName(r, "a:hlinkClick");
                         // Check if this run has a hyperlink click action
                         if (hlinkClick) {
                             // Relationship ID for the link
@@ -581,33 +567,34 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
      * transforms so nested groups inherit positional transforms.
      *
      * @param treeNode The XML node representing <p:spTree>
-     * @param parentTransform Transform inherited from parent groups (defaults to identity)
+     * @param slideNumber Current slide number for relationship resolution
+     * @param xmlContentString The source XML string for raw content extraction
      */
-    function traverseSpTree(treeNode: Element, slideNumber: number): OfficeContentNode[] {
+    function traverseSpTree(treeNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode[] {
         const nodes: OfficeContentNode[] = [];
         // Process children in XML order (this preserves Z-order)
         for (const child of Array.from(treeNode?.childNodes || [])) {
-            if (child.nodeType !== 1) {
+            if (!isElement(child)) {
                 continue;
             }
 
-            const element = child as Element;
+            const element = child;
             const tag = element.tagName;
 
             // Case 1: Normal shape
             if (tag === "p:sp") {
-                nodes.push(...extractShapeNodes(element, slideNumber));
+                nodes.push(...extractShapeNodes(element, slideNumber, xmlContentString));
             }
             // Case 2: Inline picture
             else if (tag === "p:pic") {
-                const imageNode = extractImageNode(element, slideNumber);
+                const imageNode = extractImageNode(element, slideNumber, xmlContentString);
                 if (imageNode) {
                     nodes.push(imageNode);
                 }
             }
             // Case 3: Chart or other graphic frame
             else if (tag === "p:graphicFrame") {
-                const tableNode = extractGraphicFrameNode(element, slideNumber);
+                const tableNode = extractGraphicFrameNode(element, slideNumber, xmlContentString);
                 if (tableNode) {
                     nodes.push(tableNode);
                 }
@@ -615,9 +602,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
             // Case 4: Grouped shape (recursive!)
             else if (tag === "p:grpSp") {
                 // Extract the nested <p:spTree> inside the group
-                const nestedTree = element.getElementsByTagName("p:spTree")[0];
+                const nestedTree = getFirstElementByTagName(element, "p:spTree");
                 // Recurse into the nested tree
-                nodes.push(...traverseSpTree(nestedTree, slideNumber));
+                if (nestedTree) {
+                    nodes.push(...traverseSpTree(nestedTree, slideNumber, xmlContentString));
+                }
             }
         }
         return nodes;
@@ -716,7 +705,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
         if (file.path.match(corePropsFileRegex)) continue;
 
         const xmlContentString = file.content.toString();
-        const xml = parseXmlString(xmlContentString);
+        const xml = parseXmlString(xmlContentString, { locator: config.includeRawContent });
         if (config.includeRawContent) {
             rawContents.push(xmlContentString);
         }
@@ -735,16 +724,16 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
         };
 
         if (config.includeRawContent) {
-            slideNode.rawContent = file.content.toString();
+            slideNode.rawContent = getRawContent(xml, xmlContentString, config);
         }
 
         /**
          * Extract slide contents in correct document order by scanning p:spTree children.
          * This ensures p:pic, p:sp, p:graphicFrame appear in AST in the exact sequence.
          */
-        const spTree = getElementsByTagName(xml, "p:spTree")[0];
+        const spTree = getFirstElementByTagName(xml, "p:spTree");
         if (spTree) {
-            slideNode.children?.push(...traverseSpTree(spTree, slideNumber));
+            slideNode.children?.push(...traverseSpTree(spTree, slideNumber, xmlContentString));
         }
 
         if (slideNode.children && slideNode.children.length > 0) {

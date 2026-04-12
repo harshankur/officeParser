@@ -33,16 +33,16 @@
  * @module OfficeParser
  */
 
-import * as fs from 'fs';
-import { parseExcel } from './parsers/ExcelParser';
-import { parseOpenOffice } from './parsers/OpenOfficeParser';
-import { parsePdf } from './parsers/PdfParser';
-import { parsePowerPoint } from './parsers/PowerPointParser';
-import { parseRtf } from './parsers/RtfParser';
-import { parseWord } from './parsers/WordParser';
-import { OfficeParserAST, OfficeParserConfig } from './types';
-import { getOfficeError, getWrappedError, OfficeErrorType } from './utils/errorUtils';
-import { loadFileType } from './utils/moduleLoader';
+import { assertNode } from './utils/envUtils.js';
+import { parseExcel } from './parsers/ExcelParser.js';
+import { parseOpenOffice } from './parsers/OpenOfficeParser.js';
+import { parsePdf } from './parsers/PdfParser.js';
+import { parsePowerPoint } from './parsers/PowerPointParser.js';
+import { parseRtf } from './parsers/RtfParser.js';
+import { parseWord } from './parsers/WordParser.js';
+import { OfficeParserAST, OfficeParserConfig } from './types.js';
+import { getOfficeError, getWrappedError, OfficeErrorType } from './utils/errorUtils.js';
+import { loadFileType } from './utils/moduleLoader.js';
 
 /**
  * Main parser class providing office document parsing functionality.
@@ -116,6 +116,8 @@ export class OfficeParser {
             ocr: false,
             ocrLanguage: 'eng',
             includeRawContent: false,
+            serializeRawContent: true,
+            preserveXmlWhitespace: false,
             pdfWorkerSrc: '',
             ...actualConfig
         };
@@ -135,6 +137,13 @@ export class OfficeParser {
                 buffer = file;
             } else if (typeof file === 'string') {
                 filePath = file;
+                assertNode('path-parsing');
+
+                // Safe to use dynamic import here as we've asserted we are in Node.
+                // Modern bundlers will still see this, but our browser builds 
+                // shim 'fs' so it won't crash at build time.
+                const fs = await import('fs');
+
                 if (!fs.existsSync(file)) {
                     throw getOfficeError(OfficeErrorType.FILE_DOES_NOT_EXIST, internalConfig, file);
                 }

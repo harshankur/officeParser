@@ -44,7 +44,8 @@ const extractOpenXmlRichText = (el: Element, tagName: string): string | undefine
 const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
     const xml = xmlBuffer.toString("utf8");
     const dom = parseXmlString(xml);
-    const root = dom.documentElement;
+    const root = dom.documentElement as Element;
+    if (!root) return { title: undefined, xAxisTitle: undefined, yAxisTitle: undefined, dataSets: [], labels: [], rawTexts: [] };
 
     const title = extractOpenXmlRichText(root, "c:title");
 
@@ -53,10 +54,10 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
     let yAxisTitle: string | undefined = undefined;
 
     const catAxes = root.getElementsByTagName("c:catAx");
-    if (catAxes.length > 0) xAxisTitle = extractOpenXmlRichText(catAxes[0], "c:title");
+    if (catAxes.length > 0) xAxisTitle = extractOpenXmlRichText(catAxes[0] as Element, "c:title");
 
     const valAxes = root.getElementsByTagName("c:valAx");
-    if (valAxes.length > 0) yAxisTitle = extractOpenXmlRichText(valAxes[0], "c:title");
+    if (valAxes.length > 0) yAxisTitle = extractOpenXmlRichText(valAxes[0] as Element, "c:title");
 
     // Extract Series (dataSets)
     const seriesNodes = root.getElementsByTagName("c:ser");
@@ -64,7 +65,7 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
     const sharedLabels: string[] = [];
 
     for (let i = 0; i < seriesNodes.length; i++) {
-        const ser = seriesNodes[i];
+        const ser = seriesNodes[i] as Element;
 
         // DataSet Name (c:tx)
         const name = extractOpenXmlRichText(ser, "c:tx");

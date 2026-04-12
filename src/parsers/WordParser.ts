@@ -59,13 +59,12 @@
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/ [MS-DOCX] Specification
  */
 
-import { XMLSerializer } from '@xmldom/xmldom';
-import { ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types';
-import { logWarning } from '../utils/errorUtils';
-import { createAttachment } from '../utils/imageUtils';
-import { performOcr } from '../utils/ocrUtils';
-import { getDirectChildren, getElementsByTagName, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils';
-import { extractFiles } from '../utils/zipUtils';
+import { ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types.js';
+import { logWarning } from '../utils/errorUtils.js';
+import { createAttachment } from '../utils/imageUtils.js';
+import { performOcr } from '../utils/ocrUtils.js';
+import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
+import { extractFiles } from '../utils/zipUtils.js';
 
 /**
  * Parses a Word document (.docx) and extracts content, formatting, and metadata.
@@ -94,12 +93,11 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
     const relsFileRegex = /word\/_rels\/document[\d+]?.xml\.rels/;
     const stylesFileRegex = /word\/styles[\d+]?.xml/;
 
-    const xmlSerializer = new XMLSerializer();
 
     // Helper to extract formatting from run properties XML string
     const extractFormattingFromXml = (rPr: Element): TextFormatting => {
         const formatting: TextFormatting = {};
-        const rPrString = xmlSerializer.serializeToString(rPr);
+        const rPrString = serializeXml(rPr);
 
         // Helper to check boolean properties
         const getBoolVal = (xmlSnippet: string, tagName: string): boolean | null => {
@@ -210,9 +208,9 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
     if (relsFile) {
         const relsXml = parseXmlString(relsFile.content.toString());
         const relationships = getElementsByTagName(relsXml, "Relationship");
-        for (let i = 0; i < relationships.length; i++) {
-            const id = relationships[i].getAttribute("Id");
-            const target = relationships[i].getAttribute("Target");
+        for (const relationship of relationships) {
+            const id = relationship.getAttribute("Id");
+            const target = relationship.getAttribute("Target");
             if (id && target) {
                 relsMap[id] = target;
             }
@@ -227,26 +225,26 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         const nums = getElementsByTagName(numberingXml, "w:num");
         const abstractNums = getElementsByTagName(numberingXml, "w:abstractNum");
 
-        const abstractNumMap: { [key: string]: any } = {};
-        for (let i = 0; i < abstractNums.length; i++) {
-            const abstractNumId = abstractNums[i].getAttribute("w:abstractNumId");
+        const abstractNumMap: { [key: string]: Element } = {};
+        for (const abstractNum of abstractNums) {
+            const abstractNumId = abstractNum.getAttribute("w:abstractNumId");
             if (abstractNumId) {
-                abstractNumMap[abstractNumId] = abstractNums[i];
+                abstractNumMap[abstractNumId] = abstractNum;
             }
         }
 
-        for (let i = 0; i < nums.length; i++) {
-            const numId = nums[i].getAttribute("w:numId");
-            const abstractNumIdNode = getElementsByTagName(nums[i], "w:abstractNumId")[0];
+        for (const num of nums) {
+            const numId = num.getAttribute("w:numId");
+            const abstractNumIdNode = getFirstElementByTagName(num, "w:abstractNumId");
             const abstractNumId = abstractNumIdNode?.getAttribute("w:val");
 
             if (numId && abstractNumId && abstractNumMap[abstractNumId]) {
                 numberingMap[numId] = {};
                 const lvls = getElementsByTagName(abstractNumMap[abstractNumId], "w:lvl");
-                for (let j = 0; j < lvls.length; j++) {
-                    const ilvl = lvls[j].getAttribute("w:ilvl");
-                    const numFmtNode = getElementsByTagName(lvls[j], "w:numFmt")[0];
-                    const lvlTextNode = getElementsByTagName(lvls[j], "w:lvlText")[0];
+                for (const lvl of lvls) {
+                    const ilvl = lvl.getAttribute("w:ilvl");
+                    const numFmtNode = getFirstElementByTagName(lvl, "w:numFmt");
+                    const lvlTextNode = getFirstElementByTagName(lvl, "w:lvlText");
                     if (ilvl) {
                         numberingMap[numId][ilvl] = {
                             numFmt: numFmtNode?.getAttribute("w:val") || 'decimal',
@@ -266,25 +264,25 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         const stylesXml = parseXmlString(stylesFile.content.toString());
         const styles = getElementsByTagName(stylesXml, "w:style");
 
-        for (let i = 0; i < styles.length; i++) {
-            const styleId = styles[i].getAttribute("w:styleId");
+        for (const style of styles) {
+            const styleId = style.getAttribute("w:styleId");
             if (styleId) {
-                const rPr = getElementsByTagName(styles[i], "w:rPr")[0];
-                const pPr = getElementsByTagName(styles[i], "w:pPr")[0];
+                const rPr = getFirstElementByTagName(style, "w:rPr");
+                const pPr = getFirstElementByTagName(style, "w:pPr");
 
                 const formatting = rPr ? extractFormattingFromXml(rPr) : {};
                 let alignment: 'left' | 'center' | 'right' | 'justify' | undefined = undefined;
                 let backgroundColor: string | undefined = undefined;
 
                 if (pPr) {
-                    const jc = getElementsByTagName(pPr, "w:jc")[0];
+                    const jc = getFirstElementByTagName(pPr, "w:jc");
                     if (jc) {
                         const val = jc.getAttribute("w:val");
                         if (val === 'left' || val === 'center' || val === 'right' || val === 'justify') {
                             alignment = val;
                         }
                     }
-                    const shd = getElementsByTagName(pPr, "w:shd")[0];
+                    const shd = getFirstElementByTagName(pPr, "w:shd");
                     if (shd) {
                         const fill = shd.getAttribute("w:fill");
                         if (fill && fill !== 'auto') backgroundColor = '#' + fill;
@@ -301,11 +299,11 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
 
     if (stylesFile) {
         const stylesXml = parseXmlString(stylesFile.content.toString());
-        const docDefaultsNode = getElementsByTagName(stylesXml, "w:docDefaults")[0];
+        const docDefaultsNode = getFirstElementByTagName(stylesXml, "w:docDefaults");
         if (docDefaultsNode) {
-            const rPrDefaultNode = getElementsByTagName(docDefaultsNode, "w:rPrDefault")[0];
+            const rPrDefaultNode = getFirstElementByTagName(docDefaultsNode, "w:rPrDefault");
             if (rPrDefaultNode) {
-                const rPr = getElementsByTagName(rPrDefaultNode, "w:rPr")[0];
+                const rPr = getFirstElementByTagName(rPrDefaultNode, "w:rPr");
                 if (rPr) {
                     docDefaults = extractFormattingFromXml(rPr);
                 }
@@ -320,10 +318,10 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         const styles = getElementsByTagName(stylesXml, "w:style");
 
         // Look for a style with w:type="paragraph" and w:default="1"
-        for (let i = 0; i < styles.length; i++) {
-            const styleType = styles[i].getAttribute("w:type");
-            const isDefault = styles[i].getAttribute("w:default");
-            const styleId = styles[i].getAttribute("w:styleId");
+        for (const style of styles) {
+            const styleType = style.getAttribute("w:type");
+            const isDefault = style.getAttribute("w:default");
+            const styleId = style.getAttribute("w:styleId");
 
             if (styleType === "paragraph" && isDefault === "1" && styleId) {
                 defaultParaStyleId = styleId;
@@ -345,17 +343,17 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
     const listCounters: { [key: string]: { [key: string]: number } } = {}; // Track item index per listId/level
 
     // Helper to parse a paragraph node
-    const parseParagraph = (pNode: Element): OfficeContentNode => {
-        const pXml = xmlSerializer.serializeToString(pNode);
+    const parseParagraph = (pNode: Element, documentContent: string): OfficeContentNode => {
+        const pXml = pNode.toString();
 
         // Check if it's a list item
-        const numPr = getElementsByTagName(pNode, "w:numPr")[0];
+        const numPr = getFirstElementByTagName(pNode, "w:numPr");
         const isList = !!numPr;
 
         // Check if it's a heading
-        const pPr = getElementsByTagName(pNode, "w:pPr")[0];
-        const pStyle = pPr ? getElementsByTagName(pPr, "w:pStyle")[0] : null;
-        const pStyleVal = pStyle ? pStyle.getAttribute("w:val") : null;
+        const pPr = getFirstElementByTagName(pNode, "w:pPr");
+        const pStyle = pPr ? getFirstElementByTagName(pPr, "w:pStyle") : null;
+        const pStyleVal = pStyle?.getAttribute("w:val");
         const isHeading = pStyleVal ? (pStyleVal.startsWith("Heading") || pStyleVal === "Title") : false;
 
         // Extract Paragraph Style Properties
@@ -364,7 +362,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         // Extract Alignment
         let alignment = styleProps.alignment;
         if (pPr) {
-            const jc = getElementsByTagName(pPr, "w:jc")[0];
+            const jc = getFirstElementByTagName(pPr, "w:jc");
             if (jc) {
                 const val = jc.getAttribute("w:val");
                 if (val === 'left' || val === 'center' || val === 'right' || val === 'justify') {
@@ -376,7 +374,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         // Extract Paragraph Background
         let paraBackgroundColor = styleProps.backgroundColor;
         if (pPr) {
-            const shd = getElementsByTagName(pPr, "w:shd")[0];
+            const shd = getFirstElementByTagName(pPr, "w:shd");
             if (shd) {
                 const fill = shd.getAttribute("w:fill");
                 if (fill && fill !== 'auto') {
@@ -388,7 +386,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         // Extract paragraph-level run properties
         let paragraphRunFormatting: TextFormatting = { ...styleProps.formatting };
         if (pPr) {
-            const pPrRPr = getElementsByTagName(pPr, "w:rPr")[0];
+            const pPrRPr = getFirstElementByTagName(pPr, "w:rPr");
             if (pPrRPr) {
                 const pPrFormatting = extractFormattingFromXml(pPrRPr);
                 for (const key in pPrFormatting) {
@@ -408,9 +406,9 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
 
         // Traverse children of paragraph (runs, hyperlinks, etc.)
         const processChildNode = (node: Node) => {
-            if (node.nodeName === 'w:r') {
-                const runNode = node as Element;
-                const rPr = getElementsByTagName(runNode, "w:rPr")[0];
+            if (isElement(node) && node.nodeName === 'w:r') {
+                const runNode = node;
+                const rPr = getFirstElementByTagName(runNode, "w:rPr");
 
                 // Formatting
                 let formatting: TextFormatting = {};
@@ -420,7 +418,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 }
 
                 // Check for run style
-                const rStyle = rPr ? getElementsByTagName(rPr, "w:rStyle")[0] : null;
+                const rStyle = rPr ? getFirstElementByTagName(rPr, "w:rStyle") : null;
                 const rStyleVal = rStyle ? rStyle.getAttribute("w:val") : pStyleVal;
                 if (rStyleVal && styleMap[rStyleVal]) {
                     for (const key in styleMap[rStyleVal].formatting) {
@@ -457,7 +455,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                         formatting: formatting
                     };
                     if (config.includeRawContent) {
-                        textNode.rawContent = xmlSerializer.serializeToString(tNode);
+                        textNode.rawContent = getRawContent(tNode, documentContent, config);
                     }
                     // Always set a style: run style > paragraph style > detected default
                     // Use detected default style for international compatibility
@@ -475,22 +473,22 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                     const allImages = [...drawings, ...picts];
 
                     for (const imgNode of allImages) {
-                        const imgXml = xmlSerializer.serializeToString(imgNode);
+                        const imgXml = serializeXml(imgNode);
 
                         // Extract Alt Text
                         let altText = '';
-                        const docPr = getElementsByTagName(imgNode, "wp:docPr")[0];
+                        const docPr = getFirstElementByTagName(imgNode, "wp:docPr");
                         if (docPr) {
                             altText = docPr.getAttribute("descr") || docPr.getAttribute("title") || '';
                         }
 
                         // Extract Relationship ID
                         let rId = '';
-                        const blip = getElementsByTagName(imgNode, "a:blip")[0];
+                        const blip = getFirstElementByTagName(imgNode, "a:blip");
                         if (blip) {
                             rId = blip.getAttribute("r:embed") || '';
                         } else {
-                            const imagedata = getElementsByTagName(imgNode, "v:imagedata")[0];
+                            const imagedata = getFirstElementByTagName(imgNode, "v:imagedata");
                             if (imagedata) {
                                 rId = imagedata.getAttribute("r:id") || '';
                             }
@@ -506,7 +504,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                                     metadata: { attachmentName: filename, altText: altText }
                                 };
                                 if (config.includeRawContent) {
-                                    imageNode.rawContent = imgXml;
+                                    imageNode.rawContent = getRawContent(imgNode, documentContent, config);
                                 }
                                 children.push(imageNode);
                             }
@@ -516,7 +514,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                                 text: '',
                             };
                             if (config.includeRawContent) {
-                                imageNode.rawContent = imgXml;
+                                imageNode.rawContent = getRawContent(imgNode, documentContent, config);
                             }
                             children.push(imageNode);
                         }
@@ -525,7 +523,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
 
                 // Footnotes/Endnotes inside runs
                 if (!config.ignoreNotes) {
-                    const footnoteRef = getElementsByTagName(runNode, "w:footnoteReference")[0];
+                    const footnoteRef = getFirstElementByTagName(runNode, "w:footnoteReference");
                     if (footnoteRef) {
                         const id = footnoteRef.getAttribute("w:id");
                         if (id && footnoteMap.has(id)) {
@@ -545,7 +543,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                         }
                     }
 
-                    const endnoteRef = getElementsByTagName(runNode, "w:endnoteReference")[0];
+                    const endnoteRef = getFirstElementByTagName(runNode, "w:endnoteReference");
                     if (endnoteRef) {
                         const id = endnoteRef.getAttribute("w:id");
                         if (id && endnoteMap.has(id)) {
@@ -565,8 +563,8 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                         }
                     }
                 }
-            } else if (node.nodeName === 'w:hyperlink') {
-                const hlNode = node as Element;
+            } else if (isElement(node) && node.nodeName === 'w:hyperlink') {
+                const hlNode = node;
                 const rId = hlNode.getAttribute("r:id");
                 const anchor = hlNode.getAttribute("w:anchor");
 
@@ -601,8 +599,8 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         }
 
         if (isList) {
-            const numIdNode = getElementsByTagName(numPr, "w:numId")[0];
-            const ilvlNode = getElementsByTagName(numPr, "w:ilvl")[0];
+            const numIdNode = getFirstElementByTagName(numPr, "w:numId");
+            const ilvlNode = getFirstElementByTagName(numPr, "w:ilvl");
             const numId = numIdNode ? numIdNode.getAttribute("w:val") || '0' : '0';
             const ilvl = ilvlNode ? parseInt(ilvlNode.getAttribute("w:val") || '0') : 0;
 
@@ -642,7 +640,8 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                     style: pStyleVal
                 } as ListMetadata
             };
-            if (config.includeRawContent) listNode.rawContent = pXml;
+
+            if (config.includeRawContent) listNode.rawContent = getRawContent(pNode, documentContent, config);
             return listNode;
 
         } else if (isHeading) {
@@ -653,7 +652,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 children: children,
                 metadata: { level, alignment, style: pStyleVal ?? undefined }
             };
-            if (config.includeRawContent) headingNode.rawContent = pXml;
+            if (config.includeRawContent) headingNode.rawContent = getRawContent(pNode, documentContent, config);
             return headingNode;
         } else {
             const paraNode: OfficeContentNode = {
@@ -662,13 +661,13 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 children: children,
                 metadata: { alignment, style: pStyleVal ?? undefined }
             };
-            if (config.includeRawContent) paraNode.rawContent = pXml;
+            if (config.includeRawContent) paraNode.rawContent = getRawContent(pNode, documentContent, config);
             return paraNode;
         }
     };
 
     // Helper to parse a table node
-    const parseTable = (tblNode: Element): OfficeContentNode => {
+    const parseTable = (tblNode: Element, documentContent: string): OfficeContentNode => {
         const rows: OfficeContentNode[] = [];
         // Only get direct child rows, not nested table rows
         const trNodes = getDirectChildren(tblNode, "w:tr");
@@ -688,13 +687,13 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 // Cells contain paragraphs (and other block-level elements)
                 const cellContentNodes = Array.from(tcNode.childNodes);
                 for (const child of cellContentNodes) {
-                    if (child.nodeName === 'w:p') {
-                        const pNode = parseParagraph(child as Element);
+                    if (isElement(child) && child.nodeName === 'w:p') {
+                        const pNode = parseParagraph(child, documentContent);
                         cellChildren.push(pNode);
                         cellText += pNode.text;
-                    } else if (child.nodeName === 'w:tbl') {
+                    } else if (isElement(child) && child.nodeName === 'w:tbl') {
                         // Nested table
-                        const nestedTable = parseTable(child as Element);
+                        const nestedTable = parseTable(child, documentContent);
                         cellChildren.push(nestedTable);
                         // Don't add nested table text to cell text - it will be handled recursively
                     }
@@ -727,24 +726,26 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         const footnotesFile = files.find(f => f.path.match(footnotesFileRegex));
         if (footnotesFile) {
             const footnotesDoc = parseXmlString(footnotesFile.content.toString());
+            const footnoteXml = footnotesFile.content.toString();
             const footnoteNodes = getElementsByTagName(footnotesDoc, "w:footnote");
             for (const node of footnoteNodes) {
                 const id = node.getAttribute("w:id");
                 if (!id || id === "-1" || id === "0") continue;
                 const pNodes = getElementsByTagName(node, "w:p");
-                footnoteMap.set(id, pNodes.map(p => parseParagraph(p)));
+                footnoteMap.set(id, pNodes.map(p => parseParagraph(p, footnoteXml)));
             }
         }
 
         const endnotesFile = files.find(f => f.path.match(endnotesFileRegex));
         if (endnotesFile) {
             const endnotesDoc = parseXmlString(endnotesFile.content.toString());
+            const endnoteXml = endnotesFile.content.toString();
             const endnoteNodes = getElementsByTagName(endnotesDoc, "w:endnote");
             for (const node of endnoteNodes) {
                 const id = node.getAttribute("w:id");
                 if (!id || id === "-1" || id === "0") continue;
                 const pNodes = getElementsByTagName(node, "w:p");
-                endnoteMap.set(id, pNodes.map(p => parseParagraph(p)));
+                endnoteMap.set(id, pNodes.map(p => parseParagraph(p, endnoteXml)));
             }
         }
     }
@@ -762,15 +763,15 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
             rawContents.push(documentContent);
         }
 
-        const doc = parseXmlString(documentContent);
-        const body = getElementsByTagName(doc, "w:body")[0];
+        const doc = parseXmlString(documentContent, { locator: config.includeRawContent });
+        const body = getFirstElementByTagName(doc, "w:body");
         if (body) {
             const bodyChildren = Array.from(body.childNodes);
             for (const child of bodyChildren) {
-                if (child.nodeName === 'w:p') {
-                    content.push(parseParagraph(child as Element));
-                } else if (child.nodeName === 'w:tbl') {
-                    content.push(parseTable(child as Element));
+                if (isElement(child) && child.nodeName === 'w:p') {
+                    content.push(parseParagraph(child, documentContent));
+                } else if (isElement(child) && child.nodeName === 'w:tbl') {
+                    content.push(parseTable(child, documentContent));
                 }
             }
         }

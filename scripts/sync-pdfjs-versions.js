@@ -9,15 +9,26 @@ const path = require('path');
  */
 
 function syncVersions() {
+    const args = process.argv.slice(2);
+    const versionFromArg = args.find(arg => !arg.startsWith('--'));
+
     const packageJsonPath = path.join(__dirname, '../package.json');
     if (!fs.existsSync(packageJsonPath)) {
         console.error('Error: package.json not found');
         process.exit(1);
     }
 
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    let packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+
+    // If version is provided as an argument, update package.json first
+    if (versionFromArg) {
+        console.log(`Updating package.json pdfjs-dist dependency to: ${versionFromArg}`);
+        packageJson.dependencies['pdfjs-dist'] = versionFromArg;
+        fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n', 'utf8');
+    }
+
     const pdfJsDependency = packageJson.dependencies['pdfjs-dist'];
-    
+
     if (!pdfJsDependency) {
         console.error('Error: pdfjs-dist not found in dependencies');
         process.exit(1);
@@ -27,7 +38,7 @@ function syncVersions() {
     const pdfJsVersion = pdfJsDependency.replace(/[\^~]/g, '');
     const versionRegex = /pdfjs-dist@[\d.]+/g;
     const targetVersionString = `pdfjs-dist@${pdfJsVersion}`;
-    
+
     console.log(`Syncing PDF.js version: ${pdfJsVersion}`);
 
     const filesToUpdate = [
@@ -46,7 +57,7 @@ function syncVersions() {
         if (fs.existsSync(filePath)) {
             const content = fs.readFileSync(filePath, 'utf8');
             const newContent = content.replace(versionRegex, targetVersionString);
-            
+
             if (content !== newContent) {
                 fs.writeFileSync(filePath, newContent, 'utf8');
                 console.log(`  ✓ Updated ${relativePath}`);
@@ -70,7 +81,7 @@ function syncVersions() {
         for (const file of files) {
             const fullPath = path.join(currentDir, file);
             const relPath = path.relative(rootDir, fullPath);
-            
+
             if (fs.statSync(fullPath).isDirectory()) {
                 if (!ignoreDirs.includes(file)) {
                     scanDir(fullPath);
@@ -80,7 +91,7 @@ function syncVersions() {
 
             // Only scan text-like files
             if (!/\.(ts|js|html|md|json|txt|css)$/.test(file)) continue;
-            
+
             // Skip the package files and the script itself
             if (relPath === 'package.json' || relPath === 'package-lock.json') continue;
             if (relPath === 'scripts/sync-pdfjs-versions.js') continue;

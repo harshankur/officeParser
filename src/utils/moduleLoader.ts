@@ -8,6 +8,9 @@
  * into require() when targeting CommonJS.
  */
 
+import { isBrowser } from './envUtils.js';
+import type * as FileTypeModule from 'file-type' with { 'resolution-mode': 'import' };
+
 /**
  * Dynamically loads an ESM module in a Node.js CJS context.
  * 
@@ -23,12 +26,12 @@ async function loadNodeEsmModule<T>(specifier: string): Promise<T> {
 /** 
  * Specialized loader for file-type 
  */
-export async function loadFileType(): Promise<typeof import('file-type')> {
-    if (typeof window === 'undefined') {
-        // Node.js path
-        return loadNodeEsmModule<typeof import('file-type')>('file-type');
+export async function loadFileType(): Promise<typeof FileTypeModule> {
+    if (!isBrowser) {
+        // Node.js path: Use dynamic import wrapper for CJS compatibility
+        return loadNodeEsmModule<typeof FileTypeModule>('file-type');
     }
-    // Browser path: esbuild handles standard dynamic import()
+    // Browser path: standard dynamic import() is handled by bundlers (e.g. esbuild/Vite)
     return import('file-type');
 }
 
@@ -36,7 +39,7 @@ export async function loadFileType(): Promise<typeof import('file-type')> {
  * Specialized loader for pdfjs-dist 
  */
 export async function loadPdfJs(): Promise<any> {
-    if (typeof window === 'undefined') {
+    if (!isBrowser) {
         // Node.js environment: require legacy build for stability with ESM-only main
         try {
             return await loadNodeEsmModule('pdfjs-dist/legacy/build/pdf.mjs');

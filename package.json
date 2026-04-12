@@ -3,7 +3,17 @@
   "version": "6.0.7",
   "description": "A robust, strictly-typed Node.js and Browser library for parsing office files (.docx, .pptx, .xlsx, .odt, .odp, .ods, .pdf, .rtf) into structured AST with rich metadata, formatting, and attachment support.",
   "main": "dist/index.js",
+  "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
+  "browser": "./dist/officeparser.browser.mjs",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "browser": "./dist/officeparser.browser.mjs",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
   "sideEffects": false,
   "engines": {
     "node": ">=18.0.0"
@@ -12,15 +22,21 @@
     "dist"
   ],
   "scripts": {
-    "build": "npm run sync:versions && npm run build:node && npm run build:browser:types && npm run build:browser",
+    "build": "npm run sync:versions && npm run build:node && npm run build:esm-wrapper && npm run build:browser:types && npm run build:browser",
     "build:node": "tsc",
+    "build:esm-wrapper": "node scripts/generate-esm-wrapper.js",
     "build:browser:types": "dts-bundle-generator --no-check -o dist/officeparser.browser.d.ts src/index.ts",
     "build:browser": "node build_browser.js && npm run sync:docs",
     "sync:versions": "node scripts/sync-pdfjs-versions.js",
-    "sync:docs": "mkdir -p docs/dist && cp dist/officeparser.browser.js docs/dist/",
-    "test": "npm run test:clean && npm run build && npx tsx test/testOfficeParser.ts",
+    "sync:docs": "mkdir -p docs/dist && cp dist/officeparser.browser.iife.js docs/dist/ && cp dist/officeparser.browser.mjs docs/dist/",
+    "test": "npm run test:clean && npm run build && npm run test:license && npm run test:artifacts && npm run test:parser",
+    "test:baseline": "npm run test baseline",
+    "test:parser": "npx tsx test/testOfficeParser.ts",
+    "test:artifacts": "npx tsx test/testShippingArtifacts.ts",
+    "test:license": "npm run sbom && node scripts/validate-licenses.js",
     "test:clean": "rm -rf test/results",
     "clean": "rm -rf dist && npm run test:clean",
+    "sbom": "npx --yes @cyclonedx/cyclonedx-npm --output-format json --output-file dist/sbom.cdx.json --omit dev",
     "prepublishOnly": "npm run build",
     "prepare": "husky"
   },
@@ -29,7 +45,7 @@
     "url": "git+https://github.com/harshankur/officeParser.git"
   },
   "bin": {
-    "officeparser": "dist/index.js"
+    "officeparser": "dist/cli.js"
   },
   "publishConfig": {
     "access": "public",
@@ -74,19 +90,20 @@
   },
   "homepage": "https://officeparser.harshankur.com",
   "dependencies": {
-    "@xmldom/xmldom": "^0.8.11",
+    "@xmldom/xmldom": "^0.9.9",
     "fflate": "^0.8.2",
-    "file-type": "^21.3.4",
-    "pdfjs-dist": "5.5.207",
+    "file-type": "^22.0.1",
+    "pdfjs-dist": "5.6.205",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.15.5",
-    "@types/xmldom": "^0.1.34",
+    "@types/node": "^25.5.0",
+    "buffer": "^6.0.3",
     "dts-bundle-generator": "^9.5.1",
     "esbuild": "^0.27.4",
-    "esbuild-plugin-polyfill-node": "^0.3.0",
+    "esbuild-plugins-node-modules-polyfill": "^1.8.1",
     "husky": "^9.1.7",
+    "process": "^0.11.10",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   }

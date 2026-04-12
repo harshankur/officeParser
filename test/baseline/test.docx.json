@@ -1,6 +1,12 @@
 {
   "type": "docx",
   "metadata": {
+    "title": "DOCX Demo",
+    "author": "Kovid Goyal",
+    "lastModifiedBy": "Harsh Ankur",
+    "created": "2013-06-05T07:56:00.000Z",
+    "modified": "2025-11-25T20:13:45.823Z",
+    "description": "Demonstration of DOCX support in calibre",
     "customProperties": {
       "TestString": "Hello from custom props",
       "TestNumber": 42,

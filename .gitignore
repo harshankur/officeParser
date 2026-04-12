@@ -8,3 +8,4 @@ officeParser.bk.js
 *.actual.txt
 *.traineddata
 /test/results/
+sbom.cdx.json

@@ -1,0 +1,53 @@
+# Workflow Name: Test and Validate
+# This workflow runs the full test suite on every push to master and on pull
+# requests targeting master. It validates:
+#  - All shipping artifacts (CJS, ESM, browser IIFE, browser ESM, CLI, types)
+#  - Parser correctness across all 8 supported file formats
+#  - Compatibility across all supported Node.js versions (18, 20, 22, 24)
+#
+# This is the primary guard before merging into master. The build-and-publish
+# workflow runs only on release publication and is gated by the tag trigger,
+# not this workflow.
+
+name: Test and Validate
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false   # Let all matrix jobs complete to get a full picture
+      matrix:
+        node-version: [18, 20, 22, 24]
+
+    steps:
+      # Step 1: Check out the full repository
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Node.js with npm dependency caching
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      # Step 3: Clean install dependencies pinned by package-lock.json
+      - name: Install Dependencies
+        run: npm ci
+
+      # Step 4: Run the full test suite:
+      #  - Builds all artifacts (tsc, ESM wrapper, browser bundles, types)
+      #  - Runs testShippingArtifacts.ts (validates every shipped file)
+      #  - Runs testOfficeParser.ts (parser correctness + baseline parity)
+      - name: Run Full Test Suite
+        run: npm test

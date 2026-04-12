@@ -51,10 +51,25 @@ export interface OfficeParserConfig {
      */
     ocrLanguage?: string;
     /**
+     * Flag to serialize raw content (XML) as clean, formatted strings.
+     * Only relevant when `includeRawContent` is true.
+     * Default is true.
+     * 
+     * If false, the parser will attempt to extract the original raw substring from the 
+     * source document instead of re-serializing the DOM node.
+     */
+    serializeRawContent?: boolean;
+    /**
+     * Flag to preserve original XML whitespace and line endings when serializing.
+     * Only relevant when `includeRawContent` is true and `serializeRawContent` is true.
+     * Default is false.
+     */
+    preserveXmlWhitespace?: boolean;
+    /**
      * The URL/path to the PDF.js worker script.
      * 
      * **Mandatory** when using PDF parsing in browser environments to avoid worker configuration errors.
-     * If not provided, it defaults to `https://unpkg.com/pdfjs-dist@5.5.207/build/pdf.worker.min.mjs`.
+     * If not provided, it defaults to `https://unpkg.com/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs`.
      * You can override this with your own local path or a different CDN link.
      */
     pdfWorkerSrc?: string;

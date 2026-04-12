@@ -22,13 +22,13 @@
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
  */
 
-import { ChartMetadata, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types';
-import { extractChartData } from '../utils/chartUtils';
-import { logWarning } from '../utils/errorUtils';
-import { createAttachment } from '../utils/imageUtils';
-import { performOcr } from '../utils/ocrUtils';
-import { getElementsByTagName, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils';
-import { extractFiles } from '../utils/zipUtils';
+import { ChartMetadata, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
+import { extractChartData } from '../utils/chartUtils.js';
+import { logWarning } from '../utils/errorUtils.js';
+import { createAttachment } from '../utils/imageUtils.js';
+import { performOcr } from '../utils/ocrUtils.js';
+import { getElementsByTagName, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
+import { extractFiles } from '../utils/zipUtils.js';
 
 /**
  * Parses an Excel spreadsheet (.xlsx) and extracts sheets, rows, and cells.

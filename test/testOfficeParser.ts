@@ -47,6 +47,8 @@ const FULL_CONFIG: Required<OfficeParserConfig> = {
     newlineDelimiter: '\n',
     outputErrorToConsole: true,
     pdfWorkerSrc: '',
+    serializeRawContent: true,
+    preserveXmlWhitespace: false
 };
 
 /** Config permutations to test */
@@ -1519,7 +1521,7 @@ class DualLogger {
 // REPORTING
 // ============================================================================
 
-function generateReport(allResults: FeatureTest[], logger: DualLogger) {
+function generateReport(allResults: FeatureTest[], logger: DualLogger): number {
     const width = 130;
     const line = '═'.repeat(width);
 
@@ -1622,6 +1624,8 @@ function generateReport(allResults: FeatureTest[], logger: DualLogger) {
     logger.log(`Detailed results saved to:`);
     logger.log(`  JSON: ${jsonPath}`);
     logger.log(`  Markdown: ${mdPath}`);
+
+    return failed;
 }
 
 // ============================================================================
@@ -1805,6 +1809,10 @@ async function runSingleFileTest(ext: string) {
 
     logger.log(`Detailed report saved to: ${reportPath}`);
     logger.log('');
+
+    if (textFailed > 0 || failed > 0 || configFailed > 0) {
+        process.exit(1);
+    }
 }
 
 async function runAllTests() {
@@ -1835,7 +1843,11 @@ async function runAllTests() {
     // 4. Generate report
     console.log('\n');
     const logger = new DualLogger();
-    generateReport(allResults, logger);
+    const failedCount = generateReport(allResults, logger);
+
+    if (failedCount > 0) {
+        process.exit(1);
+    }
 }
 
 /** Generate parsed outputs for all supported file types */

@@ -57,12 +57,18 @@
  * @see https://www.adobe.com/devnet/pdf/pdf_reference.html PDF Reference
  */
 
-import { ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types';
-import { getOfficeError, logWarning, OfficeErrorType } from '../utils/errorUtils';
-import { createAttachment } from '../utils/imageUtils';
-import { performOcr } from '../utils/ocrUtils';
-import { loadPdfJs } from '../utils/moduleLoader';
-import { parseOfficeDate } from '../utils/dateUtils';
+import { ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types.js';
+import { getOfficeError, logWarning, OfficeErrorType } from '../utils/errorUtils.js';
+import { createAttachment } from '../utils/imageUtils.js';
+import { performOcr } from '../utils/ocrUtils.js';
+import { loadPdfJs } from '../utils/moduleLoader.js';
+import { parseOfficeDate } from '../utils/dateUtils.js';
+import { assertNode, isBrowser } from '../utils/envUtils.js';
+
+/** Type guard for TextItem in PDF.js 5.x */
+function isTextItem(item: any): item is { str: string; transform: number[]; width: number; height: number; fontName: string } {
+    return item && typeof item.str === 'string' && Array.isArray(item.transform) && item.transform.length >= 6;
+}
 
 /** Represents a text item with position and formatting */
 interface TextPageItem {
@@ -148,29 +154,24 @@ function detectHeadingLevel(fontSize: number, fontStats: { median: number; max: 
     return 0;  // Below threshold
 }
 
-/**
- * Checks if a text position falls within a link annotation rectangle.
- */
-/**
- * Checks if a text item falls within a link annotation rectangle.
- * Uses the center point of the text item to avoid false positives for text
- * that starts immediately after a link (which would share the same x coordinate boundary).
- */
 function findLinkForText(item: TextPageItem, annotations: LinkAnnotation[]): LinkAnnotation | undefined {
-    const centerX = item.x + (item.width / 2);
-    const centerY = item.y + (item.height / 2);
+    const itemMinX = item.x;
+    const itemMaxX = item.x + item.width;
+    const itemMinY = item.y;
+    const itemMaxY = item.y + item.height;
 
     for (const annot of annotations) {
-        // PDF annotation rects are [x1, y1, x2, y2] in page coordinates
         const [x1, y1, x2, y2] = annot.rect;
-        const minX = Math.min(x1, x2);
-        const maxX = Math.max(x1, x2);
-        const minY = Math.min(y1, y2);
-        const maxY = Math.max(y1, y2);
+        const annotMinX = Math.min(x1, x2);
+        const annotMaxX = Math.max(x1, x2);
+        const annotMinY = Math.min(y1, y2);
+        const annotMaxY = Math.max(y1, y2);
 
-        // Check if center point is within the rect (strict, no tolerance)
-        if (centerX >= minX && centerX <= maxX &&
-            centerY >= minY && centerY <= maxY) {
+        // Check for any intersection between boxes
+        const intersects = (itemMinX < annotMaxX && itemMaxX > annotMinX) &&
+                           (itemMinY < annotMaxY && itemMaxY > annotMinY);
+
+        if (intersects) {
             return annot;
         }
     }
@@ -320,12 +321,12 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
         pdfjs.GlobalWorkerOptions.workerSrc = config.pdfWorkerSrc;
     } else {
         // Fallbacks when no workerSrc is provided
-        // @ts-ignore
-        if (typeof window !== 'undefined') {
+        if (isBrowser) {
             // Browser: Default to CDN
             pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
         } else {
             // Node.js: Try to auto-resolve local worker path to avoid remote fetch errors
+            assertNode('pdf-worker-auto-resolution');
             try {
                 // We use require.resolve to find the exact path of the installed package.
                 // @ts-ignore - 'require' is available in Node.js/CommonJS environment
@@ -455,23 +456,31 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
         const commonObjs = page.commonObjs;
 
         for (const item of textContent.items) {
-            const transform = item.transform;
+            // PDF.js 5.x: textContent.items can contain TextMarkedContent which lack
+            // 'str' and 'transform'. Skip these to avoid crashes and page skipping.
+            if (!isTextItem(item)) {
+                continue;
+            }
+
+            // At this point we know the item is a TextItem
+            const textItem = item;
+            const transform = textItem.transform;
             const x = transform[4];
             const y = transform[5];
-            const width = item.width || 0;
-            const height = item.height || Math.abs(transform[3]) || 12;
+            const width = textItem.width || 0;
+            const height = textItem.height || Math.abs(transform[3]) || 12;
 
             // Extract formatting from font
             const formatting: TextFormatting = {};
             let fontName: string | undefined;
 
-            if (item.fontName && commonObjs) {
+            if (textItem.fontName && commonObjs) {
                 try {
-                    if (commonObjs.has(item.fontName)) {
+                    if (commonObjs.has(textItem.fontName)) {
                         // Use callback-based get to ensure safe resolution
                             const fontData = await new Promise<Record<string, unknown>>((resolve) => {
                                 // @ts-ignore - commonObjs.get is callback-based in legacy builds
-                                commonObjs.get(item.fontName, (data: Record<string, unknown>) => resolve(data));
+                                commonObjs.get(textItem.fontName, (data: Record<string, unknown>) => resolve(data));
                             });
                         if (fontData?.name && typeof fontData.name === 'string') {
                             // Remove PDF subset prefix (6 uppercase letters + '+')
@@ -499,7 +508,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                 y,
                 width,
                 height,
-                text: item.str,
+                text: textItem.str,
                 fontName,
                 formatting
             });
@@ -555,11 +564,10 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
 
                             if (hasObj) {
                                 // Use callback-based get to ensure safe resolution
-                                const rawObj = await new Promise<Record<string, unknown>>((resolve) => {
+                                const imgObj = await new Promise<Record<string, unknown> & { data?: Uint8ClampedArray; bitmap?: ImageBitmap; width: number; height: number; kind?: number }>((resolve) => {
                                     // @ts-ignore - targetObjs.get is callback-based
-                                    targetObjs.get(imgName, (data: Record<string, unknown>) => resolve(data));
+                                    targetObjs.get(imgName, (data: any) => resolve(data));
                                 });
-                                const imgObj = rawObj as Record<string, unknown> & { data?: Uint8ClampedArray; bitmap?: ImageBitmap; width: number; height: number; kind?: number };
 
                                 // Browser-specific: Handle ImageBitmap if data is missing
                                 if (typeof window !== 'undefined' && !imgObj.data && imgObj.bitmap) {
@@ -633,13 +641,16 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
 
         // Extract link annotations for this page
         const annotations: LinkAnnotation[] = [];
+        const matchedAnnotations = new Set<LinkAnnotation>();
         try {
             const annots = await page.getAnnotations();
             for (const annot of annots) {
                 if (annot.subtype === 'Link' && annot.rect) {
+                    // PDF.js 5.x compatibility: url might be in 'url', 'unsafeUrl', or 'data.url'
+                    const url = annot.url || annot.unsafeUrl || annot.data?.url;
                     annotations.push({
                         rect: annot.rect,
-                        url: annot.url,
+                        url: url,
                         dest: annot.dest
                     });
                 }
@@ -650,7 +661,8 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
 
         // Sort items: Y descending (top to bottom), then X ascending (left to right)
         pageItems.sort((a, b) => {
-            if (Math.abs(b.y - a.y) > 5) return b.y - a.y;
+            // Relax tolerance slightly (5 -> 7) for PDF.js 5.x coordinate precision
+            if (Math.abs(b.y - a.y) > 7) return b.y - a.y;
             return a.x - b.x;
         });
 
@@ -732,6 +744,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
 
                 // Check for link
                 const link = findLinkForText(item, annotations);
+                if (link) matchedAnnotations.add(link);
                 let textMetadata: TextMetadata | undefined;
                 if (link) {
                     if (link.url) {

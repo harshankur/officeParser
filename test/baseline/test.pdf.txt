@@ -13,16 +13,16 @@ Text Formatting
 Inline formatting
 Here, we demonstrate various types of inline text formatting and the use of
 embedded fonts.
-Here is some bold, italic, bold - italic, underlined and struck out text. Then, we
-have a super script and a sub script . Now we see some red , green and blue text. Some text
-with a yellow highlight . Some text in a box . Some text in inverse video .
-A paragraph with styled text: subtle emphasis f ollowed by strong text a nd
+Here is some bold, italic, bold-italic, underlined and struck out text. Then, we
+have a super script and a sub script . Now we see some red, green and blue text. Some text
+with a yellow highlight. Some text in a box. Some text in inverse video.
+A paragraph with styled text: subtle emphasis followed by strong text and
 intense emphasis . This paragraph uses document wide styles for styling rather than
 inline text properties as demonstrated in the previous paragraph — calibre can handle
 both with equal ease.
 Fun with fonts
 This document has embedded the Ubuntu font family. The body text is in the
-Ubuntu typeface, here is some text in the Ubuntu Mono typeface , notice how every
+Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every
 letter has the same width, even i and m . Every embedded font will automatically
 be embedded in the output ebook during conversion.
 Paragraph level formatting
@@ -38,15 +38,15 @@ Tables
 ITEM NEEDED Tables in Word can vary from the extremely
 Books 1 simple to the extremely complex. calibre tries to do
 Pens 3
-its best when converting tables. While you may run
 Pencils 2
+its best when converting tables. While you may run
 Highlighter 2 colors into trouble with the occasional table, the vast
 Scissors 1 pair majority of common cases should be converted very
 well, as demonstrated in this section. Note that for
 optimum results, when creating tables in Word, you should set their widths using
 percentages, rather than absolute units. To the left of this paragraph is a floating two
 column table with a nice green border and header row.
-Now let’s look at a fancier table — one with alternating row colors and partial
+Now let’s look at a fancier table— one with alternating row colors and partial
 borders. This table is stretched out to take 100% of the available width.
 City or Point A Point B Point C Point D Point E
 Town
@@ -56,25 +56,25 @@ Point C 64 56 —
 Point D 37 32 91 —
 Point E 93 35 54 43 —
 Next, we see a table with special formatting in various locations. Notice how the
-f ormatting for the h eader row and sub header rows is preserved.
+formatting for the header row and sub header rows is preserved.
 College New students Graduating Change
 students
 Undergraduate
 Cedar University 110 103 +7
-Oak Institute 202 210 - 8
+Oak Institute 202 210 -8
 Graduate
 Cedar University 24 20 +4
-Elm College 43 53 - 10
+Elm College 43 53 -10
 Total 998 908 90
 Source: Fictitious data, for illustration purposes only
-Next , we have something a little more complex, a nested table, i.e. a table inside
+Next, we have something a little more complex, a nested table, i.e. a table inside
 another table. Additionally, the inner table has some of its cells merged. The table is
 displayed horizontally centered.
 One Two To the left is a table inside a
 table, with some cells
 Three Four merged.
-W e end with a fancy calendar, note how much of the original formatting is
-preserved . Note that this table will only display correctly on relatively wide screens. In
+We end with a fancy calendar, note how much of the original formatting is
+preserved. Note that this table will only display correctly on relatively wide screens. In
 general, very wide tables or tables whose cells have fixed width requirements don’t
 fare well in ebooks.
 December 2007
@@ -98,7 +98,7 @@ Footnotes 1 and endnotes i are automatically recognized and both are converted t
 endnotes, with backlinks for maximum ease of use in ebook devices.
 Dropcaps
 rop caps are used to emphasize the leading paragraph at the start of a
-section. In Word it is possible to s p ecify how many lines of text a drop - cap
+section. In Word it is possible to specify how many lines of text a drop-cap
 D should use.
 Links
 Two kinds of links are possible, those that refer to an external website and those
@@ -108,33 +108,33 @@ points back to the section on paragraph level formatting in this document.
 Table of Contents
 You can see the Table of Contents created by calibre by clicking the Table of
 Contents button in whatever viewer you are using to view the converted ebook.
-Demonstration of DOCX support in calibre ................................ ................................ .............................. 1
-Text Formatting ................................ ................................ ................................ ................................ ................ 1
-Inline formatting ................................ ................................ ................................ ................................ ............. 2
-Fun with fonts ................................ ................................ ................................ ................................ ................. 2
-Paragraph level formatting ................................ ................................ ................................ ........................... 2
-Tables ................................ ................................ ................................ ................................ ................................ ... 2
-Structural Elements ................................ ................................ ................................ ................................ ......... 4
-Footnotes & Endnotes ................................ ................................ ................................ ................................ .... 5
-Dropcaps ................................ ................................ ................................ ................................ .......................... 5
-Links ................................ ................................ ................................ ................................ ................................ . 5
-Table of Contents ................................ ................................ ................................ ................................ ........... 5
+Demonstration of DOCX support in calibre ................................................................ .............................. 1
+Text Formatting ................................................................................................................................ ................ 1
+Inline formatting ................................................................................................................................ ............. 2
+Fun with fonts ................................................................................................................................ ................. 2
+Paragraph level formatting ................................................................................................ ........................... 2
+Tables ................................................................................................................................................................ ... 2
+Structural Elements ................................................................................................................................ ......... 4
+Footnotes & Endnotes ................................................................................................................................ .... 5
+Dropcaps ................................................................................................................................ .......................... 5
+Links ................................................................................................................................................................ . 5
+Table of Contents ................................................................................................................................ ........... 5
 1 In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a
 better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This
 conversion is handled automatically by calibre.
-Images ................................ ................................ ................................ ................................ ................................ .. 6
-Lists ................................ ................................ ................................ ................................ ................................ ...... 7
-Bulleted List ................................ ................................ ................................ ................................ .................... 8
-Numbered List ................................ ................................ ................................ ................................ ................. 8
-Multi - level Lists ................................ ................................ ................................ ................................ ............... 8
-Continued Lists ................................ ................................ ................................ ................................ ................ 8
+Images ................................................................................................................................................................ .. 6
+Lists ................................................................................................................................................................ ...... 7
+Bulleted List ................................................................................................................................ .................... 8
+Numbered List ................................................................................................................................ ................. 8
+Multi-level Lists ................................................................................................................................ ............... 8
+Continued Lists ................................................................................................................................ ................ 8
 Images
 Centered images like this are useful for large pictures that should be a focus of
 attention.
 Bethe change
 thatyouwish to
 seein the world.
-There is no analogous technology in ebooks , so the conversion will usually end up
+There is no analogous technology in ebooks, so the conversion will usually end up
 placing the image either centered or floating close to the point in the text where it
 was inserted , not necessarily where it appears on the page in Word.
 Lists
@@ -147,7 +147,7 @@ Numbered List
 1. One, with a very long line to demonstrate that the hanging indent for the
 list is working correctly
 2. Two
-Multi - level List s
+Multi-level Lists
 1. One
 1.1. Two
 1.1.1. Three
@@ -155,7 +155,7 @@ Multi - level List s
 for the list is working correctly.
 1.1.3. Five
 2. Six
-A Multi - level list with bullets:
+A Multi-level list with bullets:
 ▪ One
 • Two
 

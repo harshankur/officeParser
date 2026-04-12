@@ -1,7 +1,8 @@
 {
     "compilerOptions": {
-        "target": "ES2020",
-        "module": "CommonJS",
+        "target": "ES2022",
+        "module": "Node16",
+        "moduleResolution": "Node16",
         "outDir": "./dist",
         "rootDir": "./src",
         "strict": true,

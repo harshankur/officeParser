@@ -40,9 +40,9 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types';
-import { logWarning } from '../utils/errorUtils';
-import { performOcr } from '../utils/ocrUtils';
+import { ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
+import { logWarning } from '../utils/errorUtils.js';
+import { performOcr } from '../utils/ocrUtils.js';
 
 /**
  * Represents an RTF group (content enclosed in braces).
