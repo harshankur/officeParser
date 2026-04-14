@@ -824,7 +824,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                             try {
                                 // Skip OCR for very small images/artifacts (e.g. < 10px) to avoid Tesseract warnings
                                 if (item.width >= 10 && item.height >= 10) {
-                                    attachment.ocrText = (await performOcr(bmpBuffer, config.ocrLanguage)).trim();
+                                    attachment.ocrText = (await performOcr(bmpBuffer, { language: config.ocrLanguage, ...config.ocrConfig })).trim();
                                 }
                             } catch (e) {
                                 if (config.outputErrorToConsole) console.error(`OCR failed for ${attachmentName}:`, e);

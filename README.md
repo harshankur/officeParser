@@ -3,6 +3,8 @@
 A robust, strictly-typed Node.js and Browser library for parsing office files ([`docx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`odt`](https://en.wikipedia.org/wiki/OpenDocument), [`odp`](https://en.wikipedia.org/wiki/OpenDocument), [`ods`](https://en.wikipedia.org/wiki/OpenDocument), [`pdf`](https://en.wikipedia.org/wiki/PDF), [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format)). It produces a clean, hierarchical Abstract Syntax Tree (AST) with rich metadata, text formatting, and full attachment support.
 
 [![npm version](https://badge.fury.io/js/officeparser.svg)](https://badge.fury.io/js/officeparser)
+[![Total Downloads](https://img.shields.io/npm/dt/officeparser.svg)](https://www.npmjs.com/package/officeparser)
+[![Weekly Downloads](https://img.shields.io/npm/dw/officeparser.svg)](https://www.npmjs.com/package/officeparser)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
@@ -22,6 +24,13 @@ A robust, strictly-typed Node.js and Browser library for parsing office files ([
 
 
 #### Update
+* 2026-04-14 - **v6.1.0 Release**: Major Infrastructure & Resource Stability. (Incremental since v6.0.0)
+    - **OCR Scheduler**: Intelligent worker pool that optimizes Tesseract lifecycle across parallel requests. **Note**: By default, Node.js processes stay active for 10s after OCR to keep workers warm (configurable via `ocrConfig.autoTerminateTimeout`); use `terminateOcr()` for immediate CLI/script exit.
+    - **Core Engine**: Replaced legacy zip extraction with `fflate` for significant performance gains and robust browser/edge compatibility.
+    - **Module System**: Full native ESM support with `Node16` resolution and verified browser bundles (Vite/Angular compatible).
+    - **Format Refinements**: Hierarchical PDF coordinate alignment and ODT/RTF list parsing stability.
+    - **Custom Properties**: Added support for extracting custom document metadata across OOXML, ODF, and PDF formats.
+    - **Sponsorship**: Integrated `funding.json` manifest and GitHub Sponsors support.
 * 2025/12/29 - **v6.0.0 Release**: Major overhaul of the library. Transitioned from simple text extraction to a rich **Abstract Syntax Tree (AST)** output.
     - Simplified API: Use `parseOffice` for all parsing needs (returns a Promise).
     - Structured Output: Access hierarchical document structure (paragraphs, headings, tables, lists, etc.).
@@ -82,6 +91,7 @@ npx officeparser /path/to/officeFile.docx --ignoreNotes=true --newlineDelimiter=
 - `--extractAttachments=[true|false]`   Flag to extract images/charts as Base64. Default is false.
 - `--ocr=[true|false]`                  Flag to enable OCR for extracted images. Default is false.
 - `--includeRawContent=[true|false]`    Flag to include raw XML/RTF content in nodes. Default is false.
+- `--verbose=[true|false]`              Show full error stack traces.
 
 
 ## Library Usage
@@ -156,7 +166,7 @@ The `OfficeParserAST` provides a format-agnostic representation of your document
 ```text
 OfficeParserAST
 ├── type: "docx" | "pptx" | "xlsx" | ...
-├── metadata: { author, title, created, modified, ... }
+├── metadata: { author, title, created, modified, ..., customProperties }
 ├── content: [ OfficeContentNode ]
 │   ├── type: "paragraph" | "heading" | "table" | "list" | ...
 │   ├── text: "Concatenated text of this node and all children"
@@ -177,7 +187,7 @@ OfficeParserAST
 ```json
 {
   "type": "docx",
-  "metadata": { "author": "John Doe", "title": "Annual Report" },
+  "metadata": { "author": "John Doe", "title": "Annual Report", "customProperties": { "Department": "Finance" } },
   "content": [
     {
       "type": "heading",
@@ -303,6 +313,16 @@ Formatting can be found at two levels:
 The `ast.metadata` object provides document-wide context:
 - **`styleMap`**: A dictionary of style names to their `TextFormatting` definitions found in the document.
 - **`formatting`**: Document-wide default settings (e.g., default font or font size).
+- **`customProperties`**: A dictionary of user-defined metadata embedded in the document (OOXML `custom.xml`, ODF `meta:user-defined`, or PDF Info dictionary).
+
+### 7. Custom Properties
+You can access custom user-defined metadata that might be embedded in the document:
+
+```javascript
+const ast = await officeParser.parseOffice("contract.docx");
+console.log("Custom Metadata:", ast.metadata.customProperties);
+// Output: { "ProjectID": "ABC-123", "InternalReview": true }
+```
 
 ### Advanced AST Usage
 Beyond using `ast.toText()`, you can interact with the structural data directly:
@@ -403,10 +423,46 @@ Pass an optional config object as the second argument to `parseOffice`.
 | `ignoreNotes` | boolean | `false` | Ignore notes in files like PowerPoint/ODP. |
 | `putNotesAtLast` | boolean | `false` | Put notes text at the end of the document. (Note: Does not work for RTF. It is treated as true always.) |
 | `extractAttachments` | boolean | `false` | Extract images and charts as Base64. |
-| `ocr` | boolean | `false` | Enable OCR for images (requires `extractAttachments: true`). |
-| `ocrLanguage` | string | `eng` | Language for OCR (e.g., 'eng', 'fra'). Supports multiple languages with '+'. See [Language Codes](https://tesseract-ocr.github.io/tessdoc/Data-Files#data-files-for-version-400-november-29-2016). |
 | `includeRawContent` | boolean | `false` | Include raw XML/RTF markup in the nodes. |
+| `serializeRawContent` | boolean | `true` | When `includeRawContent` is true, re-serializes raw XML to clean strings. If false, extracts original raw substring. |
+| `preserveXmlWhitespace` | boolean | `false` | When `serializeRawContent` is true, preserves original XML whitespace and line endings. |
+| `ocr` | boolean | `false` | Enable OCR for images (requires `extractAttachments: true`). |
+| `ocrLanguage` | string | `eng` | **Deprecated**: Use `ocrConfig.language` instead. Language for OCR. |
 | `pdfWorkerSrc` | string | `(see below)` | Path to PDF.js worker. Defaults to a CDN link if not provided. |
+| `ocrConfig` | object | `{}` | **OCR Scheduler** configuration for fine-grained worker control. |
+| `ocrConfig.language` | string | `eng` | Language(s) for OCR (e.g., 'eng', 'fra', 'eng+fra'). |
+| `ocrConfig.autoTerminateTimeout` | number | `10000` | Inactivity timeout in milliseconds before workers are killed. |
+| `ocrConfig.workerPath` | string | `undefined` | Path to Tesseract worker script (for offline use). |
+| `ocrConfig.corePath` | string | `undefined` | Path to Tesseract core script (for offline use). |
+| `ocrConfig.langPath` | string | `undefined` | Path for Tesseract language files (for offline use). |
+
+### OCR Scheduler & Resource Management
+If your application uses OCR, `officeParser` utilizes an intelligent **Smart Worker Pool** to maintain a background worker pool and optimize repeated parse requests.
+
+- **Dynamic Affinity**: Workers in the pool persist with their last used language affinity. 
+- **Smart Re-initialization**: If a new language is requested and the pool is full, the manager identifies the **Least Recently Used (LRU)** idle worker and re-initializes it for the new language using the Tesseract.js v5 API. This avoids the overhead of destroying and recreating workers.
+- **Auto-Termination**: Workers are automatically cleaned up after 10 seconds of inactivity (configurable via `ocrConfig.autoTerminateTimeout`).
+
+#### `OfficeParser.terminateOcr()`
+If you have used OCR (`{ ocr: true }`) in a short-lived script (like CLI tools or one-off automation), we recommend explicitly calling `terminateOcr()` after your processing is finished. This bypasses the 10-second idle timer and allows the process to return to the terminal prompt immediately.
+
+> [!NOTE]
+> If OCR was not used, this function is a no-op and does not need to be called.
+
+```js
+const officeParser = require('officeparser');
+
+async function runCleaner() {
+    await officeParser.parseOffice("file.pdf", { ocr: true });
+    // ... process results ...
+
+    // Manually kill OCR workers for an immediate exit
+    await officeParser.terminateOcr();
+}
+```
+
+> [!TIP]
+> This is handled automatically in our own CLI (`npx officeparser ...`). You only need to call this manually if you are using the library in your own custom script and want a snappy exit.
 
 ```js
 const config = {
@@ -449,24 +505,37 @@ officeParser.parseOffice("presentation.pptx", config).then(ast => {
 ```
 
 ## Browser Usage
-The browser bundle exposes the `officeParser` namespace. Include the bundle file available in the release assets.
+The library provides two types of browser bundles in the `dist/` directory:
+1. **`officeparser.browser.iife.js`**: Standard IIFE bundle for direct `<script>` tag usage. Exposes the global `officeParser` namespace.
+2. **`officeparser.browser.mjs`**: Modern ESM bundle for use with `import` statements or modern bundlers.
+
+### Usage (Script Tag)
+Include the IIFE bundle file available in the release assets.
 
 ```html
-<script src="dist/officeparser.browser.js"></script>
+<script src="dist/officeparser.browser.iife.js"></script>
 <script>
     async function handleFile(file) {
         // file can be a File object from an input element or an ArrayBuffer
-        // The browser bundle exposes the global variable `officeParser`
-        // which contains the `OfficeParser` class.
-        
         try {
             const ast = await officeParser.parseOffice(file, { ocr: true });
             console.log(ast.toText());
-            console.log("Metadata:", ast.metadata);
         } catch (error) {
             console.error(error);
         }
     }
+</script>
+```
+
+### Usage (ESM)
+If you are using a modern browser that supports modules or a dev server like Vite:
+
+```html
+<script type="module">
+    import { OfficeParser } from './dist/officeparser.browser.mjs';
+    
+    const ast = await OfficeParser.parseOffice(fileBuffer);
+    console.log(ast.metadata);
 </script>
 ```
 
@@ -485,7 +554,17 @@ const ast2 = await officeParser.parseOffice(file, {
 });
 ```
 
-> **Note:** The version of `pdfjs-dist` in the worker source should match the version used by `officeparser` (currently `5.4.530`).
+> **Note:** The version of `pdfjs-dist` in the worker source should match the version used by `officeparser` (currently `5.6.205`).
+
+## Troubleshooting & Common Issues
+
+- **Node.js process stays alive after finishing**: If using OCR, the worker pool stays warm for 10s by default. Use `await terminateOcr()` at the end of your script for a snappy exit.
+- **"Worker not found" in Browser**: Ensure `pdfWorkerSrc` is correctly pointed to the `pdf.worker.min.mjs` file matching version `5.6.205`.
+- **OCR accuracy is low**: Verify your `ocrConfig.language` matches the document content. Note that OCR quality depends on image resolution.
+- **Out of memory on large files**: For massive spreadsheets, consider using `ast.toText()` early and allowing the full AST object to be garbage-collected.
+
+For a comprehensive guide, visit our [Debugging & Troubleshooting Documentation](https://harshankur.github.io/officeParser/#spec/debugging).
+
 
 ## Known Limitations
 1. **ODT/ODS Charts**: Extraction may occasionally show inaccurate data when referencing external cell ranges or complex layout-based data.

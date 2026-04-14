@@ -319,9 +319,9 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
             if (config.ocr) {
                 if (attachment.mimeType.startsWith('image/')) {
                     try {
-                        const ocrText = await performOcr(media.content, config.ocrLanguage);
-                        if (ocrText.trim()) {
-                            attachment.ocrText = ocrText.trim();
+                        const ocrText = (await performOcr(media.content, { language: config.ocrLanguage, ...config.ocrConfig })).trim();
+                        if (ocrText) {
+                            attachment.ocrText = ocrText;
                         }
                     } catch (e) {
                         logWarning(`OCR failed for ${attachment.name}:`, config, e);

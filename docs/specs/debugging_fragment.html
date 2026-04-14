@@ -1,31 +1,60 @@
 <div class="doc-body">
-    <h1>officeParser Debugging Tips</h1>
-    <p>Tips and common solutions for working with <code>officeParser</code>.</p>
+    <h1>Troubleshooting & Debugging</h1>
+    <p>Solutions for common integration challenges and performance optimizations in <code>officeParser</code> v6.1.0.</p>
 
-    <h2>1. Enable Verbose Errors</h2>
-    <p>If you encounter an issue during parsing, set <code>outputErrorToConsole</code> to <code>true</code>. This will
-        log internal stack traces.</p>
-    <pre><code>const ast = await officeParser.parseOffice(file, { outputErrorToConsole: true });</code></pre>
+    <div class="alert alert-info">
+        <strong>💡 Pro Tip:</strong> Always enable <code>outputErrorToConsole: true</code> when debugging to see the full internal stack traces.
+    </div>
 
-    <h2>2. Accessing Raw Source</h2>
-    <p>Enable <code>includeRawContent</code> to attach original XML/RTF markup to each node. Useful for investigating
-        missing formatting or internal tags.</p>
-
-    <h2>3. PDF Parsing in Browser</h2>
-    <p>In the browser, PDF parsing requires a background worker script. Default is a CDN, but you can host it locally:
-    </p>
-    <pre><code>const config = {
-    pdfWorkerSrc: '/assets/workers/pdf.worker.min.mjs'
-};</code></pre>
-
-    <h2>4. OCR Issues</h2>
+    <h2>1. Node.js Process Hanging (OCR)</h2>
+    <p>In v6.1.0, if you use <code>ocr: true</code>, the library maintains a persistent worker pool to make subsequent OCR tasks much faster. However, this background pool will keep your Node.js process alive for <strong>10 seconds</strong> of inactivity by default.</p>
+    
+    <h3>Solutions:</h3>
     <ul>
-        <li><strong>Multiple Languages</strong>: Provide comma-separated languages (e.g., <code>eng+fra</code>).</li>
-        <li><strong>Image Quality</strong>: OCR accuracy depends on resolution and clarity.</li>
-        <li><strong>Connectivity</strong>: Tesseract.js may need to download data files.</li>
+        <li><strong>For CLI/Short-lived scripts:</strong> Call <code>await terminateOcr()</code> manually after your <code>parseOffice</code> call.</li>
+        <li><strong>Change Timeout:</strong> Set a shorter idle period via <code>ocrConfig.autoTerminateTimeout</code>.</li>
+        <li><strong>Disable Pooled Persistence:</strong> Set <code>autoTerminateTimeout: 0</code> to kill workers immediately (similar to legacy behavior).</li>
+    </ul>
+    <pre><code>import { parseOffice, terminateOcr } from 'officeparser';
+
+const ast = await parseOffice('file.png', { ocr: true });
+// Process finishes...
+await terminateOcr(); // Snappy exit</code></pre>
+
+    <h2>2. PDF Rendering Issues (Browser)</h2>
+    <p>If PDF parsing fails in the browser with "Worker not found" or "Version mismatch" errors:</p>
+    <ul>
+        <li><strong>Worker Source:</strong> Ensure <code>pdfWorkerSrc</code> points to a valid URL. By default, it uses a CDN pointing to version <code>5.6.205</code>.</li>
+        <li><strong>Version Matching:</strong> If you host the worker locally, ensure it matches the <code>pdfjs-dist</code> version <code>5.6.205</code> used by the library.</li>
     </ul>
 
-    <h2>5. Large Spreadsheet Memory</h2>
-    <p>XLSX files can be massive. Use <code>ast.toText()</code> if you only need plain text to save memory, or parse on
-        the server.</p>
+    <h2>3. OCR Accuracy & Performance</h2>
+    <p>If OCR results are missing or incorrect:</p>
+    <ul>
+        <li><strong>Language Selection:</strong> Ensure you've provided the correct language code. You can combine multiple languages with a <code>+</code> sign (e.g., <code>eng+deu</code>).</li>
+        <li><strong>Air-gapped Environments:</strong> In restricted environments, <code>tesseract.js</code> cannot download language files. You must provide local paths via <code>ocrConfig.workerPath</code>, <code>ocrConfig.corePath</code>, and <code>ocrConfig.langPath</code>.</li>
+        <li><strong>Memory:</strong> Parallel OCR on many images can be intensive. <code>officeParser</code> limits the pool to 4 concurrent workers by default to prevent crashes.</li>
+    </ul>
+
+    <h2>4. Memory Management (Giant Files)</h2>
+    <p>When parsing extremely large Excel (.xlsx) or PowerPoint (.pptx) files:</p>
+    <ul>
+        <li><strong>AST vs. Text:</strong> The structured AST consumes significantly more memory than plain text. If you don't need the hierarchy, use <code>ast.toText()</code> and allow the AST to be garbage-collected immediately.</li>
+        <li><strong>Ignore Notes:</strong> For complex PowerPoints, setting <code>ignoreNotes: true</code> can reduce memory usage by skipping entire XML trees.</li>
+    </ul>
+
+    <h2>5. Metadata & Custom Properties</h2>
+    <p>If <code>metadata.customProperties</code> is empty:</p>
+    <ul>
+        <li>Custom property extraction is currently limited to <strong>OOXML (DOCX, XLSX, PPTX)</strong>, <strong>ODF (ODT, ODS, ODP)</strong>, and <strong>PDF</strong>.</li>
+        <li>Legacy formats like <strong>RTF</strong> do not support custom property extraction.</li>
+    </ul>
+
+    <h2>6. Bundle Selection</h2>
+    <p>Ensure you are importing the correct build for your environment:</p>
+    <ul>
+        <li><strong>Node.js (CJS/ESM)</strong>: Standard <code>import</code> or <code>require</code> works automatically via <code>package.json</code> exports.</li>
+        <li><strong>Modern Bundlers (Vite/Webpack)</strong>: Use the <code>.mjs</code> bundle for best treeshaking.</li>
+        <li><strong>Legacy Browser Scripts</strong>: Use <code>dist/officeparser.browser.iife.js</code> for a global <code>officeParser</code> namespace.</li>
+    </ul>
 </div>

@@ -41,6 +41,7 @@ const FULL_CONFIG: Required<OfficeParserConfig> = {
     extractAttachments: true,
     ocr: true,
     ocrLanguage: 'eng',
+    ocrConfig: {},
     includeRawContent: true,
     ignoreNotes: false,
     putNotesAtLast: false,
@@ -1634,6 +1635,7 @@ function generateReport(allResults: FeatureTest[], logger: DualLogger): number {
 
 /** Generate focused report for single file type */
 async function runSingleFileTest(ext: string) {
+    const startTime = Date.now();
     const logger = new DualLogger();
 
     logger.log('═'.repeat(100));
@@ -1810,12 +1812,20 @@ async function runSingleFileTest(ext: string) {
     logger.log(`Detailed report saved to: ${reportPath}`);
     logger.log('');
 
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    logger.log(`Total duration: ${duration}s`);
+    logger.log('');
+
+    // Terminate OCR workers to allow process exit
+    await OfficeParser.terminateOcr();
+
     if (textFailed > 0 || failed > 0 || configFailed > 0) {
         process.exit(1);
     }
 }
 
 async function runAllTests() {
+    const startTime = Date.now();
     console.log('Starting comprehensive test suite...\n');
 
     const allResults: FeatureTest[] = [];
@@ -1844,6 +1854,13 @@ async function runAllTests() {
     console.log('\n');
     const logger = new DualLogger();
     const failedCount = generateReport(allResults, logger);
+
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    logger.log(`Total duration: ${duration}s`);
+    logger.log('');
+
+    // Terminate OCR workers to allow process exit
+    await OfficeParser.terminateOcr();
 
     if (failedCount > 0) {
         process.exit(1);
@@ -1917,13 +1934,20 @@ const args = process.argv.slice(2);
 
 if (args.length === 0) {
     // No arguments - run all tests
-    runAllTests().catch(console.error);
+    runAllTests().catch((err) => {
+        console.error(err);
+        process.exit(1);
+    });
 } else {
     if (args[0].toLowerCase() === 'baseline') {
         // Create actual ast and text files
         generateParsedOutputs()
             .then(copyToBaseline)
-            .catch(console.error);
+            .then(() => OfficeParser.terminateOcr())
+            .catch((err) => {
+                console.error(err);
+                process.exit(1);
+            });
     }
     else {
         // Single file test
@@ -1942,6 +1966,9 @@ if (args.length === 0) {
             process.exit(1);
         }
 
-        runSingleFileTest(ext).catch(console.error);
+        runSingleFileTest(ext).catch((err) => {
+            console.error(err);
+            process.exit(1);
+        });
     }
 }

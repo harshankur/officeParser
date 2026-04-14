@@ -63,20 +63,29 @@ if (fileArg) {
     });
 
     OfficeParser.parseOffice(fileArg, config)
-        .then((ast: OfficeParserAST) => {
+        .then(async (ast: OfficeParserAST) => {
             if (toText) {
                 process.stdout.write(ast.toText() + '\n');
             } else {
                 process.stdout.write(JSON.stringify(ast, null, 2) + '\n');
             }
+            // Ensure OCR workers are terminated for clean CLI exit
+            if (config.ocr) {
+                await OfficeParser.terminateOcr();
+            }
         })
-        .catch(err => {
+        .catch(async err => {
             console.error(`Error parsing file "${fileArg}":`);
             if (verbose) {
                 console.error(err);
             } else {
                 console.error(err.message || err);
                 console.error('Use --verbose=true for full stack trace.');
+            }
+            
+            // Ensure OCR workers are terminated even on error
+            if (config.ocr) {
+                await OfficeParser.terminateOcr();
             }
             process.exit(1);
         });

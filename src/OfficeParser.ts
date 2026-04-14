@@ -43,6 +43,7 @@ import { parseWord } from './parsers/WordParser.js';
 import { OfficeParserAST, OfficeParserConfig } from './types.js';
 import { getOfficeError, getWrappedError, OfficeErrorType } from './utils/errorUtils.js';
 import { loadFileType } from './utils/moduleLoader.js';
+import { terminateOcr } from './utils/ocrUtils.js';
 
 /**
  * Main parser class providing office document parsing functionality.
@@ -119,6 +120,7 @@ export class OfficeParser {
             serializeRawContent: true,
             preserveXmlWhitespace: false,
             pdfWorkerSrc: '',
+            ocrConfig: {},
             ...actualConfig
         };
 
@@ -200,5 +202,17 @@ export class OfficeParser {
             if (callback) callback(undefined as any, wrappedError);
             throw wrappedError;
         }
+    }
+
+    /**
+     * Terminates all active OCR workers and cleans up resources.
+     * 
+     * This should be called when the application is shutting down or when OCR 
+     * is no longer needed to prevent memory leaks and orphaned worker processes.
+     * 
+     * @returns A promise that resolves when all workers have been terminated
+     */
+    public static async terminateOcr(): Promise<void> {
+        await terminateOcr();
     }
 }

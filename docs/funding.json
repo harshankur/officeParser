@@ -1,0 +1,108 @@
+{
+    "$schema": "https://fundingjson.org/schema/v1.1.0.json",
+    "version": "v1.1.0",
+
+    "entity": {
+        "type": "individual",
+        "role": "maintainer",
+        "name": "Harsh Ankur",
+        "email": "harshankur@outlook.com",
+        "description": "I am a full-stack open source maintainer focused on building high-performance document processing infrastructure. Since 2019, I have been the sole architect of officeParser, maintaining it through six major versions and ensuring its stability for a global user base that depends on it for over 10 million downloads and 260,000+ weekly installations.",
+        "webpageUrl": {
+            "url": "https://officeparser.harshankur.com",
+            "wellKnown": ""
+        }
+    },
+
+    "projects": [
+        {
+            "guid": "officeparser",
+            "name": "officeParser",
+            "description": "officeParser is a strictly-typed, zero-dependency-core library for Node.js and the browser that transforms complex office documents (DOCX, PDF, XLSX, etc.) into a unified, hierarchical Abstract Syntax Tree (AST). It is a critical piece of infrastructure for AI ingestion pipelines, search engines, and document-management tools, providing the only JavaScript/TypeScript solution that maintains format parity across both server and client runtimes.",
+            "webpageUrl": {
+                "url": "https://officeparser.harshankur.com",
+                "wellKnown": "https://github.com/harshankur/officeParser/blob/master/.well-known/funding-manifest-urls"
+            },
+            "repositoryUrl": {
+                "url": "https://github.com/harshankur/officeParser",
+                "wellKnown": "https://github.com/harshankur/officeParser/blob/master/.well-known/funding-manifest-urls"
+            },
+            "licenses": ["spdx:MIT"],
+            "tags": [
+                "ai-ingestion",
+                "document-ast",
+                "typescript",
+                "office-automation",
+                "rag-infrastructure",
+                "nodejs",
+                "browser-parser"
+            ]
+        }
+    ],
+
+    "funding": {
+        "channels": [
+            {
+                "guid": "github-sponsors",
+                "type": "payment-provider",
+                "address": "https://github.com/sponsors/harshankur",
+                "description": "GitHub Sponsors - Recursive monthly support for long-term project stability."
+            },
+            {
+                "guid": "paypal",
+                "type": "payment-provider",
+                "address": "https://www.paypal.me/hakuna0404",
+                "description": "PayPal - Direct contributions for immediate infrastructure needs."
+            },
+            {
+                "guid": "buymeacoffee",
+                "type": "payment-provider",
+                "address": "https://www.buymeacoffee.com/harshankur",
+                "description": "Buy Me A Coffee - Micro-contributions from the developer community."
+            }
+        ],
+
+        "plans": [
+            {
+                "guid": "maintenance-annual",
+                "status": "active",
+                "name": "Core Sustainability & Maintenance",
+                "description": "Focuses on the baseline health of the library: maintaining compatibility with Node.js LTS releases, resolving security vulnerabilities, and providing timely triage for issues across the 8 supported file formats. This ensures reliability for the 260k+ weekly users currently reaching it.",
+                "amount": 25000,
+                "currency": "USD",
+                "frequency": "yearly",
+                "channels": ["github-sponsors", "paypal"]
+            },
+            {
+                "guid": "plugin-ecosystem-annual",
+                "status": "active",
+                "name": "The Plugin Ecosystem (AI Foundations)",
+                "description": "Funds the development of a composable plugin architecture (v7 design). This allows officeParser to remain lightweight while enabling high-value transformations like Markdown/HTML serialisation and LLM-ready chunking. This work is critical for cementing the library as the default choice for modern AI/RAG ingestion in JavaScript.",
+                "amount": 50000,
+                "currency": "USD",
+                "frequency": "yearly",
+                "channels": ["github-sponsors", "paypal"]
+            },
+            {
+                "guid": "intelligent-ingestion-annual",
+                "status": "active",
+                "name": "Intelligent Document Ingestion",
+                "description": "The 'Full Focus' program. Enables advanced vertical features such as semantic table reconstruction (headers/merged-cells) and structured chart-to-JSON extraction. Also includes officially validated drivers for Bun, Deno, and Edge environments, and first-party connectors for LangChain and LlamaIndex.",
+                "amount": 75000,
+                "currency": "USD",
+                "frequency": "yearly",
+                "channels": ["github-sponsors", "paypal"]
+            }
+        ],
+
+        "history": [
+            {
+                "year": 2024,
+                "income": 0,
+                "expenses": 0,
+                "currency": "USD",
+                "description": "All development was contributed voluntarily alongside full-time employment."
+            }
+        ]
+    }
+}

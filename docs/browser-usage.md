@@ -41,7 +41,7 @@ const handleFile = async (event) => {
 You can also use the IIFE bundle directly in a script tag:
 
 ```html
-<script src="node_modules/officeparser/dist/officeparser.bundle.js"></script>
+<script src="dist/officeparser.browser.iife.js"></script>
 <script>
     const handleFile = async (file) => {
         const buffer = await file.arrayBuffer();
@@ -74,3 +74,21 @@ const ast = await OfficeParser.parseOffice(buffer, {
 
 - **serializeRawContent: true** (Default): Re-serializes the XML from the DOM. This ensures valid XML but may change whitespace or attribute order.
 - **serializeRawContent: false**: Extracts the exact substring from the original file based on DOM locators. This is faster and preserves the byte-for-byte original content.
+
+## OCR Scheduler & Resource Management
+
+If you enable OCR in the browser (`{ ocr: true }`), `officeParser` will initialize a pool of Tesseract.js workers managed by an intelligent **Smart Worker Pool**. 
+
+- **Efficient Switching**: These workers persist with their language affinity. If you switch between parsing of English and French documents, the pool will automatically re-allocate workers using an **LRU (Least Recently Used)** strategy—re-initializing the oldest idle worker to the new language only when necessary.
+- **Resource Cleanup**: Workers are automatically cleaned up after an inactivity timeout of 10 seconds.
+
+### Manual OCR Cleanup
+If you have performed a parse with OCR enabled and want to free up memory and terminate workers immediately:
+
+```javascript
+await officeParser.parseOffice(file, { ocr: true });
+// ... process results ...
+
+// Kill all background workers immediately
+await officeParser.terminateOcr();
+```

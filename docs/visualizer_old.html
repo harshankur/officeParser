@@ -476,6 +476,20 @@
                     </label>
                 </div>
                 <div class="config-item">
+                    <span class="config-label" title="Re-serialize raw XML to clean strings">Serialize Raw XML</span>
+                    <label class="switch">
+                        <input type="checkbox" id="cfg_serializeRawContent" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="config-item">
+                    <span class="config-label" title="Preserve original XML whitespace">Preserve XML Space</span>
+                    <label class="switch">
+                        <input type="checkbox" id="cfg_preserveXmlWhitespace">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="config-item">
                     <span class="config-label" title="Enable OCR for images (Requires Tesseract.js)">Enable OCR</span>
                     <label class="switch">
                         <input type="checkbox" id="cfg_ocr" checked>
@@ -498,11 +512,16 @@
                         style="width: 100%; margin-left: 20px;"
                         value="https://unpkg.com/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs">
                 </div>
+                <div class="config-item">
+                    <span class="config-label">OCR Timeout (s)</span>
+                    <input type="number" id="cfg_ocrTimeout" class="config-input" value="10" min="0">
+                </div>
             </div>
         </div>
 
-        <div class="controls">
+        <div class="controls" style="gap: 10px;">
             <button id="parseBtn" disabled>Parse File</button>
+            <button id="cleanupOcrBtn" class="action-btn" style="height: 40px; padding: 0 15px; border-color: #ff3b30; color: #ff3b30;">🗑️ Cleanup OCR Pool</button>
         </div>
 
         <div id="status"
@@ -510,7 +529,7 @@
 
         <div class="preview-section">
             <div class="section-header">
-                <h3>Visualized Content</h3>
+                <h3 id="visualized-heading">Visualized Content</h3>
             </div>
             <div id="preview">
                 <em>Rendered content will appear here...</em>
@@ -536,7 +555,7 @@
         </div>
     </div>
 
-    <script src="dist/officeparser.browser.js"></script>
+    <script src="dist/officeparser.browser.iife.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             try {
@@ -557,14 +576,63 @@
                 const copyJsonBtn = document.getElementById('copyJsonBtn');
                 const output = document.getElementById('output');
                 const status = document.getElementById('status');
+                const cleanupOcrBtn = document.getElementById('cleanupOcrBtn');
                 let selectedFile = null;
+                let ocrWasUsedInCurrentPreview = false;
+
+                // --- Brand Icons System ---
+                const BRAND_ICONS = {
+                    docx: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;vertical-align:middle;margin-right:8px;"><path d="M4 4V20H20V8L16 4H4Z" fill="#2B579A"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="7" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="8">W</text></svg>`,
+                    xlsx: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:1.5rem;height:1.5rem;vertical-align:middle;margin-right:8px;"><path d="M4 4V20H20V8L16 4H4Z" fill="#217346"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="7" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="8">X</text></svg>`,
+                    pptx: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:1.5rem;height:1.5rem;vertical-align:middle;margin-right:8px;"><path d="M4 4V20H20V8L16 4H4Z" fill="#D24726"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="7" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="8">P</text></svg>`,
+                    pdf: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:1.5rem;height:1.5rem;vertical-align:middle;margin-right:8px;"><path d="M4 4V20H20V8L16 4H4Z" fill="#E02A26"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5.5" y="15" fill="white" font-family="Outfit" font-weight="800" font-size="5">PDF</text></svg>`,
+                    odt: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:1.5rem;height:1.5rem;vertical-align:middle;margin-right:8px;"><path d="M4 4V20H20V8L16 4H4Z" fill="#0062AF"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><circle cx="10" cy="13" r="3" stroke="white" stroke-width="1.5"/></svg>`,
+                    ods: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:1.5rem;height:1.5rem;vertical-align:middle;margin-right:8px;"><path d="M4 4V20H20V8L16 4H4Z" fill="#00A950"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><rect x="7" y="10" width="6" height="6" stroke="white" stroke-width="1.5"/></svg>`,
+                    odp: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:1.5rem;height:1.5rem;vertical-align:middle;margin-right:8px;"><path d="M4 4V20H20V8L16 4H4Z" fill="#7B2B8D"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><path d="M8 10L13 13L8 16V10Z" fill="white"/></svg>`,
+                    rtf: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:1.5rem;height:1.5rem;vertical-align:middle;margin-right:8px;"><path d="M4 4V20H20V8L16 4H4Z" fill="#475569"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><path d="M7 11H13M7 14H11" stroke="white" stroke-width="1.5"/></svg>`,
+                    default: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:1.5rem;height:1.5rem;vertical-align:middle;margin-right:8px;"><path d="M4 4V20H20V8L16 4H4Z" fill="#94a3b8"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/></svg>`
+                };
+
+                const getFormatIcon = (filename) => {
+                    const ext = filename.split('.').pop().toLowerCase();
+                    return BRAND_ICONS[ext] || BRAND_ICONS.default;
+                };
+
+                const updateOcrCleanupState = () => {
+                    cleanupOcrBtn.disabled = !ocrWasUsedInCurrentPreview;
+                    cleanupOcrBtn.title = ocrWasUsedInCurrentPreview ? "Terminate active OCR workers" : "No OCR workers recently used";
+                };
+
+                cleanupOcrBtn.addEventListener('click', async () => {
+                    const originalHtml = `🗑️ Cleanup OCR Pool`;
+                    try {
+                        cleanupOcrBtn.innerHTML = '🧹 Cleaning...';
+                        cleanupOcrBtn.disabled = true;
+                        await window.officeParser.terminateOcr();
+                        cleanupOcrBtn.innerHTML = '✅ Cleaned!';
+                        status.textContent = 'OCR Workers terminated successfully.';
+                        ocrWasUsedInCurrentPreview = false;
+                        setTimeout(() => {
+                            cleanupOcrBtn.innerHTML = originalHtml;
+                            updateOcrCleanupState();
+                        }, 2000);
+                    } catch (err) {
+                        console.error("Cleanup failed:", err);
+                        cleanupOcrBtn.innerHTML = '❌ Failed';
+                        setTimeout(() => {
+                            cleanupOcrBtn.innerHTML = originalHtml;
+                            cleanupOcrBtn.disabled = false;
+                        }, 2000);
+                    }
+                });
+                updateOcrCleanupState();
 
                 // Configuration Persistence Logic
                 const CONFIG_KEY = 'officeparser_visualizer_config';
                 const configInputs = [
                     'cfg_outputErrorToConsole', 'cfg_ignoreNotes', 'cfg_putNotesAtLast',
-                    'cfg_extractAttachments', 'cfg_includeRawContent', 'cfg_ocr',
-                    'cfg_ocrLanguage', 'cfg_newlineDelimiter', 'cfg_pdfWorkerSrc'
+                    'cfg_extractAttachments', 'cfg_includeRawContent', 'cfg_serializeRawContent', 'cfg_preserveXmlWhitespace', 'cfg_ocr',
+                    'cfg_ocrLanguage', 'cfg_newlineDelimiter', 'cfg_pdfWorkerSrc', 'cfg_ocrTimeout'
                 ];
 
                 const saveConfig = () => {
@@ -600,6 +668,32 @@
                 });
 
                 loadConfig();
+
+                // Cleanup Button logic
+                const cleanupOcrBtn = document.getElementById('cleanupOcrBtn');
+                const ocrCheckbox = document.getElementById('cfg_ocr');
+
+                const updateCleanupVisibility = () => {
+                    cleanupOcrBtn.style.display = ocrCheckbox.checked ? 'inline-block' : 'none';
+                };
+
+                ocrCheckbox.addEventListener('change', updateCleanupVisibility);
+                updateCleanupVisibility(); // Initial check
+
+                cleanupOcrBtn.addEventListener('click', async () => {
+                    const originalText = cleanupOcrBtn.innerHTML;
+                    try {
+                        cleanupOcrBtn.textContent = '🧹 Cleaning...';
+                        await window.officeParser.terminateOcr();
+                        cleanupOcrBtn.textContent = '✅ Cleaned!';
+                        status.textContent = 'OCR Workers terminated successfully.';
+                        setTimeout(() => { cleanupOcrBtn.innerHTML = originalText; }, 2000);
+                    } catch (err) {
+                        console.error("Cleanup failed:", err);
+                        cleanupOcrBtn.textContent = '❌ Failed';
+                        setTimeout(() => { cleanupOcrBtn.innerHTML = originalText; }, 2000);
+                    }
+                });
 
                 console.log("Visualizer initialized successfully.");
 
@@ -639,10 +733,15 @@
                             putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
                             extractAttachments: document.getElementById('cfg_extractAttachments').checked,
                             includeRawContent: document.getElementById('cfg_includeRawContent').checked,
+                            serializeRawContent: document.getElementById('cfg_serializeRawContent').checked,
+                            preserveXmlWhitespace: document.getElementById('cfg_preserveXmlWhitespace').checked,
                             ocr: document.getElementById('cfg_ocr').checked,
                             ocrLanguage: document.getElementById('cfg_ocrLanguage').value || 'eng',
                             newlineDelimiter: document.getElementById('cfg_newlineDelimiter').value.replace(/\\n/g, '\n') || '\n',
-                            pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value
+                            pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value,
+                            ocrConfig: {
+                                autoTerminateTimeout: parseInt(document.getElementById('cfg_ocrTimeout').value, 10) * 1000
+                            }
                         };
 
                         console.log("Parsing with config:", config);
@@ -676,7 +775,9 @@
                         output.classList.add('error');
                         status.textContent = 'Parsing failed.';
                     } finally {
-                        parseBtn.disabled = false;
+                        const heading = document.getElementById('visualized-heading');
+                    heading.innerHTML = `${getFormatIcon(selectedFile.name)} Visualized Content - ${selectedFile.name}`;
+                    parseBtn.disabled = false;
                     }
                 });
 

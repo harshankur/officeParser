@@ -3,10 +3,10 @@
 #  - Checks out repository code and sets up the Node.js environment
 #  - Runs the full test suite (artifact validation + parser tests)
 #  - Builds all release artifacts:
-#      officeparser@<version>.browser.js   — IIFE bundle for <script> tags
-#      officeparser@<version>.browser.mjs  — ESM bundle for bundlers (Vite, webpack)
-#      officeparser@<version>.browser.d.ts — TypeScript declarations
-#      sbom.cdx.json                       — CycloneDX Software Bill of Materials
+#      officeparser@<version>.browser.iife.js — IIFE bundle for <script> tags
+#      officeparser@<version>.browser.mjs     — ESM bundle for bundlers (Vite, webpack)
+#      officeparser@<version>.browser.d.ts    — TypeScript declarations
+#      sbom.cdx.json                          — CycloneDX Software Bill of Materials
 #  - Attaches all artifacts to the GitHub Release
 #  - Publishes to npm registry with OIDC provenance (Sigstore attestation)
 #  - Publishes to GitHub Packages with @harshankur scope
@@ -61,7 +61,7 @@ jobs:
           VERSION=${{ github.event.release.tag_name }}
           VERSION_CLEAN=${VERSION#v}
           mkdir -p release_assets
-          cp dist/officeparser.browser.iife.js "release_assets/officeparser@$VERSION_CLEAN.browser.js"
+          cp dist/officeparser.browser.iife.js "release_assets/officeparser@$VERSION_CLEAN.browser.iife.js"
           cp dist/officeparser.browser.mjs     "release_assets/officeparser@$VERSION_CLEAN.browser.mjs"
           cp dist/officeparser.browser.d.ts    "release_assets/officeparser@$VERSION_CLEAN.browser.d.ts"
 
@@ -79,8 +79,8 @@ jobs:
 
       # ── Step 7: Attach all assets to the GitHub Release ───────────────────
       # This uploads:
-      #   officeparser@<version>.browser.js   — IIFE bundle
-      #   officeparser@<version>.browser.mjs  — ESM bundle
+      #   officeparser@<version>.browser.iife.js — IIFE bundle
+      #   officeparser@<version>.browser.mjs      — ESM bundle
       #   officeparser@<version>.browser.d.ts — TypeScript declarations
       #   sbom.cdx.json                       — CycloneDX SBOM
       - name: Upload Release Assets

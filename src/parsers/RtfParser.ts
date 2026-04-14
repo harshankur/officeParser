@@ -1680,7 +1680,7 @@ export const parseRtf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                         // Passing base64 string directly would be interpreted as a file path,
                         // causing ENAMETOOLONG error for large images.
                         const imageBuffer = Buffer.from(attachment.data, 'base64');
-                        attachment.ocrText = (await performOcr(imageBuffer, config.ocrLanguage)).trim();
+                        attachment.ocrText = (await performOcr(imageBuffer, { language: config.ocrLanguage, ...config.ocrConfig })).trim();
                     } catch (e) {
                         logWarning(`OCR failed for ${attachment.name}:`, config, e);
                     }

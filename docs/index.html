@@ -41,10 +41,10 @@
             --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
             --glow: 0 0 20px rgba(99, 102, 241, 0.2);
             --header-bg: rgba(10, 10, 12, 0.8);
-            --preview-bg: #ffffff;
-            --preview-text: #1a1a1a;
-            --visual-card-bg: #f8fafc;
-            --visual-card-border: #e2e8f0;
+            --preview-bg: #141417;
+            --preview-text: #f8fafc;
+            --visual-card-bg: #1c1c21;
+            --visual-card-border: #27272a;
             --json-key: #818cf8;
             --json-string: #34d399;
             --json-number: #fbbf24;
@@ -67,9 +67,9 @@
             --glow: 0 0 20px rgba(79, 70, 229, 0.1);
             --header-bg: rgba(248, 250, 252, 0.8);
             --preview-bg: #ffffff;
-            --preview-text: #1a1a1a;
-            --visual-card-bg: #f1f5f9;
-            --visual-card-border: #cbd5e1;
+            --preview-text: #1a202c;
+            --visual-card-bg: #f8fafc;
+            --visual-card-border: #e2e8f0;
             --json-key: #312e81;
             --json-string: #059669;
             --json-number: #d97706;
@@ -94,6 +94,10 @@
             color: var(--text-main);
             line-height: 1.6;
             overflow-x: hidden;
+        }
+
+        section {
+            scroll-margin-top: 100px;
         }
 
         /* --- JSON Viewer Styles --- */
@@ -985,8 +989,12 @@
 
         /* Visual Preview Component Styles - Restored from visualizer_old.html */
         #visual-preview {
-            background: #ffffff !important;
-            color: #1a1a1a !important;
+            background: var(--preview-bg) !important;
+            color: var(--preview-text) !important;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            min-height: 400px;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
         }
 
@@ -1038,49 +1046,64 @@
         }
 
         .page-card {
-            border-left-color: #0071e3;
+            border-left: 6px solid #0071e3;
+            background: var(--bg-card);
+            border-right: 1px solid var(--border);
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 2rem;
+            padding: 2rem;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
         }
 
         .sheet-card {
-            border-left-color: #34c759;
+            border-left: 6px solid #34c759;
+            background: var(--bg-card);
+            border-right: 1px solid var(--border);
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 2rem;
+            padding: 2rem;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
         }
 
         .slide-card {
-            border-left-color: #ff9500;
+            border-left: 6px solid #ff9500;
+            background: var(--bg-card);
+            border-right: 1px solid var(--border);
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 2rem;
+            padding: 2rem;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
         }
 
         .slide-note-card {
-            border: 1px solid #ccc;
-            margin-bottom: 30px;
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-            background-color: #fcfcfc;
-            border-left: 6px solid #888;
-        }
-
-        .slide-note-card .slide-note-number {
-            font-weight: bold;
-            color: #888;
-            margin-bottom: 15px;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 8px;
-            font-size: 14px;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-            display: block;
+            border-left: 6px solid var(--text-dim);
+            background: var(--bg-card);
+            border-right: 1px solid var(--border);
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 2rem;
+            padding: 2rem;
+            border-radius: 16px;
+            opacity: 0.9;
         }
 
         .page-number,
         .sheet-number,
-        .slide-number {
-            font-weight: bold;
-            color: #888;
-            margin-bottom: 15px;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 8px;
-            font-size: 14px;
-            letter-spacing: 0.5px;
+        .slide-number,
+        .slide-note-number {
+            font-weight: 800;
+            color: var(--text-dim);
+            margin-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0.5rem;
+            font-size: 0.75rem;
+            letter-spacing: 0.1em;
             text-transform: uppercase;
             display: block;
         }
@@ -1158,10 +1181,10 @@
 
     <main>
         <section class="hero">
-            <div class="badge">120k+ Weekly Downloads</div>
+            <div class="badge">260k+ Weekly Downloads</div>
             <h1>The Industry's Most <span class="gradient-text">Versatile</span> Office Parser</h1>
             <p>One library, every format. Extract content, metadata, and attachments into a structured Abstract Syntax
-                Tree with 7 Million+ total downloads and counting.</p>
+                Tree with <a href="https://npm-stat.com/charts.html?package=officeparser&from=2019-01-01&to=2026-04-13" target="_blank" style="color: inherit; text-decoration: underline; text-underline-offset: 4px; opacity: 0.9;">10 Million+ total downloads</a> and counting.</p>
             <div class="cta-group">
                 <a href="#visualizer" class="btn btn-primary">Try Visualizer</a>
                 <a href="https://www.npmjs.com/package/officeparser" class="btn btn-outline" target="_blank">View on
@@ -1171,16 +1194,16 @@
 
         <section class="stats-grid">
             <div class="stat-item">
-                <a href="https://npm-stat.com/charts.html?package=officeparser&from=2025-07-01&to=2025-12-31"
+                <a href="https://npm-stat.com/charts.html?package=officeparser&from=2026-01-01&to=2026-04-13"
                     target="_blank" style="text-decoration: none;">
-                    <h3>120k+</h3>
+                    <h3>260k+</h3>
                     <p>Weekly Downloads*</p>
                 </a>
             </div>
             <div class="stat-item">
-                <a href="https://npm-stat.com/charts.html?package=officeparser&from=2019-01-01&to=2025-12-31"
+                <a href="https://npm-stat.com/charts.html?package=officeparser&from=2019-01-01&to=2026-04-13"
                     target="_blank" style="text-decoration: none;">
-                    <h3>7M+</h3>
+                    <h3>10M+</h3>
                     <p>Total Downloads</p>
                 </a>
             </div>
@@ -1198,42 +1221,98 @@
             </div>
             <div class="support-grid">
                 <div class="support-card">
-                    <span class="feature-icon">📄</span>
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#2B579A" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="7" y="16" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="8">W</text>
+                        </svg>
+                    </span>
                     <h3>DOCX</h3>
                     <p>Modern Word</p>
                 </div>
                 <div class="support-card">
-                    <span class="feature-icon">📊</span>
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#217346" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="7" y="16" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="8">X</text>
+                        </svg>
+                    </span>
                     <h3>XLSX</h3>
                     <p>Modern Excel</p>
                 </div>
                 <div class="support-card">
-                    <span class="feature-icon">📽️</span>
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#D24726" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="7" y="16" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="8">P</text>
+                        </svg>
+                    </span>
                     <h3>PPTX</h3>
                     <p>Modern Powerpoint</p>
                 </div>
                 <div class="support-card">
-                    <span class="feature-icon">🧾</span>
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#E02A26" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="5.5" y="15" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="5">PDF</text>
+                        </svg>
+                    </span>
                     <h3>PDF</h3>
                     <p>Documents</p>
                 </div>
                 <div class="support-card">
-                    <span class="feature-icon">📝</span>
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#0062AF" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" />
+                            <circle cx="10" cy="13" r="3" stroke="white" stroke-width="1.5" />
+                        </svg>
+                    </span>
                     <h3>ODT</h3>
                     <p>OpenDocument Text</p>
                 </div>
                 <div class="support-card">
-                    <span class="feature-icon">📈</span>
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#00A950" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" />
+                            <rect x="7" y="10" width="6" height="6" stroke="white" stroke-width="1.5" />
+                        </svg>
+                    </span>
                     <h3>ODS</h3>
                     <p>OpenDocument Spreadsheet</p>
                 </div>
                 <div class="support-card">
-                    <span class="feature-icon">📽️</span>
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#7B2B8D" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" />
+                            <path d="M8 10L13 13L8 16V10Z" fill="white" />
+                        </svg>
+                    </span>
                     <h3>ODP</h3>
                     <p>OpenDocument Presentation</p>
                 </div>
                 <div class="support-card">
-                    <span class="feature-icon">📜</span>
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#475569" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" />
+                            <path d="M7 11H13M7 14H11" stroke="white" stroke-width="1.5" />
+                        </svg>
+                    </span>
                     <h3>RTF</h3>
                     <p>Rich Text</p>
                 </div>
@@ -1350,7 +1429,7 @@
                             ODP,
                             ODS</p>
                     </div>
-                    <div id="file-info" class="file-info hidden">
+                    <div id="file-selected-info" class="file-info hidden">
                         <span class="file-icon">📄</span>
                         <div style="text-align: left;">
                             <div class="file-name" id="display-filename">No file selected</div>
@@ -1379,6 +1458,20 @@
                         <span class="config-label">Include Raw Source</span>
                         <label class="switch">
                             <input type="checkbox" id="cfg_includeRawContent">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-item">
+                        <span class="config-label">Serialize Raw XML</span>
+                        <label class="switch">
+                            <input type="checkbox" id="cfg_serializeRawContent" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-item">
+                        <span class="config-label">Preserve XML Space</span>
+                        <label class="switch">
+                            <input type="checkbox" id="cfg_preserveXmlWhitespace">
                             <span class="slider"></span>
                         </label>
                     </div>
@@ -1413,6 +1506,11 @@
                         <input type="text" id="cfg_newlineDelimiter" class="btn btn-outline"
                             style="padding: 0.4rem 0.8rem; width: 60px; font-size: 0.8rem;" value="\n">
                     </div>
+                    <div class="config-item">
+                        <span class="config-label">OCR Timeout (s)</span>
+                        <input type="number" id="cfg_ocrTimeout" class="btn btn-outline"
+                            style="padding: 0.4rem 0.8rem; width: 60px; font-size: 0.8rem;" value="10" min="0">
+                    </div>
                 </div>
             </div>
 
@@ -1423,7 +1521,13 @@
                 <!-- Full Width Preview -->
                 <div class="visual-panel-full">
                     <div class="panel-header" style="justify-content: space-between;">
-                        <h4>Visual Preview</h4>
+                        <div style="display: flex; gap: 1rem; align-items: center;">
+                            <h4>Visual Preview</h4>
+                            <button id="cleanup-ocr-btn" class="sync-btn" title="Manual Resource Cleanup"
+                                style="border-color: #ef4444; color: #ef4444; background: rgba(239, 68, 68, 0.05);">
+                                🗑️ Cleanup OCR Pool
+                            </button>
+                        </div>
                         <button id="reparse-btn" class="sync-btn" title="Update Visual Preview" style="display: none;">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                                 stroke-linecap="round" stroke-linejoin="round" style="width: 1rem; height: 1rem;">
@@ -1485,7 +1589,7 @@
         <p class="copyright">© 2026 officeParser. Built with ❤️ for the Open Source community.</p>
     </footer>
 
-    <script src="dist/officeparser.browser.js"></script>
+    <script src="dist/officeparser.browser.iife.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const html = document.documentElement;
@@ -1499,14 +1603,66 @@
             const copyTextBtn = document.getElementById('copy-text-btn');
             const docViewer = document.getElementById('doc-viewer');
             const docBody = document.getElementById('doc-body-placeholder');
-            const reparseBtn = document.getElementById('reparse-btn');
-            const fileInfo = document.getElementById('file-info');
             const dropZonePrompt = document.getElementById('drop-zone-prompt');
-            const displayFilename = document.getElementById('display-filename');
+            const fileInfo = document.getElementById('file-selected-info');
+            const displayFilename = fileInfo.querySelector('.file-name');
+            const displayFileIcon = fileInfo.querySelector('.file-icon');
+            const reparseBtn = document.getElementById('reparse-btn');
 
             let currentAst = null;
             let lastFileBuffer = null;
             let lastFileName = "";
+            let ocrWasUsedInCurrentPreview = false;
+
+            // --- Brand Icons System ---
+            const BRAND_ICONS = {
+                docx: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#2B579A"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="7" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="8">W</text></svg>`,
+                xlsx: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#217346"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="7" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="8">X</text></svg>`,
+                pptx: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#D24726"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="7" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="8">P</text></svg>`,
+                pdf: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#E02A26"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5.5" y="15" fill="white" font-family="Outfit" font-weight="800" font-size="5">PDF</text></svg>`,
+                odt: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#0062AF"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><circle cx="10" cy="13" r="3" stroke="white" stroke-width="1.5"/></svg>`,
+                ods: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#00A950"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><rect x="7" y="10" width="6" height="6" stroke="white" stroke-width="1.5"/></svg>`,
+                odp: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#7B2B8D"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><path d="M8 10L13 13L8 16V10Z" fill="white"/></svg>`,
+                rtf: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#475569"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><path d="M7 11H13M7 14H11" stroke="white" stroke-width="1.5"/></svg>`,
+                default: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#94a3b8"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/></svg>`
+            };
+
+            function getFormatIcon(filename) {
+                const ext = filename.split('.').pop().toLowerCase();
+                return BRAND_ICONS[ext] || BRAND_ICONS.default;
+            }
+
+            // --- Manual Cleanup ---
+            function updateOcrCleanupState() {
+                const btn = document.getElementById('cleanup-ocr-btn');
+                btn.style.display = 'flex'; // Always visible as per request
+                btn.disabled = !ocrWasUsedInCurrentPreview;
+                btn.title = ocrWasUsedInCurrentPreview ? "Terminate active OCR workers" : "No OCR workers recently used";
+            }
+
+            document.getElementById('cleanup-ocr-btn').addEventListener('click', async () => {
+                const btn = document.getElementById('cleanup-ocr-btn');
+                const originalHtml = `🗑️ Cleanup OCR Pool`;
+                try {
+                    btn.innerHTML = '🧹 Cleaning...';
+                    btn.disabled = true;
+                    await window.officeParser.terminateOcr();
+                    btn.innerHTML = '✅ Cleaned!';
+                    statusMsg.textContent = 'OCR Workers terminated successfully.';
+                    ocrWasUsedInCurrentPreview = false;
+                    setTimeout(() => {
+                        btn.innerHTML = originalHtml;
+                        updateOcrCleanupState();
+                    }, 2000);
+                } catch (err) {
+                    console.error("Cleanup failed:", err);
+                    btn.innerHTML = '❌ Failed';
+                    setTimeout(() => {
+                        btn.innerHTML = originalHtml;
+                        btn.disabled = false;
+                    }, 2000);
+                }
+            });
 
             // --- Theme Switcher ---
             const themeBtns = {
@@ -1554,7 +1710,8 @@
                     // Default to 'config' if we are in specs section or homepage
                     loadDocContent('config');
                 } else {
-                    docViewer.style.display = 'none';
+                    // Navigate to other sections (#visualizer, #support, etc.)
+                    // WE DO NOT HIDE the docViewer anymore. It stays open until closeDoc() is called.
                 }
             }
 
@@ -1608,7 +1765,7 @@
             });
 
             // Config Persistence
-            const configIds = ['cfg_extractAttachments', 'cfg_ocr', 'cfg_includeRawContent', 'cfg_ignoreNotes', 'cfg_putNotesAtLast', 'cfg_outputErrorToConsole', 'cfg_ocrLanguage', 'cfg_newlineDelimiter'];
+            const configIds = ['cfg_extractAttachments', 'cfg_ocr', 'cfg_includeRawContent', 'cfg_serializeRawContent', 'cfg_preserveXmlWhitespace', 'cfg_ignoreNotes', 'cfg_putNotesAtLast', 'cfg_outputErrorToConsole', 'cfg_ocrLanguage', 'cfg_newlineDelimiter'];
             configIds.forEach(id => {
                 const el = document.getElementById(id);
                 const saved = localStorage.getItem(id);
@@ -1639,6 +1796,8 @@
                     extractAttachments: document.getElementById('cfg_extractAttachments').checked,
                     ocr: document.getElementById('cfg_ocr').checked,
                     includeRawContent: document.getElementById('cfg_includeRawContent').checked,
+                    serializeRawContent: document.getElementById('cfg_serializeRawContent').checked,
+                    preserveXmlWhitespace: document.getElementById('cfg_preserveXmlWhitespace').checked,
                     ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
                     putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
                     outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
@@ -1662,6 +1821,7 @@
 
                 // Update UI to show file selected
                 displayFilename.textContent = file.name;
+                displayFileIcon.innerHTML = getFormatIcon(file.name);
                 fileInfo.classList.remove('hidden');
                 dropZonePrompt.classList.add('hidden');
 
@@ -1684,13 +1844,21 @@
                         extractAttachments: document.getElementById('cfg_extractAttachments').checked,
                         ocr: document.getElementById('cfg_ocr').checked,
                         includeRawContent: document.getElementById('cfg_includeRawContent').checked,
+                        serializeRawContent: document.getElementById('cfg_serializeRawContent').checked,
+                        preserveXmlWhitespace: document.getElementById('cfg_preserveXmlWhitespace').checked,
                         ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
                         putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
                         outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
                         ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
                         newlineDelimiter: document.getElementById('cfg_newlineDelimiter').value.replace(/\\n/g, '\n'),
-                        pdfWorkerSrc: 'https://unpkg.com/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs'
+                        pdfWorkerSrc: 'https://unpkg.com/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs',
+                        ocrConfig: {
+                            autoTerminateTimeout: parseInt(document.getElementById('cfg_ocrTimeout').value, 10) * 1000
+                        }
                     };
+
+                    if (config.ocr) ocrWasUsedInCurrentPreview = true;
+                    updateOcrCleanupState();
 
                     lastConfigJson = JSON.stringify({
                         extractAttachments: config.extractAttachments,
@@ -1732,6 +1900,7 @@
                             attachmentMap.set(att.name, att);
                         });
                     }
+                    renderMetadataSummary(ast.metadata, visualPreview);
                     renderNodes(ast.content, visualPreview, attachmentMap);
                 } else {
                     visualPreview.innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">No content structure found in AST.</div>';
@@ -1780,7 +1949,43 @@
             }
 
             function escapeHtml(text) {
+                if (typeof text !== 'string') return text;
                 return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+            }
+
+            function renderMetadataSummary(metadata, container) {
+                if (!metadata) return;
+
+                const metaDiv = document.createElement('div');
+                metaDiv.style.cssText = 'background: var(--visual-card-bg); border: 1px solid var(--visual-card-border); border-radius: 12px; padding: 1.5rem; margin-bottom: 2rem;';
+
+                let html = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">';
+
+                const addField = (label, value) => {
+                    if (value) {
+                        html += `<div><div style="font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; font-weight: 700;">${label}</div><div style="font-weight: 600; color: var(--text-main);">${value}</div></div>`;
+                    }
+                };
+
+                addField('Title', metadata.title);
+                addField('Author', metadata.author);
+                addField('Created', metadata.created ? new Date(metadata.created).toLocaleString() : null);
+                addField('Modified', metadata.modified ? new Date(metadata.modified).toLocaleString() : null);
+
+                html += '</div>';
+
+                if (metadata.customProperties && Object.keys(metadata.customProperties).length > 0) {
+                    html += '<div style="margin-top: 1.5rem; border-top: 1px solid var(--visual-card-border); padding-top: 1rem;">';
+                    html += '<div style="font-size: 0.75rem; color: var(--primary); font-weight: 700; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">🏷️ Custom Properties</div>';
+                    html += '<div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">';
+                    for (const [key, val] of Object.entries(metadata.customProperties)) {
+                        html += `<div style="background: rgba(99, 102, 241, 0.05); border: 1px solid rgba(99, 102, 241, 0.2); padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.8rem;"><span style="color: var(--text-dim); font-weight: 500;">${escapeHtml(key)}:</span> <span style="color: var(--text-main); font-weight: 600;">${escapeHtml(String(val))}</span></div>`;
+                    }
+                    html += '</div></div>';
+                }
+
+                metaDiv.innerHTML = html;
+                container.appendChild(metaDiv);
             }
 
             /**

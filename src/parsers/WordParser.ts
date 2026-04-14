@@ -787,7 +787,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
             if (config.ocr) {
                 if (attachment.mimeType.startsWith('image/')) {
                     try {
-                        attachment.ocrText = (await performOcr(media.content, config.ocrLanguage)).trim();
+                        attachment.ocrText = (await performOcr(media.content, { language: config.ocrLanguage, ...config.ocrConfig })).trim();
                     } catch (e) {
                         logWarning(`OCR failed for ${attachment.name}:`, config, e);
                     }

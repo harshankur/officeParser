@@ -8,7 +8,7 @@
  * into require() when targeting CommonJS.
  */
 
-import { isBrowser } from './envUtils.js';
+import { isBrowser, ensureDomMatrix } from './envUtils.js';
 import type * as FileTypeModule from 'file-type' with { 'resolution-mode': 'import' };
 
 /**
@@ -40,6 +40,8 @@ export async function loadFileType(): Promise<typeof FileTypeModule> {
  */
 export async function loadPdfJs(): Promise<any> {
     if (!isBrowser) {
+        // Ensure DOMMatrix polyfill for Node.js 18 support
+        ensureDomMatrix();
         // Node.js environment: require legacy build for stability with ESM-only main
         try {
             return await loadNodeEsmModule('pdfjs-dist/legacy/build/pdf.mjs');

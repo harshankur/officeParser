@@ -66,10 +66,12 @@ import {
 } from './types';
 
 const parseOffice = OfficeParser.parseOffice;
+const terminateOcr = OfficeParser.terminateOcr;
 
 export {
     OfficeParser,
     parseOffice,
+    terminateOcr,
     OfficeParserConfig,
     OfficeParserAST,
     OfficeContentNode,

@@ -65,35 +65,76 @@
                 <td><code>includeRawContent</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Source Inspection</strong>: Adds a <code>rawContent</code> property to every node containing
-                    its
-                    original XML (OOXML) or RTF source. <em>Warning: Significantly increases AST memory footprint.</em>
-                </td>
+                <td><strong>Source Inspection</strong>: Adds a <code>rawContent</code> property to every node containing its original XML or RTF source. <em>Warning: Significantly increases AST memory footprint.</em></td>
+            </tr>
+            <tr>
+                <td><code>serializeRawContent</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td><strong>XML Cleanliness</strong>: When <code>includeRawContent</code> is true, re-serializes raw XML to clean strings. If false, extracts original raw substring.</td>
+            </tr>
+            <tr>
+                <td><code>preserveXmlWhitespace</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Formatting Fidelity</strong>: When <code>serializeRawContent</code> is true, preserves original XML whitespace and line endings during serialization.</td>
             </tr>
             <tr>
                 <td><code>ocr</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Vision Synthesis</strong>: Enables optical character recognition for images and
-                    non-selectable
-                    PDF layers. <em>Requires Tesseract.js in the environment.</em></td>
+                <td><strong>Vision Synthesis</strong>: Enables optical character recognition for images and non-selectable PDF layers. <em>Requires Tesseract.js.</em></td>
             </tr>
             <tr>
                 <td><code>ocrLanguage</code></td>
                 <td><code>string</code></td>
                 <td><code>eng</code></td>
-                <td><strong>Language Training</strong>: Specifies which Tesseract data files to load.
-                    Use combinations like <code>eng+fra</code> for multi-lingual documents.</td>
+                <td><strong>Deprecated</strong>: Use <code>ocrConfig.language</code>. Specifies which Tesseract data files to load.</td>
             </tr>
             <tr>
                 <td><code>pdfWorkerSrc</code></td>
                 <td><code>string</code></td>
                 <td>(CDN)</td>
-                <td><strong>PDF Engine</strong>: Path to the <code>pdf.worker.js</code>. Must be accessible by the
-                    browser. <em>Crucial for PDF parsing stability and performance.</em></td>
+                <td><strong>PDF Engine</strong>: Path to the <code>pdf.worker.js</code>. Must be accessible by the browser.</td>
+            </tr>
+            <tr>
+                <td><code>ocrConfig</code></td>
+                <td><code>object</code></td>
+                <td><code>{}</code></td>
+                <td><strong>OCR Scheduler</strong>: Fine-grained settings for the intelligent worker pool.</td>
+            </tr>
+            <tr>
+                <td><code>ocrConfig.language</code></td>
+                <td><code>string</code></td>
+                <td><code>eng</code></td>
+                <td><strong>Language Training</strong>: Specifies Tesseract languages (e.g., 'eng+fra').</td>
+            </tr>
+            <tr>
+                <td><code>ocrConfig.autoTerminateTimeout</code></td>
+                <td><code>number</code></td>
+                <td><code>10000</code></td>
+                <td><strong>Lifecycle Safety</strong>: Inactivity timeout in ms before workers are killed. Set to `0` to disable.</td>
+            </tr>
+            <tr>
+                <td><code>ocrConfig.workerPath</code> / <code>corePath</code> / <code>langPath</code></td>
+                <td><code>string</code></td>
+                <td><code>undefined</code></td>
+                <td><strong>Offline Environments</strong>: Paths to Tesseract scripts and data files for air-gapped or customized installations.</td>
             </tr>
         </tbody>
     </table>
+
+    <h2>OCR Scheduler & Resource Management (Smart Pool)</h2>
+    <p>Using OCR initializes a persistent **Smart Worker Pool** to improve performance for subsequent requests.</p>
+    <ul>
+        <li><strong>Dynamic Affinity:</strong> Workers persist with their language affinity.</li>
+        <li><strong>Smart Re-initialization:</strong> If a new language is requested at capacity, the Least Recently Used (LRU) idle worker is re-initialized instead of a full pool reset.</li>
+        <li><strong>Automatic Cleanup:</strong> Workers are killed after the configured timeout of inactivity.</li>
+    </ul>
+    
+    <h3>OfficeParser.terminateOcr()</h3>
+    <p>A static method that immediately kills all active OCR workers. Call this in short-lived scripts (CLI) to bypass the inactivity timer and exit the terminal immediately.</p>
+    <pre><code>await OfficeParser.terminateOcr();</code></pre>
 
     <h2 id="examples">Common Scenarios</h2>
 

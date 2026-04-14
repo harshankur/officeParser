@@ -1,4 +1,42 @@
 /**
+ * Configuration options for OCR.
+ */
+export interface OcrConfig {
+    /**
+     * Language for OCR.
+     * Default is 'eng'.
+     * 
+     * You can provide multiple languages separated by a `+` sign (e.g., 'eng+fra' for English and French).
+     * The OCR engine will then attempt to recognize text in any of the specified languages.
+     * 
+     * See the list of supported languages and their codes here:
+     * https://tesseract-ocr.github.io/tessdoc/Data-Files#data-files-for-version-400-november-29-2016
+     */
+    language?: string;
+    /**
+     * Path to the Tesseract worker script.
+     * Primarily used for offline/air-gapped environments.
+     */
+    workerPath?: string;
+    /**
+     * Path to the Tesseract core script.
+     * Primarily used for offline/air-gapped environments.
+     */
+    corePath?: string;
+    /**
+     * Path for Tesseract language files (traineddata).
+     * Primarily used for offline/air-gapped environments.
+     */
+    langPath?: string;
+    /**
+     * Timeout in milliseconds of inactivity before the OCR worker pool is automatically terminated.
+     * Set to 0 to disable auto-termination.
+     * Default is 10,000 (10 seconds).
+     */
+    autoTerminateTimeout?: number;
+}
+
+/**
  * Configuration options for the OfficeParser.
  */
 export interface OfficeParserConfig {
@@ -40,6 +78,7 @@ export interface OfficeParserConfig {
      */
     ocr?: boolean;
     /**
+     * @deprecated Use `ocrConfig.language` instead.
      * Language for OCR.
      * Default is 'eng'.
      * 
@@ -50,6 +89,12 @@ export interface OfficeParserConfig {
      * https://tesseract-ocr.github.io/tessdoc/Data-Files#data-files-for-version-400-november-29-2016
      */
     ocrLanguage?: string;
+    /**
+     * Shared OCR configuration for worker pooling and offline support.
+     * If provided, `ocrLanguage` will be ignored in favor of `ocrConfig.language`.
+     */
+    ocrConfig?: OcrConfig;
+
     /**
      * Flag to serialize raw content (XML) as clean, formatted strings.
      * Only relevant when `includeRawContent` is true.
