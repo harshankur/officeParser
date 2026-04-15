@@ -1,15 +1,33 @@
 ## Description
-Please include a summary of the change and which issue is fixed.
+Please include a summary of the changes and the related issue (if any).
 
-## Type of change
+**Which internal parser/component does this affect?**
+- [ ] WordParser (DOCX)
+- [ ] PowerPointParser (PPTX)
+- [ ] ExcelParser (XLSX)
+- [ ] OpenOfficeParser (ODT/ODS/ODP)
+- [ ] PDFParser
+- [ ] OCR / Worker Pool
+- [ ] Infrastructure / Build / CLI
+- [ ] Other (Specify Below)
 
+_If Other, please specify:_ _______________________
+
+
+## Type of Change
 - [ ] Bug fix (non-breaking change which fixes an issue)
 - [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
+- [ ] Other (Specify Below)
 
-## Checklist:
+_If Other, please specify:_ ________________________
 
+## Verification Results
+Please describe the tests you ran to verify your changes. 
+- [ ] **Build Check**: I have run `npm run build` and no errors occurred in Node or Browser bundles.
+- [ ] **Parser Baselines**: I have run `npm test` and there are no failures.
+- [ ] **Manual Proof**: Provide a brief snippet or screenshot of the new behavior/output.
+
+## Checklist
 - [ ] My code follows the style guidelines of this project
 - [ ] I have performed a self-review of my own code
 - [ ] I have commented my code, particularly in hard-to-understand areas

@@ -1,72 +1,51 @@
-# Contributing to officeParser
+# Contributing to officeParser 🚀
 
-First off, thanks for taking the time to contribute! 🎉
-
-The following is a set of guidelines for contributing to `officeParser`. These are mostly guidelines, not rules. Use your best judgment, and feel free to propose changes to this document in a pull request.
+First off, thank you for considering a contribution to `officeParser`! Maintaining a project that handles over 260,000 weekly installs is a significant responsibility, and your help is vital for its long-term stability.
 
 ## Code of Conduct
+This project is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold these standards.
 
-This project and everyone participating in it is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code.
+## How to Contribute
 
-## How Can I Contribute?
+### 1. Reporting Bugs 🐛
+We use interactive **GitHub Issue Forms** to help categorize bugs by internal library component. 
+- Please use the [Bug Report Form](https://github.com/harshankur/officeParser/issues/new?template=bug_report.yml).
+- **Pro Tip**: Providing a sample file (via the upload field) is the single fastest way to get a bug fixed.
 
-### Reporting Bugs
+### 2. Suggesting Enhancements 💡
+Technical suggestions are welcome! Please use the [Feature Request Form](https://github.com/harshankur/officeParser/issues/new?template=feature_request.yml) to outline your goal and the expected impact on the library.
 
-This section guides you through submitting a bug report for `officeParser`. Following these guidelines helps maintainers and the community understand your report, reproduce the behavior, and find related reports.
+### 3. Pull Requests 🛠️
+We welcome pull requests that improve performance, expand format support, or fix documented bugs.
 
-- **Use a clear and descriptive title** for the issue to identify the problem.
-- **Describe the exact steps to reproduce the problem** in as much detail as possible.
-- **Provide specific examples** to demonstrate the steps.
-- **Describe the behavior you observed after following the steps** and point out what exactly is the problem with that behavior.
-- **Explain which behavior you expected to see instead and why.**
-- **Include snippets of the file** that is causing the issue, or attach a small sample file if possible (ensure no private data involved).
+**The PR Process:**
+1.  Fork the repo and create your branch from `master`.
+2.  **Local Testing**: Run `npm test` to ensure all existing parsers (Word, PDF, Excel, etc.) still pass their baseline checks.
+3.  **Build Validation**: Run `npm run build` to ensure the TypeScript-to-JS compilation and browser bundling function correctly.
+4.  **Documentation**: If you've changed the AST structure or added a new config option, please update relevant documentation or types.
+5.  Submit your PR!
 
-### Suggesting Enhancements
+## Development Setup
 
-This section guides you through submitting an enhancement suggestion for `officeParser`, including completely new features and minor improvements to existing functionality.
+```bash
+# 1. Clone the repository
+git clone https://github.com/harshankur/officeParser.git
+cd officeParser
 
-- **Use a clear and descriptive title** for the issue to identify the suggestion.
-- **Provide a step-by-step description of the suggested enhancement** in as much detail as possible.
-- **Explain why this enhancement would be useful** to most `officeParser` users.
+# 2. Install dependencies
+npm install
 
-### key_v2 Pull Requests
+# 3. Running the standard test suite
+npm test
 
-1. Fork the repo and create your branch from `main`.
-2. If you've added code that should be tested, add tests.
-3. If you've changed APIs, update the documentation.
-4. Ensure the test suite passes (`npm test`).
-5. Make sure your code lints.
-6. Issue that pull request!
+# 4. Building the project (ESM, CJS, and Browser bundles)
+npm run build
+```
 
-## development Setup
-
-1.  **Clone the repository**
-    ```bash
-    git clone https://github.com/harshankur/officeParser.git
-    cd officeParser
-    ```
-
-2.  **Install dependencies**
-    ```bash
-    npm install
-    ```
-
-3.  **Build the project**
-    ```bash
-    npm run build
-    ```
-
-4.  **Run tests**
-    ```bash
-    npm test
-    ```
-
-## Coding Style
-
-- We use **TypeScript** for type safety. Please ensure strict mode is enabled (default in `tsconfig.json`).
-- Follow the existing code style (indentation, variable naming).
-- Run `npm run clean` before submitting to ensure a fresh build.
+## Coding Standards
+- **Strict Typing**: All new code must be strictly typed. Avoid `any` at all costs.
+- **AST Integrity**: Ensure your changes do not break the "Hierarchical AST" philosophy of the library.
+- **Zero-Dependency Core**: My goal is to keep the core dependency list extremely lean. Propose new dependencies in an issue before adding them to a PR.
 
 ## Questions?
-
-Feel free to open an issue with the label `question` if you have any doubts.
+If you have a general question about how to use the library or its internal architecture, please open a [Discussion](https://github.com/harshankur/officeParser/discussions) rather than an issue.

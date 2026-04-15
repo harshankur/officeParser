@@ -1,0 +1,47 @@
+name: Bug Report 🐛
+description: Something isn't working as expected.
+labels: [bug]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Library Component
+      description: Which internal parser or component is likely causing the issue?
+      options:
+        - Word Parser (DOCX)
+        - PowerPoint Parser (PPTX)
+        - Excel Parser (XLSX)
+        - OpenOffice Parser (ODT, ODS, ODP)
+        - PDF Parser
+        - OCR Scheduler & Infrastructure
+        - CLI / Tooling
+        - Other / Not Sure
+    validations:
+      required: true
+
+  - type: upload
+    id: sample-file
+    attributes:
+      label: Sample File
+      description: If you can share a file that causes the issue, please upload it here (max 25MB).
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description & Reproduction
+      description: Please describe the issue, provide a code snippet, or share the error message.
+      placeholder: |
+        - What did you do?
+        - What was the error?
+        - (Optional) Minimal code snippet
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node.js version, or any other relevant details.
+      placeholder: e.g. Node 20, macOS

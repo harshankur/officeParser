@@ -1,0 +1,27 @@
+# .gitattributes
+# Standardize line endings and file handling for all environments
+
+# Automatically detect text files and force Unix-style LF line endings
+# eol=lf ensures all file commits use LF, preventing Windows CRLF noise
+* text=auto eol=lf
+
+# Explicitly mark these extensions as text files for consistent handling
+# The 'text' attribute tells Git to normalize line endings on checkout/commit
+*.ts text
+*.js text
+*.json text
+*.md text
+*.yml text
+*.html text
+*.css text
+
+# Mark binary files to prevent Git from attempting line-ending normalization
+# 'binary' is a macro representing -diff -merge -text, treating it as raw data
+*.png binary
+*.jpg binary
+*.webp binary
+*.traineddata binary
+*.docx binary
+*.pptx binary
+*.xlsx binary
+*.pdf binary

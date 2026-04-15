@@ -1,0 +1,25 @@
+# .editorconfig
+# To ensure all contributors use the same indentation and line-endings
+
+# Indicates this is the top-most .editorconfig file (ignore those in parent directories)
+root = true
+
+# Settings for all files in the project
+[*]
+# Use spaces instead of tabs
+indent_style = space
+# Set each indentation level to 4 spaces
+indent_size = 4
+# Enforce Unix-style line endings (Line Feed)
+end_of_line = lf
+# Ensure files are saved with UTF-8 character encoding
+charset = utf-8
+# Automatically remove any whitespace at the end of lines on save
+trim_trailing_whitespace = true
+# Ensure every file ends with a single newline character on save
+insert_final_newline = true
+
+# Specific overrides for Markdown files
+[*.md]
+# Preserve trailing whitespace in Markdown (often used for line breaks)
+trim_trailing_whitespace = false

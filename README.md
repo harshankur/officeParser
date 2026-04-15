@@ -23,44 +23,12 @@ A robust, strictly-typed Node.js and Browser library for parsing office files ([
 ---
 
 
-#### Update
-* 2026-04-14 - **v6.1.0 Release**: Major Infrastructure & Resource Stability. (Incremental since v6.0.0)
-    - **OCR Scheduler**: Intelligent worker pool that optimizes Tesseract lifecycle across parallel requests. **Note**: By default, Node.js processes stay active for 10s after OCR to keep workers warm (configurable via `ocrConfig.autoTerminateTimeout`); use `terminateOcr()` for immediate CLI/script exit.
-    - **Core Engine**: Replaced legacy zip extraction with `fflate` for significant performance gains and robust browser/edge compatibility.
-    - **Module System**: Full native ESM support with `Node16` resolution and verified browser bundles (Vite/Angular compatible).
-    - **Format Refinements**: Hierarchical PDF coordinate alignment and ODT/RTF list parsing stability.
-    - **Custom Properties**: Added support for extracting custom document metadata across OOXML, ODF, and PDF formats.
-    - **Sponsorship**: Integrated `funding.json` manifest and GitHub Sponsors support.
-* 2025/12/29 - **v6.0.0 Release**: Major overhaul of the library. Transitioned from simple text extraction to a rich **Abstract Syntax Tree (AST)** output.
-    - Simplified API: Use `parseOffice` for all parsing needs (returns a Promise).
-    - Structured Output: Access hierarchical document structure (paragraphs, headings, tables, lists, etc.).
-    - Rich Metadata: Extracted document properties (author, title, creation date).
-    - Enhanced Formatting: Support for bold, italic, colors, fonts, alignment, etc.
-    - Attachment Handling: Extract images, charts, and embedded files as Base64.
-    - OCR Integration: Optional OCR for images using Tesseract.js.
-    - RTF Support: Added full support for Rich Text Format files.
-    - Improved Type Definitions: Full TypeScript support with detailed interfaces.
-* 2024/11/12 - Added ArrayBuffer as a type of file input. Generating bundle files now which exposes namespace officeParser to be able to access parseOffice directly on the browser.
-* 2024/10/21 - Replaced extracting zip files from decompress to yauzl. This means that we now extract files in memory and we no longer need to write them to disk. Removed config flags related to extracted files. Added flags for CLI execution.
-* 2024/10/15 - Fixed erroring out while deleting temp files when multiple worker threads make parallel executions resulting in same file name for multiple files. Fixed erroring out when multiple executions are made without waiting for the previous execution to finish which resulted in deleting the file from other execution. Upgraded dependencies.
-* 2024/10/13 - Fixed parsing text from xlsx files which contain no shared strings file and files which have inlineStr based strings.
-* 2024/05/06 - Replaced pdf parsing support from pdf-parse library to natively building it using pdf.js library from Mozilla by analyzing its output. Added pdfjs-dist build as a local library.
-* 2023/11/25 - Fixed error catching when an error occurs within the parsing of a file, especially after decompressing it. Also fixed the problem with parallel parsing of files as we were using only timestamp in file names.
-* 2023/10/24 - Revamped content parsing code. Fixed order of content in files, especially in word files where table information would always land up at the end of the text. Added config object as argument for parseOffice which can be used to set new line delimiter and multiple other configurations. Added support for parsing pdf files using the popular npm library pdf-parse. Removed support for individual file parsing functions.
-* 2023/04/26 - Added support for file buffers as argument for filepath for parseOffice and parseOfficeAsync
-* 2023/04/07 - Added typings to methods to help with Typescript projects.
-* 2022/12/28 - Added command line method to use officeParser with or without installing it and instantly get parsed content on the console.
-* 2022/12/10 - Fixed memory leak issues, bugs related to parsing open document files and improved error handling.
-* 2021/11/21 - Added promise way to existing callback functions.
-* 2020/06/01 - Added error handling and console.log enable/disable methods. Default is set at enabled. Everything backward compatible.
-* 2019/06/17 - Added method to change location for decompressing office files in places with restricted write access.
-* 2019/04/30 - Removed case sensitive file extension bug. File names with capital lettered extensions now supported.
-* 2019/04/23 - Added support for open office files *.odt, *.odp, *.ods through parseOffice function. Created a new method parseOpenOffice for those who prefer targetted functions. 
-* 2019/04/23 - Added feature to delete the generated dist folder after function callback.
-* 2019/04/22 - Added parseOffice method to avoid confusion between type of file and their extension.
-* 2019/04/22 - Added file extension validations. Removed errors for excel files with no drawing elements.
-* 2019/04/19 - Support added for *.xlsx files.
-* 2019/04/18 - Support added for *.pptx files.
+---
+
+### 📝 [Changelog](CHANGELOG.md)
+*Detailed release notes and the full history of updates are available in the project changelog.*
+
+---
 
 ## Install via npm
 
@@ -131,7 +99,7 @@ console.log(text);
 ```
 
 ### Using Callbacks (Backward Compatibility Support)
-We still support callbacks, but the data returned is now the AST object.
+Callbacks are still supported for those preferred, but the data returned is now the AST object.
 ```js
 const officeParser = require('officeparser');
 
@@ -440,7 +408,7 @@ Pass an optional config object as the second argument to `parseOffice`.
 If your application uses OCR, `officeParser` utilizes an intelligent **Smart Worker Pool** to maintain a background worker pool and optimize repeated parse requests.
 
 - **Dynamic Affinity**: Workers in the pool persist with their last used language affinity. 
-- **Smart Re-initialization**: If a new language is requested and the pool is full, the manager identifies the **Least Recently Used (LRU)** idle worker and re-initializes it for the new language using the Tesseract.js v5 API. This avoids the overhead of destroying and recreating workers.
+- **LRU Re-allocation**: If a new language is requested and the pool is full, the manager identifies the **Least Recently Used (LRU)** idle worker and re-initializes it for the new language. This avoids the overhead of destroying and recreating workers.
 - **Auto-Termination**: Workers are automatically cleaned up after 10 seconds of inactivity (configurable via `ocrConfig.autoTerminateTimeout`).
 
 #### `OfficeParser.terminateOcr()`
@@ -462,7 +430,7 @@ async function runCleaner() {
 ```
 
 > [!TIP]
-> This is handled automatically in our own CLI (`npx officeparser ...`). You only need to call this manually if you are using the library in your own custom script and want a snappy exit.
+> This is handled automatically in the built-in CLI (`npx officeparser ...`). You only need to call this manually if you are using the library in your own custom script and want a snappy exit.
 
 ```js
 const config = {
@@ -509,33 +477,48 @@ The library provides two types of browser bundles in the `dist/` directory:
 1. **`officeparser.browser.iife.js`**: Standard IIFE bundle for direct `<script>` tag usage. Exposes the global `officeParser` namespace.
 2. **`officeparser.browser.mjs`**: Modern ESM bundle for use with `import` statements or modern bundlers.
 
+### Usage (ESM)
+If you are using a modern bundler like **Vite**, **Webpack**, or **Next.js**:
+
+```javascript
+import { OfficeParser } from 'officeparser';
+
+const handleFile = async (event) => {
+    const file = event.target.files[0];
+    const buffer = await file.arrayBuffer();
+    
+    try {
+        // Pass the Buffer or Uint8Array directly
+        const ast = await OfficeParser.parseOffice(new Uint8Array(buffer));
+        console.log(ast.toText());
+    } catch (err) {
+        console.error(err);
+    }
+};
+```
+
+> [!NOTE] 
+> **Why `fs` fails in the browser**: Browsers do not have a built-in file system. If you try to pass a file path string in the browser, `officeParser` will throw a descriptive "Fail-Fast" error instead of crashing mysteriously: 
+> `[officeparser] Node.js 'fs' module is not available in the browser. Please pass a Buffer or Uint8Array instead.`
+
 ### Usage (Script Tag)
-Include the IIFE bundle file available in the release assets.
+Include the IIFE bundle available in the release assets or your `dist/` folder. This exposes the global `officeParser` object.
 
 ```html
 <script src="dist/officeparser.browser.iife.js"></script>
 <script>
-    async function handleFile(file) {
-        // file can be a File object from an input element or an ArrayBuffer
+    async function handleFile(event) {
+        const file = event.target.files[0];
+        const buffer = await file.arrayBuffer();
+        
         try {
-            const ast = await officeParser.parseOffice(file, { ocr: true });
+            // Reconstruct as Uint8Array for the parser
+            const ast = await officeParser.parseOffice(new Uint8Array(buffer));
             console.log(ast.toText());
         } catch (error) {
-            console.error(error);
+            console.error("Parsing failed:", error);
         }
     }
-</script>
-```
-
-### Usage (ESM)
-If you are using a modern browser that supports modules or a dev server like Vite:
-
-```html
-<script type="module">
-    import { OfficeParser } from './dist/officeparser.browser.mjs';
-    
-    const ast = await OfficeParser.parseOffice(fileBuffer);
-    console.log(ast.metadata);
 </script>
 ```
 
@@ -579,7 +562,7 @@ For a comprehensive guide, visit our [Debugging & Troubleshooting Documentation]
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to get started.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to get started.
 
 ## License
 

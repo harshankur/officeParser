@@ -1,0 +1,61 @@
+name: Feature Request 💡
+description: Suggest an enhancement or new functionality.
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Library Component
+      description: Which part of officeParser does this feature target?
+      options:
+        - Word Parser (DOCX)
+        - PowerPoint Parser (PPTX)
+        - Excel Parser (XLSX)
+        - OpenOffice Parser (ODT, ODS, ODP)
+        - PDF Parser
+        - OCR Scheduler & Infrastructure
+        - CLI / Tooling
+        - General / Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Problem Description
+      description: What is the current gap or challenge you encounter?
+      placeholder: e.g. "I cannot extract nested list levels in ODT files, which makes my document structure inaccurate."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: How should this work? Any specific API or AST change in mind?
+      placeholder: e.g. "Add a 'charts' array to the ExcelParser output."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Expected Impact
+      description: What is the primary benefit of this enhancement?
+      options:
+        - New Format Support
+        - Performance Optimization
+        - Accuracy Improvement
+        - Developer Experience (DX)
+        - Infrastructure / Build
+        - Other (please specify below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: other-details
+    attributes:
+      label: Additional Details / Other Impact
+      description: If you selected "Other" above, or have any extra context or sample files (links), please add them here.
+    validations:
+      required: false
