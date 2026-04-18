@@ -121,6 +121,12 @@
                 <td><code>undefined</code></td>
                 <td><strong>Offline Environments</strong>: Paths to Tesseract scripts and data files for air-gapped or customized installations.</td>
             </tr>
+            <tr>
+                <td><code>includeBreakNodes</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Line/Page Break Parsing</strong>: Specifically targets Word documents (DOCX). When set to true, <code>officeParser</code> will also parse <code>w:br</code>, <code>w:cr</code> and <code>w:lastRenderedPageBreak</code> nodes.</td>
+            </tr>
         </tbody>
     </table>
 

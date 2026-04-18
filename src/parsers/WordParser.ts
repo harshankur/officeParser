@@ -34,17 +34,18 @@
  *   </w:body>
  * </w:document>
  * ```
- * 
+ *
  * **Key OOXML Elements:**
  * - `<w:p>` - Paragraph
  * - `<w:r>` - Run (contiguous text with same formatting)
  * - `<w:t>` - Text content
+ * - `<w:br>` - Line or page break
  * - `<w:b>`, `<w:i>`, `<w:u>` - Bold, italic, underline
  * - `<w:pStyle>` - Paragraph style (for headings)
  * - `<w:numPr>` - List numbering properties
  * - `<w:tbl>` - Table
  * - `<w:drawing>` - Drawing/image
- * 
+ *
  * **Parsing Approach:**
  * 1. Extract ZIP contents
  * 2. Parse word/document.xml for structure and text
@@ -53,13 +54,13 @@
  * 5. Extract footnotes from word/footnotes.xml
  * 6. Process embedded images from word/media/*
  * 7. Parse metadata from docProps/core.xml
- * 
+ *
  * @module WordParser
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/ OOXML Standard
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/ [MS-DOCX] Specification
  */
 
-import { ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types.js';
 import { logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
@@ -444,26 +445,70 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                     formatting.backgroundColor = paraBackgroundColor;
                 }
 
-                // Text content
-                const tNodes = getElementsByTagName(runNode, "w:t");
-                for (const tNode of tNodes) {
-                    const tContent = tNode.textContent || '';
-                    text += tContent;
-                    const textNode: OfficeContentNode = {
-                        type: 'text',
-                        text: tContent,
-                        formatting: formatting
-                    };
-                    if (config.includeRawContent) {
-                        textNode.rawContent = getRawContent(tNode, documentContent, config);
+                for (const child of runNode.childNodes) {
+                    if (!isElement(child)) continue;
+
+                    // also handle unprefixed version (mirroring the behaviour of getElementsByTagName)
+
+                    // Text content
+                    if (child.tagName === "w:t" || child.tagName === "t") {
+                        const tNode = child;
+
+                        const tContent = tNode.textContent || '';
+                        text += tContent;
+                        const textNode: OfficeContentNode = {
+                            type: 'text',
+                            text: tContent,
+                            formatting: formatting
+                        };
+                        if (config.includeRawContent) {
+                            textNode.rawContent = getRawContent(tNode, documentContent, config);
+                        }
+                        // Always set a style: run style > paragraph style > detected default
+                        // Use detected default style for international compatibility
+                        const nodeStyle = rStyleVal || pStyleVal || defaultParaStyleId;
+                        if (nodeStyle) {
+                            textNode.metadata = { style: nodeStyle };
+                        }
+                        children.push(textNode);
                     }
-                    // Always set a style: run style > paragraph style > detected default
-                    // Use detected default style for international compatibility
-                    const nodeStyle = rStyleVal || pStyleVal || defaultParaStyleId;
-                    if (nodeStyle) {
-                        textNode.metadata = { style: nodeStyle };
+                    // Break nodes
+                    else if (config.includeBreakNodes &&
+                            (child.tagName === "w:br"
+                                || child.tagName === "br"
+                                || child.tagName === "w:cr"
+                                || child.tagName === "cr")
+                        ) {
+                        const brNode = child;
+
+                        const nodeBreakType = brNode.getAttribute("w:type");
+
+                        // 'textWrapping' is the default break type that should be
+                        // used when w:type is not specified
+                        let breakType: BreakMetadata['breakType'] = 'textWrapping';
+                        if (nodeBreakType !== null) {
+                            breakType = nodeBreakType as BreakMetadata['breakType'];
+                        }
+
+                        let breakClear: BreakMetadata["clear"] = undefined;
+                        if (breakType === 'textWrapping' && brNode.getAttribute("w:clear") !== null) {
+                            breakClear = brNode.getAttribute("w:clear") as BreakMetadata["clear"];
+                        }
+
+                        const breakNode: OfficeContentNode = {
+                            type: 'break',
+                            metadata: { breakType, clear: breakClear }
+                        };
+
+                        children.push(breakNode);
+                    } else if (config.includeBreakNodes && (child.tagName === "w:lastRenderedPageBreak" || child.tagName === "lastRenderedPageBreak")) {
+                        const breakNode: OfficeContentNode = {
+                            type: 'break',
+                            metadata: { breakType: 'lastRenderedPage' }
+                        };
+
+                        children.push(breakNode);
                     }
-                    children.push(textNode);
                 }
 
                 // Images/Drawings

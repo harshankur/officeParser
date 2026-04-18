@@ -112,12 +112,19 @@ export interface OfficeParserConfig {
     preserveXmlWhitespace?: boolean;
     /**
      * The URL/path to the PDF.js worker script.
-     * 
+     *
      * **Mandatory** when using PDF parsing in browser environments to avoid worker configuration errors.
      * If not provided, it defaults to `https://unpkg.com/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs`.
      * You can override this with your own local path or a different CDN link.
      */
     pdfWorkerSrc?: string;
+    /**
+     * Flag to include break nodes in the AST.
+     * This is currently only supported for Word documents. (w:br nodes)
+     *
+     * Default is false
+     */
+    includeBreakNodes?: boolean;
 }
 
 /**
@@ -128,7 +135,7 @@ export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods'
 /**
  * Types of content nodes in the AST.
  */
-export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page';
+export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break';
 
 /**
  * Supported MIME types for attachments.
@@ -439,9 +446,35 @@ export interface NoteMetadata {
 }
 
 /**
+ * Metadata for break nodes.
+ * Used in DOCX files to track line and page breaks.
+ */
+export interface BreakMetadata {
+    /**
+     * Type of break. The break type determines the next location where
+     * text shall be placed.
+     * - 'column': The next text will be placed in the next column.
+     * - 'page': The next text will be placed on the next page.
+     * - 'lastRenderedPage': The editing application has inserted a soft break on the last save.
+     * - 'textWrapping' (default, assumed when not specified): The next text will be placed on the next line.
+     */
+    breakType:  'column' | 'page' | 'lastRenderedPage' | 'textWrapping';
+
+    /**
+     * Specifies the location which shall be used as the next available line when breakType
+     * has a value of 'textWrapping'. Should be ignored for other break types.
+     * - 'all': text wrapping break shall advance the text to the next line which spans the full width of the line
+     * - 'left': text wrapping break shall restart in next text region unblocked on the left
+     * - 'none': text wrapping break shall advance the text to the next line regardless of any floating objects
+     * - 'right': text wrapping break shall restart in next text region unblocked on the right
+     */
+    clear?: 'all' | 'left' | 'none' | 'right';
+}
+
+/**
  * Union type for content metadata.
  */
-export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | undefined;
+export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | undefined;
 
 
 /**
