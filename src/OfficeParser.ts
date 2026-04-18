@@ -121,6 +121,7 @@ export class OfficeParser {
             preserveXmlWhitespace: false,
             pdfWorkerSrc: '',
             ocrConfig: {},
+            includeBreakNodes: false,
             ...actualConfig
         };
 

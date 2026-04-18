@@ -49,7 +49,8 @@ const FULL_CONFIG: Required<OfficeParserConfig> = {
     outputErrorToConsole: true,
     pdfWorkerSrc: '',
     serializeRawContent: true,
-    preserveXmlWhitespace: false
+    preserveXmlWhitespace: false,
+    includeBreakNodes: true
 };
 
 /** Config permutations to test */

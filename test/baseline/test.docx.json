@@ -412,9 +412,16 @@
     {
       "type": "paragraph",
       "text": "",
-      "children": [],
+      "children": [
+        {
+          "type": "break",
+          "metadata": {
+            "breakType": "textWrapping"
+          }
+        }
+      ],
       "metadata": {},
-      "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00386659\" w:rsidP=\"00230C50\" w:rsidRDefault=\"00386659\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"672A6659\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"/>"
+      "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00386659\" w:rsidP=\"00230C50\" w:rsidRDefault=\"00386659\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"672A6659\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:r><w:br type=\"page\"/></w:r></w:p>"
     },
     {
       "type": "heading",
@@ -477,10 +484,16 @@
           "metadata": {
             "style": "Normal"
           }
+        },
+        {
+          "type": "break",
+          "metadata": {
+            "breakType": "textWrapping"
+          }
         }
       ],
       "metadata": {},
-      "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00386659\" w:rsidP=\"00386659\" w:rsidRDefault=\"00386659\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"52539654\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:r><w:t>Here, we demonstrate various types of inline text formatting and the use of embedded fonts.</w:t></w:r></w:p>"
+      "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00386659\" w:rsidP=\"00386659\" w:rsidRDefault=\"00386659\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"52539654\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:r><w:t>Here, we demonstrate various types of inline text formatting and the use of embedded fonts.</w:t><w:br/></w:r></w:p>"
     },
     {
       "type": "paragraph",

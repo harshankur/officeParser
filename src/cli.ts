@@ -102,6 +102,7 @@ if (fileArg) {
     console.log('  --includeRawContent=true     Include raw content in AST');
     console.log('  --serializeRawContent=true   Serialize raw XML content (default: true)');
     console.log('  --preserveXmlWhitespace=true Preserve whitespace in serialized XML (default: false)');
+    console.log('  --includeBreakNodes=false    Include break nodes (DOCX only, default: false)');
     console.log('  --verbose=true               Show full error stack traces');
     console.log('');
     console.log('Examples:');

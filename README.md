@@ -59,6 +59,7 @@ npx officeparser /path/to/officeFile.docx --ignoreNotes=true --newlineDelimiter=
 - `--extractAttachments=[true|false]`   Flag to extract images/charts as Base64. Default is false.
 - `--ocr=[true|false]`                  Flag to enable OCR for extracted images. Default is false.
 - `--includeRawContent=[true|false]`    Flag to include raw XML/RTF content in nodes. Default is false.
+- `--includeBreakNodes=[true|false]`    Flag to include break nodes. Currently only available for DOCX documents
 - `--verbose=[true|false]`              Show full error stack traces.
 
 
@@ -277,13 +278,28 @@ Formatting can be found at two levels:
 1.  **Node Level**: Applied directly to a text run or paragraph.
 2.  **Document Level**: Found in `ast.metadata.formatting` (defaults) or `ast.metadata.styleMap` (named styles).
 
-### 6. Advanced Metadata
+### 6. Breaks
+Breaks are currently only supported when parsing DOCX-documents. Breaks are added as a node of type `break` and carry metadata of the type `BreakMetadata`.
+
+```text
+Break Node
+├── type: "break"
+└── metadata: {
+        breakType: "lineWrapping" | "page" | "column",
+        clear?: "all" | "left" | "none" | "right"
+    }
+```
+
+- `breakType`: Type of break. "lineWrapping" means just a simple line break, "page" a page break and "column" a break to the next column
+- `clear`: This field is only relevant when `breakType` is set to "lineWrapping". This indicates how breaking to next line should be handled when there are e.g. floating objects in the document.
+
+### 7. Advanced Metadata
 The `ast.metadata` object provides document-wide context:
 - **`styleMap`**: A dictionary of style names to their `TextFormatting` definitions found in the document.
 - **`formatting`**: Document-wide default settings (e.g., default font or font size).
 - **`customProperties`**: A dictionary of user-defined metadata embedded in the document (OOXML `custom.xml`, ODF `meta:user-defined`, or PDF Info dictionary).
 
-### 7. Custom Properties
+### 8. Custom Properties
 You can access custom user-defined metadata that might be embedded in the document:
 
 ```javascript
@@ -403,6 +419,7 @@ Pass an optional config object as the second argument to `parseOffice`.
 | `ocrConfig.workerPath` | string | `undefined` | Path to Tesseract worker script (for offline use). |
 | `ocrConfig.corePath` | string | `undefined` | Path to Tesseract core script (for offline use). |
 | `ocrConfig.langPath` | string | `undefined` | Path for Tesseract language files (for offline use). |
+| `includeBreakNodes` | boolean | `false` | Specifically targets Word documents (DOCX). When set to true, officeParser will also parse `w:br`, `w:cr` and `w:lastRenderedPageBreak` nodes.|
 
 ### OCR Scheduler & Resource Management
 If your application uses OCR, `officeParser` utilizes an intelligent **Smart Worker Pool** to maintain a background worker pool and optimize repeated parse requests.

@@ -62,7 +62,8 @@ import {
     CellMetadata,
     ImageMetadata,
     PageMetadata,
-    ContentMetadata
+    ContentMetadata,
+    BreakMetadata,
 } from './types';
 
 const parseOffice = OfficeParser.parseOffice;
@@ -88,11 +89,9 @@ export {
     CellMetadata,
     ImageMetadata,
     PageMetadata,
-    ContentMetadata
+    ContentMetadata,
+    BreakMetadata,
 };
-
-
 
 // Default export for backward compatibility
 export default OfficeParser;
-
