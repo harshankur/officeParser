@@ -416,8 +416,9 @@
         {
           "type": "break",
           "metadata": {
-            "breakType": "textWrapping"
-          }
+            "breakType": "page"
+          },
+          "rawContent": "<w:br type=\"page\" xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"/>"
         }
       ],
       "metadata": {},
@@ -489,7 +490,8 @@
           "type": "break",
           "metadata": {
             "breakType": "textWrapping"
-          }
+          },
+          "rawContent": "<w:br xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"/>"
         }
       ],
       "metadata": {},

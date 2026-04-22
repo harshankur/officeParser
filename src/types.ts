@@ -457,8 +457,9 @@ export interface BreakMetadata {
      * - 'page': The next text will be placed on the next page.
      * - 'lastRenderedPage': The editing application has inserted a soft break on the last save.
      * - 'textWrapping' (default, assumed when not specified): The next text will be placed on the next line.
+     * - 'carriageReturn': An explicit carriage return (w:cr) equivalent to a hard line break.
      */
-    breakType:  'column' | 'page' | 'lastRenderedPage' | 'textWrapping';
+    breakType: 'column' | 'page' | 'lastRenderedPage' | 'textWrapping' | 'carriageReturn';
 
     /**
      * Specifies the location which shall be used as the next available line when breakType

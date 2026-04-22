@@ -474,20 +474,21 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                     }
                     // Break nodes
                     else if (config.includeBreakNodes &&
-                            (child.tagName === "w:br"
-                                || child.tagName === "br"
-                                || child.tagName === "w:cr"
-                                || child.tagName === "cr")
-                        ) {
+                        (child.tagName === "w:br"
+                            || child.tagName === "br"
+                            || child.tagName === "w:cr"
+                            || child.tagName === "cr")
+                    ) {
                         const brNode = child;
 
-                        const nodeBreakType = brNode.getAttribute("w:type");
-
-                        // 'textWrapping' is the default break type that should be
-                        // used when w:type is not specified
                         let breakType: BreakMetadata['breakType'] = 'textWrapping';
-                        if (nodeBreakType !== null) {
-                            breakType = nodeBreakType as BreakMetadata['breakType'];
+                        if (child.tagName === "w:cr" || child.tagName === "cr") {
+                            breakType = 'carriageReturn';
+                        } else {
+                            const nodeBreakType = brNode.getAttribute("w:type") || brNode.getAttribute("type");
+                            if (nodeBreakType !== null) {
+                                breakType = nodeBreakType as BreakMetadata['breakType'];
+                            }
                         }
 
                         let breakClear: BreakMetadata["clear"] = undefined;
@@ -500,12 +501,20 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                             metadata: { breakType, clear: breakClear }
                         };
 
+                        if (config.includeRawContent) {
+                            breakNode.rawContent = getRawContent(brNode, documentContent, config);
+                        }
+
                         children.push(breakNode);
                     } else if (config.includeBreakNodes && (child.tagName === "w:lastRenderedPageBreak" || child.tagName === "lastRenderedPageBreak")) {
                         const breakNode: OfficeContentNode = {
                             type: 'break',
                             metadata: { breakType: 'lastRenderedPage' }
                         };
+
+                        if (config.includeRawContent) {
+                            breakNode.rawContent = getRawContent(child, documentContent, config);
+                        }
 
                         children.push(breakNode);
                     }
@@ -876,6 +885,9 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 let t = '';
                 if (node.children) {
                     t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter ?? '\n');
+                }
+                else if (node.type === 'break') {
+                    t += config.newlineDelimiter ?? '\n';
                 }
                 else
                     t += node.text || '';

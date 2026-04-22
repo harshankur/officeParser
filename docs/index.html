@@ -1502,6 +1502,13 @@
                         </label>
                     </div>
                     <div class="config-item">
+                        <span class="config-label">Include Break Nodes</span>
+                        <label class="switch">
+                            <input type="checkbox" id="cfg_includeBreakNodes" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-item">
                         <span class="config-label">Verbose Errors</span>
                         <label class="switch">
                             <input type="checkbox" id="cfg_outputErrorToConsole">
@@ -1777,7 +1784,7 @@
             });
 
             // Config Persistence
-            const configIds = ['cfg_extractAttachments', 'cfg_ocr', 'cfg_includeRawContent', 'cfg_serializeRawContent', 'cfg_preserveXmlWhitespace', 'cfg_ignoreNotes', 'cfg_putNotesAtLast', 'cfg_outputErrorToConsole', 'cfg_ocrLanguage', 'cfg_newlineDelimiter'];
+            const configIds = ['cfg_extractAttachments', 'cfg_ocr', 'cfg_includeRawContent', 'cfg_serializeRawContent', 'cfg_preserveXmlWhitespace', 'cfg_ignoreNotes', 'cfg_putNotesAtLast', 'cfg_includeBreakNodes', 'cfg_outputErrorToConsole', 'cfg_ocrLanguage', 'cfg_newlineDelimiter'];
             configIds.forEach(id => {
                 const el = document.getElementById(id);
                 const saved = localStorage.getItem(id);
@@ -1812,6 +1819,7 @@
                     preserveXmlWhitespace: document.getElementById('cfg_preserveXmlWhitespace').checked,
                     ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
                     putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
+                    includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
                     outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
                     ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
                     newlineDelimiter: document.getElementById('cfg_newlineDelimiter').value
@@ -1860,6 +1868,7 @@
                         preserveXmlWhitespace: document.getElementById('cfg_preserveXmlWhitespace').checked,
                         ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
                         putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
+                        includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
                         outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
                         ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
                         newlineDelimiter: document.getElementById('cfg_newlineDelimiter').value.replace(/\\n/g, '\n'),
@@ -2138,6 +2147,38 @@
                             return link;
                         }
                         return textSpan;
+
+                    case 'break':
+                        const bType = node.metadata?.breakType || 'textWrapping';
+                        if (bType === 'page') {
+                            const wrapper = document.createElement('div');
+                            wrapper.style.cssText = 'text-align: center; margin: 3rem 0; position: relative;';
+                            const line = document.createElement('hr');
+                            line.style.cssText = 'border: none; border-top: 1px dashed var(--border); position: absolute; top: 50%; width: 100%; z-index: 0; margin: 0;';
+                            const label = document.createElement('span');
+                            label.textContent = 'PAGE BREAK';
+                            label.style.cssText = 'background: var(--preview-bg); padding: 0 1rem; position: relative; z-index: 1; font-size: 0.65rem; color: var(--text-dim); font-weight: 700; letter-spacing: 0.1em;';
+                            wrapper.appendChild(line);
+                            wrapper.appendChild(label);
+                            return wrapper;
+                        } else if (bType === 'column') {
+                            const hr = document.createElement('hr');
+                            hr.style.cssText = 'border: none; border-top: 1px dotted var(--accent); margin: 1.5rem 0; height: 1px;';
+                            return hr;
+                        } else if (bType === 'lastRenderedPage') {
+                            const wrapper = document.createElement('div');
+                            wrapper.style.cssText = 'text-align: center; margin: 2rem 0; position: relative; opacity: 0.5;';
+                            const line = document.createElement('hr');
+                            line.style.cssText = 'border: none; border-top: 1px dotted var(--text-dim); position: absolute; top: 50%; width: 100%; z-index: 0; margin: 0;';
+                            const label = document.createElement('span');
+                            label.textContent = 'SOFT PAGE BREAK';
+                            label.style.cssText = 'background: var(--preview-bg); padding: 0 1rem; position: relative; z-index: 1; font-size: 0.55rem; color: var(--text-dim); font-weight: 700; letter-spacing: 0.1em;';
+                            wrapper.appendChild(line);
+                            wrapper.appendChild(label);
+                            return wrapper;
+                        } else {
+                            return document.createElement('br');
+                        }
 
                     case 'image':
                         el = document.createElement('div');

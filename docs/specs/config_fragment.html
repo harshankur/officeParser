@@ -125,7 +125,7 @@
                 <td><code>includeBreakNodes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Line/Page Break Parsing</strong>: Specifically targets Word documents (DOCX). When set to true, <code>officeParser</code> will also parse <code>w:br</code>, <code>w:cr</code> and <code>w:lastRenderedPageBreak</code> nodes.</td>
+                <td><strong>Line/Page Break Parsing</strong>: Specifically targets Word documents (DOCX). When set to true, <code>officeParser</code> will extract physical breaks into the AST as <code>break</code> nodes. This includes standard line breaks (<code>textWrapping</code>), hard carriage returns (<code>carriageReturn</code>), page breaks (<code>page</code>), column breaks (<code>column</code>), and soft layout markers (<code>lastRenderedPage</code>).</td>
             </tr>
         </tbody>
     </table>

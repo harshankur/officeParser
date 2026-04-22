@@ -279,19 +279,22 @@ Formatting can be found at two levels:
 2.  **Document Level**: Found in `ast.metadata.formatting` (defaults) or `ast.metadata.styleMap` (named styles).
 
 ### 6. Breaks
-Breaks are currently only supported when parsing DOCX-documents. Breaks are added as a node of type `break` and carry metadata of the type `BreakMetadata`.
+Breaks are currently only supported when parsing DOCX-documents. Breaks are added as a node of type `break` and carry metadata of the type `BreakMetadata`. When `includeRawContent` is enabled, they also include the `rawContent` string from the original XML.
 
 ```text
 Break Node
 ├── type: "break"
 └── metadata: {
-        breakType: "lineWrapping" | "page" | "column",
+        breakType: "textWrapping" | "page" | "column" | "lastRenderedPage" | "carriageReturn",
         clear?: "all" | "left" | "none" | "right"
     }
 ```
 
-- `breakType`: Type of break. "lineWrapping" means just a simple line break, "page" a page break and "column" a break to the next column
-- `clear`: This field is only relevant when `breakType` is set to "lineWrapping". This indicates how breaking to next line should be handled when there are e.g. floating objects in the document.
+- `breakType`: Type of break. `textWrapping` (default) is a standard line break, `page` is a page break, `column` is a break to the next column, `lastRenderedPage` is a soft break inserted by Word, and `carriageReturn` is an explicit carriage return (`w:cr`).
+- `clear`: Relevant for `textWrapping`. Indicates if text should wrap around floating objects.
+
+> [!NOTE]
+> Even though break nodes don't have a `text` property, the `ast.toText()` method will automatically convert them to newlines (`\n`) or the configured delimiter in the final string output.
 
 ### 7. Advanced Metadata
 The `ast.metadata` object provides document-wide context:

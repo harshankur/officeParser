@@ -138,10 +138,24 @@
             <code>chartData</code> in metadata if requested.</li>
     </ul>
 
-    <h3>5. Other</h3>
+    <h3>5. Breaks (The <code>break</code> Node)</h3>
+    <p>Breaks are added as <code>break</code> nodes when <code>includeBreakNodes</code> is enabled in the configuration. They represent physical layout changes within the document flow.</p>
     <ul>
-        <li><strong><code>break</code></strong>: Currently only available for Word documents. <code>breakType</code> in metadata can be used to differentiate between line, (soft) page and column breaks.</li>
+        <li><strong><code>breakType</code></strong>: 
+            <ul>
+                <li><code>'textWrapping'</code>: Standard line break (Shift+Enter). This is the default break type.</li>
+                <li><code>'carriageReturn'</code>: Explicit hard return (<code>w:cr</code>), often used for legacy compatibility.</li>
+                <li><code>'page'</code>: Hard page break, forcing subsequent content to a new page.</li>
+                <li><code>'column'</code>: Column break, moving text to the top of the next column in multi-column layouts.</li>
+                <li><code>'lastRenderedPage'</code>: A "soft" page break marker indicating where a page naturally ended during the last render.</li>
+            </ul>
+        </li>
+        <li><strong><code>clear</code></strong>: (Only for <code>textWrapping</code>) Specifies where the next available line should start when wrapping around floating objects (<code>all</code>, <code>left</code>, <code>right</code>, <code>none</code>).</li>
     </ul>
+    <blockquote>
+        [!NOTE]
+        <strong>Plain Text Conversion</strong>: Even though break nodes have no <code>text</code> property, the <code>ast.toText()</code> method automatically converts them into newlines (<code>\n</code>) or the configured <code>newlineDelimiter</code> to preserve the document's visual structure.
+    </blockquote>
 
     <h2>Text Formatting</h2>
     <p>Applied to <code>text</code>, <code>paragraph</code>, or <code>heading</code> nodes.</p>
