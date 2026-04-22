@@ -91,7 +91,7 @@
   },
   "homepage": "https://officeparser.harshankur.com",
   "dependencies": {
-    "@xmldom/xmldom": "^0.9.9",
+    "@xmldom/xmldom": "^0.9.10",
     "fflate": "^0.8.2",
     "file-type": "^22.0.1",
     "pdfjs-dist": "5.6.205",

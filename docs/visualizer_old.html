@@ -598,10 +598,18 @@
                     return BRAND_ICONS[ext] || BRAND_ICONS.default;
                 };
 
+                const ocrCheckbox = document.getElementById('cfg_ocr');
                 const updateOcrCleanupState = () => {
                     cleanupOcrBtn.disabled = !ocrWasUsedInCurrentPreview;
                     cleanupOcrBtn.title = ocrWasUsedInCurrentPreview ? "Terminate active OCR workers" : "No OCR workers recently used";
+                    if (ocrCheckbox) {
+                        cleanupOcrBtn.style.display = ocrCheckbox.checked ? 'inline-block' : 'none';
+                    }
                 };
+
+                if (ocrCheckbox) {
+                    ocrCheckbox.addEventListener('change', updateOcrCleanupState);
+                }
 
                 cleanupOcrBtn.addEventListener('click', async () => {
                     const originalHtml = `🗑️ Cleanup OCR Pool`;
@@ -669,31 +677,6 @@
 
                 loadConfig();
 
-                // Cleanup Button logic
-                const cleanupOcrBtn = document.getElementById('cleanupOcrBtn');
-                const ocrCheckbox = document.getElementById('cfg_ocr');
-
-                const updateCleanupVisibility = () => {
-                    cleanupOcrBtn.style.display = ocrCheckbox.checked ? 'inline-block' : 'none';
-                };
-
-                ocrCheckbox.addEventListener('change', updateCleanupVisibility);
-                updateCleanupVisibility(); // Initial check
-
-                cleanupOcrBtn.addEventListener('click', async () => {
-                    const originalText = cleanupOcrBtn.innerHTML;
-                    try {
-                        cleanupOcrBtn.textContent = '🧹 Cleaning...';
-                        await window.officeParser.terminateOcr();
-                        cleanupOcrBtn.textContent = '✅ Cleaned!';
-                        status.textContent = 'OCR Workers terminated successfully.';
-                        setTimeout(() => { cleanupOcrBtn.innerHTML = originalText; }, 2000);
-                    } catch (err) {
-                        console.error("Cleanup failed:", err);
-                        cleanupOcrBtn.textContent = '❌ Failed';
-                        setTimeout(() => { cleanupOcrBtn.innerHTML = originalText; }, 2000);
-                    }
-                });
 
                 console.log("Visualizer initialized successfully.");
 
