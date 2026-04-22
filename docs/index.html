@@ -2103,6 +2103,7 @@
                         if (node.metadata && node.metadata.alignment) {
                             el.style.textAlign = node.metadata.alignment;
                         }
+                        applyParagraphIndentation(el, node.metadata);
                         break;
                     case 'heading':
                         const level = (node.metadata && node.metadata.level) || 1;
@@ -2111,6 +2112,7 @@
                         if (node.metadata && node.metadata.alignment) {
                             el.style.textAlign = node.metadata.alignment;
                         }
+                        applyParagraphIndentation(el, node.metadata);
                         break;
                     case 'table':
                         el = document.createElement('table');
@@ -2132,6 +2134,7 @@
                         if (node.metadata?.listType === 'ordered' && typeof node.metadata.itemIndex === 'number') {
                             el.value = node.metadata.itemIndex + 1;
                         }
+                        applyParagraphIndentation(el, node.metadata);
                         break;
                     case 'text':
                         const textSpan = document.createElement('span');
@@ -2412,6 +2415,20 @@
                 }
 
                 return el;
+            }
+
+            function applyParagraphIndentation(el, metadata) {
+                if (metadata && metadata.paragraphIndentation) {
+                    const ind = metadata.paragraphIndentation;
+                    if (ind.left) el.style.marginLeft = `${ind.left / 20}pt`;
+                    if (ind.right) el.style.marginRight = `${ind.right / 20}pt`;
+                    if (ind.firstLine) el.style.textIndent = `${ind.firstLine / 20}pt`;
+                    if (ind.hanging) {
+                        const currentLeft = parseFloat(el.style.marginLeft) || 0;
+                        el.style.marginLeft = `${currentLeft + (ind.hanging / 20)}pt`;
+                        el.style.textIndent = `-${ind.hanging / 20}pt`;
+                    }
+                }
             }
 
             function renderTextFormatting(el, formatting) {

@@ -60,7 +60,7 @@
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/ [MS-DOCX] Specification
  */
 
-import { BreakMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types.js';
 import { logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
@@ -135,7 +135,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
 
         // Font size
         const szMatch = rPrString.match(/<w:sz w:val="(\d+)"/);
-        if (szMatch) formatting.size = (parseInt(szMatch[1]) / 2).toString() + 'pt';
+        if (szMatch) formatting.size = (parseInt(szMatch[1], 10) / 2).toString() + 'pt';
 
         // Color
         const colorMatch = rPrString.match(/<w:color w:val="([^"]+)"/);
@@ -174,6 +174,26 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         }
 
         return formatting;
+    };
+
+    // Helper to extract indentation from paragraph properties XML string
+    const extractIndentationFromXml = (pPr: Element): IndentationMetadata | undefined => {
+        const ind = getFirstElementByTagName(pPr, "w:ind");
+        if (ind) {
+            const indentation: IndentationMetadata = {};
+            const left = ind.getAttribute("w:left") || ind.getAttribute("w:start");
+            const right = ind.getAttribute("w:right") || ind.getAttribute("w:end");
+            const firstLine = ind.getAttribute("w:firstLine");
+            const hanging = ind.getAttribute("w:hanging");
+
+            if (left) indentation.left = parseInt(left, 10);
+            if (right) indentation.right = parseInt(right, 10);
+            if (firstLine) indentation.firstLine = parseInt(firstLine, 10);
+            if (hanging) indentation.hanging = parseInt(hanging, 10);
+
+            return Object.keys(indentation).length > 0 ? indentation : undefined;
+        }
+        return undefined;
     };
 
     const files = await extractFiles(buffer, x =>
@@ -259,7 +279,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
 
     // Parse Styles
     const stylesFile = files.find(f => f.path.match(stylesFileRegex));
-    const styleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify', backgroundColor?: string } } = {};
+    const styleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify', backgroundColor?: string, paragraphIndentation?: IndentationMetadata } } = {};
 
     if (stylesFile) {
         const stylesXml = parseXmlString(stylesFile.content.toString());
@@ -274,6 +294,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 const formatting = rPr ? extractFormattingFromXml(rPr) : {};
                 let alignment: 'left' | 'center' | 'right' | 'justify' | undefined = undefined;
                 let backgroundColor: string | undefined = undefined;
+                let paragraphIndentation: IndentationMetadata | undefined = undefined;
 
                 if (pPr) {
                     const jc = getFirstElementByTagName(pPr, "w:jc");
@@ -288,9 +309,12 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                         const fill = shd.getAttribute("w:fill");
                         if (fill && fill !== 'auto') backgroundColor = '#' + fill;
                     }
+
+                    const ind = extractIndentationFromXml(pPr);
+                    if (ind) paragraphIndentation = ind;
                 }
 
-                styleMap[styleId] = { formatting, alignment, backgroundColor };
+                styleMap[styleId] = { formatting, alignment, backgroundColor, paragraphIndentation };
             }
         }
     }
@@ -369,6 +393,15 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 if (val === 'left' || val === 'center' || val === 'right' || val === 'justify') {
                     alignment = val;
                 }
+            }
+        }
+
+        // Extract Indentation
+        let paraIndentation = styleProps.paragraphIndentation;
+        if (pPr) {
+            const ind = extractIndentationFromXml(pPr);
+            if (ind) {
+                paraIndentation = { ...paraIndentation, ...ind };
             }
         }
 
@@ -656,7 +689,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
             const numIdNode = getFirstElementByTagName(numPr, "w:numId");
             const ilvlNode = getFirstElementByTagName(numPr, "w:ilvl");
             const numId = numIdNode ? numIdNode.getAttribute("w:val") || '0' : '0';
-            const ilvl = ilvlNode ? parseInt(ilvlNode.getAttribute("w:val") || '0') : 0;
+            const ilvl = ilvlNode ? parseInt(ilvlNode.getAttribute("w:val") || '0', 10) : 0;
 
             let listType: 'ordered' | 'unordered' = 'ordered';
             let itemIndex = 0;
@@ -688,6 +721,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 metadata: {
                     listType,
                     indentation: ilvl,
+                    paragraphIndentation: paraIndentation,
                     alignment: (alignment || 'left') as 'left' | 'center' | 'right' | 'justify',
                     listId: numId,
                     itemIndex: itemIndex,
@@ -699,12 +733,12 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
             return listNode;
 
         } else if (isHeading) {
-            const level = pStyleVal ? parseInt(pStyleVal.replace("Heading", "")) || 1 : 1;
+            const level = pStyleVal ? parseInt(pStyleVal.replace("Heading", ""), 10) || 1 : 1;
             const headingNode: OfficeContentNode = {
                 type: 'heading',
                 text: text,
                 children: children,
-                metadata: { level, alignment, style: pStyleVal ?? undefined }
+                metadata: { level, alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined }
             };
             if (config.includeRawContent) headingNode.rawContent = getRawContent(pNode, documentContent, config);
             return headingNode;
@@ -713,7 +747,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 type: 'paragraph',
                 text: text,
                 children: children,
-                metadata: { alignment, style: pStyleVal ?? undefined }
+                metadata: { alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined }
             };
             if (config.includeRawContent) paraNode.rawContent = getRawContent(pNode, documentContent, config);
             return paraNode;

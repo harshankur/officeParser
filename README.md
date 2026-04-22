@@ -141,7 +141,7 @@ OfficeParserAST
 │   ├── text: "Concatenated text of this node and all children"
 │   ├── children: [ OfficeContentNode ] (recursive)
 │   ├── formatting: { bold, italic, color, size, font, ... }
-│   ├── metadata: { level, listId, row, col, ... }
+│   ├── metadata: { level, listId, paragraphIndentation, row, col, ... }
 │   └── rawContent: "<xml>...</xml>" (if enabled)
 ├── attachments: [ OfficeAttachment ]
 │   ├── type: "image" | "chart"
@@ -193,13 +193,15 @@ List Node
     listId: "1", 
     listType: "ordered", 
     indentation: 0, 
+    paragraphIndentation: { left: 720, hanging: 360 },
     itemIndex: 0 
 }
 └── children: [ Text Content... ]
 ```
 
 - **`listId`**: A unique identifier for the list definition. Multiple items with the same `listId` belong to the same logical list.
-- **`indentation`**: The nesting level (0-based).
+- **`indentation`**: The structural nesting level (0-based).
+- **`paragraphIndentation`**: The physical indentation formatting in twentieths of a point (twips) (e.g., `left`, `right`, `firstLine`, `hanging`).
 - **`itemIndex`**: The sequential position within that list level.
 - **`listType`**: Either `ordered` (numbered) or `unordered` (bulleted).
 

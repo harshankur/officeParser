@@ -268,6 +268,21 @@ export interface SheetMetadata {
 }
 
 /**
+ * Detailed indentation information for paragraphs and headings.
+ * Values are typically in twentieths of a point (twips) in OOXML.
+ */
+export interface IndentationMetadata {
+    /** Left indentation. */
+    left?: number;
+    /** Right indentation. */
+    right?: number;
+    /** First line indentation. */
+    firstLine?: number;
+    /** Hanging indentation. */
+    hanging?: number;
+}
+
+/**
  * Metadata for a heading.
  */
 export interface HeadingMetadata {
@@ -277,6 +292,8 @@ export interface HeadingMetadata {
     alignment?: 'left' | 'center' | 'right' | 'justify';
     /** The style of the heading. */
     style?: string;
+    /** Detailed indentation information. */
+    paragraphIndentation?: IndentationMetadata;
 }
 
 /**
@@ -287,6 +304,8 @@ export interface ParagraphMetadata {
     alignment?: 'left' | 'center' | 'right' | 'justify';
     /** The style of the paragraph. */
     style?: string;
+    /** Detailed indentation information. */
+    paragraphIndentation?: IndentationMetadata;
 }
 
 /**
@@ -304,6 +323,9 @@ export interface ListMetadata {
      * @example 0 for top-level items, 1 for first nested level
      */
     indentation: number;
+
+    /** Detailed indentation information. */
+    paragraphIndentation?: IndentationMetadata;
 
     /**
      * Text alignment of the list item.

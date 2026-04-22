@@ -98,7 +98,8 @@
     <p>Lists are represented as a flat sequence of <code>list</code> nodes. To reconstruct the visual nesting (nested
         <code>ul/ol</code>), you must interpret the <code>metadata</code>.</p>
     <ul>
-        <li><code>indentation</code>: Integer starting at 0. Represents the nesting level.</li>
+        <li><code>indentation</code>: Integer starting at 0. Represents the structural nesting level.</li>
+        <li><code>paragraphIndentation</code>: Physical paragraph indentation formatting (e.g., <code>left</code>, <code>hanging</code>) measured in twips.</li>
         <li><code>listType</code>: <code>'ordered'</code> or <code>'unordered'</code>.</li>
         <li><code>listId</code>: A unique identifier for the list group. Use this to determine if adjacent items belong
             to the same logical list.</li>

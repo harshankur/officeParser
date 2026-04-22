@@ -446,7 +446,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                     if (cMatches) {
                         for (const cXml of cMatches) {
                             // Extract cell value
-                            const typeMatch = cXml.match(/t="([a-z]+)"/);
+                            const typeMatch = cXml.match(/t="([a-zA-Z]+)"/);
                             const type = typeMatch ? typeMatch[1] : 'n'; // n = number (default)
 
                             const vMatch = cXml.match(/<v>(.*?)<\/v>/);

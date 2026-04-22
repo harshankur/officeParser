@@ -20,6 +20,9 @@
         "formatting": {
           "size": "12pt",
           "font": "Ubuntu"
+        },
+        "paragraphIndentation": {
+          "firstLine": 432
         }
       },
       "Heading1": {
@@ -28,13 +31,19 @@
           "size": "14pt",
           "color": "#365F91"
         },
-        "alignment": "center"
+        "alignment": "center",
+        "paragraphIndentation": {
+          "firstLine": 0
+        }
       },
       "Heading2": {
         "formatting": {
           "bold": true,
           "size": "13pt",
           "color": "#4F81BD"
+        },
+        "paragraphIndentation": {
+          "firstLine": 0
         }
       },
       "DefaultParagraphFont": {
@@ -58,6 +67,9 @@
         "formatting": {
           "size": "26pt",
           "color": "#17365D"
+        },
+        "paragraphIndentation": {
+          "firstLine": 0
         }
       },
       "TitleChar": {
@@ -104,11 +116,17 @@
       "DecimalAligned": {
         "formatting": {
           "size": "11pt"
+        },
+        "paragraphIndentation": {
+          "firstLine": 0
         }
       },
       "FootnoteText": {
         "formatting": {
           "size": "10pt"
+        },
+        "paragraphIndentation": {
+          "firstLine": 0
         }
       },
       "FootnoteTextChar": {
@@ -180,7 +198,10 @@
         }
       },
       "ListParagraph": {
-        "formatting": {}
+        "formatting": {},
+        "paragraphIndentation": {
+          "left": 720
+        }
       },
       "TOC1": {
         "formatting": {
@@ -192,41 +213,65 @@
         "formatting": {
           "italic": true,
           "size": "10pt"
+        },
+        "paragraphIndentation": {
+          "left": 240
         }
       },
       "TOC3": {
         "formatting": {
           "size": "10pt"
+        },
+        "paragraphIndentation": {
+          "left": 480
         }
       },
       "TOC4": {
         "formatting": {
           "size": "10pt"
+        },
+        "paragraphIndentation": {
+          "left": 720
         }
       },
       "TOC5": {
         "formatting": {
           "size": "10pt"
+        },
+        "paragraphIndentation": {
+          "left": 960
         }
       },
       "TOC6": {
         "formatting": {
           "size": "10pt"
+        },
+        "paragraphIndentation": {
+          "left": 1200
         }
       },
       "TOC7": {
         "formatting": {
           "size": "10pt"
+        },
+        "paragraphIndentation": {
+          "left": 1440
         }
       },
       "TOC8": {
         "formatting": {
           "size": "10pt"
+        },
+        "paragraphIndentation": {
+          "left": 1680
         }
       },
       "TOC9": {
         "formatting": {
           "size": "10pt"
+        },
+        "paragraphIndentation": {
+          "left": 1920
         }
       },
       "TOCHeading": {
@@ -267,6 +312,9 @@
       ],
       "metadata": {
         "level": 1,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Title"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00332BA2\" w:rsidP=\"00217028\" w:rsidRDefault=\"00B63EA6\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"6EEE3CD0\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Title\"/><w:outlineLvl w:val=\"0\"/></w:pPr><w:bookmarkStart w:name=\"OLE_LINK1\" w:id=\"0\"/><w:bookmarkStart w:name=\"OLE_LINK2\" w:id=\"1\"/><w:bookmarkStart w:name=\"_Toc581531977\" w:id=\"1977623574\"/><w:r w:rsidR=\"6D7C350F\"><w:rPr/><w:t xml:space=\"preserve\">Demonstration of DOCX support in </w:t></w:r><w:r w:rsidR=\"6D7C350F\"><w:rPr/><w:t>calibre</w:t></w:r><w:bookmarkEnd w:id=\"1977623574\"/></w:p>"
@@ -445,6 +493,9 @@
       "metadata": {
         "level": 1,
         "alignment": "center",
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading1"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00386659\" w:rsidP=\"00386659\" w:rsidRDefault=\"00386659\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"46F715D9\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:bookmarkStart w:name=\"_Toc2054249818\" w:id=\"1999796209\"/><w:r w:rsidR=\"630A7BBA\"><w:rPr/><w:t>Text Formatting</w:t></w:r><w:bookmarkEnd w:id=\"1999796209\"/></w:p>"
@@ -469,6 +520,9 @@
       ],
       "metadata": {
         "level": 2,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00386659\" w:rsidP=\"00753CF0\" w:rsidRDefault=\"00753CF0\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"32B43E00\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:bookmarkStart w:name=\"_Toc2137712100\" w:id=\"1507754915\"/><w:r w:rsidR=\"09C75831\"><w:rPr/><w:t>Inline formatting</w:t></w:r><w:bookmarkEnd w:id=\"1507754915\"/></w:p>"
@@ -922,6 +976,9 @@
       ],
       "metadata": {
         "level": 2,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00025E62\" w:rsidP=\"00025E62\" w:rsidRDefault=\"00025E62\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"3622F1F8\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:bookmarkStart w:name=\"_Toc1074133965\" w:id=\"932951133\"/><w:r w:rsidR=\"4C562FE0\"><w:rPr/><w:t>Fun with fonts</w:t></w:r><w:bookmarkEnd w:id=\"932951133\"/></w:p>"
@@ -1003,6 +1060,9 @@
       ],
       "metadata": {
         "level": 2,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"001D582F\" w:rsidP=\"71400456\" w:rsidRDefault=\"001D582F\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"2C022100\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading2\"/><w:rPr><w:rStyle w:val=\"IntenseEmphasis\"/><w:b w:val=\"1\"/><w:bCs w:val=\"1\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/></w:rPr></w:pPr><w:bookmarkStart w:name=\"_Paragraph_level_formatting\" w:id=\"6\"/><w:bookmarkEnd w:id=\"6\"/><w:bookmarkStart w:name=\"_Toc2022725662\" w:id=\"1224456720\"/><w:r w:rsidRPr=\"71400456\" w:rsidR=\"4FB2B274\"><w:rPr><w:rStyle w:val=\"IntenseEmphasis\"/><w:b w:val=\"1\"/><w:bCs w:val=\"1\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/></w:rPr><w:t>Paragraph level formatting</w:t></w:r><w:bookmarkEnd w:id=\"1224456720\"/></w:p>"
@@ -1042,7 +1102,12 @@
           }
         }
       ],
-      "metadata": {},
+      "metadata": {
+        "paragraphIndentation": {
+          "left": 720,
+          "hanging": 720
+        }
+      },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00A46055\" w:rsidP=\"00A46055\" w:rsidRDefault=\"00A46055\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"650E6619\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:spacing w:before=\"600\"/><w:ind w:left=\"720\" w:hanging=\"720\"/></w:pPr><w:r><w:t>For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.</w:t></w:r></w:p>"
     },
     {
@@ -1066,6 +1131,9 @@
       "metadata": {
         "level": 1,
         "alignment": "center",
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading1"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidP=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"776C0E4A\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:bookmarkStart w:name=\"_Toc28114276\" w:id=\"1270184710\"/><w:r w:rsidR=\"0F7F96B7\"><w:rPr/><w:t>Tables</w:t></w:r><w:bookmarkEnd w:id=\"1270184710\"/></w:p>"
@@ -2773,6 +2841,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"1C213BED\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>110</w:t></w:r></w:p>"
@@ -2804,6 +2875,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"49FB466E\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>103</w:t></w:r></w:p>"
@@ -2835,6 +2909,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"4A742D9E\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>+7</w:t></w:r></w:p>"
@@ -2898,6 +2975,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"4BDA9431\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>202</w:t></w:r></w:p>"
@@ -2929,6 +3009,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"1C9AB277\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>210</w:t></w:r></w:p>"
@@ -2960,6 +3043,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"456735A7\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>-8</w:t></w:r></w:p>"
@@ -3109,6 +3195,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"1D8EB8EE\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>24</w:t></w:r></w:p>"
@@ -3140,6 +3229,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"5007C906\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>20</w:t></w:r></w:p>"
@@ -3171,6 +3263,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"30569314\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>+4</w:t></w:r></w:p>"
@@ -3234,6 +3329,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"00C804A8\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>43</w:t></w:r></w:p>"
@@ -3265,6 +3363,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"3F6FB1E0\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>53</w:t></w:r></w:p>"
@@ -3296,6 +3397,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"6085DA69\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>-10</w:t></w:r></w:p>"
@@ -3359,6 +3463,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"7FA0714C\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>998</w:t></w:r></w:p>"
@@ -3390,6 +3497,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"1EA9953A\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>908</w:t></w:r></w:p>"
@@ -3421,6 +3531,9 @@
                     }
                   ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "DecimalAligned"
                   },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"5AA05B6E\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"DecimalAligned\"/></w:pPr><w:r><w:t>90</w:t></w:r></w:p>"
@@ -3465,6 +3578,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "FootnoteText"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00297ABF\" w:rsidRDefault=\"00297ABF\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"63E7272E\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"FootnoteText\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"SubtleEmphasis\"/></w:rPr><w:t>Source:</w:t></w:r><w:r><w:t xml:space=\"preserve\"> Fictitious data, for illustration purposes only</w:t></w:r></w:p>"
@@ -3538,7 +3654,11 @@
                                   }
                                 }
                               ],
-                              "metadata": {},
+                              "metadata": {
+                                "paragraphIndentation": {
+                                  "firstLine": 0
+                                }
+                              },
                               "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00272A32\" w:rsidP=\"009A211E\" w:rsidRDefault=\"00272A32\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"4638C84E\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:spacing w:before=\"240\"/><w:ind w:firstLine=\"0\"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p>"
                             },
                             {
@@ -3555,7 +3675,11 @@
                                   }
                                 }
                               ],
-                              "metadata": {},
+                              "metadata": {
+                                "paragraphIndentation": {
+                                  "firstLine": 0
+                                }
+                              },
                               "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00272A32\" w:rsidP=\"00272A32\" w:rsidRDefault=\"00272A32\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"52762B19\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:spacing w:before=\"240\"/><w:ind w:firstLine=\"0\"/></w:pPr><w:r><w:t>Three</w:t></w:r></w:p>"
                             }
                           ],
@@ -3582,7 +3706,11 @@
                                   }
                                 }
                               ],
-                              "metadata": {},
+                              "metadata": {
+                                "paragraphIndentation": {
+                                  "firstLine": 0
+                                }
+                              },
                               "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00272A32\" w:rsidP=\"009A211E\" w:rsidRDefault=\"00272A32\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"03CD820F\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:spacing w:before=\"240\"/><w:ind w:firstLine=\"0\"/></w:pPr><w:r><w:t>Two</w:t></w:r></w:p>"
                             }
                           ],
@@ -3604,7 +3732,11 @@
                               "type": "paragraph",
                               "text": "",
                               "children": [],
-                              "metadata": {},
+                              "metadata": {
+                                "paragraphIndentation": {
+                                  "firstLine": 0
+                                }
+                              },
                               "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00272A32\" w:rsidP=\"009A211E\" w:rsidRDefault=\"00272A32\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"62486C05\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:spacing w:before=\"240\"/><w:ind w:firstLine=\"0\"/></w:pPr></w:p>"
                             }
                           ],
@@ -3631,7 +3763,11 @@
                                   }
                                 }
                               ],
-                              "metadata": {},
+                              "metadata": {
+                                "paragraphIndentation": {
+                                  "firstLine": 0
+                                }
+                              },
                               "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00272A32\" w:rsidP=\"009A211E\" w:rsidRDefault=\"00272A32\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"6423AEA6\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:spacing w:before=\"240\"/><w:ind w:firstLine=\"0\"/></w:pPr><w:r><w:t>Four</w:t></w:r></w:p>"
                             }
                           ],
@@ -3648,7 +3784,11 @@
                   "type": "paragraph",
                   "text": "",
                   "children": [],
-                  "metadata": {},
+                  "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    }
+                  },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00272A32\" w:rsidP=\"009A211E\" w:rsidRDefault=\"00272A32\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"4101652C\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:spacing w:before=\"240\"/><w:ind w:firstLine=\"0\"/></w:pPr></w:p>"
                 }
               ],
@@ -3675,7 +3815,11 @@
                       }
                     }
                   ],
-                  "metadata": {},
+                  "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    }
+                  },
                   "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00272A32\" w:rsidP=\"009A211E\" w:rsidRDefault=\"00272A32\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"7A39C9CA\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"77777777\"><w:pPr><w:spacing w:before=\"240\"/><w:ind w:firstLine=\"0\"/></w:pPr><w:r><w:t>To the left is a table inside a table, with some cells merged.</w:t></w:r></w:p>"
                 }
               ],
@@ -6916,6 +7060,9 @@
       "metadata": {
         "level": 1,
         "alignment": "center",
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading1"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00B727BF\" w:rsidP=\"00E7307D\" w:rsidRDefault=\"00E7307D\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"03DA85B1\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:bookmarkStart w:name=\"_Toc54889875\" w:id=\"183053957\"/><w:r w:rsidR=\"3ED02F41\"><w:rPr/><w:t>Structural Elements</w:t></w:r><w:bookmarkEnd w:id=\"183053957\"/></w:p>"
@@ -6957,6 +7104,9 @@
       ],
       "metadata": {
         "level": 2,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00E7307D\" w:rsidP=\"00E7307D\" w:rsidRDefault=\"00E7307D\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"7B758F58\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:bookmarkStart w:name=\"_Toc201580556\" w:id=\"181498905\"/><w:r w:rsidR=\"3ED02F41\"><w:rPr/><w:t>Footnotes &amp; Endnotes</w:t></w:r><w:bookmarkEnd w:id=\"181498905\"/></w:p>"
@@ -6995,6 +7145,9 @@
                 }
               ],
               "metadata": {
+                "paragraphIndentation": {
+                  "firstLine": 0
+                },
                 "style": "FootnoteText"
               },
               "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00E7307D\" w:rsidRDefault=\"00E7307D\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"7AC0B5F5\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"FootnoteText\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"FootnoteReference\"/></w:rPr><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.</w:t></w:r></w:p>"
@@ -7078,6 +7231,9 @@
       ],
       "metadata": {
         "level": 2,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"004C7966\" w:rsidP=\"004C7966\" w:rsidRDefault=\"004C7966\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"2FF1F1D3\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:bookmarkStart w:name=\"_Toc1977424358\" w:id=\"1257209708\"/><w:r w:rsidR=\"7EAB9E49\"><w:rPr/><w:t>Dropcaps</w:t></w:r><w:bookmarkEnd w:id=\"1257209708\"/></w:p>"
@@ -7160,7 +7316,11 @@
           }
         }
       ],
-      "metadata": {},
+      "metadata": {
+        "paragraphIndentation": {
+          "firstLine": 0
+        }
+      },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"004C7966\" w:rsidP=\"004C7966\" w:rsidRDefault=\"004C7966\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"25EB7059\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"73DCAB26\"><w:pPr><w:ind w:firstLine=\"0\"/></w:pPr><w:r w:rsidR=\"7EAB9E49\"><w:rPr/><w:t>rop</w:t></w:r><w:r w:rsidR=\"7EAB9E49\"><w:rPr/><w:t xml:space=\"preserve\"> caps are used to emphasize the leading paragraph at the start of a section. In </w:t></w:r><w:r w:rsidR=\"7EAB9E49\"><w:rPr/><w:t>Word</w:t></w:r><w:r w:rsidR=\"7EAB9E49\"><w:rPr/><w:t xml:space=\"preserve\"> it is possible to s</w:t></w:r><w:r w:rsidR=\"4D0B16AA\"><w:rPr/><w:t>p</w:t></w:r><w:r w:rsidR=\"7EAB9E49\"><w:rPr/><w:t>ecify how many lines of text a drop-cap should use.</w:t></w:r></w:p>"
     },
     {
@@ -7183,6 +7343,9 @@
       ],
       "metadata": {
         "level": 2,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00973501\" w:rsidP=\"00973501\" w:rsidRDefault=\"00973501\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"7D40C647\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:bookmarkStart w:name=\"_Toc1233048813\" w:id=\"723134289\"/><w:r w:rsidR=\"44E1BFF9\"><w:rPr/><w:t>Links</w:t></w:r><w:bookmarkEnd w:id=\"723134289\"/></w:p>"
@@ -7297,6 +7460,9 @@
       ],
       "metadata": {
         "level": 2,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"7E161C51\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"716F1783\"><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:bookmarkStart w:name=\"_Toc64145348\" w:id=\"1417419257\"/><w:r w:rsidR=\"62BFBF03\"><w:rPr/><w:t>Table of Contents</w:t></w:r><w:bookmarkEnd w:id=\"1417419257\"/></w:p>"
@@ -7470,6 +7636,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 240
+        },
         "style": "TOC2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidRPr=\"00747584\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"20340319\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"3DFB5F55\"><w:pPr><w:pStyle w:val=\"TOC2\"/><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9345\"/></w:tabs><w:rPr><w:rFonts w:eastAsia=\"\" w:eastAsiaTheme=\"minorEastAsia\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:noProof/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr></w:pPr><w:hyperlink w:anchor=\"_Toc2137712100\"><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>Inline formatting</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">PAGEREF _Toc2137712100 \\h</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>2</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink></w:p>"
@@ -7510,6 +7679,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 240
+        },
         "style": "TOC2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidRPr=\"00747584\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"569475BC\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"69CFA641\"><w:pPr><w:pStyle w:val=\"TOC2\"/><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9345\"/></w:tabs><w:rPr><w:rFonts w:eastAsia=\"\" w:eastAsiaTheme=\"minorEastAsia\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:noProof/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr></w:pPr><w:hyperlink w:anchor=\"_Toc1074133965\"><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>Fun with fonts</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">PAGEREF _Toc1074133965 \\h</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>2</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink></w:p>"
@@ -7550,6 +7722,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 240
+        },
         "style": "TOC2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidRPr=\"00747584\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"7620ED2A\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"2C1279D8\"><w:pPr><w:pStyle w:val=\"TOC2\"/><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9345\"/></w:tabs><w:rPr><w:rFonts w:eastAsia=\"\" w:eastAsiaTheme=\"minorEastAsia\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:noProof/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr></w:pPr><w:hyperlink w:anchor=\"_Toc2022725662\"><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>Paragraph level formatting</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">PAGEREF _Toc2022725662 \\h</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>2</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink></w:p>"
@@ -7670,6 +7845,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 240
+        },
         "style": "TOC2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidRPr=\"00747584\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"0FE17CE9\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"6E959819\"><w:pPr><w:pStyle w:val=\"TOC2\"/><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9345\"/></w:tabs><w:rPr><w:rFonts w:eastAsia=\"\" w:eastAsiaTheme=\"minorEastAsia\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:noProof/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr></w:pPr><w:hyperlink w:anchor=\"_Toc201580556\"><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>Footnotes &amp; Endnotes</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">PAGEREF _Toc201580556 \\h</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>5</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink></w:p>"
@@ -7710,6 +7888,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 240
+        },
         "style": "TOC2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidRPr=\"00747584\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"44019132\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"67FF28FA\"><w:pPr><w:pStyle w:val=\"TOC2\"/><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9345\"/></w:tabs><w:rPr><w:rFonts w:eastAsia=\"\" w:eastAsiaTheme=\"minorEastAsia\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:noProof/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr></w:pPr><w:hyperlink w:anchor=\"_Toc1977424358\"><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>Dropcaps</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">PAGEREF _Toc1977424358 \\h</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>5</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink></w:p>"
@@ -7750,6 +7931,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 240
+        },
         "style": "TOC2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidRPr=\"00747584\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"7DCCB99A\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"6BF4B388\"><w:pPr><w:pStyle w:val=\"TOC2\"/><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9345\"/></w:tabs><w:rPr><w:rFonts w:eastAsia=\"\" w:eastAsiaTheme=\"minorEastAsia\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:noProof/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr></w:pPr><w:hyperlink w:anchor=\"_Toc1233048813\"><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>Links</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">PAGEREF _Toc1233048813 \\h</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>5</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink></w:p>"
@@ -7790,6 +7974,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 240
+        },
         "style": "TOC2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidRPr=\"00747584\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"16669D24\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"277B5088\"><w:pPr><w:pStyle w:val=\"TOC2\"/><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9345\"/></w:tabs><w:rPr><w:rFonts w:eastAsia=\"\" w:eastAsiaTheme=\"minorEastAsia\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:noProof/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr></w:pPr><w:hyperlink w:anchor=\"_Toc64145348\"><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>Table of Contents</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">PAGEREF _Toc64145348 \\h</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>5</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink></w:p>"
@@ -7910,6 +8097,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 240
+        },
         "style": "TOC2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidRPr=\"00747584\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"3A551484\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"7F7A2915\"><w:pPr><w:pStyle w:val=\"TOC2\"/><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9345\"/></w:tabs><w:rPr><w:rFonts w:eastAsia=\"\" w:eastAsiaTheme=\"minorEastAsia\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:noProof/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr></w:pPr><w:hyperlink w:anchor=\"_Toc1958162433\"><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>Bulleted List</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">PAGEREF _Toc1958162433 \\h</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>8</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink></w:p>"
@@ -7950,6 +8140,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 240
+        },
         "style": "TOC2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidRPr=\"00747584\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"31536C2F\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"154BD7C7\"><w:pPr><w:pStyle w:val=\"TOC2\"/><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9345\"/></w:tabs><w:rPr><w:rFonts w:eastAsia=\"\" w:eastAsiaTheme=\"minorEastAsia\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:noProof/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr></w:pPr><w:hyperlink w:anchor=\"_Toc415190676\"><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>Numbered List</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">PAGEREF _Toc415190676 \\h</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>8</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink></w:p>"
@@ -7990,6 +8183,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 240
+        },
         "style": "TOC2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidRPr=\"00747584\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"239AD8BA\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"23EF4BD7\"><w:pPr><w:pStyle w:val=\"TOC2\"/><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9345\"/></w:tabs><w:rPr><w:rFonts w:eastAsia=\"\" w:eastAsiaTheme=\"minorEastAsia\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:noProof/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr></w:pPr><w:hyperlink w:anchor=\"_Toc1093260318\"><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>Multi-level Lists</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">PAGEREF _Toc1093260318 \\h</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>8</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink></w:p>"
@@ -8030,6 +8226,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 240
+        },
         "style": "TOC2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00936DB5\" w:rsidP=\"71400456\" w:rsidRDefault=\"00936DB5\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"1FC7166E\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\" wp14:textId=\"54590AF4\"><w:pPr><w:pStyle w:val=\"TOC2\"/><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"9345\"/></w:tabs><w:rPr><w:rFonts w:eastAsia=\"\" w:eastAsiaTheme=\"minorEastAsia\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:noProof/><w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/></w:rPr></w:pPr><w:hyperlink w:anchor=\"_Toc1471533984\"><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>Continued Lists</w:t></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">PAGEREF _Toc1471533984 \\h</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"71400456\"><w:rPr><w:rStyle w:val=\"Hyperlink\"/></w:rPr><w:t>8</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:hyperlink><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>"
@@ -8069,6 +8268,9 @@
       "metadata": {
         "level": 1,
         "alignment": "center",
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading1"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"002E7C7C\" w:rsidP=\"002E7C7C\" w:rsidRDefault=\"002E7C7C\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"6442539E\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:bookmarkStart w:name=\"_Toc484565143\" w:id=\"645320926\"/><w:r w:rsidR=\"1A06216B\"><w:rPr/><w:t>Images</w:t></w:r><w:bookmarkEnd w:id=\"645320926\"/></w:p>"
@@ -8114,6 +8316,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "firstLine": 432
+        },
         "style": "Normal"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"66B84382\" w:rsidP=\"71400456\" w:rsidRDefault=\"66B84382\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"4057D370\" w14:textId=\"6884D3BA\"><w:pPr><w:pStyle w:val=\"Normal\"/><w:rPr><w:rFonts w:ascii=\"Times\" w:hAnsi=\"Times\" w:eastAsia=\"Times\" w:cs=\"Times\"/><w:b w:val=\"0\"/><w:bCs w:val=\"0\"/><w:i w:val=\"0\"/><w:iCs w:val=\"0\"/><w:caps w:val=\"0\"/><w:smallCaps w:val=\"0\"/><w:noProof w:val=\"0\"/><w:color w:val=\"000000\" w:themeColor=\"text1\" w:themeTint=\"FF\" w:themeShade=\"FF\"/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/><w:lang w:val=\"en-US\"/></w:rPr></w:pPr><w:r w:rsidR=\"66B84382\"><w:drawing><wp:inline xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing\" wp14:editId=\"59223659\" wp14:anchorId=\"229A495E\" xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\"><wp:extent cx=\"4010025\" cy=\"4010025\"/><wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/><wp:docPr id=\"45369589\" name=\"drawing\" title=\"165 Inspirational Quotes To Keep You Motivated In Life\"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect=\"1\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"/></wp:cNvGraphicFramePr><a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"2136387631\" name=\"Picture 2136387631\"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed=\"rId711942037\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><a:extLst><a:ext uri=\"{28A0092B-C50C-407E-A947-70E740481C1C}\"><a14:useLocalDpi xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\"/></a:ext></a:extLst></a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm rot=\"0\"><a:off x=\"0\" y=\"0\"/><a:ext cx=\"4010025\" cy=\"4010025\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
@@ -8123,6 +8328,9 @@
       "text": "",
       "children": [],
       "metadata": {
+        "paragraphIndentation": {
+          "firstLine": 432
+        },
         "style": "Normal"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"71400456\" w:rsidP=\"71400456\" w:rsidRDefault=\"71400456\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"46D121C2\" w14:textId=\"04E70223\"><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr></w:p>"
@@ -8195,6 +8403,9 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "firstLine": 432
+        },
         "style": "Normal"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"0FE07E51\" w:rsidP=\"71400456\" w:rsidRDefault=\"0FE07E51\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"6EC1E9AE\" w14:textId=\"0FC4ADEE\"><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr><w:r w:rsidR=\"0FE07E51\"><w:rPr/><w:t xml:space=\"preserve\">There is no analogous technology in </w:t></w:r><w:r w:rsidR=\"0FE07E51\"><w:rPr/><w:t>ebooks</w:t></w:r><w:r w:rsidR=\"0FE07E51\"><w:rPr/><w:t xml:space=\"preserve\">, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was </w:t></w:r><w:r w:rsidRPr=\"71400456\" w:rsidR=\"0FE07E51\"><w:rPr><w:rStyle w:val=\"SubtleEmphasis\"/></w:rPr><w:t>inserted</w:t></w:r><w:r w:rsidR=\"48F2F964\"><w:rPr/><w:t>, not necessarily where it appears on the page in Word.</w:t></w:r></w:p>"
@@ -8220,6 +8431,9 @@
       "metadata": {
         "level": 1,
         "alignment": "center",
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading1"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"008920B2\" w:rsidP=\"008920B2\" w:rsidRDefault=\"008920B2\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"6614341F\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:bookmarkStart w:name=\"_Toc1359965655\" w:id=\"624545445\"/><w:r w:rsidR=\"56D7363A\"><w:rPr/><w:t>Lists</w:t></w:r><w:bookmarkEnd w:id=\"624545445\"/></w:p>"
@@ -8261,6 +8475,9 @@
       ],
       "metadata": {
         "level": 2,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"008920B2\" w:rsidP=\"008920B2\" w:rsidRDefault=\"008920B2\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"6197E541\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:bookmarkStart w:name=\"_Toc1958162433\" w:id=\"636604137\"/><w:r w:rsidR=\"56D7363A\"><w:rPr/><w:t>Bulleted List</w:t></w:r><w:bookmarkEnd w:id=\"636604137\"/></w:p>"
@@ -8282,6 +8499,9 @@
       "metadata": {
         "listType": "unordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "1",
         "itemIndex": 0,
@@ -8306,6 +8526,9 @@
       "metadata": {
         "listType": "unordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "1",
         "itemIndex": 1,
@@ -8333,6 +8556,9 @@
       ],
       "metadata": {
         "level": 2,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"008920B2\" w:rsidP=\"008920B2\" w:rsidRDefault=\"008920B2\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"5ECE29C0\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:bookmarkStart w:name=\"_Toc415190676\" w:id=\"1466016212\"/><w:r w:rsidR=\"56D7363A\"><w:rPr/><w:t>Numbered List</w:t></w:r><w:bookmarkEnd w:id=\"1466016212\"/></w:p>"
@@ -8354,6 +8580,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "2",
         "itemIndex": 0,
@@ -8378,6 +8607,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "2",
         "itemIndex": 1,
@@ -8418,6 +8650,9 @@
       ],
       "metadata": {
         "level": 2,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"008920B2\" w:rsidP=\"008920B2\" w:rsidRDefault=\"008920B2\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"513A727A\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:bookmarkStart w:name=\"_Toc1093260318\" w:id=\"1186724002\"/><w:r w:rsidR=\"56D7363A\"><w:rPr/><w:t>Multi-level List</w:t></w:r><w:r w:rsidR=\"2AD0789F\"><w:rPr/><w:t>s</w:t></w:r><w:bookmarkEnd w:id=\"1186724002\"/></w:p>"
@@ -8439,6 +8674,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "3",
         "itemIndex": 0,
@@ -8463,6 +8701,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 1,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "3",
         "itemIndex": 0,
@@ -8487,6 +8728,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 2,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "3",
         "itemIndex": 0,
@@ -8511,6 +8755,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 2,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "3",
         "itemIndex": 1,
@@ -8535,6 +8782,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 2,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "3",
         "itemIndex": 2,
@@ -8559,6 +8809,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "3",
         "itemIndex": 1,
@@ -8581,6 +8834,10 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 360,
+          "firstLine": 0
+        },
         "style": "ListParagraph"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"000822AA\" w:rsidP=\"000822AA\" w:rsidRDefault=\"000822AA\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"0C818A76\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"ListParagraph\"/><w:ind w:left=\"360\" w:firstLine=\"0\"/></w:pPr><w:r><w:t>A Multi-level list with bullets:</w:t></w:r></w:p>"
@@ -8602,6 +8859,9 @@
       "metadata": {
         "listType": "unordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "4",
         "itemIndex": 0,
@@ -8626,6 +8886,9 @@
       "metadata": {
         "listType": "unordered",
         "indentation": 1,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "4",
         "itemIndex": 0,
@@ -8650,6 +8913,9 @@
       "metadata": {
         "listType": "unordered",
         "indentation": 2,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "4",
         "itemIndex": 0,
@@ -8674,6 +8940,9 @@
       "metadata": {
         "listType": "unordered",
         "indentation": 3,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "4",
         "itemIndex": 0,
@@ -8698,6 +8967,9 @@
       "metadata": {
         "listType": "unordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "4",
         "itemIndex": 1,
@@ -8725,6 +8997,9 @@
       ],
       "metadata": {
         "level": 2,
+        "paragraphIndentation": {
+          "firstLine": 0
+        },
         "style": "Heading2"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"006535FC\" w:rsidP=\"006535FC\" w:rsidRDefault=\"006535FC\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"6DD540F5\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:bookmarkStart w:name=\"_Toc1471533984\" w:id=\"1145505707\"/><w:r w:rsidR=\"51CFD761\"><w:rPr/><w:t>Continued Lists</w:t></w:r><w:bookmarkEnd w:id=\"1145505707\"/></w:p>"
@@ -8746,6 +9021,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "7",
         "itemIndex": 0,
@@ -8770,6 +9048,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "7",
         "itemIndex": 1,
@@ -8792,6 +9073,10 @@
         }
       ],
       "metadata": {
+        "paragraphIndentation": {
+          "left": 720,
+          "firstLine": 0
+        },
         "style": "ListParagraph"
       },
       "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"006535FC\" w:rsidP=\"006535FC\" w:rsidRDefault=\"006535FC\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"650527CB\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"ListParagraph\"/><w:ind w:firstLine=\"0\"/></w:pPr><w:r><w:t>An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.</w:t></w:r></w:p>"
@@ -8813,6 +9098,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "7",
         "itemIndex": 2,
@@ -8837,6 +9125,9 @@
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
+        "paragraphIndentation": {
+          "left": 720
+        },
         "alignment": "left",
         "listId": "7",
         "itemIndex": 3,
