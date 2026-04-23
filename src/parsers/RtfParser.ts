@@ -181,6 +181,15 @@ export class SimpleRtfParser {
     /** The RTF content as a Buffer */
     private buffer: Buffer;
 
+    /** Current code page for character decoding (default is Windows-1252) */
+    private codePage: number = 1252;
+
+    /** Cached TextDecoders for different code pages */
+    private decoders: { [key: number]: TextDecoder } = {};
+
+    /** Buffer for consecutive text bytes to handle multi-byte encodings and UTF-8 detection */
+    private pendingBytes: number[] = [];
+
     /** Total length of the buffer */
     private length: number;
 
@@ -203,11 +212,13 @@ export class SimpleRtfParser {
 
             if (char === 0x7B) { // '{'
                 this.index++;
+                this.flushPendingText(currentGroup);
                 const newGroup: RtfGroup = { type: 'group', content: [] };
                 currentGroup.content.push(newGroup);
                 stack.push(newGroup);
             } else if (char === 0x7D) { // '}'
                 this.index++;
+                this.flushPendingText(currentGroup);
                 if (stack.length > 1) {
                     stack.pop();
                 }
@@ -223,6 +234,7 @@ export class SimpleRtfParser {
             }
         }
 
+        this.flushPendingText(root);
         return root;
     }
 
@@ -233,7 +245,7 @@ export class SimpleRtfParser {
 
         // Special control symbols
         if (char === 0x7B || char === 0x7D || char === 0x5C) { // \{ \} \\
-            group.content.push({ type: 'text', value: String.fromCharCode(char) });
+            this.pendingBytes.push(char);
             this.index++;
             return;
         }
@@ -241,49 +253,17 @@ export class SimpleRtfParser {
         if (char === 0x27) { // \'xx (hex)
             this.index++;
             if (this.index + 1 < this.length) {
-                const hex = this.buffer.toString('utf8', this.index, this.index + 2);
+                const hex = String.fromCharCode(this.buffer[this.index], this.buffer[this.index + 1]);
                 const code = parseInt(hex, 16);
                 if (!isNaN(code)) {
-                    // RTF hex escapes represent bytes in the document's code page (usually Windows-1252)
-                    // Characters 0x80-0x9F in Windows-1252 don't map directly to Unicode
-                    // We need to convert them properly
-                    const windows1252ToUnicode: { [key: number]: number } = {
-                        0x80: 0x20AC, // €
-                        0x82: 0x201A, // ‚
-                        0x83: 0x0192, // ƒ
-                        0x84: 0x201E, // „
-                        0x85: 0x2026, // …
-                        0x86: 0x2020, // †
-                        0x87: 0x2021, // ‡
-                        0x88: 0x02C6, // ˆ
-                        0x89: 0x2030, // ‰
-                        0x8A: 0x0160, // Š
-                        0x8B: 0x2039, // ‹
-                        0x8C: 0x0152, // Œ
-                        0x8E: 0x017D, // Ž
-                        0x91: 0x2018, // '
-                        0x92: 0x2019, // '
-                        0x93: 0x201C, // "
-                        0x94: 0x201D, // "
-                        0x95: 0x2022, // •
-                        0x96: 0x2013, // –
-                        0x97: 0x2014, // —
-                        0x98: 0x02DC, // ˜
-                        0x99: 0x2122, // ™
-                        0x9A: 0x0161, // š
-                        0x9B: 0x203A, // ›
-                        0x9C: 0x0153, // œ
-                        0x9E: 0x017E, // ž
-                        0x9F: 0x0178  // Ÿ
-                    };
-
-                    const unicodeCode = windows1252ToUnicode[code] || code;
-                    group.content.push({ type: 'text', value: String.fromCharCode(unicodeCode) });
+                    this.pendingBytes.push(code);
                 }
                 this.index += 2;
             }
             return;
         }
+
+        this.flushPendingText(group);
 
         if (char === 0x2A) { // \* (ignorable destination)
             // We treat this as a control word named '*'
@@ -328,7 +308,7 @@ export class SimpleRtfParser {
         }
 
         // Space after control word is consumed
-        if (this.index < this.length && this.buffer[this.index] === 0x20) {
+        if (name !== '' && this.index < this.length && this.buffer[this.index] === 0x20) {
             this.index++;
         }
 
@@ -338,6 +318,19 @@ export class SimpleRtfParser {
             this.index += param;
             // \binN is not added to content as we want to ignore it
             return;
+        }
+
+        // Handle encoding control words
+        if (name === 'ansicpg' && param !== undefined) {
+            this.codePage = param;
+        } else if (name === 'ansi') {
+            this.codePage = 1252;
+        } else if (name === 'mac') {
+            this.codePage = 10000;
+        } else if (name === 'pc') {
+            this.codePage = 437;
+        } else if (name === 'pca') {
+            this.codePage = 850;
         }
 
         group.content.push({ type: 'control', value: name, param });
@@ -352,20 +345,93 @@ export class SimpleRtfParser {
     }
 
     private parseText(group: RtfGroup) {
-        let text = '';
         while (this.index < this.length) {
             const char = this.buffer[this.index];
+            if (char === undefined) break;
             if (char === 0x7B || char === 0x7D || char === 0x5C || char === 0x0D || char === 0x0A) {
                 break;
             }
-            // Basic ASCII text.
-            text += String.fromCharCode(char);
+            this.pendingBytes.push(char);
             this.index++;
         }
-        if (text.length > 0) {
-            group.content.push({ type: 'text', value: text });
+    }
+
+    /**
+     * Flushes the pending bytes buffer as a text node to the current group.
+     * @param group The group to append the text node to
+     */
+    private flushPendingText(group: RtfGroup) {
+        if (this.pendingBytes.length > 0) {
+            group.content.push({ type: 'text', value: this.decodeBytes(this.pendingBytes, this.codePage) });
+            this.pendingBytes = [];
         }
     }
+
+    /**
+     * Decodes a byte array using a "UTF-8 first" strategy.
+     * If the bytes form valid UTF-8 and contain non-ASCII characters, UTF-8 is preferred.
+     * Otherwise, falls back to the specified code page.
+     * @param bytes The bytes to decode
+     * @param codePage The RTF code page ID
+     * @returns The decoded string
+     */
+    private decodeBytes(bytes: number[], codePage: number): string {
+        const uint8 = new Uint8Array(bytes);
+
+        // Try UTF-8 first if there are any non-ASCII bytes.
+        // Many modern RTF generators (like calibre or web-based tools) dump UTF-8 bytes 
+        // into the RTF even if the header claims a different code page.
+        if (bytes.some(b => b > 127)) {
+            try {
+                // Use fatal: true to ensure we fall back on invalid UTF-8 sequences
+                const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+                return utf8Decoder.decode(uint8);
+            } catch (e) {
+                // Not valid UTF-8, continue to code page fallback
+            }
+        }
+
+        // Fallback to specified code page
+        if (!this.decoders[codePage]) {
+            let encoding = `windows-${codePage}`;
+            if (codePage === 10000) encoding = 'macintosh';
+            else if (codePage === 437) encoding = 'ibm437';
+            else if (codePage === 850) encoding = 'ibm850';
+
+            try {
+                this.decoders[codePage] = new TextDecoder(encoding);
+            } catch (e) {
+                if (codePage !== 1252) {
+                    try {
+                        this.decoders[codePage] = new TextDecoder('windows-1252');
+                    } catch (e2) {
+                        return String.fromCharCode(...bytes);
+                    }
+                } else {
+                    return String.fromCharCode(...bytes);
+                }
+            }
+        }
+
+        let result = this.decoders[codePage].decode(uint8);
+
+        // Safety override for Windows-1252 0x80-0x9F range if TextDecoder behaves like Latin-1.
+        // We replace control characters in the decoded string with their proper 1252 equivalents.
+        if (codePage === 1252 && /[\u0080-\u009F]/.test(result)) {
+            const map: { [key: string]: string } = {
+                '\u0080': '€', '\u0082': '‚', '\u0083': 'ƒ', '\u0084': '„', '\u0085': '…',
+                '\u0086': '†', '\u0087': '‡', '\u0088': 'ˆ', '\u0089': '‰', '\u008A': 'Š',
+                '\u008B': '‹', '\u008C': 'Œ', '\u008E': 'Ž', '\u0091': '‘', '\u0092': '’',
+                '\u0093': '“', '\u0094': '”', '\u0095': '•', '\u0096': '–', '\u0097': '—',
+                '\u0098': '˜', '\u0099': '™', '\u009A': 'š', '\u009B': '›', '\u009C': 'œ',
+                '\u009E': 'ž', '\u009F': 'Ÿ'
+            };
+            return result.replace(/[\u0080-\u009F]/g, m => map[m] || m);
+        }
+
+        return result;
+    }
+
 }
 
 /**
