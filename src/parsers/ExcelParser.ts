@@ -449,8 +449,8 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                             const typeMatch = cXml.match(/t="([a-zA-Z]+)"/);
                             const type = typeMatch ? typeMatch[1] : 'n'; // n = number (default)
 
-                            const vMatch = cXml.match(/<v>(.*?)<\/v>/);
-                            const tMatch = cXml.match(/<t>(.*?)<\/t>/);
+                            const vMatch = cXml.match(/<v>([\s\S]*?)<\/v>/);
+                            const tMatch = cXml.match(/<t>([\s\S]*?)<\/t>/);
 
                             let text = '';
                             let cellNodes: OfficeContentNode[] = [];
@@ -467,9 +467,9 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                                     text = content || '';
                                 }
                             } else if (type === 'inlineStr' && tMatch) {
-                                text = tMatch[1];
+                                text = tMatch[1].trim();
                             } else if (vMatch) {
-                                text = vMatch[1];
+                                text = vMatch[1].trim();
                             }
 
                             // Parse cell coordinate
