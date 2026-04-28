@@ -73,6 +73,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
     const styleMap: { [key: string]: TextFormatting } = {};
     const paragraphStyleMap: { [key: string]: { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean } } = {};
     const listCounters: { [listId: string]: { [level: string]: number } } = {}; // Track item index per listId/level
+    let currentListId: string | null = null;
+    let lastListType: 'ordered' | 'unordered' | null = null;
+    let lastListStyle: string | null = null;
+    let listIdCounter = 0;
+    let lastWasList = false;
 
     // Helper to parse styles
     const parseStyles = (xmlString: string) => {
@@ -235,7 +240,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                         type: 'text',
                         text: '\n',
                         formatting: parentFormatting,
-                        metadata: linkMetadata ? { ...linkMetadata } : undefined
+                        metadata: { ...(linkMetadata || {}), isLineBreak: true } as any
                     });
                 } else if (tagName === 'text:span') {
                     // Formatted text span
@@ -421,6 +426,33 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
 
         return { text: content.text, children: content.children, alignment, style: paraStyle || undefined };
     };
+
+    /**
+     * Splits paragraph content into multiple segments based on line breaks.
+     * Used to handle soft line breaks within list items.
+     * 
+     * @param pContent - The content of a single paragraph
+     * @returns Array of content segments
+     */
+    const splitParagraphByBreaks = (pContent: { text: string; children: OfficeContentNode[]; alignment?: "left" | "center" | "right" | "justify"; style?: string }): { text: string; children: OfficeContentNode[] }[] => {
+        const segments: { text: string; children: OfficeContentNode[] }[] = [];
+        let currentText = "";
+        let currentChildren: OfficeContentNode[] = [];
+
+        for (const child of pContent.children) {
+            if (child.type === "text" && (child.metadata as any)?.isLineBreak) {
+                segments.push({ text: currentText, children: currentChildren });
+                currentText = "";
+                currentChildren = [];
+            } else {
+                currentText += child.text || "";
+                currentChildren.push(child);
+            }
+        }
+        segments.push({ text: currentText, children: currentChildren });
+        return segments;
+    };
+
 
     /**
      * Helper to parse a table node and extract its structure.
@@ -692,6 +724,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     pNode.rawContent = getRawContent(node, sourceXml, config);
                 }
                 targetArray.push(pNode);
+                lastWasList = false;
             } else if (node.tagName === "text:h") {
                 const level = parseInt(node.getAttribute("text:outline-level") || "1");
                 const hContent = parseParagraphContent(node, paragraphStyleMap, styleMap, config, sourceXml);
@@ -710,6 +743,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     hNode.rawContent = getRawContent(node, sourceXml, config);
                 }
                 targetArray.push(hNode);
+                lastWasList = false;
             } else if (node.tagName === "table:table") {
                 // Parse table with proper structure
                 const tableNode = parseTable(node, paragraphStyleMap, styleMap, config, sourceXml);
@@ -717,17 +751,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     tableNode.rawContent = getRawContent(node, sourceXml, config);
                 }
                 targetArray.push(tableNode);
+                lastWasList = false;
             } else if (node.tagName === "text:list") {
                 // Parse list structure with proper listId tracking
                 const listItems = getDirectChildren(node, "text:list-item");
 
-                // Get list style name to use as listId (or generate one)
-                const listStyleName = node.getAttribute("text:style-name") || node.getAttribute("xml:id");
-                const listId = listStyleName || `list-${targetArray.length}`;
-
                 // Determine list type by checking the list style definition
                 let listType: 'ordered' | 'unordered' = 'unordered';
                 let isVisible = false;
+                const listStyleName = node.getAttribute("text:style-name") || node.getAttribute("xml:id");
                 let styleNameToCheck = listStyleName;
 
                 // If no style name, check parent list for inherited style
@@ -796,6 +828,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 // If the list is not visible, it's likely a layout list used by Impress.
                 // We should traverse its items and treat their content as regular nodes.
                 if (!isVisible) {
+                    lastWasList = false;
                     for (let i = 0; i < listItems.length; i++) {
                         const item = listItems[i];
                         if (item.childNodes) {
@@ -809,6 +842,25 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     }
                     return;
                 }
+
+                // List Continuity Logic:
+                // If this list follows another list of the same type and style, or we are in ODP and it's sequential,
+                // we should reuse the previous listId to maintain numbering.
+                const isODP = fileType === 'odp';
+                const sameStyle = styleNameToCheck && styleNameToCheck === lastListStyle;
+                const sameType = listType === lastListType;
+                
+                let listId: string;
+                if (lastWasList && (sameStyle || (isODP && sameType))) {
+                    listId = currentListId!;
+                } else {
+                    // New list
+                    listId = styleNameToCheck || `list-${++listIdCounter}`;
+                    currentListId = listId;
+                    lastListType = listType;
+                    lastListStyle = styleNameToCheck;
+                }
+                lastWasList = true;
 
                 // Calculate indentation level by counting parent text:list elements
                 let indentation = 0;
@@ -833,16 +885,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 for (let i = 0; i < listItems.length; i++) {
                     const item = listItems[i];
 
-                    // Increment item index for this list/level
-                    listCounters[listId][indentKey]++;
-                    const itemIndex = listCounters[listId][indentKey];
-
-                    // Reset deeper levels when we encounter an item at this level
-                    for (let k = indentation + 1; k < 10; k++) {
-                        if (listCounters[listId][k.toString()] !== undefined) {
-                            listCounters[listId][k.toString()] = -1;
-                        }
-                    }
+                    let hasIndexedThisItem = false;
 
                     // Iterate over direct children of list item (paragraphs, headings, nested lists)
                     if (item.childNodes) {
@@ -851,41 +894,53 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                             if (isElement(child)) { // Element
                                 const element = child;
 
-                                if (element.tagName === "text:p") {
-                                    const pContent = parseParagraphContent(element, paragraphStyleMap, styleMap, config, sourceXml);
-                                    const listNode: OfficeContentNode = {
-                                        type: 'list',
-                                        text: pContent.text,
-                                        children: pContent.children,
-                                        metadata: {
-                                            listType,
-                                            indentation,
-                                            itemIndex,
-                                            listId,
-                                            alignment: pContent.alignment || 'left',
-                                            style: pContent.style
-                                        } as ListMetadata
-                                    };
-                                    if (config.includeRawContent) listNode.rawContent = getRawContent(element, sourceXml, config);
-                                    targetArray.push(listNode);
-                                } else if (element.tagName === "text:h") {
-                                    const level = parseInt(element.getAttribute("text:outline-level") || "1");
-                                    const hContent = parseParagraphContent(element, paragraphStyleMap, styleMap, config, sourceXml);
-                                    const listNode: OfficeContentNode = {
-                                        type: 'list',
-                                        text: hContent.text,
-                                        children: hContent.children,
-                                        metadata: {
-                                            listType,
-                                            indentation,
-                                            itemIndex,
-                                            listId,
-                                            ...(hContent.alignment ? { alignment: hContent.alignment } : {}),
-                                            style: hContent.style
+                                if (element.tagName === "text:p" || element.tagName === "text:h") {
+                                    if (!hasIndexedThisItem) {
+                                        listCounters[listId][indentKey]++;
+                                        hasIndexedThisItem = true;
+                                        for (let k = indentation + 1; k < 10; k++) {
+                                            if (listCounters[listId][k.toString()] !== undefined) {
+                                                listCounters[listId][k.toString()] = -1;
+                                            }
                                         }
-                                    };
-                                    if (config.includeRawContent) listNode.rawContent = getRawContent(element, sourceXml, config);
-                                    targetArray.push(listNode);
+                                    }
+                                    const itemIndex = listCounters[listId][indentKey];
+                                    const pContent = parseParagraphContent(element, paragraphStyleMap, styleMap, config, sourceXml);
+                                    const segments = splitParagraphByBreaks(pContent);
+
+                                    for (let k = 0; k < segments.length; k++) {
+                                        const segment = segments[k];
+                                        if (!segment.text.trim() && segment.children.length === 0) continue;
+
+                                        const isFirst = k === 0;
+                                        const nodeType = isFirst ? 'list' : 'paragraph';
+                                        
+                                        const node: OfficeContentNode = {
+                                            type: nodeType as any,
+                                            text: segment.text,
+                                            children: segment.children,
+                                            metadata: isFirst ? {
+                                                listType,
+                                                indentation,
+                                                itemIndex,
+                                                listId,
+                                                alignment: pContent.alignment || 'left',
+                                                style: pContent.style
+                                            } as ListMetadata : {
+                                                alignment: pContent.alignment || 'left',
+                                                style: pContent.style
+                                            }
+                                        };
+
+                                        // Special case for headings in lists
+                                        if (isFirst && element.tagName === "text:h") {
+                                            const level = parseInt(element.getAttribute("text:outline-level") || "1");
+                                            (node.metadata as any).level = level;
+                                        }
+
+                                        if (config.includeRawContent) node.rawContent = getRawContent(element, sourceXml, config);
+                                        targetArray.push(node);
+                                    }
                                 } else if (element.tagName === "text:list") {
                                     // Recursive call for nested list
                                     traverse(element, targetArray, forceHeading, sourceXml);

@@ -443,118 +443,125 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                     pNode.rawContent = getRawContent(p, xmlContentString, config);
                 }
 
-                const runs = getElementsByTagName(p, "a:r");
+                // Process all children of <a:p> in order (runs, breaks, fields)
+                const children = Array.from(p.childNodes);
+                let activeNode = pNode;
+                nodes.push(activeNode);
 
-                for (let j = 0; j < runs.length; j++) {
-                    const r = runs[j];
-                    const t = getFirstElementByTagName(r, "a:t");
-                    if (t && t.childNodes[0]) {
-                        const textContent = t.childNodes[0].nodeValue || '';
-                        pNode.text += textContent;
+                for (const childNode of children) {
+                    if (!isElement(childNode)) continue;
+                    const element = childNode;
+                    const tag = element.tagName;
 
-                        const rPr = getFirstElementByTagName(r, "a:rPr");
-                        const formatting: TextFormatting = {};
-                        if (rPr) {
-                            if (rPr.getAttribute("b") === "1") formatting.bold = true;
-                            if (rPr.getAttribute("i") === "1") formatting.italic = true;
-                            if (rPr.getAttribute("u") === "sng") formatting.underline = true;
-                            if (rPr.getAttribute("strike") === "sngStrike") formatting.strikethrough = true;
+                    if (tag === "a:r" || tag === "a:fld") {
+                        const t = getFirstElementByTagName(element, "a:t");
+                        if (t && t.childNodes[0]) {
+                            const textContent = t.childNodes[0].nodeValue || "";
+                            activeNode.text += textContent;
 
-                            const sz = rPr.getAttribute("sz");
-                            if (sz) formatting.size = (parseInt(sz) / 100).toString() + 'pt';
+                            const rPr = getFirstElementByTagName(element, "a:rPr");
+                            const formatting: TextFormatting = {};
+                            if (rPr) {
+                                if (rPr.getAttribute("b") === "1") formatting.bold = true;
+                                if (rPr.getAttribute("i") === "1") formatting.italic = true;
+                                if (rPr.getAttribute("u") === "sng") formatting.underline = true;
+                                if (rPr.getAttribute("strike") === "sngStrike") formatting.strikethrough = true;
 
-                            // Color extraction
-                            const solidFill = getFirstElementByTagName(rPr, "a:solidFill");
-                            if (solidFill) {
-                                const srgbClr = getFirstElementByTagName(solidFill, "a:srgbClr");
-                                if (srgbClr) {
-                                    const val = srgbClr.getAttribute("val");
-                                    if (val) formatting.color = '#' + val;
+                                const sz = rPr.getAttribute("sz");
+                                if (sz) formatting.size = (parseInt(sz) / 100).toString() + "pt";
+
+                                // Color extraction
+                                const solidFill = getFirstElementByTagName(rPr, "a:solidFill");
+                                if (solidFill) {
+                                    const srgbClr = getFirstElementByTagName(solidFill, "a:srgbClr");
+                                    if (srgbClr) {
+                                        const val = srgbClr.getAttribute("val");
+                                        if (val) formatting.color = "#" + val;
+                                    }
+                                }
+
+                                // Highlight extraction
+                                const highlight = getFirstElementByTagName(rPr, "a:highlight");
+                                if (highlight) {
+                                    const srgbClr = getFirstElementByTagName(highlight, "a:srgbClr");
+                                    if (srgbClr) {
+                                        const val = srgbClr.getAttribute("val");
+                                        if (val) formatting.backgroundColor = "#" + val;
+                                    }
+                                }
+
+                                // Font family
+                                const latin = getFirstElementByTagName(rPr, "a:latin");
+                                if (latin) {
+                                    const typeface = latin.getAttribute("typeface");
+                                    if (typeface) formatting.font = typeface;
+                                }
+
+                                // Subscript/Superscript
+                                const baseline = rPr.getAttribute("baseline");
+                                if (baseline) {
+                                    const baselineVal = parseInt(baseline);
+                                    if (baselineVal < 0) formatting.subscript = true;
+                                    if (baselineVal > 0) formatting.superscript = true;
                                 }
                             }
 
-                            // Highlight extraction
-                            const highlight = getFirstElementByTagName(rPr, "a:highlight");
-                            if (highlight) {
-                                const srgbClr = getFirstElementByTagName(highlight, "a:srgbClr");
-                                if (srgbClr) {
-                                    const val = srgbClr.getAttribute("val");
-                                    if (val) formatting.backgroundColor = '#' + val;
+                            const textNode: OfficeContentNode = {
+                                type: 'text',
+                                text: textContent,
+                                formatting: formatting
+                            };
+
+                            // Check for Hyperlinks
+                            const hlinkClick = getFirstElementByTagName(element, "a:hlinkClick");
+                            if (hlinkClick) {
+                                const rId = hlinkClick.getAttribute("r:id");
+                                const action = hlinkClick.getAttribute("action");
+                                let link: string | undefined;
+                                let linkType: "internal" | "external" | undefined;
+                                if (rId && slideRelsMap[slideNumber] && slideRelsMap[slideNumber][rId] && slideRelsMap[slideNumber][rId].type === "hyperlink") {
+                                    link = slideRelsMap[slideNumber][rId].target;
+                                    linkType = "external";
+                                } else if (rId && slideRelsMap[slideNumber] && slideRelsMap[slideNumber][rId] && slideRelsMap[slideNumber][rId].type === "slide") {
+                                    link = slideRelsMap[slideNumber][rId].target;
+                                    linkType = "internal";
+                                } else if (action) {
+                                    link = action;
+                                    linkType = "internal";
+                                }
+                                if (link) {
+                                    textNode.metadata = { link, linkType };
                                 }
                             }
 
-                            // Font family
-                            const latin = getFirstElementByTagName(rPr, "a:latin");
-                            if (latin) {
-                                const typeface = latin.getAttribute("typeface");
-                                if (typeface) formatting.font = typeface;
-                            }
-
-                            // Subscript/Superscript
-                            const baseline = rPr.getAttribute("baseline");
-                            if (baseline) {
-                                const baselineVal = parseInt(baseline);
-                                if (baselineVal < 0) formatting.subscript = true;
-                                if (baselineVal > 0) formatting.superscript = true;
-                            }
+                            activeNode.children?.push(textNode);
                         }
-
-                        const textNode: OfficeContentNode = {
-                            type: 'text',
-                            text: textContent,
-                            formatting: formatting
-                        };
-
-                        // Check for Hyperlinks
-                        const hlinkClick = getFirstElementByTagName(r, "a:hlinkClick");
-                        // Check if this run has a hyperlink click action
-                        if (hlinkClick) {
-                            // Relationship ID for the link
-                            const rId = hlinkClick.getAttribute("r:id");
-                            // Optional action attribute, often for internal jumps
-                            const action = hlinkClick.getAttribute("action");
-                            // Result placeholders
-                            let link: string | undefined;
-                            let linkType: "internal" | "external" | undefined;
-                            // Case 1: Relationship exists in slideRelsMap and is a real hyperlink (external URL)
-                            if (rId
-                                && slideRelsMap[slideNumber]
-                                && slideRelsMap[slideNumber][rId]
-                                && slideRelsMap[slideNumber][rId].type === "hyperlink") {
-                                // External URL
-                                link = slideRelsMap[slideNumber][rId].target;
-                                linkType = "external";
+                    } else if (tag === "a:br") {
+                        if (isList) {
+                            // Split the list item on soft break into a paragraph node
+                            activeNode = {
+                                type: 'paragraph',
+                                text: '',
+                                children: [],
+                                metadata: {
+                                    indentation: lvl,
+                                    alignment: (pNode.metadata as any)?.alignment || 'left'
+                                }
+                            };
+                            if (config.includeRawContent) {
+                                activeNode.rawContent = getRawContent(p, xmlContentString, config);
                             }
-                            // Case 2: Relationship exists and is an internal slide reference
-                            else if (rId
-                                && slideRelsMap[slideNumber]
-                                && slideRelsMap[slideNumber][rId]
-                                && slideRelsMap[slideNumber][rId].type === "slide") {
-                                // Example target: ppt/slides/slide3.xml
-                                link = slideRelsMap[slideNumber][rId].target;
-                                linkType = "internal";
-                            }
-                            // Case 3: action attribute like ppaction://hlinksldjump
-                            else if (action) {
-                                link = action;
-                                linkType = "internal";
-                            }
-                            // Assign metadata only if a link was actually discovered
-                            if (link) {
-                                textNode.metadata = { link, linkType };
-                            }
+                            nodes.push(activeNode);
+                        } else {
+                            // In a normal paragraph, just add a newline
+                            activeNode.text += "\n";
+                            activeNode.children?.push({ type: 'text', text: "\n" });
                         }
-
-                        pNode.children?.push(textNode);
                     }
-                }
-
-                if (pNode.text) {
-                    nodes.push(pNode);
                 }
             }
         }
-        return nodes;
+        return nodes.filter(n => n.text?.trim() || (n.children && n.children.length > 0));
     }
 
     /**

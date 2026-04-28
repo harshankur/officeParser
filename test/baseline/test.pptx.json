@@ -241,6 +241,19 @@
           ],
           "metadata": {},
           "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>Slide Note 1.</a:t></a:r></a:p>"
+        },
+        {
+          "type": "paragraph",
+          "text": "1",
+          "children": [
+            {
+              "type": "text",
+              "text": "1",
+              "formatting": {}
+            }
+          ],
+          "metadata": {},
+          "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:fld id=\"{089B58DF-6DB6-4FA5-83E1-46BF508CDB74}\" type=\"slidenum\"><a:t>1</a:t></a:fld><a:endParaRPr lang=\"en-US\"/></a:p>"
         }
       ],
       "metadata": {
@@ -781,6 +794,19 @@
           ],
           "metadata": {},
           "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>Slide Note 2. This is a </a:t></a:r><a:r><a:rPr lang=\"en-US\" b=\"1\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>bold</a:t></a:r><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t> text, but no </a:t></a:r><a:r><a:rPr lang=\"en-US\" i=\"1\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>italic</a:t></a:r><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>. Let's strike </a:t></a:r><a:r><a:rPr lang=\"en-US\" strike=\"sngStrike\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>that</a:t></a:r><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t> out.</a:t></a:r></a:p>"
+        },
+        {
+          "type": "paragraph",
+          "text": "2",
+          "children": [
+            {
+              "type": "text",
+              "text": "2",
+              "formatting": {}
+            }
+          ],
+          "metadata": {},
+          "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:fld id=\"{089B58DF-6DB6-4FA5-83E1-46BF508CDB74}\" type=\"slidenum\"><a:t>2</a:t></a:fld><a:endParaRPr lang=\"en-US\"/></a:p>"
         }
       ],
       "metadata": {
@@ -2213,6 +2239,19 @@
           ],
           "metadata": {},
           "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>And then about tables</a:t></a:r></a:p>"
+        },
+        {
+          "type": "paragraph",
+          "text": "3",
+          "children": [
+            {
+              "type": "text",
+              "text": "3",
+              "formatting": {}
+            }
+          ],
+          "metadata": {},
+          "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:fld id=\"{089B58DF-6DB6-4FA5-83E1-46BF508CDB74}\" type=\"slidenum\"><a:t>3</a:t></a:fld><a:endParaRPr lang=\"en-US\"/></a:p>"
         }
       ],
       "metadata": {
@@ -3468,6 +3507,19 @@
           ],
           "metadata": {},
           "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:r><a:rPr lang=\"en-US\" dirty=\"0\"><a:ea typeface=\"Calibri\"/><a:cs typeface=\"Calibri\"/></a:rPr><a:t>7. Sat</a:t></a:r></a:p>"
+        },
+        {
+          "type": "paragraph",
+          "text": "5",
+          "children": [
+            {
+              "type": "text",
+              "text": "5",
+              "formatting": {}
+            }
+          ],
+          "metadata": {},
+          "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:fld id=\"{089B58DF-6DB6-4FA5-83E1-46BF508CDB74}\" type=\"slidenum\"><a:t>5</a:t></a:fld><a:endParaRPr lang=\"en-US\"/></a:p>"
         }
       ],
       "metadata": {
@@ -9126,19 +9178,11 @@
         },
         {
           "type": "list",
-          "text": "TwoAn interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.",
+          "text": "Two",
           "children": [
             {
               "type": "text",
               "text": "Two",
-              "formatting": {
-                "size": "12pt",
-                "font": "Ubuntu"
-              }
-            },
-            {
-              "type": "text",
-              "text": "An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.",
               "formatting": {
                 "size": "12pt",
                 "font": "Ubuntu"
@@ -9150,6 +9194,25 @@
             "indentation": 0,
             "listId": "6",
             "itemIndex": 1,
+            "alignment": "left"
+          },
+          "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:pPr marL=\"285750\" indent=\"-285750\"><a:buAutoNum type=\"romanLcPeriod\"/></a:pPr><a:r><a:rPr lang=\"en-US\" sz=\"1200\" dirty=\"0\"><a:latin typeface=\"Ubuntu\"/></a:rPr><a:t>Two</a:t></a:r><a:br><a:rPr lang=\"en-US\" sz=\"1200\" dirty=\"0\"><a:latin typeface=\"Ubuntu\"/></a:rPr></a:br><a:r><a:rPr lang=\"en-US\" sz=\"1200\" dirty=\"0\"><a:latin typeface=\"Ubuntu\"/></a:rPr><a:t>An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.</a:t></a:r></a:p>"
+        },
+        {
+          "type": "paragraph",
+          "text": "An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.",
+          "children": [
+            {
+              "type": "text",
+              "text": "An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.",
+              "formatting": {
+                "size": "12pt",
+                "font": "Ubuntu"
+              }
+            }
+          ],
+          "metadata": {
+            "indentation": 0,
             "alignment": "left"
           },
           "rawContent": "<a:p xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:pPr marL=\"285750\" indent=\"-285750\"><a:buAutoNum type=\"romanLcPeriod\"/></a:pPr><a:r><a:rPr lang=\"en-US\" sz=\"1200\" dirty=\"0\"><a:latin typeface=\"Ubuntu\"/></a:rPr><a:t>Two</a:t></a:r><a:br><a:rPr lang=\"en-US\" sz=\"1200\" dirty=\"0\"><a:latin typeface=\"Ubuntu\"/></a:rPr></a:br><a:r><a:rPr lang=\"en-US\" sz=\"1200\" dirty=\"0\"><a:latin typeface=\"Ubuntu\"/></a:rPr><a:t>An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.</a:t></a:r></a:p>"

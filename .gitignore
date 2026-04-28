@@ -9,3 +9,4 @@ officeParser.bk.js
 *.traineddata
 /test/results/
 sbom.cdx.json
+scratch

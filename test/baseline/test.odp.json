@@ -8494,34 +8494,6 @@
             "style": "a798"
           },
           "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a798\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a789\" text:class-names=\"\">To see the DOCX conversion in action, simply add this file to </text:span><text:span text:style-name=\"a790\" text:class-names=\"\">calibre</text:span><text:span text:style-name=\"a791\" text:class-names=\"\"> using the </text:span><text:span text:style-name=\"a792\" text:class-names=\"\">“Add Books” </text:span><text:span text:style-name=\"a793\" text:class-names=\"\">button and then click “</text:span><text:span text:style-name=\"a794\" text:class-names=\"\">Convert”. </text:span><text:span text:style-name=\"a795\" text:class-names=\"\"> Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click </text:span><text:span text:style-name=\"a796\" text:class-names=\"\">“OK”</text:span><text:span text:style-name=\"a797\" text:class-names=\"\">.</text:span></text:p>"
-        },
-        {
-          "type": "list",
-          "text": "",
-          "children": [],
-          "metadata": {
-            "listType": "unordered",
-            "indentation": 0,
-            "itemIndex": 0,
-            "listId": "a802",
-            "alignment": "left",
-            "style": "a801"
-          },
-          "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a801\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a800\" text:class-names=\"\"/></text:p>"
-        },
-        {
-          "type": "list",
-          "text": "",
-          "children": [],
-          "metadata": {
-            "listType": "unordered",
-            "indentation": 0,
-            "itemIndex": 0,
-            "listId": "a805",
-            "alignment": "left",
-            "style": "a804"
-          },
-          "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a804\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a803\" text:class-names=\"\"/></text:p>"
         }
       ],
       "metadata": {
@@ -18188,8 +18160,8 @@
           "metadata": {
             "listType": "ordered",
             "indentation": 0,
-            "itemIndex": 0,
-            "listId": "a1883",
+            "itemIndex": 1,
+            "listId": "a1880",
             "alignment": "left",
             "style": "a1882"
           },
@@ -18948,8 +18920,8 @@
           "metadata": {
             "listType": "unordered",
             "indentation": 0,
-            "itemIndex": 0,
-            "listId": "a1978",
+            "itemIndex": 1,
+            "listId": "a1974",
             "alignment": "left",
             "style": "a1977"
           },
@@ -19036,8 +19008,8 @@
           "metadata": {
             "listType": "ordered",
             "indentation": 0,
-            "itemIndex": 0,
-            "listId": "a1990",
+            "itemIndex": 1,
+            "listId": "a1987",
             "alignment": "left",
             "style": "a1989"
           },
@@ -19115,7 +19087,7 @@
             "listType": "ordered",
             "indentation": 1,
             "itemIndex": 0,
-            "listId": "a2002",
+            "listId": "a1998",
             "alignment": "left",
             "style": "a2001"
           },
@@ -19142,7 +19114,7 @@
             "listType": "ordered",
             "indentation": 2,
             "itemIndex": 0,
-            "listId": "a2006",
+            "listId": "a1998",
             "alignment": "left",
             "style": "a2005"
           },
@@ -19168,8 +19140,8 @@
           "metadata": {
             "listType": "ordered",
             "indentation": 2,
-            "itemIndex": 0,
-            "listId": "a2010",
+            "itemIndex": 1,
+            "listId": "a1998",
             "alignment": "left",
             "style": "a2009"
           },
@@ -19195,8 +19167,8 @@
           "metadata": {
             "listType": "ordered",
             "indentation": 2,
-            "itemIndex": 0,
-            "listId": "a2014",
+            "itemIndex": 2,
+            "listId": "a1998",
             "alignment": "left",
             "style": "a2013"
           },
@@ -19222,8 +19194,8 @@
           "metadata": {
             "listType": "ordered",
             "indentation": 0,
-            "itemIndex": 0,
-            "listId": "a2018",
+            "itemIndex": 1,
+            "listId": "a1998",
             "alignment": "left",
             "style": "a2017"
           },
@@ -19310,7 +19282,7 @@
             "listType": "unordered",
             "indentation": 1,
             "itemIndex": 0,
-            "listId": "a2029",
+            "listId": "a2026",
             "alignment": "left",
             "style": "a2028"
           },
@@ -19337,7 +19309,7 @@
             "listType": "unordered",
             "indentation": 2,
             "itemIndex": 0,
-            "listId": "a2032",
+            "listId": "a2026",
             "alignment": "left",
             "style": "a2031"
           },
@@ -19364,7 +19336,7 @@
             "listType": "unordered",
             "indentation": 3,
             "itemIndex": 0,
-            "listId": "a2035",
+            "listId": "a2026",
             "alignment": "left",
             "style": "a2034"
           },
@@ -19390,8 +19362,8 @@
           "metadata": {
             "listType": "unordered",
             "indentation": 0,
-            "itemIndex": 0,
-            "listId": "a2038",
+            "itemIndex": 1,
+            "listId": "a2026",
             "alignment": "left",
             "style": "a2037"
           },
@@ -19450,7 +19422,7 @@
         },
         {
           "type": "list",
-          "text": "Two\nAn interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.",
+          "text": "Two",
           "children": [
             {
               "type": "text",
@@ -19463,19 +19435,22 @@
               "metadata": {
                 "style": "a2046"
               }
-            },
-            {
-              "type": "text",
-              "text": "\n",
-              "formatting": {
-                "size": "0.16667in",
-                "color": "#000000",
-                "font": "Ubuntu"
-              },
-              "metadata": {
-                "style": "a2046"
-              }
-            },
+            }
+          ],
+          "metadata": {
+            "listType": "ordered",
+            "indentation": 0,
+            "itemIndex": 1,
+            "listId": "a2044",
+            "alignment": "left",
+            "style": "a2046"
+          },
+          "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a2046\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a2045\" text:class-names=\"\">Two<text:line-break/>An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.</text:span></text:p>"
+        },
+        {
+          "type": "paragraph",
+          "text": "An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.",
+          "children": [
             {
               "type": "text",
               "text": "An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.",
@@ -19490,10 +19465,6 @@
             }
           ],
           "metadata": {
-            "listType": "ordered",
-            "indentation": 0,
-            "itemIndex": 0,
-            "listId": "a2047",
             "alignment": "left",
             "style": "a2046"
           },
@@ -19519,8 +19490,8 @@
           "metadata": {
             "listType": "ordered",
             "indentation": 0,
-            "itemIndex": 0,
-            "listId": "a2050",
+            "itemIndex": 2,
+            "listId": "a2044",
             "alignment": "left",
             "style": "a2049"
           },
@@ -19546,8 +19517,8 @@
           "metadata": {
             "listType": "ordered",
             "indentation": 0,
-            "itemIndex": 0,
-            "listId": "a2053",
+            "itemIndex": 3,
+            "listId": "a2044",
             "alignment": "left",
             "style": "a2052"
           },

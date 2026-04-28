@@ -4,6 +4,24 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.1] - 2026-04-28
+### Added
+- **Break Nodes (DOCX)**: Comprehensive support for `w:br`, `w:cr`, and `w:lastRenderedPageBreak` nodes in Word documents.
+- **Indentation Metadata (DOCX)**: Extraction of `<w:ind>` properties for precise paragraph layout analysis.
+- **Field Extraction (PPTX)**: Support for `<a:fld>` elements, ensuring slide numbers and other dynamic fields are captured.
+
+### Fixed
+- **Soft Break Handling**: Standardized splitting of list items on soft breaks (`Shift+Enter`) across PPTX and ODP, treating interruptions as independent paragraph nodes.
+- **List Indexing (ODP)**: Re-engineered stateful index tracking for nested lists in ODP to ensure sequential continuity.
+- **Excel Multi-line Parsing**: Resolved failures in XLSX parsing for cells containing complex multi-line content.
+- **RTF Encoding**: Implemented robust byte-buffering and character decoding to resolve smart quote and double-quote dropouts.
+- **XLSX Fidelity**: Fixed case-sensitivity issues in regex for `inlineStr` cell types.
+- **Security & Stability**: Upgraded `@xmldom/xmldom` to `0.9.10` to address upstream vulnerabilities.
+
+### Changed
+- **PPTX Engine**: Migrated to an iterative child-processing model for paragraphs to guarantee correct content ordering and support for all inline elements.
+- **Documentation**: Updated OpenGraph metadata and project specs for better social sharing and developer clarity.
+
 ## [6.1.0] - 2026-04-14
 ### Added
 - **OCR Scheduler**: Intelligent worker pool that optimizes Tesseract lifecycle across parallel requests.
