@@ -195,16 +195,15 @@
                   "text": "One, with a very long line to demonstrate that the hanging indent for the list is working correctly ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 121,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A122\" s=\"50\"/><c r=\"B122\" s=\"1\" t=\"s\"><v>4</v></c>"
+              "rawContent": "<c r=\"B122\" s=\"1\" t=\"s\"><v>4</v></c>"
             }
           ],
           "rawContent": "<row r=\"122\" spans=\"1:2\" ht=\"182.25\"><c r=\"A122\" s=\"50\"/><c r=\"B122\" s=\"1\" t=\"s\"><v>4</v></c></row>"
@@ -221,16 +220,15 @@
                   "text": "Two ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 122,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A123\" s=\"50\"/><c r=\"B123\" s=\"1\" t=\"s\"><v>5</v></c>"
+              "rawContent": "<c r=\"B123\" s=\"1\" t=\"s\"><v>5</v></c>"
             }
           ],
           "rawContent": "<row r=\"123\" spans=\"1:2\" ht=\"16.5\"><c r=\"A123\" s=\"50\"/><c r=\"B123\" s=\"1\" t=\"s\"><v>5</v></c></row>"
@@ -247,16 +245,15 @@
                   "text": "One ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 124,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A125\" s=\"50\"/><c r=\"B125\" s=\"1\" t=\"s\"><v>6</v></c>"
+              "rawContent": "<c r=\"B125\" s=\"1\" t=\"s\"><v>6</v></c>"
             }
           ],
           "rawContent": "<row r=\"125\" spans=\"1:2\" ht=\"16.5\"><c r=\"A125\" s=\"50\"/><c r=\"B125\" s=\"1\" t=\"s\"><v>6</v></c></row>"
@@ -273,16 +270,15 @@
                   "text": "Two ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 125,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A126\" s=\"50\"/><c r=\"B126\" s=\"1\" t=\"s\"><v>5</v></c>"
+              "rawContent": "<c r=\"B126\" s=\"1\" t=\"s\"><v>5</v></c>"
             }
           ],
           "rawContent": "<row r=\"126\" spans=\"1:2\" ht=\"16.5\"><c r=\"A126\" s=\"50\"/><c r=\"B126\" s=\"1\" t=\"s\"><v>5</v></c></row>"
@@ -299,16 +295,15 @@
                   "text": "Three ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 126,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A127\" s=\"50\"/><c r=\"B127\" s=\"1\" t=\"s\"><v>7</v></c>"
+              "rawContent": "<c r=\"B127\" s=\"1\" t=\"s\"><v>7</v></c>"
             }
           ],
           "rawContent": "<row r=\"127\" spans=\"1:2\" ht=\"16.5\"><c r=\"A127\" s=\"50\"/><c r=\"B127\" s=\"1\" t=\"s\"><v>7</v></c></row>"
@@ -325,16 +320,15 @@
                   "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly. ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 127,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A128\" s=\"50\"/><c r=\"B128\" s=\"1\" t=\"s\"><v>8</v></c>"
+              "rawContent": "<c r=\"B128\" s=\"1\" t=\"s\"><v>8</v></c>"
             }
           ],
           "rawContent": "<row r=\"128\" spans=\"1:2\" ht=\"182.25\"><c r=\"A128\" s=\"50\"/><c r=\"B128\" s=\"1\" t=\"s\"><v>8</v></c></row>"
@@ -351,16 +345,15 @@
                   "text": "Five ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 128,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A129\" s=\"50\"/><c r=\"B129\" s=\"1\" t=\"s\"><v>9</v></c>"
+              "rawContent": "<c r=\"B129\" s=\"1\" t=\"s\"><v>9</v></c>"
             }
           ],
           "rawContent": "<row r=\"129\" spans=\"1:2\" ht=\"16.5\"><c r=\"A129\" s=\"50\"/><c r=\"B129\" s=\"1\" t=\"s\"><v>9</v></c></row>"
@@ -377,16 +370,15 @@
                   "text": "Six ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 129,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A130\" s=\"50\"/><c r=\"B130\" s=\"1\" t=\"s\"><v>10</v></c>"
+              "rawContent": "<c r=\"B130\" s=\"1\" t=\"s\"><v>10</v></c>"
             }
           ],
           "rawContent": "<row r=\"130\" spans=\"1:2\" ht=\"16.5\"><c r=\"A130\" s=\"50\"/><c r=\"B130\" s=\"1\" t=\"s\"><v>10</v></c></row>"
@@ -403,16 +395,15 @@
                   "text": "One ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 137,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A138\" s=\"50\"/><c r=\"B138\" s=\"1\" t=\"s\"><v>6</v></c>"
+              "rawContent": "<c r=\"B138\" s=\"1\" t=\"s\"><v>6</v></c>"
             }
           ],
           "rawContent": "<row r=\"138\" spans=\"1:2\" ht=\"16.5\"><c r=\"A138\" s=\"50\"/><c r=\"B138\" s=\"1\" t=\"s\"><v>6</v></c></row>"
@@ -429,16 +420,15 @@
                   "text": "Two ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 138,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A139\" s=\"50\"/><c r=\"B139\" s=\"1\" t=\"s\"><v>5</v></c>"
+              "rawContent": "<c r=\"B139\" s=\"1\" t=\"s\"><v>5</v></c>"
             }
           ],
           "rawContent": "<row r=\"139\" spans=\"1:2\" ht=\"16.5\"><c r=\"A139\" s=\"50\"/><c r=\"B139\" s=\"1\" t=\"s\"><v>5</v></c></row>"
@@ -455,16 +445,15 @@
                   "text": "We now resume our normal programming ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 140,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A141\" s=\"50\"/><c r=\"B141\" s=\"1\" t=\"s\"><v>11</v></c>"
+              "rawContent": "<c r=\"B141\" s=\"1\" t=\"s\"><v>11</v></c>"
             }
           ],
           "rawContent": "<row r=\"141\" spans=\"1:2\" ht=\"90.75\"><c r=\"A141\" s=\"50\"/><c r=\"B141\" s=\"1\" t=\"s\"><v>11</v></c></row>"
@@ -481,16 +470,15 @@
                   "text": "Four ",
                   "formatting": {
                     "size": "12pt",
-                    "color": "#000000",
                     "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 141,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A142\" s=\"50\"/><c r=\"B142\" s=\"1\" t=\"s\"><v>12</v></c>"
+              "rawContent": "<c r=\"B142\" s=\"1\" t=\"s\"><v>12</v></c>"
             }
           ],
           "rawContent": "<row r=\"142\" spans=\"1:2\" ht=\"16.5\"><c r=\"A142\" s=\"50\"/><c r=\"B142\" s=\"1\" t=\"s\"><v>12</v></c></row>"
@@ -3049,16 +3037,16 @@
                   "type": "text",
                   "text": "Four ",
                   "formatting": {
-                    "size": "11pt",
-                    "font": "Aptos Narrow"
+                    "size": "12pt",
+                    "font": "Ubuntu"
                   }
                 }
               ],
               "metadata": {
                 "row": 20,
-                "col": 0
+                "col": 1
               },
-              "rawContent": "<c r=\"A21\" s=\"30\"/><c r=\"B21\" s=\"31\" t=\"s\"><v>12</v></c>"
+              "rawContent": "<c r=\"B21\" s=\"31\" t=\"s\"><v>12</v></c>"
             }
           ],
           "rawContent": "<row r=\"21\" spans=\"1:3\" ht=\"16.5\"><c r=\"A21\" s=\"30\"/><c r=\"B21\" s=\"31\" t=\"s\"><v>12</v></c><c r=\"C21\" s=\"29\"/></row>"

@@ -431,106 +431,144 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
             }
 
             const rows: OfficeContentNode[] = [];
-            const rowRegex = /<row.*?>[\s\S]*?<\/row>/g;
-            const rowMatches = file.content.toString().match(rowRegex);
+            const sheetXml = file.content.toString();
+            // regex to match <row> elements, capturing:
+            // 1. attributes (e.g., r="1")
+            // 2. whether it's self-closing (/>)
+            // 3. inner content (for non-self-closing rows)
+            const rowRegex = /<row\b([^>]*?)(?:(\/>)|(>([\s\S]*?)<\/row>))/g;
+            // matchAll provides an iterator over all matches, which is much more efficient than 
+            // iterating over a massive sparse row range declared in spreadsheet dimensions.
+            const rowMatches = sheetXml.matchAll(rowRegex);
 
-            if (rowMatches) {
-                for (const rowXml of rowMatches) {
-                    const cells: OfficeContentNode[] = [];
-                    const cRegex = /<c.*?>[\s\S]*?<\/c>/g;
-                    const cMatches = rowXml.match(cRegex);
+            /** Helper to convert Excel column string (A, B, AA, etc.) to 0-based index */
+            const colToNumber = (col: string): number => {
+                let num = 0;
+                for (let i = 0; i < col.length; i++) {
+                    num = num * 26 + (col.charCodeAt(i) - 'A'.charCodeAt(0) + 1);
+                }
+                return num - 1;
+            };
 
-                    const rMatch = rowXml.match(/r="(\d+)"/);
-                    const rowIndex = rMatch ? parseInt(rMatch[1]) - 1 : 0;
+            let lastRowIndex = -1;
 
-                    if (cMatches) {
-                        for (const cXml of cMatches) {
-                            // Extract cell value
-                            const typeMatch = cXml.match(/t="([a-zA-Z]+)"/);
-                            const type = typeMatch ? typeMatch[1] : 'n'; // n = number (default)
+            for (const rowMatch of rowMatches) {
+                const rowXml = rowMatch[0];
+                const rowAttrs = rowMatch[1];
+                const isSelfClosing = !!rowMatch[2];
+                const rowContent = rowMatch[4] || "";
 
-                            const vMatch = cXml.match(/<v>([\s\S]*?)<\/v>/);
-                            const tMatch = cXml.match(/<t>([\s\S]*?)<\/t>/);
+                if (!isSelfClosing && !rowContent.includes('<c')) continue;
 
-                            let text = '';
-                            let cellNodes: OfficeContentNode[] = [];
+                const cells: OfficeContentNode[] = [];
+                // regex to match <c> (cell) elements within a row, capturing:
+                // 1. cell attributes (e.g., r="A1", t="s")
+                // 2. whether it's self-closing (/>)
+                // 3. inner content (e.g., <v> value)
+                const cRegex = /<c\b([^>]*?)(?:(\/>)|(>([\s\S]*?)<\/c>))/g;
+                const cMatches = rowContent.matchAll(cRegex);
 
-                            if (type === 's' && vMatch) {
-                                const idx = parseInt(vMatch[1]);
-                                const content = sharedStrings[idx];
-                                if (Array.isArray(content)) {
-                                    // Rich text runs
-                                    // Deep copy runs to avoid reference issues if reused
-                                    cellNodes = JSON.parse(JSON.stringify(content));
-                                    text = cellNodes.map(n => n.text).join('');
-                                } else {
-                                    text = content || '';
-                                }
-                            } else if (type === 'inlineStr' && tMatch) {
-                                text = tMatch[1].trim();
-                            } else if (vMatch) {
-                                text = vMatch[1].trim();
-                            }
+                const rMatch = rowAttrs.match(/r="(\d+)"/);
+                const rowIndex = rMatch ? parseInt(rMatch[1]) - 1 : lastRowIndex + 1;
+                lastRowIndex = rowIndex;
 
-                            // Parse cell coordinate
-                            const coordMatch = cXml.match(/r="([A-Z]+)(\d+)"/);
-                            const colStr = coordMatch ? coordMatch[1] : '';
-                            const colIndex = colStr.charCodeAt(0) - 'A'.charCodeAt(0);
+                let lastColIndex = -1;
 
-                            if (text || cellNodes.length > 0) {
-                                // Extract cell style index
-                                const styleMatch = cXml.match(/s="(\d+)"/);
-                                const styleIdx = styleMatch ? parseInt(styleMatch[1]) : undefined;
-                                const cellFormatting = (styleIdx !== undefined && cellFormatMap[styleIdx]) ? cellFormatMap[styleIdx] : {};
+                for (const cMatch of cMatches) {
+                    const cXml = cMatch[0];
+                    const cAttrs = cMatch[1];
+                    const cContent = cMatch[4] || "";
 
-                                if (cellNodes.length > 0) {
-                                    // If we have specific runs, merge cell styles into them if run style is missing
-                                    // But usually run style overrides cell style (except maybe background)
-                                    for (const node of cellNodes) {
-                                        if (!node.formatting) node.formatting = {};
-                                        // Cell background always applies
-                                        if (cellFormatting.backgroundColor) node.formatting.backgroundColor = cellFormatting.backgroundColor;
-                                        // Cell alignment always applies
-                                        if (cellFormatting.alignment) node.formatting.alignment = cellFormatting.alignment;
+                    // Extract cell value
+                    const typeMatch = cAttrs.match(/t="([a-zA-Z]+)"/);
+                    const type = typeMatch ? typeMatch[1] : 'n'; // n = number (default)
 
-                                        // Font defaults from cell style if not in run
-                                        if (!node.formatting.font && cellFormatting.font) node.formatting.font = cellFormatting.font;
-                                        if (!node.formatting.size && cellFormatting.size) node.formatting.size = cellFormatting.size;
-                                    }
-                                } else {
-                                    // Simple text node
-                                    cellNodes.push({
-                                        type: 'text',
-                                        text: text,
-                                        formatting: cellFormatting
-                                    });
-                                }
+                    const vMatch = cContent.match(/<v>([\s\S]*?)<\/v>/);
+                    const tMatch = cContent.match(/<t>([\s\S]*?)<\/t>/);
 
-                                const cellNode: OfficeContentNode = {
-                                    type: 'cell',
-                                    text: text,
-                                    children: cellNodes,
-                                    metadata: { row: rowIndex, col: colIndex }
-                                };
-                                if (config.includeRawContent) {
-                                    cellNode.rawContent = cXml;
-                                }
-                                cells.push(cellNode);
-                            }
+                    let text = '';
+                    let cellNodes: OfficeContentNode[] = [];
+
+                    if (type === 's' && vMatch) {
+                        const idx = parseInt(vMatch[1]);
+                        const content = sharedStrings[idx];
+                        if (Array.isArray(content)) {
+                            // Rich text runs
+                            // Deep copy runs to avoid reference issues if reused
+                            cellNodes = JSON.parse(JSON.stringify(content));
+                            text = cellNodes.map(n => n.text).join('');
+                        } else {
+                            text = content || '';
                         }
+                    } else if (type === 'inlineStr' && tMatch) {
+                        text = tMatch[1].trim();
+                    } else if (vMatch) {
+                        text = vMatch[1].trim();
                     }
 
-                    if (cells.length > 0) {
-                        const rowNode: OfficeContentNode = {
-                            type: 'row',
-                            children: cells,
-                            metadata: undefined
+                    // Parse cell coordinate
+                    const coordMatch = cAttrs.match(/r="([A-Z]+)(\d+)"/);
+                    let colIndex: number;
+                    if (coordMatch) {
+                        colIndex = colToNumber(coordMatch[1]);
+                        // If row index is missing in cell coord (unlikely but possible), use rowIndex
+                    } else {
+                        colIndex = lastColIndex + 1;
+                    }
+                    lastColIndex = colIndex;
+
+                    if (text || cellNodes.length > 0) {
+                        // Extract cell style index
+                        const styleMatch = cAttrs.match(/s="(\d+)"/);
+                        const styleIdx = styleMatch ? parseInt(styleMatch[1]) : undefined;
+                        const cellFormatting = (styleIdx !== undefined && cellFormatMap[styleIdx]) ? cellFormatMap[styleIdx] : {};
+
+                        if (cellNodes.length > 0) {
+                            // If we have specific runs, merge cell styles into them if run style is missing
+                            // But usually run style overrides cell style (except maybe background)
+                            for (const node of cellNodes) {
+                                if (!node.formatting) node.formatting = {};
+                                // Cell background always applies
+                                if (cellFormatting.backgroundColor) node.formatting.backgroundColor = cellFormatting.backgroundColor;
+                                // Cell alignment always applies
+                                if (cellFormatting.alignment) node.formatting.alignment = cellFormatting.alignment;
+
+                                // Font defaults from cell style if not in run
+                                if (!node.formatting.font && cellFormatting.font) node.formatting.font = cellFormatting.font;
+                                if (!node.formatting.size && cellFormatting.size) node.formatting.size = cellFormatting.size;
+                            }
+                        } else {
+                            // Simple text node
+                            cellNodes.push({
+                                type: 'text',
+                                text: text,
+                                formatting: cellFormatting
+                            });
+                        }
+
+                        const cellNode: OfficeContentNode = {
+                            type: 'cell',
+                            text: text,
+                            children: cellNodes,
+                            metadata: { row: rowIndex, col: colIndex }
                         };
                         if (config.includeRawContent) {
-                            rowNode.rawContent = rowXml;
+                            cellNode.rawContent = cXml;
                         }
-                        rows.push(rowNode);
+                        cells.push(cellNode);
                     }
+                }
+
+                if (cells.length > 0) {
+                    const rowNode: OfficeContentNode = {
+                        type: 'row',
+                        children: cells,
+                        metadata: undefined
+                    };
+                    if (config.includeRawContent) {
+                        rowNode.rawContent = rowXml;
+                    }
+                    rows.push(rowNode);
                 }
             }
 

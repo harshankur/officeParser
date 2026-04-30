@@ -74,9 +74,9 @@ if (typeof setImmediate === 'undefined') {
                 string_decoder: true,
             },
         }),
-        // Post-process: inject /* @vite-ignore */ before `import(this.workerSrc)`
-        // inside bundled pdfjs-dist to suppress Vite's unanalyzable dynamic import warning.
-        viteIgnorePdfjsWorkerPlugin(),
+        // Post-process: inject /* @vite-ignore */ into dynamic imports with variables
+        // to suppress Vite's unanalyzable dynamic import warning.
+        viteIgnoreDynamicImportsPlugin(),
     ],
 };
 
@@ -84,9 +84,9 @@ if (typeof setImmediate === 'undefined') {
 // @vite-ignore plugin for pdfjs-dist workerSrc dynamic import
 // ---------------------------------------------------------------------------
 
-function viteIgnorePdfjsWorkerPlugin() {
+function viteIgnoreDynamicImportsPlugin() {
     return {
-        name: 'vite-ignore-pdfjs-worker',
+        name: 'vite-ignore-dynamic-imports',
         setup(build) {
             build.onEnd(result => {
                 if (result.errors.length > 0) return;
@@ -96,20 +96,22 @@ function viteIgnorePdfjsWorkerPlugin() {
 
                 let content = fs.readFileSync(outfile, 'utf8');
 
-                // Replace `import(this.workerSrc)` with the Vite-ignore annotated form.
-                // We match both `import(this.workerSrc)` and its minified variants.
-                const pattern = /\bimport\((this\.workerSrc)\)/g;
+                // TODO: [Add Test] - Add an automated CI test to verify that the browser bundle
+                // does not contain unannotated dynamic imports that trigger Vite/Webpack warnings.
+                //
+                // Replace dynamic imports that use variables (not string literals)
+                // with Vite and Webpack ignore annotations.
+                // This suppresses "unanalyzable dynamic import" and "Critical dependency" warnings.
+                // We skip imports that already have @vite-ignore, webpackIgnore, or use string literals.
+                const pattern = /\bimport\((?!\s*['"`]|\s*\/\*\s*@vite-ignore\s*\*\/|\s*\/\*\s*webpackIgnore:\s*true\s*\*\/)([^)]+)\)/g;
                 const replaced = content.replace(
                     pattern,
-                    'import(/* @vite-ignore */ $1)'
+                    'import(/* @vite-ignore */ /* webpackIgnore: true */ $1)'
                 );
 
                 if (replaced !== content) {
                     fs.writeFileSync(outfile, replaced, 'utf8');
-                    console.log(`  → injected @vite-ignore into ${path.basename(outfile)}`);
-                } else {
-                    console.error(`\nERROR: Could not find \`import(this.workerSrc)\` in ${path.basename(outfile)} to inject @vite-ignore. Vite bundle will contain unanalyzable dynamic imports!\n`);
-                    process.exit(1);
+                    console.log(`  → injected ignore comments into dynamic imports in ${path.basename(outfile)}`);
                 }
             });
         },

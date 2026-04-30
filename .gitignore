@@ -10,3 +10,4 @@ officeParser.bk.js
 /test/results/
 sbom.cdx.json
 scratch
+repro
