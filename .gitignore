@@ -8,6 +8,11 @@ officeParser.bk.js
 *.actual.txt
 *.traineddata
 /test/results/
+/test/generator/results/
+/test/generator/output/
+/test/parser/results/
+/test/parser/output/
 sbom.cdx.json
 scratch
 repro
+.npm-cache

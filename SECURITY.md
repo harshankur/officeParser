@@ -8,9 +8,9 @@ Maintenance and security patches are currently provided for the latest major bra
 
 | Version | Supported          |
 | ------- | ------------------ |
+| v7.x    | :white_check_mark: |
 | v6.x    | :white_check_mark: |
-| v5.x    | :x:                |
-| < v5.x  | :x:                |
+| < v6.x  | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -38,4 +38,5 @@ Upon receiving a valid report, I will:
 I ask that you follow **coordinated disclosure** practices and allow a reasonable window to release a patch before sharing technical details publicly.
 
 ## Out of Scope
-Vulnerabilities in third-party dependencies (e.g., `tesseract.js`, `pdfjs-dist`) should be reported directly to their respective upstream maintainers.
+- **Third-Party Dependencies**: Vulnerabilities in upstream libraries (e.g., `tesseract.js`, `pdfjs-dist`, `fflate`) should be reported directly to their respective maintainers.
+- **Semantic Chunking & External APIs**: When using `Semantic Strategy` for chunking, you provide an `embed` function. If this function sends data to external LLM providers (like OpenAI or Anthropic), the security and privacy of that data transfer are governed by your implementation and the provider's terms. `officeParser` itself does not transmit document data to external servers by default.

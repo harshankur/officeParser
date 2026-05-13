@@ -60,7 +60,8 @@
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/ [MS-DOCX] Specification
  */
 
-import { BreakMetadata, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, TextFormatting, TextMetadata, OfficeWarningType } from '../types.js';
+import { createAST } from '../utils/astUtils.js';
 import { logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
@@ -83,7 +84,7 @@ import { extractFiles } from '../utils/zipUtils.js';
  * @param config - Parser configuration options
  * @returns A promise resolving to the parsed AST
  */
-export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Promise<OfficeParserAST> => {
+export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     const documentFileRegex = /word\/document[\d+]?.xml/;
     const footnotesFileRegex = /word\/footnotes[\d+]?.xml/;
     const endnotesFileRegex = /word\/endnotes[\d+]?.xml/;
@@ -98,29 +99,29 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
     // Helper to extract formatting from run properties XML string
     const extractFormattingFromXml = (rPr: Element): TextFormatting => {
         const formatting: TextFormatting = {};
-        const rPrString = serializeXml(rPr);
 
-        // Helper to check boolean properties
-        const getBoolVal = (xmlSnippet: string, tagName: string): boolean | null => {
-            const regex = new RegExp(`<${tagName}(?:\\s+w:val="([^"]+)")?\\s*\\/?>`);
-            const match = xmlSnippet.match(regex);
-            if (match) {
-                const val = match[1];
-                if (val === undefined) return true;
+        // Helper to check boolean properties (e.g., <w:b />, <w:i w:val="0" />)
+        const getBoolVal = (parent: Element, tagName: string): boolean | null => {
+            const el = getFirstElementByTagName(parent, tagName);
+            if (el) {
+                const val = el.getAttribute('w:val');
+                // In OOXML, if the element is present without w:val, it's true.
+                // If w:val is present, it can be '1', 'true', 'on' for true.
+                if (val === null) return true;
                 return val === '1' || val === 'true' || val === 'on';
             }
             return null;
         };
 
-        const bold = getBoolVal(rPrString, 'w:b');
+        const bold = getBoolVal(rPr, 'w:b');
         if (bold !== null) formatting.bold = bold;
 
-        const italic = getBoolVal(rPrString, 'w:i');
+        const italic = getBoolVal(rPr, 'w:i');
         if (italic !== null) formatting.italic = italic;
 
-        const underlineMatch = rPrString.match(/<w:u(?: w:val="([^"]+)")?\/?>/);
-        if (underlineMatch) {
-            const val = underlineMatch[1];
+        const u = getFirstElementByTagName(rPr, 'w:u');
+        if (u) {
+            const val = u.getAttribute('w:val');
             // If val is missing, it's a default underline (true). 
             // If val is present, it's true unless explicit 'none'.
             if (!val || val !== 'none') {
@@ -128,49 +129,69 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
             }
         }
 
-        const strike = getBoolVal(rPrString, 'w:strike');
-        const dstrike = getBoolVal(rPrString, 'w:dstrike');
+        const strike = getBoolVal(rPr, 'w:strike');
+        const dstrike = getBoolVal(rPr, 'w:dstrike');
         if (strike !== null) formatting.strikethrough = strike;
         else if (dstrike !== null) formatting.strikethrough = dstrike;
 
-        // Font size
-        const szMatch = rPrString.match(/<w:sz w:val="(\d+)"/);
-        if (szMatch) formatting.size = (parseInt(szMatch[1], 10) / 2).toString() + 'pt';
-
-        // Color
-        const colorMatch = rPrString.match(/<w:color w:val="([^"]+)"/);
-        if (colorMatch && colorMatch[1] !== 'auto') formatting.color = '#' + colorMatch[1];
-
-        // Background color (shading)
-        const shdMatch = rPrString.match(/<w:shd[^>]*w:fill="([^"]+)"/);
-        if (shdMatch && shdMatch[1] !== 'auto') formatting.backgroundColor = '#' + shdMatch[1];
-
-        // Highlight (map to backgroundColor)
-        const highlightMatch = rPrString.match(/<w:highlight w:val="([^"]+)"/);
-        if (highlightMatch && highlightMatch[1] !== 'none') {
-            const colorMap: { [key: string]: string } = {
-                'yellow': '#FFFF00', 'green': '#00FF00', 'cyan': '#00FFFF', 'magenta': '#FF00FF',
-                'blue': '#0000FF', 'red': '#FF0000', 'darkBlue': '#00008B', 'darkCyan': '#008B8B',
-                'darkGreen': '#006400', 'darkMagenta': '#8B008B', 'darkRed': '#8B0000',
-                'darkYellow': '#808000', 'darkGray': '#A9A9A9', 'lightGray': '#D3D3D3', 'black': '#000000'
-            };
-            formatting.backgroundColor = colorMap[highlightMatch[1]] || highlightMatch[1];
+        // Font size (w:sz) - stored in half-points
+        const sz = getFirstElementByTagName(rPr, 'w:sz');
+        if (sz) {
+            const val = sz.getAttribute('w:val');
+            if (val) {
+                formatting.size = (parseInt(val, 10) / 2).toString() + 'pt';
+            }
         }
 
-        // Font family
-        const rFontsMatch = rPrString.match(/<w:rFonts[^>]*w:ascii="([^"]+)"/);
-        if (rFontsMatch) {
-            formatting.font = rFontsMatch[1];
-        } else {
-            const hAnsiMatch = rPrString.match(/<w:rFonts[^>]*w:hAnsi="([^"]+)"/);
-            if (hAnsiMatch) formatting.font = hAnsiMatch[1];
+        // Color (w:color)
+        const color = getFirstElementByTagName(rPr, 'w:color');
+        if (color) {
+            const val = color.getAttribute('w:val');
+            if (val && val !== 'auto') {
+                formatting.color = '#' + val;
+            }
         }
 
-        // Subscript/Superscript
-        const vertAlignMatch = rPrString.match(/<w:vertAlign w:val="([^"]+)"/);
-        if (vertAlignMatch) {
-            if (vertAlignMatch[1] === 'subscript') formatting.subscript = true;
-            if (vertAlignMatch[1] === 'superscript') formatting.superscript = true;
+        // Background color (w:shd) - shading
+        const shd = getFirstElementByTagName(rPr, 'w:shd');
+        if (shd) {
+            const val = shd.getAttribute('w:fill');
+            if (val && val !== 'auto') {
+                formatting.backgroundColor = '#' + val;
+            }
+        }
+
+        // Highlight (w:highlight) - maps to background color in our AST
+        const highlight = getFirstElementByTagName(rPr, 'w:highlight');
+        if (highlight) {
+            const val = highlight.getAttribute('w:val');
+            if (val && val !== 'none') {
+                const colorMap: { [key: string]: string } = {
+                    'yellow': '#FFFF00', 'green': '#00FF00', 'cyan': '#00FFFF', 'magenta': '#FF00FF',
+                    'blue': '#0000FF', 'red': '#FF0000', 'darkBlue': '#00008B', 'darkCyan': '#008B8B',
+                    'darkGreen': '#006400', 'darkMagenta': '#8B008B', 'darkRed': '#8B0000',
+                    'darkYellow': '#808000', 'darkGray': '#A9A9A9', 'lightGray': '#D3D3D3', 'black': '#000000'
+                };
+                formatting.backgroundColor = colorMap[val] || val;
+            }
+        }
+
+        // Font family (w:rFonts)
+        const rFonts = getFirstElementByTagName(rPr, 'w:rFonts');
+        if (rFonts) {
+            // Priority: ascii (Western) > hAnsi (High ANSI)
+            const font = rFonts.getAttribute('w:ascii') || rFonts.getAttribute('w:hAnsi');
+            if (font) {
+                formatting.font = font;
+            }
+        }
+
+        // Subscript/Superscript (w:vertAlign)
+        const vertAlign = getFirstElementByTagName(rPr, 'w:vertAlign');
+        if (vertAlign) {
+            const val = vertAlign.getAttribute('w:val');
+            if (val === 'subscript') formatting.subscript = true;
+            else if (val === 'superscript') formatting.superscript = true;
         }
 
         return formatting;
@@ -194,6 +215,22 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
             return Object.keys(indentation).length > 0 ? indentation : undefined;
         }
         return undefined;
+    };
+
+    /**
+     * Resolves mc:AlternateContent by preferring mc:Fallback if choice namespace is not recognized,
+     * or simply the first available valid child.
+     */
+    const resolveAlternateContent = (element: Element): Node[] => {
+        const choice = getFirstElementByTagName(element, "mc:Choice");
+        // In most cases, mc:Choice contains the modern version, but mc:Fallback is safer for legacy compatibility
+        // Mammoth often skips Choice if it's not handled. We'll try Choice first.
+        if (choice) return Array.from(choice.childNodes);
+
+        const fallback = getFirstElementByTagName(element, "mc:Fallback");
+        if (fallback) return Array.from(fallback.childNodes);
+
+        return Array.from(element.childNodes);
     };
 
     const files = await extractFiles(buffer, x =>
@@ -239,7 +276,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
     }
 
     const numberingFile = files.find(f => f.path.match(numberingFileRegex));
-    const numberingMap: { [key: string]: { [key: string]: { numFmt: string, lvlText: string } } } = {};
+    const numberingMap: { [key: string]: { [key: string]: { numFmt: string, lvlText: string, start: number } } } = {};
 
     if (numberingFile) {
         const numberingXml = parseXmlString(numberingFile.content.toString());
@@ -261,16 +298,32 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
 
             if (numId && abstractNumId && abstractNumMap[abstractNumId]) {
                 numberingMap[numId] = {};
+
+                // Inherit from abstractNum
                 const lvls = getElementsByTagName(abstractNumMap[abstractNumId], "w:lvl");
                 for (const lvl of lvls) {
                     const ilvl = lvl.getAttribute("w:ilvl");
                     const numFmtNode = getFirstElementByTagName(lvl, "w:numFmt");
                     const lvlTextNode = getFirstElementByTagName(lvl, "w:lvlText");
+                    const startNode = getFirstElementByTagName(lvl, "w:start");
                     if (ilvl) {
                         numberingMap[numId][ilvl] = {
                             numFmt: numFmtNode?.getAttribute("w:val") || 'decimal',
-                            lvlText: lvlTextNode?.getAttribute("w:val") || ''
+                            lvlText: lvlTextNode?.getAttribute("w:val") || '',
+                            start: parseInt(startNode?.getAttribute("w:val") || '1', 10)
                         };
+                    }
+                }
+
+                // Apply instance overrides (w:lvlOverride)
+                const overrides = getElementsByTagName(num, "w:lvlOverride");
+                for (const override of overrides) {
+                    const ilvl = override.getAttribute("w:ilvl");
+                    if (ilvl && numberingMap[numId][ilvl]) {
+                        const startOverride = getFirstElementByTagName(override, "w:startOverride");
+                        if (startOverride) {
+                            numberingMap[numId][ilvl].start = parseInt(startOverride.getAttribute("w:val") || '1', 10);
+                        }
                     }
                 }
             }
@@ -368,9 +421,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
     const listCounters: { [key: string]: { [key: string]: number } } = {}; // Track item index per listId/level
 
     // Helper to parse a paragraph node
-    const parseParagraph = (pNode: Element, documentContent: string): OfficeContentNode => {
-        const pXml = pNode.toString();
-
+    const parseParagraph = (pNode: Element, documentContent: string, pendingAnchorIds: string[] = []): OfficeContentNode => {
         // Check if it's a list item
         const numPr = getFirstElementByTagName(pNode, "w:numPr");
         const isList = !!numPr;
@@ -656,7 +707,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 const anchor = hlNode.getAttribute("w:anchor");
 
                 let linkMetadata: TextMetadata | undefined;
-                if (anchor) {
+                if (anchor && !config.ignoreInternalLinks) {
                     linkMetadata = { link: '#' + anchor, linkType: 'internal' };
                 } else if (rId && relsMap[rId]) {
                     linkMetadata = { link: relsMap[rId], linkType: 'external' };
@@ -677,13 +728,40 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                         }
                     }
                 }
+            } else if (isElement(node) && node.nodeName === 'w:bookmarkStart') {
+                const bookmarkName = node.getAttribute("w:name");
+                if (bookmarkName && !bookmarkName.startsWith('_GoBack') && !config.ignoreInternalLinks) {
+                    anchorIds.push(bookmarkName);
+                }
+            } else if (isElement(node) && (node.nodeName === 'mc:AlternateContent' || node.nodeName === 'AlternateContent')) {
+                const resolved = resolveAlternateContent(node);
+                for (const rNode of resolved) processChildNode(rNode);
+            } else if (isElement(node) && (node.nodeName === 'w:pict' || node.nodeName === 'pict' || node.nodeName === 'w:drawing' || node.nodeName === 'drawing')) {
+                // Extract text boxes from legacy shapes or modern drawings
+                const textBoxes = getElementsByTagName(node, "w:txbxContent");
+                for (const txbx of textBoxes) {
+                    const txbxChildren = Array.from(txbx.childNodes);
+                    for (const txbxChild of txbxChildren) {
+                        if (isElement(txbxChild) && txbxChild.nodeName === 'w:p') {
+                            const nestedP = parseParagraph(txbxChild, documentContent);
+                            children.push(...(nestedP.children || []));
+                            text += nestedP.text;
+                        }
+                    }
+                }
+            } else if (node.childNodes.length > 0) {
+                // Generic fallback for unknown elements that might contain content
+                for (const child of Array.from(node.childNodes)) processChildNode(child);
             }
         };
 
+        const anchorIds: string[] = [...pendingAnchorIds];
         const childNodes = Array.from(pNode.childNodes);
         for (const child of childNodes) {
             processChildNode(child);
         }
+
+        const commonMetadata = anchorIds.length > 0 ? { anchorIds } : {};
 
         if (isList) {
             const numIdNode = getFirstElementByTagName(numPr, "w:numId");
@@ -704,10 +782,10 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 const numFmt = numberingMap[numId][ilvlStr]?.numFmt || 'decimal';
                 listType = numFmt === 'bullet' ? 'unordered' : 'ordered';
 
-                // Track itemIndex (starts at 0, continues across interruptions for same listId)
+                // Track itemIndex (starts at override or default, continues across interruptions for same listId)
                 if (!listCounters[numId]) listCounters[numId] = {};
                 if (listCounters[numId][ilvlStr] === undefined) {
-                    listCounters[numId][ilvlStr] = 0;
+                    listCounters[numId][ilvlStr] = (numberingMap[numId][ilvlStr]?.start ?? 1) - 1;
                 } else {
                     listCounters[numId][ilvlStr]++;
                 }
@@ -725,7 +803,8 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                     alignment: (alignment || 'left') as 'left' | 'center' | 'right' | 'justify',
                     listId: numId,
                     itemIndex: itemIndex,
-                    style: pStyleVal
+                    style: pStyleVal,
+                    ...commonMetadata
                 } as ListMetadata
             };
 
@@ -738,7 +817,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 type: 'heading',
                 text: text,
                 children: children,
-                metadata: { level, alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined }
+                metadata: { level, alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined, ...commonMetadata }
             };
             if (config.includeRawContent) headingNode.rawContent = getRawContent(pNode, documentContent, config);
             return headingNode;
@@ -747,7 +826,7 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                 type: 'paragraph',
                 text: text,
                 children: children,
-                metadata: { alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined }
+                metadata: { alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined, ...commonMetadata }
             };
             if (config.includeRawContent) paraNode.rawContent = getRawContent(pNode, documentContent, config);
             return paraNode;
@@ -755,10 +834,11 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
     };
 
     // Helper to parse a table node
-    const parseTable = (tblNode: Element, documentContent: string): OfficeContentNode => {
+    const parseTable = (tblNode: Element, documentContent: string, pendingAnchorIds: string[] = []): OfficeContentNode => {
         const rows: OfficeContentNode[] = [];
-        // Only get direct child rows, not nested table rows
         const trNodes = getDirectChildren(tblNode, "w:tr");
+        // Track vertical merges: colIndex -> { startCellNode, rowSpan }
+        const vMergeMap = new Map<number, { node: OfficeContentNode, span: number }>();
 
         for (let rIndex = 0; rIndex < trNodes.length; rIndex++) {
             const trNode = trNodes[rIndex];
@@ -766,11 +846,36 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
             // Only get direct child cells, not nested table cells
             const tcNodes = getDirectChildren(trNode, "w:tc");
 
-            for (let cIndex = 0; cIndex < tcNodes.length; cIndex++) {
-                const tcNode = tcNodes[cIndex];
+            let visualCol = 0;
+            for (let tcIndex = 0; tcIndex < tcNodes.length; tcIndex++) {
+                const tcNode = tcNodes[tcIndex];
+                const tcPr = getFirstElementByTagName(tcNode, "w:tcPr");
+
+                // Horizontal merge (colspan)
+                let colSpan = 1;
+                if (tcPr) {
+                    const gridSpan = getFirstElementByTagName(tcPr, "w:gridSpan");
+                    if (gridSpan) {
+                        colSpan = parseInt(gridSpan.getAttribute("w:val") || "1", 10);
+                    }
+                }
+
+                let vMergeRestart = false;
+                let isVMerge = false;
+                if (tcPr) {
+                    const vMerge = getFirstElementByTagName(tcPr, "w:vMerge");
+                    if (vMerge) {
+                        isVMerge = true;
+                        const val = vMerge.getAttribute("w:val");
+                        // If it's explicit restart, or if we don't have an active merge for this column, treat as restart
+                        if (val === "restart" || !vMergeMap.has(visualCol)) {
+                            vMergeRestart = true;
+                        }
+                    }
+                }
+
                 const cellChildren: OfficeContentNode[] = [];
                 let cellText = '';
-
 
                 // Cells contain paragraphs (and other block-level elements)
                 const cellContentNodes = Array.from(tcNode.childNodes);
@@ -780,10 +885,8 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                         cellChildren.push(pNode);
                         cellText += pNode.text;
                     } else if (isElement(child) && child.nodeName === 'w:tbl') {
-                        // Nested table
                         const nestedTable = parseTable(child, documentContent);
                         cellChildren.push(nestedTable);
-                        // Don't add nested table text to cell text - it will be handled recursively
                     }
                 }
 
@@ -791,14 +894,42 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
                     type: 'cell',
                     text: cellText,
                     children: cellChildren,
-                    metadata: { row: rIndex, col: cIndex }
+                    metadata: { row: rIndex, col: visualCol } as CellMetadata
                 };
-                cells.push(cellNode);
+
+                if (colSpan > 1) (cellNode.metadata as CellMetadata).colSpan = colSpan;
+
+                if (isVMerge) {
+                    if (vMergeRestart) {
+                        vMergeMap.set(visualCol, { node: cellNode, span: 1 });
+                        cells.push(cellNode);
+                    } else {
+                        const mergeInfo = vMergeMap.get(visualCol);
+                        if (mergeInfo) {
+                            mergeInfo.span++;
+                            (mergeInfo.node.metadata as CellMetadata).rowSpan = mergeInfo.span;
+
+                            if (cellChildren.length > 0) {
+                                if (!mergeInfo.node.children) mergeInfo.node.children = [];
+                                mergeInfo.node.children.push(...cellChildren);
+                                mergeInfo.node.text += " " + cellText;
+                            }
+                        } else {
+                            // Fallback: if we found a continue but no restart, treat as normal cell
+                            cells.push(cellNode);
+                        }
+                    }
+                } else {
+                    vMergeMap.delete(visualCol);
+                    cells.push(cellNode);
+                }
+
+                visualCol += colSpan;
             }
 
             const rowNode: OfficeContentNode = {
                 type: 'row',
-                children: cells
+                children: cells,
             };
             rows.push(rowNode);
         }
@@ -855,11 +986,22 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         const body = getFirstElementByTagName(doc, "w:body");
         if (body) {
             const bodyChildren = Array.from(body.childNodes);
+            let pendingAnchorIds: string[] = [];
+
             for (const child of bodyChildren) {
-                if (isElement(child) && child.nodeName === 'w:p') {
-                    content.push(parseParagraph(child, documentContent));
-                } else if (isElement(child) && child.nodeName === 'w:tbl') {
-                    content.push(parseTable(child, documentContent));
+                if (isElement(child)) {
+                    if (child.nodeName === 'w:p') {
+                        content.push(parseParagraph(child, documentContent, pendingAnchorIds));
+                        pendingAnchorIds = [];
+                    } else if (child.nodeName === 'w:tbl') {
+                        content.push(parseTable(child, documentContent, pendingAnchorIds));
+                        pendingAnchorIds = [];
+                    } else if (child.nodeName === 'w:bookmarkStart') {
+                        const bookmarkName = child.getAttribute("w:name");
+                        if (bookmarkName && !bookmarkName.startsWith('_GoBack') && !config.ignoreInternalLinks) {
+                            pendingAnchorIds.push(bookmarkName);
+                        }
+                    }
                 }
             }
         }
@@ -875,9 +1017,9 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
             if (config.ocr) {
                 if (attachment.mimeType.startsWith('image/')) {
                     try {
-                        attachment.ocrText = (await performOcr(media.content, { language: config.ocrLanguage, ...config.ocrConfig })).trim();
+                        attachment.ocrText = (await performOcr(media.content, { ...config.ocrConfig })).trim();
                     } catch (e) {
-                        logWarning(`OCR failed for ${attachment.name}:`, config, e);
+                        logWarning(OfficeWarningType.OCR_FAILED, config, attachment.name, e);
                     }
                 }
             }
@@ -908,27 +1050,31 @@ export const parseWord = async (buffer: Buffer, config: OfficeParserConfig): Pro
         content.push(...collectedNotes);
     }
 
-    return {
-        type: 'docx',
-        metadata: { ...metadata, formatting: docDefaults, styleMap: styleMap },
-        content: content,
-        attachments: attachments,
-        toText: () => content.map(c => {
-            // Recursive text extraction
-            const getText = (node: OfficeContentNode): string => {
-                let t = '';
-                if (node.children) {
-                    t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter ?? '\n');
-                }
-                else if (node.type === 'break') {
-                    t += config.newlineDelimiter ?? '\n';
-                }
-                else
-                    t += node.text || '';
-                return t;
-            };
-            return getText(c);
-        }).filter(t => t != '').join(config.newlineDelimiter ?? '\n')
-    };
+    const toTextSync = () => content.map(c => {
+        // Recursive text extraction
+        const getText = (node: OfficeContentNode): string => {
+            let t = '';
+            if (node.children) {
+                t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter);
+            }
+            else if (node.type === 'break') {
+                t += config.newlineDelimiter;
+            }
+            else
+                t += node.text || '';
+            return t;
+        };
+        return getText(c);
+    }).filter(t => t != '').join(config.newlineDelimiter);
+
+    return createAST(
+        'docx',
+        { ...metadata, formatting: docDefaults, styleMap: styleMap },
+        content,
+        attachments,
+        config,
+        toTextSync
+    );
 };
+
 

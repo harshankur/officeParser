@@ -19,11 +19,18 @@
         </thead>
         <tbody>
             <tr>
+                <td><code>onWarning</code></td>
+                <td><code>function</code></td>
+                <td><code>undefined</code></td>
+                <td><strong>Error Handling</strong>: Callback for non-fatal issues (OCR failures, malformed nodes).
+                    Allows the parser to continue while you capture diagnostic info.</td>
+            </tr>
+            <tr>
                 <td><code>outputErrorToConsole</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Diagnostic Mode</strong>: When enabled, the library will dump internal trace logs and raw
-                    parsing errors to the browser/node console. <em>Essential for debugging malformed files.</em></td>
+                <td><strong>Deprecated</strong>: Use <code>onWarning</code> instead. When enabled, dumps internal trace
+                    logs and raw errors to the console.</td>
             </tr>
             <tr>
                 <td><code>newlineDelimiter</code></td>
@@ -65,37 +72,43 @@
                 <td><code>includeRawContent</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Source Inspection</strong>: Adds a <code>rawContent</code> property to every node containing its original XML or RTF source. <em>Warning: Significantly increases AST memory footprint.</em></td>
+                <td><strong>Source Inspection</strong>: Adds a <code>rawContent</code> property to every node containing
+                    its original XML or RTF source. <em>Warning: Significantly increases AST memory footprint.</em></td>
             </tr>
             <tr>
                 <td><code>serializeRawContent</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
-                <td><strong>XML Cleanliness</strong>: When <code>includeRawContent</code> is true, re-serializes raw XML to clean strings. If false, extracts original raw substring.</td>
+                <td><strong>XML Cleanliness</strong>: When <code>includeRawContent</code> is true, re-serializes raw XML
+                    to clean strings. If false, extracts original raw substring.</td>
             </tr>
             <tr>
                 <td><code>preserveXmlWhitespace</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Formatting Fidelity</strong>: When <code>serializeRawContent</code> is true, preserves original XML whitespace and line endings during serialization.</td>
+                <td><strong>Formatting Fidelity</strong>: When <code>serializeRawContent</code> is true, preserves
+                    original XML whitespace and line endings during serialization.</td>
             </tr>
             <tr>
                 <td><code>ocr</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Vision Synthesis</strong>: Enables optical character recognition for images and non-selectable PDF layers. <em>Requires Tesseract.js.</em></td>
+                <td><strong>Vision Synthesis</strong>: Enables optical character recognition for images and
+                    non-selectable PDF layers. <em>Requires Tesseract.js.</em></td>
             </tr>
             <tr>
                 <td><code>ocrLanguage</code></td>
                 <td><code>string</code></td>
                 <td><code>eng</code></td>
-                <td><strong>Deprecated</strong>: Use <code>ocrConfig.language</code>. Specifies which Tesseract data files to load.</td>
+                <td><strong>Deprecated</strong>: Use <code>ocrConfig.language</code>. Specifies which Tesseract data
+                    files to load.</td>
             </tr>
             <tr>
                 <td><code>pdfWorkerSrc</code></td>
                 <td><code>string</code></td>
                 <td>(CDN)</td>
-                <td><strong>PDF Engine</strong>: Path to the <code>pdf.worker.js</code>. Must be accessible by the browser.</td>
+                <td><strong>PDF Engine</strong>: Path to the <code>pdf.worker.js</code>. Must be accessible by the
+                    browser.</td>
             </tr>
             <tr>
                 <td><code>ocrConfig</code></td>
@@ -113,19 +126,47 @@
                 <td><code>ocrConfig.autoTerminateTimeout</code></td>
                 <td><code>number</code></td>
                 <td><code>10000</code></td>
-                <td><strong>Lifecycle Safety</strong>: Inactivity timeout in ms before workers are killed. Set to `0` to disable.</td>
+                <td><strong>Lifecycle Safety</strong>: Inactivity timeout in ms before workers are killed. Set to `0` to
+                    disable.</td>
             </tr>
             <tr>
                 <td><code>ocrConfig.workerPath</code> / <code>corePath</code> / <code>langPath</code></td>
                 <td><code>string</code></td>
                 <td><code>undefined</code></td>
-                <td><strong>Offline Environments</strong>: Paths to Tesseract scripts and data files for air-gapped or customized installations.</td>
+                <td><strong>Offline Environments</strong>: Paths to Tesseract scripts and data files for air-gapped or
+                    customized installations.</td>
             </tr>
             <tr>
                 <td><code>includeBreakNodes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Line/Page Break Parsing</strong>: Specifically targets Word documents (DOCX). When set to true, <code>officeParser</code> will extract physical breaks into the AST as <code>break</code> nodes. This includes standard line breaks (<code>textWrapping</code>), hard carriage returns (<code>carriageReturn</code>), page breaks (<code>page</code>), column breaks (<code>column</code>), and soft layout markers (<code>lastRenderedPage</code>).</td>
+                <td><strong>Line/Page Break Parsing</strong>: Specifically targets Word documents (DOCX). When set to
+                    true, <code>officeParser</code> will extract physical breaks into the AST as <code>break</code>
+                    nodes. This includes standard line breaks (<code>textWrapping</code>), hard carriage returns
+                    (<code>carriageReturn</code>), page breaks (<code>page</code>), column breaks (<code>column</code>),
+                    and soft layout markers (<code>lastRenderedPage</code>).</td>
+            </tr>
+            <tr>
+                <td><code>ignoreInternalLinks</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Link Filtering</strong>: When true, all bookmarks, cross-references, and internal document
+                    jumps are stripped from the AST. Only external URLs will be preserved.</td>
+            </tr>
+            <tr>
+                <td><code>fileType</code></td>
+                <td><code>SupportedFileType</code></td>
+                <td><code>null</code></td>
+                <td><strong>Authoritative Hint</strong>: Manually specify the source format. Essential when parsing
+                    <code>md</code>, <code>html</code>, or <code>csv</code> from a Buffer, as these lack magic byte
+                    markers.</td>
+            </tr>
+            <tr>
+                <td><code>csvDelimiter</code></td>
+                <td><code>string</code></td>
+                <td><code>,</code></td>
+                <td><strong>Data Parsing</strong>: Custom delimiter for CSV files (e.g., <code>;</code> or
+                    <code>\t</code>).</td>
             </tr>
         </tbody>
     </table>
@@ -134,12 +175,14 @@
     <p>Using OCR initializes a persistent **Smart Worker Pool** to improve performance for subsequent requests.</p>
     <ul>
         <li><strong>Dynamic Affinity:</strong> Workers persist with their language affinity.</li>
-        <li><strong>Smart Re-initialization:</strong> If a new language is requested at capacity, the Least Recently Used (LRU) idle worker is re-initialized instead of a full pool reset.</li>
+        <li><strong>Smart Re-initialization:</strong> If a new language is requested at capacity, the Least Recently
+            Used (LRU) idle worker is re-initialized instead of a full pool reset.</li>
         <li><strong>Automatic Cleanup:</strong> Workers are killed after the configured timeout of inactivity.</li>
     </ul>
-    
+
     <h3>OfficeParser.terminateOcr()</h3>
-    <p>A static method that immediately kills all active OCR workers. Call this in short-lived scripts (CLI) to bypass the inactivity timer and exit the terminal immediately.</p>
+    <p>A static method that immediately kills all active OCR workers. Call this in short-lived scripts (CLI) to bypass
+        the inactivity timer and exit the terminal immediately.</p>
     <pre><code>await OfficeParser.terminateOcr();</code></pre>
 
     <h2 id="examples">Common Scenarios</h2>

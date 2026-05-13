@@ -1,0 +1,1486 @@
+[
+  {
+    "text": "Demonstration of DOCX support in calibre",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "calibre",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "There is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "“Add Books” Convert”. “OK”",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "One, with a very long line to demonstrate that the hanging indent for the list is working correctly",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "One",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "Three",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "Five",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "Six",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "One",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "We now resume our normal programming",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "Four",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet1"
+    }
+  },
+  {
+    "text": "Text Formatting",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": "Inline formatting",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": "Here, we demonstrate various types of inline text formatting and the use of embedded fonts.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": "Here is some bold, italic, bold-italic, underlined and struck out  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": "inverse video",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": ".",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": "subtle emphasis  strong text intense emphasis",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": "Fun with fonts",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": "some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": "Paragraph level formatting",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": "You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": "For the lovers of poetry amongst you, paragraphs with hanging indents, like this often\ncome in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet2"
+    }
+  },
+  {
+    "text": "Tables",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "ITEM",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "NEEDED",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Books",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "1",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Pens",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "3",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Pencils",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "2",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Highlighter",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "2 colors",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Scissors",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "1 pair",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Tables in Word can vary from the extremely simple to the extremely complex. calibre tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section. Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units.  To the left of this paragraph is a floating two column table with a nice green border and header row.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "City or Town",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Point A",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Point B",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Point C",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Point D",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Point E",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Point A",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "—",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Point B",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "87",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "—",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Point C",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "64",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "56",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "—",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Point D",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "37",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "32",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "91",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "—",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Point E",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "93",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "35",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "54",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "43",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "—",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet3"
+    }
+  },
+  {
+    "text": "Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "College",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "New students",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Graduating students",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Change",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Cedar University",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "110",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "103",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "+7",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Oak Institute",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "202",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "210",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "-8",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Cedar University",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "24",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "20",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "+4",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Elm College",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "43",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "53",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "-10",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Total",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "998",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "908",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "90",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Fictitious data, for illustration purposes only",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "One",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "To the left is a table inside a table, with some cells merged.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Three",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "Four",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet4"
+    }
+  },
+  {
+    "text": "We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "December 2007",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "Sun",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "Mon",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "Tue",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "Wed",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "Thu",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "Fri",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "Sat",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "1",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "2",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "3",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "4",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "5",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "6",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "7",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "8",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "9",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "10",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "11",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "12",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "13",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "14",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "15",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "16",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "17",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "18",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "19",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "20",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "21",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "22",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "23",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "24",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "25",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "26",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "27",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "28",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "29",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "30",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "31",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet5"
+    }
+  },
+  {
+    "text": "Structural Elements",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet6"
+    }
+  },
+  {
+    "text": "Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet6"
+    }
+  },
+  {
+    "text": "Footnotes & Endnotes",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet6"
+    }
+  },
+  {
+    "text": "1i",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet6"
+    }
+  },
+  {
+    "text": "Dropcaps",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet6"
+    }
+  },
+  {
+    "text": "D",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet6"
+    }
+  },
+  {
+    "text": "rop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to specify how many lines of text a drop-cap should use.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet6"
+    }
+  },
+  {
+    "text": "Links",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet6"
+    }
+  },
+  {
+    "text": "calibre download pageparagraph level formatting",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet6"
+    }
+  },
+  {
+    "text": "Images",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet7"
+    }
+  },
+  {
+    "text": "Centered images like this are useful for large pictures that should be a focus of attention.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet7"
+    }
+  },
+  {
+    "text": "inserted",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet7"
+    }
+  },
+  {
+    "text": "Lists",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Bulleted List",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "One",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Numbered List",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "1",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "One, with a very long line to demonstrate that the hanging indent for the list is working correctly",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "2",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Multi-level Lists",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "1",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "One",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "1",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "1",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Three",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "2",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "3",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Five",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "2",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Six",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "A Multi-level list with bullets:",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "One",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "This bullet uses an image as the bullet item",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Four",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Five",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Continued Lists",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "i",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "One",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "ii",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "iii",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "We now resume our normal programming",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "iv",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Four",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Sheet8"
+    }
+  },
+  {
+    "text": "Charts",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "Series 1",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "Series 2",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "Series 3",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "Category 1",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "4.3",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "2.4",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "2",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "Category 2",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "2.5",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "4.4",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "2",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "Category 3",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "3.5",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "1.8",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "3",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "Category 4",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "4.5",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "2.8",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  },
+  {
+    "text": "5",
+    "metadata": {
+      "sourceType": "ods",
+      "sheetName": "Chart_Sheet"
+    }
+  }
+]

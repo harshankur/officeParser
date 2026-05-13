@@ -38,7 +38,12 @@
             <tr>
                 <td><code>toText()</code></td>
                 <td><code>function</code></td>
-                <td>Utility method to flatten the entire AST into plain text based on the current configuration.</td>
+                <td><strong>Deprecated</strong>: Utility method to flatten the entire AST into plain text. Use <code>.to('text')</code> instead.</td>
+            </tr>
+            <tr>
+                <td><code>to(destination, config?)</code></td>
+                <td><code>Promise&lt;ConversionResult&gt;</code></td>
+                <td><strong>Recommended</strong>: Universal entry point for generation. Converts the AST to <code>md</code>, <code>html</code>, <code>pdf</code>, <code>text</code>, or <code>chunks</code>.</td>
             </tr>
         </tbody>
     </table>

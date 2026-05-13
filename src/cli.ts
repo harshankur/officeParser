@@ -8,7 +8,9 @@
  *   officeparser file.docx --ocr=true --extractAttachments=true
  *
  * Options (--key=value):
- *   --toText=true             Output plain text instead of JSON AST
+ *   --format=json|text|md|html|csv|rtf|pdf|chunks  Convert AST to specified format
+ *   --output=path             Save result to a file
+ *   --toText=true             Legacy flag for plain text output
  *   --ocr=true                Enable OCR for images
  *   --ocrLanguage=eng         OCR language (default: eng)
  *   --extractAttachments=true Extract embedded attachments
@@ -19,12 +21,16 @@
  */
 
 import { OfficeParser } from './OfficeParser.js';
-import { OfficeParserAST, OfficeParserConfig } from './types.js';
+import { OfficeGenerator } from './OfficeGenerator.js';
+import { OfficeParserAST, OfficeParserConfig, UniversalGeneratorFormat } from './types.js';
+import * as fs from 'fs';
 
 const args = process.argv.slice(2);
 let fileArg: string | undefined;
 let toText = false;
 let verbose = false;
+let outputFormat: UniversalGeneratorFormat | undefined;
+let outputFile: string | undefined;
 const configArgs: string[] = [];
 
 function isConfigOption(arg: string) {
@@ -44,31 +50,71 @@ if (fileArg) {
     configArgs.forEach(arg => {
         const [key, value] = arg.split('=');
         const cleanKey = key.replace('--', '');
-        
+
         const lowerValue = value.toLowerCase();
         const boolValue = lowerValue === 'true' ? true : (lowerValue === 'false' ? false : undefined);
 
-        if (cleanKey === 'toText') {
-            if (boolValue !== undefined) toText = boolValue;
-            else console.warn(`Invalid value for toText: ${value}`);
-        } else if (cleanKey === 'verbose') {
-            if (boolValue !== undefined) verbose = boolValue;
-            else console.warn(`Invalid value for verbose: ${value}`);
+        const knownBooleans = new Set([
+            'toText', 'ocr', 'extractAttachments', 'ignoreNotes', 'putNotesAtLast', 
+            'includeRawContent', 'outputErrorToConsole', 'serializeRawContent', 
+            'preserveXmlWhitespace', 'includeBreakNodes', 'verbose'
+        ]);
+
+        if (cleanKey === 'format') {
+            outputFormat = value as UniversalGeneratorFormat;
+        } else if (cleanKey === 'output') {
+            outputFile = value;
         } else {
-            // @ts-ignore
-            if (boolValue !== undefined) config[cleanKey] = boolValue;
-            // @ts-ignore
-            else config[cleanKey] = value;
+            if (boolValue !== undefined) {
+                if (cleanKey === 'toText') toText = boolValue;
+                else if (cleanKey === 'verbose') {
+                    verbose = boolValue;
+                    if (verbose) config.outputErrorToConsole = true;
+                } else {
+                    // @ts-ignore
+                    config[cleanKey] = boolValue;
+                }
+            } else if (knownBooleans.has(cleanKey)) {
+                console.warn(`Invalid boolean value for --${cleanKey}: ${value}. Using default.`);
+            } else {
+                // @ts-ignore
+                config[cleanKey] = value;
+            }
         }
     });
 
     OfficeParser.parseOffice(fileArg, config)
         .then(async (ast: OfficeParserAST) => {
-            if (toText) {
-                process.stdout.write(ast.toText() + '\n');
+            let output: string | Uint8Array;
+
+            if (outputFormat) {
+                const result = await OfficeGenerator.generate(ast as any, outputFormat as any);
+                if (Array.isArray(result.value)) {
+                    output = JSON.stringify(result.value, null, 2);
+                } else {
+                    output = result.value as string | Uint8Array;
+                }
+            } else if (toText) {
+                output = ast.toText();
             } else {
-                process.stdout.write(JSON.stringify(ast, null, 2) + '\n');
+                output = JSON.stringify(ast, null, 2);
             }
+
+            if (outputFile) {
+                if (output instanceof Uint8Array) {
+                    fs.writeFileSync(outputFile, output);
+                } else {
+                    fs.writeFileSync(outputFile, output, 'utf8');
+                }
+                if (verbose) console.log(`Output written to ${outputFile}`);
+            } else {
+                if (output instanceof Uint8Array) {
+                    process.stdout.write(output);
+                } else {
+                    process.stdout.write(output + '\n');
+                }
+            }
+
             // Ensure OCR workers are terminated for clean CLI exit
             if (config.ocr) {
                 await OfficeParser.terminateOcr();
@@ -82,7 +128,7 @@ if (fileArg) {
                 console.error(err.message || err);
                 console.error('Use --verbose=true for full stack trace.');
             }
-            
+
             // Ensure OCR workers are terminated even on error
             if (config.ocr) {
                 await OfficeParser.terminateOcr();
@@ -93,7 +139,9 @@ if (fileArg) {
     console.log('Usage: officeparser <file> [--option=value]');
     console.log('');
     console.log('Options:');
-    console.log('  --toText=true                Output plain text instead of JSON AST');
+    console.log('  --format=json|md|html|rtf|csv|text|pdf|chunks  Convert to specified format');
+    console.log('  --output=file.ext            Save output to file instead of stdout');
+    console.log('  --toText=true                Output plain text instead of JSON AST (legacy)');
     console.log('  --ocr=true                   Enable OCR for images');
     console.log('  --ocrLanguage=eng            OCR language (default: eng)');
     console.log('  --extractAttachments=true    Extract embedded attachments');
@@ -107,7 +155,9 @@ if (fileArg) {
     console.log('');
     console.log('Examples:');
     console.log('  officeparser document.docx');
-    console.log('  officeparser document.docx --toText=true');
-    console.log('  officeparser report.pdf --ocr=true --extractAttachments=true');
+    console.log('  officeparser document.docx --format=html --output=doc.html');
+    console.log('  officeparser document.docx --format=md');
+    console.log('  officeparser report.pdf --ocr=true --format=text');
+    console.log('  officeparser data.xlsx --format=csv --output=data.csv');
     console.log('  officeparser complex.docx --serializeRawContent=false --includeRawContent=true');
 }

@@ -6,47 +6,64 @@
  * consistent error reporting across all parsers and the main entry point.
  */
 
-import { OfficeParserConfig } from '../types';
+import { OfficeErrorType, OfficeIssue, OfficeParserConfig, OfficeWarningType } from '../types.js';
 
 /** Error header prefix for all error messages */
 const ERRORHEADER = "[OfficeParser]: ";
 
-/**
- * Standard error types for OfficeParser.
- * Use these to identify the kind of error being reported.
- */
-export enum OfficeErrorType {
-    /** Unsupported file extension */
-    EXTENSION_UNSUPPORTED = 'EXTENSION_UNSUPPORTED',
-    /** File appears to be corrupted or malformed */
-    FILE_CORRUPTED = 'FILE_CORRUPTED',
-    /** File could not be found at the specified path */
-    FILE_DOES_NOT_EXIST = 'FILE_DOES_NOT_EXIST',
-    /** Specified location/directory is not reachable or is a directory */
-    LOCATION_NOT_FOUND = 'LOCATION_NOT_FOUND',
-    /** Arguments passed to the function are missing or invalid */
-    IMPROPER_ARGUMENTS = 'IMPROPER_ARGUMENTS',
-    /** Error occurred while reading or processing file buffers */
-    IMPROPER_BUFFERS = 'IMPROPER_BUFFERS',
-    /** Input type is not a supported type (string, Buffer, ArrayBuffer) */
-    INVALID_INPUT = 'INVALID_INPUT',
-    /** PDF worker source is missing (required in browser) */
-    PDF_WORKER_MISSING = 'PDF_WORKER_MISSING'
-}
 
 /** 
  * Lookup table for error messages.
  * Some entries are functions that take parameters to build dynamic messages.
  */
 const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => string)> = {
-    [OfficeErrorType.EXTENSION_UNSUPPORTED]: (ext: string) => `Sorry, OfficeParser currently supports docx, pptx, xlsx, odt, odp, ods, pdf, rtf files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
+    [OfficeErrorType.EXTENSION_UNSUPPORTED]: (ext: string) => `Sorry, OfficeParser currently supports docx, pptx, xlsx, odt, odp, ods, pdf, rtf, md, html, csv files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
     [OfficeErrorType.FILE_CORRUPTED]: (filepath: string) => `Your file ${filepath} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
     [OfficeErrorType.FILE_DOES_NOT_EXIST]: (filepath: string) => `File ${filepath} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
     [OfficeErrorType.LOCATION_NOT_FOUND]: (location: string) => `Entered location ${location} is not reachable! Please make sure that the entered directory location exists. Check relative paths and reenter.`,
     [OfficeErrorType.IMPROPER_ARGUMENTS]: `Improper arguments`,
-    [OfficeErrorType.IMPROPER_BUFFERS]: `Error occured while reading the file buffers`,
+    [OfficeErrorType.IMPROPER_BUFFERS]: `Error occured while reading the file buffers. If you are passing text-based formats like md, html, or csv as a Buffer, you must provide the 'fileType' hint in the configuration as they lack magic bytes for auto-detection.`,
     [OfficeErrorType.INVALID_INPUT]: `Invalid input type: Expected a Buffer or a valid file path`,
-    [OfficeErrorType.PDF_WORKER_MISSING]: `Missing PDF worker configuration. PDF parsing in browser environments requires a worker source. Please provide "pdfWorkerSrc" in your configuration.`
+    [OfficeErrorType.PDF_WORKER_MISSING]: `Missing PDF worker configuration. PDF parsing in browser environments requires a worker source. Please provide "pdfWorkerSrc" in your configuration.`,
+    [OfficeErrorType.FEATURE_NOT_SUPPORTED_IN_BROWSER]: (feature: string) => `'${feature}' is not supported in the browser. Browser users must pass file content as Buffer or ArrayBuffer directly.`,
+    [OfficeErrorType.INVALID_STYLE_MAPPING]: (mapping: string) => `Invalid style mapping string: ${mapping}`,
+    [OfficeErrorType.INVALID_SELECTOR]: (selector: string) => `Invalid selector: ${selector}`,
+    [OfficeErrorType.INVALID_OUTPUT_MAPPING]: (output: string) => `Invalid output mapping: ${output}`,
+    [OfficeErrorType.MISSING_EMBEDDING_FUNCTION]: `Semantic chunking requires an "embeddingFunction" to be provided in chunksConfig. This function must accept a string and return a Promise resolving to a number array (vector).`
+};
+
+/**
+ * Lookup table for warning messages.
+ */
+const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => string)> = {
+    [OfficeWarningType.PERFORMANCE_TIP]: (tip: string) => `⚡️ Performance Tip: ${tip}`,
+    [OfficeWarningType.OCR_FAILED]: (name: string) => `OCR failed for ${name}:`,
+    [OfficeWarningType.CHART_DATA_EXTRACTION_FAILED]: (path: string) => `Failed to extract chart data from ${path}:`,
+    [OfficeWarningType.PDF_WORKER_FALLBACK]: `Could not auto-resolve local worker path, falling back to CDN:`,
+    [OfficeWarningType.ATTACHMENT_EXTRACTION_FAILED]: `Error extracting embedded attachments:`,
+    [OfficeWarningType.PAGE_LOAD_FAILED]: (page: number) => `Error loading page ${page}:`,
+    [OfficeWarningType.DEPENDENCY_LOAD_FAILED]: (dep: string) => `Failed to load dependency ${dep}:`,
+    [OfficeWarningType.IMAGE_EXTRACTION_FAILED]: (context: string) => `Error extracting images ${context}:`,
+    [OfficeWarningType.ANNOTATION_EXTRACTION_FAILED]: (page: number) => `Error extracting annotations from page ${page}:`,
+    [OfficeWarningType.IMAGE_PROCESSING_FAILED]: `Failed to extract from ImageBitmap:`,
+    [OfficeWarningType.BROWSER_GENERATION_LIMITATION]: (msg: string) => msg,
+    [OfficeWarningType.SHEET_RANGE_NOT_FOUND]: (range: string) => `No sheets found matching the range: ${range}`,
+    [OfficeWarningType.BUFFER_TYPE_MISMATCH]: (info: { detected: string, expected: string }) => `File content type mismatch: Detected '${info.detected}' but expected/provided '${info.expected}'. Parsing will proceed with '${info.expected}' as requested.`,
+    [OfficeWarningType.EMPTY_CHUNK_GENERATED]: (strategy: string) => `No chunks generated for document. Check if the document content is compatible with the '${strategy}' strategy.`,
+    [OfficeWarningType.WHITESPACE_NODE_SKIPPED]: (nodeType: string) => `Skipped whitespace-only node of type: ${nodeType}`
+};
+
+/**
+ * Creates a formatted warning message for a specific warning type.
+ * 
+ * @param type - The type of warning
+ * @param info - Optional additional information
+ * @returns The formatted warning message string
+ */
+export const getWarningMessage = (type: OfficeWarningType, info?: any): string => {
+    const msg = WARNING_MESSAGES[type];
+    const message = typeof msg === 'function' ? msg(info) : msg;
+    return message;
 };
 
 /**
@@ -63,18 +80,43 @@ const createOfficeError = (type: OfficeErrorType, info?: any): string => {
 };
 
 /**
+ * Core reporting logic for all issues.
+ * Ensures consistent logging and callback execution.
+ */
+const reportIssue = (
+    issue: OfficeIssue,
+    config?: OfficeParserConfig
+): void => {
+    if (config?.onWarning) {
+        config.onWarning(issue);
+    } else if (!config || config.outputErrorToConsole) {
+        const formatted = ERRORHEADER + issue.message;
+        if (issue.type === 'error') {
+            console.error(formatted, issue.details || '');
+        } else {
+            console.warn(formatted, issue.details || '');
+        }
+    }
+};
+
+/**
  * Creates, optionally logs to console, and returns a formatted OfficeParser error.
  * 
  * @param type - The type of error
- * @param config - Parser configuration (checks outputErrorToConsole)
+ * @param config - Optional parser configuration (checks outputErrorToConsole)
  * @param info - Optional additional information
  * @returns The Error object to be thrown
  */
-export const getOfficeError = (type: OfficeErrorType, config: OfficeParserConfig, info?: any): Error => {
+export const getOfficeError = (type: OfficeErrorType, config?: OfficeParserConfig, info?: any): Error => {
     const message = createOfficeError(type, info);
-    if (config.outputErrorToConsole) {
-        console.error(ERRORHEADER + message);
-    }
+    const issue: OfficeIssue = {
+        type: 'error',
+        code: type,
+        message,
+        details: info
+    };
+    
+    reportIssue(issue, config);
     return new Error(ERRORHEADER + message);
 };
 
@@ -89,6 +131,7 @@ export const getOfficeError = (type: OfficeErrorType, config: OfficeParserConfig
  */
 export const getWrappedError = (error: any, config: OfficeParserConfig, filePath?: string): Error => {
     let message = error.message || error;
+    let code: OfficeErrorType | OfficeWarningType = OfficeErrorType.FILE_CORRUPTED; // Default for wrapped errors
 
     // Detect file corruption from common library error messages
     if (filePath && (
@@ -100,26 +143,48 @@ export const getWrappedError = (error: any, config: OfficeParserConfig, filePath
         message = createOfficeError(OfficeErrorType.FILE_CORRUPTED, filePath);
     }
 
-    if (config.outputErrorToConsole) {
-        console.error(ERRORHEADER + message);
-    }
+    const issue: OfficeIssue = {
+        type: 'error',
+        code: OfficeErrorType.FILE_CORRUPTED,
+        message,
+        details: filePath ? { filePath, originalError: error } : error
+    };
+
+    reportIssue(issue, config);
     return new Error(ERRORHEADER + message);
 };
 
 /**
- * Conditionally logs a warning message to the console.
- * Used for non-fatal errors that shouldn't stop the parsing process.
+ * Centralized logging utility for non-fatal warnings or issues.
+ * Routes messages to config.onWarning if provided, or console.warn/error 
+ * if config.outputErrorToConsole is true.
  * 
- * @param message - The warning message
- * @param config - Parser configuration
- * @param error - Optional original error object for more context
+ * @param messageOrType - The warning message or warning type
+ * @param config - Optional parser configuration
+ * @param info - Optional additional information for dynamic messages or context
+ * @param error - Optional original error object
  */
-export const logWarning = (message: string, config: OfficeParserConfig, error?: any): void => {
-    if (config.outputErrorToConsole) {
-        if (error) {
-            console.warn(ERRORHEADER + message, error);
-        } else {
-            console.warn(ERRORHEADER + message);
+export const logWarning = (type: OfficeWarningType, config?: OfficeParserConfig, info?: any, error?: any): void => {
+    let message: string;
+    let details = info;
+
+    const msg = WARNING_MESSAGES[type];
+    if (typeof msg === 'function') {
+        message = msg(info);
+        details = error || info;
+    } else {
+        message = msg;
+        if (info instanceof Error && !error) {
+            details = info;
         }
     }
+
+    const issue: OfficeIssue = {
+        type: 'warning',
+        code: type,
+        message,
+        details
+    };
+
+    reportIssue(issue, config);
 };

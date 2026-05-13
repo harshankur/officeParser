@@ -109,6 +109,18 @@ function checkCjs(): CheckResult[] {
         results.push(fail('CJS: named export parseOffice', `Got: ${typeof mod.parseOffice}`));
     }
 
+    if (typeof mod.OfficeGenerator === 'function' || typeof mod.OfficeGenerator === 'object') {
+        results.push(pass('CJS: named export OfficeGenerator', typeof mod.OfficeGenerator));
+    } else {
+        results.push(fail('CJS: named export OfficeGenerator', `Got: ${typeof mod.OfficeGenerator}`));
+    }
+
+    if (mod.OfficeGenerator && typeof mod.OfficeGenerator.generate === 'function') {
+        results.push(pass('CJS: OfficeGenerator.generate is a function'));
+    } else {
+        results.push(fail('CJS: OfficeGenerator.generate is a function', `Got: ${typeof mod.OfficeGenerator?.generate}`));
+    }
+
     // Default export
     const defaultExport = mod.default ?? mod;
     if (defaultExport && typeof defaultExport.parseOffice === 'function') {
@@ -254,6 +266,13 @@ function checkBrowserIife(): CheckResult[] {
         results.push(fail('IIFE: has globalName officeParser', 'IIFE global not found'));
     }
 
+    // Has OfficeGenerator
+    if (content.includes('OfficeGenerator')) {
+        results.push(pass('IIFE: contains OfficeGenerator export'));
+    } else {
+        results.push(fail('IIFE: contains OfficeGenerator export', 'OfficeGenerator not found in bundle'));
+    }
+
     // Has @vite-ignore
     if (content.includes('@vite-ignore')) {
         results.push(pass('IIFE: has @vite-ignore for pdfjs dynamic import'));
@@ -351,6 +370,18 @@ function checkBrowserTypes(): CheckResult[] {
         results.push(pass('Browser types: contains parseOffice declaration'));
     } else {
         results.push(fail('Browser types: contains parseOffice declaration', 'parseOffice not found in .d.ts'));
+    }
+
+    if (content.includes('OfficeGenerator')) {
+        results.push(pass('Browser types: contains OfficeGenerator declaration'));
+    } else {
+        results.push(fail('Browser types: contains OfficeGenerator declaration', 'OfficeGenerator not found in .d.ts'));
+    }
+
+    if (content.includes('GeneratorConfig')) {
+        results.push(pass('Browser types: contains GeneratorConfig declaration'));
+    } else {
+        results.push(fail('Browser types: contains GeneratorConfig declaration', 'GeneratorConfig not found in .d.ts'));
     }
 
     return results;

@@ -7,10 +7,10 @@
         "role": "maintainer",
         "name": "Harsh Ankur",
         "email": "harshankur@outlook.com",
-        "description": "I am a full-stack open source maintainer focused on building high-performance document processing infrastructure. Since 2019, I have been the sole architect of officeParser, maintaining it through six major versions and ensuring its stability for a global user base that depends on it for over 10 million downloads and 260,000+ weekly installations.",
+        "description": "I am a full-stack open source maintainer building the future of document knowledge infrastructure. Since 2019, I have architected officeParser from a simple text extractor into a comprehensive Parsing & Generation platform (v7.0.0). I am dedicated to ensuring this becomes the ultimate super-tool for all AI ingestion and document generation workflows, leveraging a seven-year track record of stability for a global community with over 10 million downloads and 300,000+ weekly installations.",
         "webpageUrl": {
             "url": "https://officeparser.harshankur.com",
-            "wellKnown": ""
+            "wellKnown": "https://officeparser.harshankur.com/.well-known/funding-manifest-urls"
         }
     },
 
@@ -18,24 +18,27 @@
         {
             "guid": "officeparser",
             "name": "officeParser",
-            "description": "officeParser is a strictly-typed, zero-dependency-core library for Node.js and the browser that transforms complex office documents (DOCX, PDF, XLSX, etc.) into a unified, hierarchical Abstract Syntax Tree (AST). It is a critical piece of infrastructure for AI ingestion pipelines, search engines, and document-management tools, providing the only JavaScript/TypeScript solution that maintains format parity across both server and client runtimes.",
+            "description": "officeParser is the industry's first dual-purpose Office Parser & Generator. It transforms 11+ complex document formats into a unified AST and provides a high-fidelity engine to generate RAG-ready Markdown, HTML, CSV, RTF, Layout-Aware Text, and PDF. Work is currently underway to introduce several additional generator formats, cementing its place as the critical infrastructure for modern AI ingestion and universal document transformation.",
             "webpageUrl": {
                 "url": "https://officeparser.harshankur.com",
-                "wellKnown": "https://github.com/harshankur/officeParser/blob/master/.well-known/funding-manifest-urls"
+                "wellKnown": "https://officeparser.harshankur.com/.well-known/funding-manifest-urls"
             },
             "repositoryUrl": {
                 "url": "https://github.com/harshankur/officeParser",
-                "wellKnown": "https://github.com/harshankur/officeParser/blob/master/.well-known/funding-manifest-urls"
+                "wellKnown": "https://raw.githubusercontent.com/harshankur/officeParser/master/.well-known/funding-manifest-urls"
             },
             "licenses": ["spdx:MIT"],
             "tags": [
                 "ai-ingestion",
                 "document-ast",
-                "typescript",
-                "office-automation",
                 "rag-infrastructure",
-                "nodejs",
-                "browser-parser"
+                "document-generation",
+                "markdown-serialization",
+                "pdf-generation",
+                "rtf-generation",
+                "text-generation",
+                "typescript",
+                "universal-parser"
             ]
         }
     ],
@@ -64,32 +67,32 @@
 
         "plans": [
             {
-                "guid": "maintenance-annual",
+                "guid": "core-sustainability-annual",
                 "status": "active",
                 "name": "Core Sustainability & Maintenance",
-                "description": "Focuses on the baseline health of the library: maintaining compatibility with Node.js LTS releases, resolving security vulnerabilities, and providing timely triage for issues across the 8 supported file formats. This ensures reliability for the 260k+ weekly users currently reaching it.",
+                "description": "Focuses on the baseline health of the library: fixing bugs, updating dependencies, and maintaining 100% test coverage. This ensures the 300,000+ weekly users have a rock-solid foundation for their production applications.",
                 "amount": 25000,
-                "currency": "USD",
+                "currency": "EUR",
                 "frequency": "yearly",
                 "channels": ["github-sponsors", "paypal"]
             },
             {
-                "guid": "plugin-ecosystem-annual",
+                "guid": "multi-runtime-excellence-annual",
                 "status": "active",
-                "name": "The Plugin Ecosystem (AI Foundations)",
-                "description": "Funds the development of a composable plugin architecture (v7 design). This allows officeParser to remain lightweight while enabling high-value transformations like Markdown/HTML serialisation and LLM-ready chunking. This work is critical for cementing the library as the default choice for modern AI/RAG ingestion in JavaScript.",
+                "name": "Multi-Runtime Excellence (Bun, Deno & Edge)",
+                "description": "Expanding the library's reach beyond Node.js. This plan funds the development and official validation of drivers for Bun, Deno, and Edge environments (Cloudflare Workers, Vercel Edge). It ensures that officeParser remains the high-performance document engine of choice for the next generation of serverless web infrastructure.",
                 "amount": 50000,
-                "currency": "USD",
+                "currency": "EUR",
                 "frequency": "yearly",
                 "channels": ["github-sponsors", "paypal"]
             },
             {
-                "guid": "intelligent-ingestion-annual",
+                "guid": "enterprise-connectivity-annual",
                 "status": "active",
-                "name": "Intelligent Document Ingestion",
-                "description": "The 'Full Focus' program. Enables advanced vertical features such as semantic table reconstruction (headers/merged-cells) and structured chart-to-JSON extraction. Also includes officially validated drivers for Bun, Deno, and Edge environments, and first-party connectors for LangChain and LlamaIndex.",
+                "name": "Enterprise Connectivity & Intelligent Extraction",
+                "description": "The 'Full Focus' program. Enables deep vertical features such as structured chart-to-JSON extraction and first-party, high-performance connectors for LangChain, LlamaIndex, and Haystack. Also includes pro-grade PDF-to-Office generation and enterprise-priority issue resolution.",
                 "amount": 75000,
-                "currency": "USD",
+                "currency": "EUR",
                 "frequency": "yearly",
                 "channels": ["github-sponsors", "paypal"]
             }
@@ -97,11 +100,18 @@
 
         "history": [
             {
-                "year": 2024,
+                "year": 2025,
                 "income": 0,
                 "expenses": 0,
-                "currency": "USD",
-                "description": "All development was contributed voluntarily alongside full-time employment."
+                "currency": "EUR",
+                "description": "Completion of the seven-year 'Foundations Era' (2019-2025). Maintained library through 5 major versions as a purely voluntary project with zero external funding."
+            },
+            {
+                "year": 2026,
+                "income": 0,
+                "expenses": 0,
+                "currency": "EUR",
+                "description": "The Super-Tool Transformation. Launched v6.0 in January and the revolutionary v7.0.0 Dual-Purpose Engine in May. Pivoting towards professional sustainability and AI-first ingestion."
             }
         ]
     }

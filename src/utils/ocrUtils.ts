@@ -11,6 +11,7 @@
  */
 
 import { OcrConfig } from '../types.js';
+import { isBrowser } from './envUtils.js';
 
 /**
  * Manages a pool of Tesseract workers using a scheduler.
@@ -232,7 +233,7 @@ export const performOcr = async (image: Buffer | string, config?: OcrConfig): Pr
 
     // In browser environment, convert Buffer to Blob for better compatibility
     // @ts-ignore
-    if (typeof window !== 'undefined' && typeof Blob !== 'undefined' && Buffer.isBuffer(image)) {
+    if (isBrowser && typeof Blob !== 'undefined' && Buffer.isBuffer(image)) {
         inputImage = new Blob([image as any], { type: 'image/bmp' });
     }
 

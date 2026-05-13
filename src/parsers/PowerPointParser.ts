@@ -22,12 +22,13 @@
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
  */
 
-import { ChartMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, SlideMetadata, TextFormatting } from '../types.js';
+import { ChartMetadata, FullOfficeParserConfig, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, SlideMetadata, TextFormatting } from '../types.js';
+import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
-import { getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
+import { getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 
 /**
@@ -37,7 +38,7 @@ import { extractFiles } from '../utils/zipUtils.js';
  * @param config - Parser configuration
  * @returns A promise resolving to the parsed AST
  */
-export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig): Promise<OfficeParserAST> => {
+export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     const allFilesRegex = /ppt\/(notesSlides|slides)\/(notesSlide|slide)\d+.xml/g;
     const slidesRegex = /ppt\/slides\/slide\d+.xml/g;
     const slideRelsRegex = /ppt\/slides\/_rels\/slide\d+\.xml\.rels/;
@@ -762,9 +763,9 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
             if (config.ocr) {
                 if (attachment.mimeType.startsWith('image/')) {
                     try {
-                        attachment.ocrText = (await performOcr(media.content, { language: config.ocrLanguage, ...config.ocrConfig })).trim();
+                        attachment.ocrText = (await performOcr(media.content, { ...config.ocrConfig })).trim();
                     } catch (e) {
-                        logWarning(`OCR failed for ${attachment.name}:`, config, e);
+                        logWarning(OfficeWarningType.OCR_FAILED, config, attachment.name, e);
                     }
                 }
             }
@@ -788,7 +789,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                 attachment.chartData = chartData;
             }
             catch (e) {
-                logWarning(`Failed to extract text from chart ${chart.path}:`, config, e);
+                logWarning(OfficeWarningType.CHART_DATA_EXTRACTION_FAILED, config, chart.path, e);
             }
         }
 
@@ -805,7 +806,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
                                 node.text = attachment.ocrText;
                         }
                         if (node.type === 'chart') {
-                            node.text = attachment.chartData?.rawTexts.join(config.newlineDelimiter || '\n');
+                            node.text = attachment.chartData?.rawTexts.join(config.newlineDelimiter);
                         }
                     }
                 }
@@ -826,23 +827,26 @@ export const parsePowerPoint = async (buffer: Buffer, config: OfficeParserConfig
         });
     }
 
-    return {
-        type: 'pptx',
-        metadata: metadata,
-        content: content,
-        attachments: attachments,
-        toText: () => content.map(c => {
-            // Recursive text extraction
-            const getText = (node: OfficeContentNode): string => {
-                let t = '';
-                if (node.children) {
-                    t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter ?? '\n');
-                }
-                else
-                    t += node.text || '';
-                return t;
-            };
-            return getText(c);
-        }).filter(t => t != '').join(config.newlineDelimiter ?? '\n')
-    };
+    const toTextSync = () => content.map(c => {
+        // Recursive text extraction
+        const getText = (node: OfficeContentNode): string => {
+            let t = '';
+            if (node.children) {
+                t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter);
+            }
+            else
+                t += node.text || '';
+            return t;
+        };
+        return getText(c);
+    }).filter(t => t != '').join(config.newlineDelimiter);
+
+    return createAST(
+        'pptx',
+        metadata,
+        content,
+        attachments,
+        config,
+        toTextSync
+    );
 };

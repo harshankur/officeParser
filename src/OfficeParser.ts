@@ -11,6 +11,9 @@
  * - ODT, ODP, ODS (OpenDocument formats)
  * - PDF (Portable Document Format)
  * - RTF (Rich Text Format)
+ * - CSV (Comma-Separated Values)
+ * - MD (Markdown)
+ * - HTML (HyperText Markup Language)
  * 
  * **Usage:**
  * ```typescript
@@ -33,15 +36,19 @@
  * @module OfficeParser
  */
 
-import { assertNode } from './utils/envUtils.js';
+import { parseCsv } from './parsers/CsvParser.js';
 import { parseExcel } from './parsers/ExcelParser.js';
+import { parseHtml } from './parsers/HtmlParser.js';
+import { parseMarkdown } from './parsers/MarkdownParser.js';
 import { parseOpenOffice } from './parsers/OpenOfficeParser.js';
 import { parsePdf } from './parsers/PdfParser.js';
 import { parsePowerPoint } from './parsers/PowerPointParser.js';
 import { parseRtf } from './parsers/RtfParser.js';
 import { parseWord } from './parsers/WordParser.js';
-import { OfficeParserAST, OfficeParserConfig } from './types.js';
-import { getOfficeError, getWrappedError, OfficeErrorType } from './utils/errorUtils.js';
+import { OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeParserConfig, OfficeWarningType } from './types.js';
+import { resolveParserConfig } from './utils/configUtils.js';
+import { assertNode } from './utils/envUtils.js';
+import { getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
 import { loadFileType } from './utils/moduleLoader.js';
 import { terminateOcr } from './utils/ocrUtils.js';
 
@@ -72,6 +79,9 @@ export class OfficeParser {
      * - `.odt`, `.odp`, `.ods` → OpenOfficeParser (ODF)
      * - `.pdf` → PdfParser (PDF.js)
      * - `.rtf` → RtfParser (custom RTF parser)
+     * - `.csv` → CsvParser
+     * - `.md` → MarkdownParser
+     * - `.html` → HtmlParser
      * 
      * @param file - File path (string), Buffer, or ArrayBuffer containing the document
      * @param config - Optional configuration object (defaults applied for all omitted options)
@@ -108,25 +118,16 @@ export class OfficeParser {
             actualConfig = configOrCallback || {};
         }
 
-        const internalConfig: Required<OfficeParserConfig> = {
-            ignoreNotes: false,
-            newlineDelimiter: '\n',
-            putNotesAtLast: false,
-            outputErrorToConsole: false,
-            extractAttachments: false,
-            ocr: false,
-            ocrLanguage: 'eng',
-            includeRawContent: false,
-            serializeRawContent: true,
-            preserveXmlWhitespace: false,
-            pdfWorkerSrc: '',
-            ocrConfig: {},
-            includeBreakNodes: false,
-            ...actualConfig
+        const internalConfig = resolveParserConfig(actualConfig);
+        const parsingWarnings: OfficeIssue[] = [];
+        const originalOnWarning = internalConfig.onWarning;
+        internalConfig.onWarning = (issue: OfficeIssue) => {
+            parsingWarnings.push(issue);
+            if (originalOnWarning) originalOnWarning(issue);
         };
 
         let buffer: Buffer = Buffer.alloc(0);
-        let ext: string = '';
+        let ext: string = internalConfig.fileType ?? '';
         let filePath: string | undefined;
 
         try {
@@ -154,23 +155,37 @@ export class OfficeParser {
                     throw getOfficeError(OfficeErrorType.LOCATION_NOT_FOUND, internalConfig, file);
                 }
                 buffer = fs.readFileSync(file);
-                ext = file.split('.').pop()?.toLowerCase() || '';
+                ext = ext || file.split('.').pop() || '';
             } else {
                 throw getOfficeError(OfficeErrorType.INVALID_INPUT, internalConfig);
             }
 
-            if (!ext) {
+            // Always attempt to detect file type from buffer if it exists, 
+            // but respect the authoritative 'ext' if it was already set.
+            if (buffer.length > 0) {
                 const { fileTypeFromBuffer } = await loadFileType();
                 const type = await fileTypeFromBuffer(buffer);
-                if (type) {
-                    ext = type.ext.toLowerCase();
-                } else {
-                    throw getOfficeError(OfficeErrorType.IMPROPER_BUFFERS, internalConfig);
+
+                if (!ext) {
+                    if (type) {
+                        ext = type.ext;
+                    } else {
+                        // If no extension could be detected and none was provided,
+                        // it might be a text-based format (csv, md, html) which 
+                        // lack magic bytes. We'll let the switch default handle it.
+                    }
+                } else if (type && type.ext.toLowerCase() !== ext.toLowerCase()) {
+                    // Mismatch found between authoritative extension and detected content
+                    logWarning(OfficeWarningType.BUFFER_TYPE_MISMATCH, internalConfig, { detected: type.ext, expected: ext });
                 }
             }
 
+            if (!ext) {
+                throw getOfficeError(OfficeErrorType.IMPROPER_BUFFERS, internalConfig);
+            }
+
             let result: OfficeParserAST;
-            switch (ext) {
+            switch (ext.toLowerCase()) {
                 case 'docx':
                     result = await parseWord(buffer, internalConfig);
                     break;
@@ -191,9 +206,20 @@ export class OfficeParser {
                 case 'rtf':
                     result = await parseRtf(buffer, internalConfig);
                     break;
+                case 'csv':
+                    result = await parseCsv(buffer, internalConfig);
+                    break;
+                case 'html':
+                    result = await parseHtml(buffer, internalConfig);
+                    break;
+                case 'md':
+                    result = await parseMarkdown(buffer, internalConfig);
+                    break;
                 default:
                     throw getOfficeError(OfficeErrorType.EXTENSION_UNSUPPORTED, internalConfig, ext);
             }
+
+            result.warnings = parsingWarnings;
 
             if (callback) callback(result);
             return result;

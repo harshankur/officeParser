@@ -84,5 +84,20 @@ if (OfficeParser && typeof OfficeParser.parseOffice === 'function') {
     fail('OfficeParser.parseOffice is a function', `Got: ${typeof OfficeParser?.parseOffice}`);
 }
 
+// --- Check 7: OfficeGenerator named export ---
+if (typeof mod.OfficeGenerator === 'function' || typeof mod.OfficeGenerator === 'object') {
+    pass('Named export: OfficeGenerator', typeof mod.OfficeGenerator);
+} else {
+    fail('Named export: OfficeGenerator', `Got: ${typeof mod.OfficeGenerator}`);
+}
+
+// --- Check 8: generateOffice is a function on OfficeGenerator class ---
+const OfficeGenerator = mod.OfficeGenerator;
+if (OfficeGenerator && typeof OfficeGenerator.generate === 'function') {
+    pass('OfficeGenerator.generate is a function');
+} else {
+    fail('OfficeGenerator.generate is a function', `Got: ${typeof OfficeGenerator?.generate}`);
+}
+
 console.log(JSON.stringify(results));
 process.exit(failed ? 1 : 0);

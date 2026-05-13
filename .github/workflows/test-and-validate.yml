@@ -2,7 +2,7 @@
 # This workflow runs the full test suite on every push to master and on pull
 # requests targeting master. It validates:
 #  - All shipping artifacts (CJS, ESM, browser IIFE, browser ESM, CLI, types)
-#  - Parser correctness across all 8 supported file formats
+#  - Parser correctness across all 11 supported file formats
 #  - Compatibility across all supported Node.js versions (18, 20, 22, 24)
 #
 # This is the primary guard before merging into master. The build-and-publish
@@ -49,5 +49,6 @@ jobs:
       #  - Builds all artifacts (tsc, ESM wrapper, browser bundles, types)
       #  - Runs testShippingArtifacts.ts (validates every shipped file)
       #  - Runs testOfficeParser.ts (parser correctness + baseline parity)
+      #  - Runs testOfficeGenerator.ts (generator correctness + baseline parity)
       - name: Run Full Test Suite
         run: npm test

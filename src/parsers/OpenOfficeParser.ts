@@ -21,12 +21,13 @@
  * @module OpenOfficeParser
  */
 
-import { CellMetadata, ChartData, ChartMetadata, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { CellMetadata, ChartData, ChartMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
-import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
+import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 
 /**
@@ -36,7 +37,7 @@ import { extractFiles } from '../utils/zipUtils.js';
  * @param config - Parser configuration
  * @returns A promise resolving to the parsed AST
  */
-export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig): Promise<OfficeParserAST> => {
+export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     const contentFileRegex = /content\.xml/;
     const objectContentFileRegex = /Object \d+\/content\.xml/;
     const mediaFileRegex = /(Pictures|media)\/.*/;
@@ -65,6 +66,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
 
     const mainContentFile = files.find(f => f.path === 'content.xml') || files.find(f => f.path.match(contentFileRegex));
     const stylesFile = files.find(f => f.path === 'styles.xml');
+    const stylesDom = stylesFile ? parseXmlString(stylesFile.content.toString()) : undefined;
     const content: OfficeContentNode[] = [];
     const notes: OfficeContentNode[] = [];
 
@@ -80,8 +82,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
     let lastWasList = false;
 
     // Helper to parse styles
-    const parseStyles = (xmlString: string) => {
-        const xml = parseXmlString(xmlString);
+    const parseStyles = (xml: Document) => {
         const styles = getElementsByTagName(xml, "style:style");
         for (const style of styles) {
             const name = style.getAttribute("style:name");
@@ -160,8 +161,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         }
     };
 
-    if (stylesFile) {
-        parseStyles(stylesFile.content.toString());
+    if (stylesDom) {
+        parseStyles(stylesDom);
     }
 
     /**
@@ -189,11 +190,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         parentFormatting: TextFormatting = {},
         linkMetadata?: { link?: string; linkType?: 'internal' | 'external' },
         sourceXml: string = ''
-    ): { text: string; children: OfficeContentNode[] } => {
+    ): { text: string; children: OfficeContentNode[]; anchorIds: string[] } => {
         const children: OfficeContentNode[] = [];
+        const anchorIds: string[] = [];
         let fullText = '';
 
-        if (!node.childNodes) return { text: '', children: [] };
+        if (!node.childNodes) return { text: '', children: [], anchorIds: [] };
 
         for (let i = 0; i < node.childNodes.length; i++) {
             const child = node.childNodes[i];
@@ -213,7 +215,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 const element = child as Element;
                 const tagName = element.tagName;
 
-                if (tagName === 'text:s') {
+                if (tagName === 'text:bookmark' || tagName === 'text:bookmark-start') {
+                    const name = element.getAttribute('text:name');
+                    if (name) anchorIds.push(name);
+                } else if (tagName === 'text:s') {
                     // Space
                     const count = parseInt(element.getAttribute('text:c') || '1');
                     const spaces = ' '.repeat(count);
@@ -250,15 +255,35 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     const spanContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, formatting, linkMetadata, sourceXml);
                     fullText += spanContent.text;
                     children.push(...spanContent.children);
+                    anchorIds.push(...spanContent.anchorIds);
                 } else if (tagName === 'text:a') {
                     // Hyperlink
-                    const href = element.getAttribute('xlink:href') || '';
-                    const linkType = href.startsWith('#') ? 'internal' : 'external';
-                    const newLinkMetadata = { link: href, linkType: linkType as 'internal' | 'external' };
+                    let href = element.getAttribute('xlink:href') || '';
+                    const isInternal = href.startsWith('#');
+                    const linkType = isInternal ? 'internal' : 'external';
+
+                    if (isInternal) {
+                        // ODT internal links can be encoded and might have suffixes like |outline
+                        try {
+                            href = decodeURIComponent(href).split('|')[0];
+                        } catch (e) {
+                            href = href.split('|')[0];
+                        }
+                        // Normalize internal link: if it contains #, keep only from # onwards
+                        if (href.includes('#')) {
+                            href = '#' + href.split('#').pop();
+                        }
+                    }
+
+                    let newLinkMetadata: TextMetadata | undefined;
+                    if (!isInternal || !config.ignoreInternalLinks) {
+                        newLinkMetadata = { link: href, linkType: linkType as 'internal' | 'external' };
+                    }
 
                     const linkContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, newLinkMetadata, sourceXml);
                     fullText += linkContent.text;
                     children.push(...linkContent.children);
+                    anchorIds.push(...linkContent.anchorIds);
                 } else if (tagName === 'text:note' && !config.ignoreNotes) {
                     // Footnote or endnote
                     const noteClass = (element.getAttribute('text:note-class') || 'footnote') as 'footnote' | 'endnote';
@@ -279,7 +304,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                 type: 'paragraph',
                                 text: npContent.text,
                                 children: npContent.children,
-                                metadata: npContent.alignment ? { alignment: npContent.alignment } : undefined
+                                metadata: {
+                                    ...(npContent.alignment ? { alignment: npContent.alignment } : {}),
+                                    ...(npContent.anchorIds?.length ? { anchorIds: npContent.anchorIds } : {})
+                                }
                             };
                             noteChildren.push(npNode);
                         }
@@ -341,7 +369,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 }
             }
         }
-        return { text: fullText, children };
+        return { text: fullText, children, anchorIds };
     };
 
     /**
@@ -360,7 +388,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         styleMap: Record<string, TextFormatting>,
         config: OfficeParserConfig,
         sourceXml: string
-    ): { text: string; children: OfficeContentNode[]; alignment?: 'left' | 'center' | 'right' | 'justify'; style?: string } => {
+    ): { text: string; children: OfficeContentNode[]; alignment?: 'left' | 'center' | 'right' | 'justify'; style?: string; anchorIds?: string[] } => {
         // Get paragraph style for alignment and drop caps
         const paraStyle = node.getAttribute("text:style-name");
         const styleInfo = paraStyle ? paraStyleMap[paraStyle] : undefined;
@@ -424,7 +452,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
             }
         }
 
-        return { text: content.text, children: content.children, alignment, style: paraStyle || undefined };
+        return { text: content.text, children: content.children, alignment, style: paraStyle || undefined, anchorIds: content.anchorIds };
     };
 
     /**
@@ -679,16 +707,17 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         // Start traversal
         const officeBody = getFirstElementByTagName(xml, "office:body");
         if (officeBody) {
-            const bodyContent = getDirectChildren(officeBody, "office:text")[0] || 
-                                getDirectChildren(officeBody, "office:presentation")[0] || 
-                                getDirectChildren(officeBody, "office:spreadsheet")[0];
+            const bodyContent = getDirectChildren(officeBody, "office:text")[0] ||
+                getDirectChildren(officeBody, "office:presentation")[0] ||
+                getDirectChildren(officeBody, "office:spreadsheet")[0];
             if (bodyContent) {
                 const bodyChildren = getDirectChildren(bodyContent, "*");
+                const isSpreadsheet = bodyContent.tagName === "office:spreadsheet";
                 for (const child of bodyChildren) {
-                    traverse(child, content, false, xmlString);
+                    traverse(child, content, false, xmlString, isSpreadsheet);
                 }
+            }
         }
-    }
 
         /**
          * Recursively traverses a node and its children to extract content.
@@ -698,21 +727,32 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
          * @param targetArray - The array to push extracted content nodes to
          * @param forceHeading - If true, treats all paragraphs as headings (used for slide titles)
          * @param sourceXml - The source XML string for raw content extraction
+         * @param asSheet - If true, treats tables as sheets (for ODS)
          */
-        function traverse(node: Element, targetArray: OfficeContentNode[], forceHeading = false, sourceXml: string) {
+        function traverse(node: Element, targetArray: OfficeContentNode[], forceHeading = false, sourceXml: string, asSheet = false) {
             if (node.tagName === "text:p") {
                 const pContent = parseParagraphContent(node, paragraphStyleMap, styleMap, config, sourceXml);
                 const type = (forceHeading || (node.getAttribute("text:style-name") || '').toLowerCase().includes('title')) ? 'heading' : 'paragraph';
+
+                const metadata: any = {
+                    ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
+                    ...(pContent.style ? { style: pContent.style } : {}),
+                    ...(pContent.anchorIds?.length ? { anchorIds: pContent.anchorIds } : {})
+                };
+
+                const nodeId = node.getAttribute("xml:id") || node.getAttribute("text:id");
+                if (nodeId) {
+                    if (!metadata.anchorIds) metadata.anchorIds = [];
+                    metadata.anchorIds.push(nodeId);
+                }
 
                 const pNode: OfficeContentNode = {
                     type,
                     text: pContent.text,
                     children: pContent.children,
-                    metadata: {
-                        ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
-                        ...(pContent.style ? { style: pContent.style } : {})
-                    }
+                    metadata
                 };
+
                 if (type === 'heading' && pNode.metadata) {
                     (pNode.metadata as HeadingMetadata).level = (pNode.metadata as HeadingMetadata).level || 1;
                 }
@@ -729,16 +769,26 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 const level = parseInt(node.getAttribute("text:outline-level") || "1");
                 const hContent = parseParagraphContent(node, paragraphStyleMap, styleMap, config, sourceXml);
 
+                const metadata: any = {
+                    level,
+                    ...(hContent.alignment ? { alignment: hContent.alignment } : {}),
+                    ...(hContent.style ? { style: hContent.style } : {}),
+                    ...(hContent.anchorIds?.length ? { anchorIds: hContent.anchorIds } : {})
+                };
+
+                const nodeId = node.getAttribute("xml:id") || node.getAttribute("text:id");
+                if (nodeId) {
+                    if (!metadata.anchorIds) metadata.anchorIds = [];
+                    metadata.anchorIds.push(nodeId);
+                }
+
                 const hNode: OfficeContentNode = {
                     type: 'heading',
                     text: hContent.text,
                     children: hContent.children,
-                    metadata: {
-                        level,
-                        ...(hContent.alignment ? { alignment: hContent.alignment } : {}),
-                        ...(hContent.style ? { style: hContent.style } : {})
-                    }
+                    metadata
                 };
+
                 if (config.includeRawContent) {
                     hNode.rawContent = getRawContent(node, sourceXml, config);
                 }
@@ -747,6 +797,22 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
             } else if (node.tagName === "table:table") {
                 // Parse table with proper structure
                 const tableNode = parseTable(node, paragraphStyleMap, styleMap, config, sourceXml);
+
+                if (asSheet) {
+                    tableNode.type = 'sheet';
+                    const sheetName = node.getAttribute("table:name");
+                    if (sheetName) {
+                        tableNode.metadata = { ...tableNode.metadata, sheetName };
+                    }
+                }
+
+                const tableId = node.getAttribute("xml:id") || node.getAttribute("table:name");
+                if (tableId) {
+                    if (!tableNode.metadata) tableNode.metadata = {};
+                    (tableNode.metadata as any).anchorIds = (tableNode.metadata as any).anchorIds || [];
+                    (tableNode.metadata as any).anchorIds.push(tableId);
+                }
+
                 if (config.includeRawContent) {
                     tableNode.rawContent = getRawContent(node, sourceXml, config);
                 }
@@ -774,9 +840,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                     }
                 }
 
-                // Try to find list style in automatic styles to determine type and visibility
+                // Try to find list style in automatic styles or styles.xml to determine type and visibility
                 if (styleNameToCheck) {
-                    const automaticStyles = getFirstElementByTagName(parseXmlString(mainContentFile?.content.toString() || ''), "office:automatic-styles");
                     if (automaticStyles) {
                         const listStyles = getElementsByTagName(automaticStyles, "text:list-style");
                         for (const listStyle of listStyles) {
@@ -792,34 +857,32 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                                 } else if (bulletLevels.length > 0) {
                                     listType = 'unordered';
                                     isVisible = bulletLevels.some(l => !!l.getAttribute("text:bullet-char"));
+                                } else if (imageLevels.length > 0) {
+                                    listType = 'unordered';
+                                    isVisible = true;
                                 }
-
-                                if (imageLevels.length > 0) isVisible = true;
                                 break;
                             }
                         }
                     }
 
-                    // Also check in styles.xml if still unordered and hidden
-                    if (stylesFile && !isVisible) {
-                        const stylesXml = parseXmlString(stylesFile.content.toString());
-                        const listStyles = getElementsByTagName(stylesXml, "text:list-style");
-                        for (const listStyle of listStyles) {
-                            if (listStyle.getAttribute("style:name") === styleNameToCheck) {
-                                const bulletLevels = getElementsByTagName(listStyle, "text:list-level-style-bullet");
-                                const numberLevels = getElementsByTagName(listStyle, "text:list-level-style-number");
-                                const imageLevels = getElementsByTagName(listStyle, "text:list-level-style-image");
-
-                                if (numberLevels.length > 0) {
-                                    listType = 'ordered';
-                                    isVisible = numberLevels.some(l => !!l.getAttribute("style:num-format"));
-                                } else if (bulletLevels.length > 0) {
-                                    listType = 'unordered';
-                                    isVisible = bulletLevels.some(l => !!l.getAttribute("text:bullet-char"));
+                    if (!isVisible && stylesDom) {
+                        const officeStyles = getFirstElementByTagName(stylesDom, "office:styles");
+                        if (officeStyles) {
+                            const listStyles = getElementsByTagName(officeStyles, "text:list-style");
+                            for (const listStyle of listStyles) {
+                                if (listStyle.getAttribute("style:name") === styleNameToCheck) {
+                                    const bulletLevels = getElementsByTagName(listStyle, "text:list-level-style-bullet");
+                                    const numberLevels = getElementsByTagName(listStyle, "text:list-level-style-number");
+                                    if (numberLevels.length > 0) {
+                                        listType = 'ordered';
+                                        isVisible = numberLevels.some(l => !!l.getAttribute("style:num-format"));
+                                    } else if (bulletLevels.length > 0) {
+                                        listType = 'unordered';
+                                        isVisible = bulletLevels.some(l => !!l.getAttribute("text:bullet-char"));
+                                    }
+                                    break;
                                 }
-
-                                if (imageLevels.length > 0) isVisible = true;
-                                break;
                             }
                         }
                     }
@@ -849,7 +912,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                 const isODP = fileType === 'odp';
                 const sameStyle = styleNameToCheck && styleNameToCheck === lastListStyle;
                 const sameType = listType === lastListType;
-                
+
                 let listId: string;
                 if (lastWasList && (sameStyle || (isODP && sameType))) {
                     listId = currentListId!;
@@ -914,7 +977,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
 
                                         const isFirst = k === 0;
                                         const nodeType = isFirst ? 'list' : 'paragraph';
-                                        
+
                                         const node: OfficeContentNode = {
                                             type: nodeType as any,
                                             text: segment.text,
@@ -983,14 +1046,21 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                         imageHref = parts[parts.length - 1];
                     }
 
+                    const metadata: any = {
+                        attachmentName: imageHref,
+                        ...(altText ? { altText } : {})
+                    };
+
+                    const frameId = node.getAttribute("xml:id") || node.getAttribute("draw:name");
+                    if (frameId) {
+                        metadata.anchorIds = [frameId];
+                    }
+
                     const imageNode: OfficeContentNode = {
                         type: 'image',
                         text: '',
                         children: [],
-                        metadata: {
-                            attachmentName: imageHref,
-                            ...(altText ? { altText } : {})
-                        }
+                        metadata
                     };
                     if (config.includeRawContent) {
                         imageNode.rawContent = getRawContent(node, sourceXml, config);
@@ -1343,9 +1413,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
             if (config.ocr) {
                 if (attachment.mimeType.startsWith('image/')) {
                     try {
-                        attachment.ocrText = (await performOcr(media.content, { language: config.ocrLanguage, ...config.ocrConfig })).trim();
+                        attachment.ocrText = (await performOcr(media.content, { ...config.ocrConfig })).trim();
                     } catch (e) {
-                        logWarning(`OCR failed for ${attachment.name}:`, config, e);
+                        logWarning(OfficeWarningType.OCR_FAILED, config, attachment.name, e);
                     }
                 }
             }
@@ -1490,7 +1560,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
                             node.text = attachment.ocrText;
                         }
                         if (attachment.chartData && node.type === 'chart') {
-                            node.text = attachment.chartData.rawTexts.join(config.newlineDelimiter ?? '\n');
+                            node.text = attachment.chartData.rawTexts.join(config.newlineDelimiter);
                         }
                     }
                 }
@@ -1528,31 +1598,34 @@ export const parseOpenOffice = async (buffer: Buffer, config: OfficeParserConfig
         content.push(...notes);
     }
 
-    return {
-        type: fileType,
-        metadata: {
+    const toTextSync = () => content.map(c => {
+        const getText = (node: OfficeContentNode): string => {
+            let t = '';
+            if (node.children && node.children.length > 0) {
+                // Check if children have their own children (container vs leaf)
+                // If children are leaf nodes (text/image), join with empty string
+                // If children are container nodes (paragraphs/rows), join with newline
+                const hasGrandChildren = node.children.some(child => child.children && child.children.length > 0);
+                const separator = hasGrandChildren ? config.newlineDelimiter : '';
+
+                t += node.children.map(getText).filter(t => t != '').join(separator);
+            } else {
+                t += node.text || '';
+            }
+            return t;
+        };
+        return getText(c);
+    }).filter(t => t != '').join(config.newlineDelimiter);
+
+    return createAST(
+        fileType,
+        {
             ...metadata,
             styleMap: combinedStyleMap
         },
-        content: content,
-        attachments: attachments,
-        toText: () => content.map(c => {
-            const getText = (node: OfficeContentNode): string => {
-                let t = '';
-                if (node.children && node.children.length > 0) {
-                    // Check if children have their own children (container vs leaf)
-                    // If children are leaf nodes (text/image), join with empty string
-                    // If children are container nodes (paragraphs/rows), join with newline
-                    const hasGrandChildren = node.children.some(child => child.children && child.children.length > 0);
-                    const separator = hasGrandChildren ? (config.newlineDelimiter ?? '\n') : '';
-
-                    t += node.children.map(getText).filter(t => t != '').join(separator);
-                } else {
-                    t += node.text || '';
-                }
-                return t;
-            };
-            return getText(c);
-        }).filter(t => t != '').join(config.newlineDelimiter ?? '\n')
-    };
+        content,
+        attachments,
+        config,
+        toTextSync
+    );
 };

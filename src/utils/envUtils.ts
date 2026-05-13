@@ -12,6 +12,9 @@ export const isBrowser = typeof window !== 'undefined' && typeof window.document
  */
 export type NodeFeature = 'fs' | 'path-parsing' | 'pdf-worker-auto-resolution';
 
+import { OfficeErrorType } from '../types.js';
+import { getOfficeError } from './errorUtils.js';
+
 /**
  * Human-readable descriptions for Node-only features.
  */
@@ -29,7 +32,7 @@ const readableFeatures: Record<NodeFeature, string> = {
  */
 export function assertNode(feature: NodeFeature): void {
     if (isBrowser) {
-        throw new Error(`officeparser: '${readableFeatures[feature]}' is not supported in the browser. Browser users must pass file content as Buffer or ArrayBuffer directly.`);
+        throw getOfficeError(OfficeErrorType.FEATURE_NOT_SUPPORTED_IN_BROWSER, undefined, readableFeatures[feature]);
     }
 }
 

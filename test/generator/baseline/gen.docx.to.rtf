@@ -1,0 +1,657 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0\fnil\fcharset0 Arial;}{\f1\fnil\fcharset0 Times New Roman;}}
+{\colortbl;\red23\green54\blue93;\red54\green95\blue145;\red79\green129\blue189;\red255\green0\blue0;\red146\green208\blue80;\red0\green112\blue192;\red255\green255\blue0;\red255\green255\blue255;\red0\green0\blue0;\red128\green128\blue128;\red221\green221\blue221;\red0\green0\blue255;}
+\f0\fs24
+\pard\s1\sb240\sa120{\b\fs44 {\rtlch\f1 \cf1 \fs52 Demonstration of DOCX support in }{\rtlch\f1 \cf1 \fs52 calibre}}\par
+\pard\sa120 {\rtlch\f1 This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action.}\par
+\pard\sa120 {\rtlch\f1 There is support for images, tables, lists, footnotes, endnotes, }{\rtlch\f1 links, dropcaps and }{\rtlch\f1 various}{\rtlch\f1  types of text and paragraph level formatting.}\par
+\pard\sa120 {\rtlch\f1 To see the DOCX conversion in action, simply add this file to calibre using the }{\rtlch\f1 \b \u8220?Add Books\u8221? \b0 }{\rtlch\f1 button and then click \u8220?}{\rtlch\f1 \b Convert\u8221?. \b0 }{\rtlch\f1  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click }{\rtlch\f1 \b \u8220?OK\u8221?\b0 }{\rtlch\f1 .}\par
+\pard\sa120 \par
+\pard\s1\sb240\sa120{\b\fs44 {\rtlch\f1 \b \cf2 \fs28 Text Formatting\b0 }}\par
+\pard\s2\sb240\sa120{\b\fs40 {\rtlch\f1 \b \cf3 \fs26 Inline formatting\b0 }}\par
+\pard\sa120 {\rtlch\f1 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.}\par
+\pard\sa120 {\rtlch\f1 Here is some }{\rtlch\f1 \b bold, \b0 }{\rtlch\f1 \i italic, \i0 }{\rtlch\f1 \b \i bold-italic, \i0 \b0 }{\rtlch\f1 \ul underlined \ul0 }{\rtlch\f1 and }{\rtlch\f1 \strike struck out \strike0 }{\rtlch\f1  text. Then, we have a super}{\rtlch\f1 script}{\rtlch\f1  and a sub}{\rtlch\f1 script}{\rtlch\f1 . Now we see some }{\rtlch\f1 \cf4 red}{\rtlch\f1 , }{\rtlch\f1 \cf5 green}{\rtlch\f1  and }{\rtlch\f1 \cf6 blue}{\rtlch\f1  text. Some text with a }{\rtlch\f1 \highlight7 yellow highlight}{\rtlch\f1 . Some text in a}{\rtlch\f1  }{\rtlch\f1 box}{\rtlch\f1 . Some text}{\rtlch\f1  in }{\rtlch\f1 \cf8 \highlight9 inverse video}{\rtlch\f1 .}\par
+\pard\sa120 {\rtlch\f1 A paragraph with styled text: }{\rtlch\f1 \i \cf10 subtle emphasis\i0 }{\rtlch\f1 \i \cf10   \i0 }{\rtlch\f1 f}{\rtlch\f1 ollowed by }{\rtlch\f1 \b strong text \b0 }{\rtlch\f1 a}{\rtlch\f1 nd }{\rtlch\f1 \b \i \cf3 intense emphasis\i0 \b0 }{\rtlch\f1 .}{\rtlch\f1  This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph}{\rtlch\f1  \u8212? }{\rtlch\f1 calibre can handle both with equal ease.}\par
+\pard\s2\sb240\sa120{\b\fs40 {\rtlch\f1 \b \cf3 \fs26 Fun with fonts\b0 }}\par
+\pard\sa120 {\rtlch\f1 This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is }{\rtlch\f1 some text in the Ubuntu Mono typeface}{\rtlch\f1 , notice how every letter has the same width, even i and m}{\rtlch\f1 . Every embedded font will automatically be embedded in the output ebook during conversion.}{\rtlch\f1  }\par
+\pard\s2\sb240\sa120{\b\fs40 {\rtlch\f1 \b \cf3 \fs26 Paragraph level formatting\b0 }}\par
+\pard\sa120\qr {\rtlch\f1 \highlight11 You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.}\par
+\pard\sa120\li720 {\rtlch\f1 For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.}\par
+\pard\s1\sb240\sa120{\b\fs44 {\rtlch\f1 \b \cf2 \fs28 Tables\b0 }}\par
+\pard\sa0
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 ITEM}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 NEEDED}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Books}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 1}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Pens}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 3}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Pencils}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 2}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Highlighter}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 2 colors}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Scissors}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 1 pair}\par
+\cell
+\row
+\pard\sa120 {\rtlch\f1 Tables in Word can vary from the extremely simple to the extremely complex. }{\rtlch\f1 calibre}{\rtlch\f1  tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section.}{\rtlch\f1  Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units. }{\rtlch\f1  To the left of this paragraph is a floating two column table with a nice green border and header row.}\par
+\pard\sa120 {\rtlch\f1 Now let\u8217?s look at a fancier table\u8212?one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.}\par
+\pard\sa0
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 City or Town}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 \fs22 Point A}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 \fs22 Point B}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 \fs22 Point C}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 \fs22 Point D}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 \fs22 Point E}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Point A}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 \u8212?}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc \par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Point B}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 87}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 \u8212?}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc \par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Point C}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 64}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 56}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 \u8212?}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc \par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Point D}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 37}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 32}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 91}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 \u8212?}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc \par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Point E}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 93}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 35}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 54}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 43}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120\qc {\rtlch\f1 \u8212?}\par
+\cell
+\row
+\pard\sa120 \par
+\pard\sa120 {\rtlch\f1 Next, we see a table with special formatting in various locations. Notice how the f}{\rtlch\f1 ormatting for the h}{\rtlch\f1 eader row and sub header rows is preserved.}\par
+\pard\sa0
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 College}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 New students}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Graduating students}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Change}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \i \cf10 Undergraduate\i0 }\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Cedar University}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 110}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 103}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 +7}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Oak Institute}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 202}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 210}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 -8}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \i \cf10 Graduate\i0 }\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Cedar University}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 24}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 20}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 +4}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Elm College}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 43}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 53}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 -10}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Total}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 998}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 908}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 \fs22 90}\par
+\cell
+\row
+\pard\sa120 {\rtlch\f1 \i \cf10 \fs20 Source:\i0 }{\rtlch\f1 \fs20  Fictitious data, for illustration purposes only}\par
+\pard\sa120 {\rtlch\f1 Next}{\rtlch\f1 , we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged.}{\rtlch\f1  The table is displayed horizontally centered.}\par
+\pard\sa0
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\sa0
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 One}\par
+\pard\intbl\sa120 {\rtlch\f1 Three}\par
+\pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Two}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Four}\par
+\cell
+\row
+\pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 To the left is a table inside a table, with some cells merged.}\par
+\cell
+\row
+\pard\sa120 \par
+\pard\sa120 {\rtlch\f1 W}{\rtlch\f1 e end with a }{\rtlch\f1 fancy}{\rtlch\f1  calendar, note how }{\rtlch\f1 much of the original formatting is preserved}{\rtlch\f1 .}{\rtlch\f1  Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don\u8217?t fare well in ebooks.}\par
+\pard\sa0
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 December 2007}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Sun}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Mon}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Tue}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Wed}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Thu}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Fri}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 Sat}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 1}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 2}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 3}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 4}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 5}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 6}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 7}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 8}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 9}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 10}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 11}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 12}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 13}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 14}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 15}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 16}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 17}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 18}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 19}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 20}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 21}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 22}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 23}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 24}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 25}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 26}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 27}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 28}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 29}\par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\row
+\trowd\trgaph108\trleft-108
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 30}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 {\rtlch\f1 31}\par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\pard\intbl\intbl\sb60\sa60 \pard\intbl\sa120 \par
+\cell
+\row
+\pard\s1\sb240\sa120{\b\fs44 {\rtlch\f1 \b \cf2 \fs28 Structural Elements\b0 }}\par
+\pard\sa120 {\rtlch\f1 Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like. }\par
+\pard\s2\sb240\sa120{\b\fs40 {\rtlch\f1 \b \cf3 \fs26 Footnotes & Endnotes\b0 }}\par
+\pard\sa120 {\rtlch\f1 Footnotes}\pard\sa120 {\rtlch\f1 \fs20  In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.}\par
+{\rtlch\f1  and endnotes}\pard\sa120 {\rtlch\f1 \fs20  Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.}\par
+{\rtlch\f1  are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.}\par
+\pard\s2\sb240\sa120{\b\fs40 {\rtlch\f1 \b \cf3 \fs26 Dropcaps\b0 }}\par
+\pard\sa120 {\rtlch\f1 \fs116 D}\par
+\pard\sa120 {\rtlch\f1 rop}{\rtlch\f1  caps are used to emphasize the leading paragraph at the start of a section. In }{\rtlch\f1 Word}{\rtlch\f1  it is possible to s}{\rtlch\f1 p}{\rtlch\f1 ecify how many lines of text a drop-cap should use.}\par
+\pard\s2\sb240\sa120{\b\fs40 {\rtlch\f1 \b \cf3 \fs26 Links\b0 }}\par
+\pard\sa120 {\rtlch\f1 Two kinds of links are possible, those that refer to an external website and those that refer to }{\rtlch\f1 locations}{\rtlch\f1  inside the document itself. Both are supported by calibre. For example, here is a link pointing to the }{\field{\*\fldinst{HYPERLINK "http://calibre-ebook.com/download"}}{\fldrslt {\rtlch\f1 \ul \cf12 calibre download page\ul0 }}}{\rtlch\f1 .}{\rtlch\f1  Then we have a link that points back to the section on }{\field{\*\fldinst{HYPERLINK "#_Paragraph_level_formatting"}}{\fldrslt {\rtlch\f1 \ul \cf12 paragraph level formatting\ul0 }}}{\rtlch\f1  in this document.}\par
+\pard\s2\sb240\sa120{\b\fs40 {\rtlch\f1 \b \cf3 \fs26 Table of Contents\b0 }}\par
+\pard\sa120 {\rtlch\f1  You can see the}{\rtlch\f1  Table of Contents}{\rtlch\f1  created by calibre}{\rtlch\f1  by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook.}{\rtlch\f1  }\par
+\pard\sa120 {\field{\*\fldinst{HYPERLINK "#_Toc581531977"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Demonstration of DOCX support in calibre\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc581531977"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 1\ul0 }}}\par
+\pard\sa120 {\field{\*\fldinst{HYPERLINK "#_Toc2054249818"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Text Formatting\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc2054249818"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 1\ul0 }}}\par
+\pard\sa120\li240 {\field{\*\fldinst{HYPERLINK "#_Toc2137712100"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Inline formatting\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc2137712100"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 2\ul0 }}}\par
+\pard\sa120\li240 {\field{\*\fldinst{HYPERLINK "#_Toc1074133965"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Fun with fonts\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc1074133965"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 2\ul0 }}}\par
+\pard\sa120\li240 {\field{\*\fldinst{HYPERLINK "#_Toc2022725662"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Paragraph level formatting\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc2022725662"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 2\ul0 }}}\par
+\pard\sa120 {\field{\*\fldinst{HYPERLINK "#_Toc28114276"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Tables\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc28114276"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 2\ul0 }}}\par
+\pard\sa120 {\field{\*\fldinst{HYPERLINK "#_Toc54889875"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Structural Elements\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc54889875"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 4\ul0 }}}\par
+\pard\sa120\li240 {\field{\*\fldinst{HYPERLINK "#_Toc201580556"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Footnotes & Endnotes\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc201580556"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 5\ul0 }}}\par
+\pard\sa120\li240 {\field{\*\fldinst{HYPERLINK "#_Toc1977424358"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Dropcaps\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc1977424358"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 5\ul0 }}}\par
+\pard\sa120\li240 {\field{\*\fldinst{HYPERLINK "#_Toc1233048813"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Links\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc1233048813"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 5\ul0 }}}\par
+\pard\sa120\li240 {\field{\*\fldinst{HYPERLINK "#_Toc64145348"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Table of Contents\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc64145348"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 5\ul0 }}}\par
+\pard\sa120 {\field{\*\fldinst{HYPERLINK "#_Toc484565143"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Images\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc484565143"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 6\ul0 }}}\par
+\pard\sa120 {\field{\*\fldinst{HYPERLINK "#_Toc1359965655"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Lists\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc1359965655"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 7\ul0 }}}\par
+\pard\sa120\li240 {\field{\*\fldinst{HYPERLINK "#_Toc1958162433"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Bulleted List\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc1958162433"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 8\ul0 }}}\par
+\pard\sa120\li240 {\field{\*\fldinst{HYPERLINK "#_Toc415190676"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Numbered List\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc415190676"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 8\ul0 }}}\par
+\pard\sa120\li240 {\field{\*\fldinst{HYPERLINK "#_Toc1093260318"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 Multi-level Lists\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc1093260318"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs24 8\ul0 }}}\par
+\pard\sa120\li240 {\field{\*\fldinst{HYPERLINK "#_Toc1471533984"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs22 Continued Lists\ul0 }}}{\field{\*\fldinst{HYPERLINK "#_Toc1471533984"}}{\fldrslt {\rtlch\f1 \ul \cf12 \fs22 8\ul0 }}}\par
+\pard\sa120 \par
+\pard\sa120 \par
+\pard\s1\sb240\sa120{\b\fs44 {\rtlch\f1 \b \cf2 \fs28 Images\b0 }}\par
+\pard\sa120 {\rtlch\f1 Centered images like this are useful for large pictures that should be a focus of attention.}{\rtlch\f1  }\par
+\pard\sa120\fi432 \par
+\pard\sa120\fi432 \par
+\pard\sa120\fi432 {\rtlch\f1 \fs24 There is no analogous technology in }{\rtlch\f1 \fs24 ebooks}{\rtlch\f1 \fs24 , so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was }{\rtlch\f1 \i \cf10 \fs24 inserted\i0 }{\rtlch\f1 \fs24 , not necessarily where it appears on the page in Word.}\par
+\pard\s1\sb240\sa120{\b\fs44 {\rtlch\f1 \b \cf2 \fs28 Lists\b0 }}\par
+\pard\sa120 {\rtlch\f1 All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.}\par
+\pard\s2\sb240\sa120{\b\fs40 {\rtlch\f1 \b \cf3 \fs26 Bulleted List\b0 }}\par
+\pard\li360\fi-360\ilvl0\pnbullet \bullet {\rtlch\f1 One}\par
+\pard\li360\fi-360\ilvl0\pnbullet \bullet {\rtlch\f1 Two}\par
+\pard\s2\sb240\sa120{\b\fs40 {\rtlch\f1 \b \cf3 \fs26 Numbered List\b0 }}\par
+\pard\li360\fi-360\ilvl0\pndec 1. {\rtlch\f1 One, with a very long line to demonstrate that the hanging indent for the list is working correctly}\par
+\pard\li360\fi-360\ilvl0\pndec 2. {\rtlch\f1 Two}\par
+\pard\s2\sb240\sa120{\b\fs40 {\rtlch\f1 \b \cf3 \fs26 Multi-level List\b0 }{\rtlch\f1 \b \cf3 \fs26 s\b0 }}\par
+\pard\li360\fi-360\ilvl0\pndec 1. {\rtlch\f1 One}\par
+\pard\li720\fi-360\ilvl1\pndec 1. {\rtlch\f1 Two}\par
+\pard\li1080\fi-360\ilvl2\pndec 1. {\rtlch\f1 Three}\par
+\pard\li1080\fi-360\ilvl2\pndec 2. {\rtlch\f1 Four with a very long line to demonstrate that the hanging indent for the list is working correctly.}\par
+\pard\li1080\fi-360\ilvl2\pndec 3. {\rtlch\f1 Five}\par
+\pard\li360\fi-360\ilvl0\pndec 2. {\rtlch\f1 Six}\par
+\pard\sa120\li360 {\rtlch\f1 A Multi-level list with bullets:}\par
+\pard\li360\fi-360\ilvl0\pnbullet \bullet {\rtlch\f1 One}\par
+\pard\li720\fi-360\ilvl1\pnbullet \bullet {\rtlch\f1 Two}\par
+\pard\li1080\fi-360\ilvl2\pnbullet \bullet {\rtlch\f1 This bullet uses an image as the bullet item}\par
+\pard\li1440\fi-360\ilvl3\pnbullet \bullet {\rtlch\f1 Four}\par
+\pard\li360\fi-360\ilvl0\pnbullet \bullet {\rtlch\f1 Five}\par
+\pard\s2\sb240\sa120{\b\fs40 {\rtlch\f1 \b \cf3 \fs26 Continued Lists\b0 }}\par
+\pard\li360\fi-360\ilvl0\pndec 1. {\rtlch\f1 One}\par
+\pard\li360\fi-360\ilvl0\pndec 2. {\rtlch\f1 Two}\par
+\pard\sa120\li720 {\rtlch\f1 An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.}\par
+\pard\li360\fi-360\ilvl0\pndec 3. {\rtlch\f1 We now resume our normal programming}\par
+\pard\li360\fi-360\ilvl0\pndec 4. {\rtlch\f1 Four}\par
+}

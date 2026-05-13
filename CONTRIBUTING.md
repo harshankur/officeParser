@@ -20,7 +20,7 @@ We welcome pull requests that improve performance, expand format support, or fix
 
 **The PR Process:**
 1.  Fork the repo and create your branch from `master`.
-2.  **Local Testing**: Run `npm test` to ensure all existing parsers (Word, PDF, Excel, etc.) still pass their baseline checks.
+2.  **Local Testing**: Run `npm test` to ensure all existing parsers and generators still pass their baseline checks. We use AST-based snapshot testing to ensure zero regression.
 3.  **Build Validation**: Run `npm run build` to ensure the TypeScript-to-JS compilation and browser bundling function correctly.
 4.  **Documentation**: If you've changed the AST structure or added a new config option, please update relevant documentation or types.
 5.  Submit your PR!
@@ -35,17 +35,32 @@ cd officeParser
 # 2. Install dependencies
 npm install
 
-# 3. Running the standard test suite
+# 3. Running the standard test suite (Parser + Generator)
 npm test
 
-# 4. Building the project (ESM, CJS, and Browser bundles)
+# 4. Updating test snapshots (If you intentionally changed output)
+npm run test:baseline
+
+# 5. Building the project (ESM, CJS, and Browser bundles)
 npm run build
 ```
+
+## Testing Deep Dive
+The project uses a two-tier testing system:
+- **Parser Tests (`test/parser`)**: Validates that office files are correctly converted into the unified AST.
+- **Generator Tests (`test/generator`)**: Validates that the AST is correctly transformed into Markdown, HTML, CSV, etc.
+
+To add a new test case, place your sample file in the appropriate `test/samples` directory and run `npm run test:baseline` to generate the initial snapshots.
 
 ## Coding Standards
 - **Strict Typing**: All new code must be strictly typed. Avoid `any` at all costs.
 - **AST Integrity**: Ensure your changes do not break the "Hierarchical AST" philosophy of the library.
 - **Zero-Dependency Core**: My goal is to keep the core dependency list extremely lean. Propose new dependencies in an issue before adding them to a PR.
+- **Error and Warning Reporting**: 
+    - Use `getOfficeError` for fatal errors that should halt the process.
+    - Use `logWarning` (in parsers) or `this.warn` (in generators) for non-fatal issues.
+    - **Never** use `console.log`, `console.warn`, or `console.error` directly in the core library.
+    - All codes must be added to `OfficeErrorType` or `OfficeWarningType` in `src/types.ts`.
 
 ## Questions?
 If you have a general question about how to use the library or its internal architecture, please open a [Discussion](https://github.com/harshankur/officeParser/discussions) rather than an issue.

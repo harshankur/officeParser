@@ -1,10 +1,22 @@
 <div class="doc-body">
     <h1>Troubleshooting & Debugging</h1>
-    <p>Solutions for common integration challenges and performance optimizations in <code>officeParser</code> v6.1.0.</p>
+    <p>Solutions for common integration challenges and performance optimizations in <code>officeParser</code> v7.0.0.</p>
 
-    <div class="alert alert-info">
-        <strong>💡 Pro Tip:</strong> Always enable <code>outputErrorToConsole: true</code> when debugging to see the full internal stack traces.
+    <div class="callout callout-tip">
+        <div class="callout-header">
+            <span class="callout-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/></svg>
+            </span>
+            Pro Tip
+        </div>
+        <div class="callout-content">
+            Use the <code>onWarning</code> callback to capture internal diagnostic information and trace logs during the parsing process.
+        </div>
     </div>
+
+    <pre><code>const config = {
+    onWarning: (issue) => console.warn(`[OfficeParser] ${issue.message}`, issue.details)
+};</code></pre>
 
     <h2>1. Node.js Process Hanging (OCR)</h2>
     <p>In v6.1.0, if you use <code>ocr: true</code>, the library maintains a persistent worker pool to make subsequent OCR tasks much faster. However, this background pool will keep your Node.js process alive for <strong>10 seconds</strong> of inactivity by default.</p>

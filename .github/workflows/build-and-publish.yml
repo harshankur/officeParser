@@ -48,7 +48,7 @@ jobs:
         run: npm ci
 
       # ── Step 4: Full test suite ────────────────────────────────────────────
-      # Runs testShippingArtifacts.ts + testOfficeParser.ts.
+      # Runs testShippingArtifacts.ts + testOfficeParser.ts + testOfficeGenerator.ts.
       # The workflow halts here if any test fails.
       - name: Run Tests
         run: npm test

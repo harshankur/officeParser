@@ -57,13 +57,15 @@
  * @see https://www.adobe.com/devnet/pdf/pdf_reference.html PDF Reference
  */
 
-import { ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeParserConfig, TextFormatting, TextMetadata } from '../types.js';
-import { getOfficeError, logWarning, OfficeErrorType } from '../utils/errorUtils.js';
-import { createAttachment } from '../utils/imageUtils.js';
-import { performOcr } from '../utils/ocrUtils.js';
-import { loadPdfJs } from '../utils/moduleLoader.js';
+import { DEFAULT_OFFICE_PARSER_CONFIG } from '../defaults.js';
+import { FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting, TextMetadata } from '../types.js';
+import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { assertNode, isBrowser } from '../utils/envUtils.js';
+import { getOfficeError, logWarning } from '../utils/errorUtils.js';
+import { createAttachment } from '../utils/imageUtils.js';
+import { loadPdfJs } from '../utils/moduleLoader.js';
+import { performOcr } from '../utils/ocrUtils.js';
 
 /** Type guard for TextItem in PDF.js 5.x */
 function isTextItem(item: any): item is { str: string; transform: number[]; width: number; height: number; fontName: string } {
@@ -169,7 +171,7 @@ function findLinkForText(item: TextPageItem, annotations: LinkAnnotation[]): Lin
 
         // Check for any intersection between boxes
         const intersects = (itemMinX < annotMaxX && itemMaxX > annotMinX) &&
-                           (itemMinY < annotMaxY && itemMaxY > annotMinY);
+            (itemMinY < annotMaxY && itemMaxY > annotMinY);
 
         if (intersects) {
             return annot;
@@ -312,29 +314,39 @@ function convertToRgbaBuffer(data: Uint8Array | Uint8ClampedArray, width: number
  * @param config - Parser configuration
  * @returns Promise resolving to the parsed AST
  */
-export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Promise<OfficeParserAST> => {
+export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     const pdfjs = await loadPdfJs();
 
     // Configure worker
 
-    if (config.pdfWorkerSrc) {
-        pdfjs.GlobalWorkerOptions.workerSrc = config.pdfWorkerSrc;
+    const workerSrc = config.pdfWorkerSrc;
+
+    if (isBrowser) {
+        pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
     } else {
-        // Fallbacks when no workerSrc is provided
-        if (isBrowser) {
-            // Browser: Default to CDN
-            pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+        // Node.js: Try to auto-resolve local worker path to avoid remote fetch errors
+        assertNode('pdf-worker-auto-resolution');
+        let resolved = false;
+
+        // If the user provided a custom path (not the default CDN one), use it.
+        // Otherwise, try to find it locally.
+        if (workerSrc !== DEFAULT_OFFICE_PARSER_CONFIG.pdfWorkerSrc && workerSrc !== '') {
+            pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+            resolved = true;
         } else {
-            // Node.js: Try to auto-resolve local worker path to avoid remote fetch errors
-            assertNode('pdf-worker-auto-resolution');
             try {
                 // We use require.resolve to find the exact path of the installed package.
                 // @ts-ignore - 'require' is available in Node.js/CommonJS environment
-                const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
-                pdfjs.GlobalWorkerOptions.workerSrc = workerPath;
+                const localWorkerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+                pdfjs.GlobalWorkerOptions.workerSrc = localWorkerPath;
+                resolved = true;
             } catch (e) {
-                if (config.outputErrorToConsole) console.warn("[PdfParser] Could not auto-resolve local worker path:", e);
+                logWarning(OfficeWarningType.PDF_WORKER_FALLBACK, config, undefined, e);
             }
+        }
+
+        if (!resolved) {
+            pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
         }
     }
 
@@ -433,7 +445,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
             }
         }
     } catch (e) {
-        if (config.outputErrorToConsole) console.error("Error extracting embedded attachments:", e);
+        logWarning(OfficeWarningType.ATTACHMENT_EXTRACTION_FAILED, config, undefined, e);
     }
 
     // --- First Pass: Collect all items for font statistics ---
@@ -447,13 +459,15 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
             // Extract text content
             textContent = await page.getTextContent();
         } catch (e: any) {
-            if (config.outputErrorToConsole) console.warn(`[PdfParser] Error loading page ${i}:`, e);
+            logWarning(OfficeWarningType.PAGE_LOAD_FAILED, config, i, e);
             // Push empty items to maintain index alignment for second pass
             allPageItems.push(pageItems);
             continue;
         }
 
         const commonObjs = page.commonObjs;
+
+        const fontCache = new Map<string, Record<string, unknown>>();
 
         for (const item of textContent.items) {
             // PDF.js 5.x: textContent.items can contain TextMarkedContent which lack
@@ -477,11 +491,16 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
             if (textItem.fontName && commonObjs) {
                 try {
                     if (commonObjs.has(textItem.fontName)) {
-                        // Use callback-based get to ensure safe resolution
-                            const fontData = await new Promise<Record<string, unknown>>((resolve) => {
+                        let fontData = fontCache.get(textItem.fontName);
+                        if (!fontData) {
+                            // Use callback-based get to ensure safe resolution
+                            fontData = await new Promise<Record<string, unknown>>((resolve) => {
                                 // @ts-ignore - commonObjs.get is callback-based in legacy builds
                                 commonObjs.get(textItem.fontName, (data: Record<string, unknown>) => resolve(data));
                             });
+                            fontCache.set(textItem.fontName, fontData);
+                        }
+
                         if (fontData?.name && typeof fontData.name === 'string') {
                             // Remove PDF subset prefix (6 uppercase letters + '+')
                             fontName = fontData.name.replace(/^[A-Z]{6}\+/, '');
@@ -543,9 +562,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                                     });
                                 });
                             } catch (e: any) {
-                                if (config.outputErrorToConsole) {
-                                    console.error(`[PdfParser] Failed to load dependency ${dep}:`, e);
-                                }
+                                logWarning(OfficeWarningType.DEPENDENCY_LOAD_FAILED, config, dep, e);
                             }
                         }
                     }
@@ -570,7 +587,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                                 });
 
                                 // Browser-specific: Handle ImageBitmap if data is missing
-                                if (typeof window !== 'undefined' && !imgObj.data && imgObj.bitmap) {
+                                if (isBrowser && !imgObj.data && imgObj.bitmap) {
                                     try {
                                         const canvas = document.createElement('canvas');
                                         canvas.width = imgObj.width;
@@ -582,7 +599,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                                             imgObj.kind = 3; // RGBA
                                         }
                                     } catch (e) {
-                                        if (config.outputErrorToConsole) console.error(`[PdfParser] Failed to extract from ImageBitmap:`, e);
+                                        logWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, config, undefined, e);
                                     }
                                 }
 
@@ -615,7 +632,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                     }
                 }
             } catch (e) {
-                if (config.outputErrorToConsole) console.error(`Error extracting images from page ${i}:`, e);
+                logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, `from page ${i}`, e);
             }
         }
 
@@ -632,7 +649,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
         try {
             page = await pdfDocument.getPage(pageNum);
         } catch (e: any) {
-            if (config.outputErrorToConsole) console.warn(`[PdfParser] Error loading page ${pageNum} in second pass:`, e);
+            logWarning(OfficeWarningType.PAGE_LOAD_FAILED, config, pageNum, e);
             continue;
         }
 
@@ -656,7 +673,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                 }
             }
         } catch (e) {
-            if (config.outputErrorToConsole) console.error(`Error extracting annotations from page ${pageNum}:`, e);
+            logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, pageNum, e);
         }
 
         // Sort items: Y descending (top to bottom), then X ascending (left to right)
@@ -824,10 +841,10 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                             try {
                                 // Skip OCR for very small images/artifacts (e.g. < 10px) to avoid Tesseract warnings
                                 if (item.width >= 10 && item.height >= 10) {
-                                    attachment.ocrText = (await performOcr(bmpBuffer, { language: config.ocrLanguage, ...config.ocrConfig })).trim();
+                                    attachment.ocrText = (await performOcr(bmpBuffer, { ...config.ocrConfig })).trim();
                                 }
                             } catch (e) {
-                                if (config.outputErrorToConsole) console.error(`OCR failed for ${attachmentName}:`, e);
+                                logWarning(OfficeWarningType.OCR_FAILED, config, attachmentName, e);
                             }
                         }
 
@@ -845,7 +862,7 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
                         });
 
                     } catch (e) {
-                        logWarning(`Failed to process image ${attachmentName}:`, config, e);
+                        logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, attachmentName, e);
                     }
                 }
             }
@@ -860,18 +877,21 @@ export const parsePdf = async (buffer: Buffer, config: OfficeParserConfig): Prom
         content.push({
             type: 'page',
             children: pageContent,
-            text: pageContent.map(node => node.text).join(config.newlineDelimiter ?? '\n\n'),
+            text: pageContent.map(node => node.text).join(config.newlineDelimiter),
             metadata: { pageNumber: pageNum }
         });
     }
 
-    return {
-        type: 'pdf',
-        metadata: metadata,
-        content: content,
-        attachments: attachments,
-        toText: () => content.map(c => c.text).join(config.newlineDelimiter ?? '\n\n')
-    };
+    const toTextSync = () => content.map(c => c.text).join(config.newlineDelimiter);
+
+    return createAST(
+        'pdf',
+        metadata,
+        content,
+        attachments,
+        config,
+        toTextSync
+    );
 };
 
 /**

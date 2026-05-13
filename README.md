@@ -1,6 +1,6 @@
-# officeParser 📄🚀
+# officeParser 📄🚀 - The Most Versatile Office Parser & Generator
 
-A robust, strictly-typed Node.js and Browser library for parsing office files ([`docx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`odt`](https://en.wikipedia.org/wiki/OpenDocument), [`odp`](https://en.wikipedia.org/wiki/OpenDocument), [`ods`](https://en.wikipedia.org/wiki/OpenDocument), [`pdf`](https://en.wikipedia.org/wiki/PDF), [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format)). It produces a clean, hierarchical Abstract Syntax Tree (AST) with rich metadata, text formatting, and full attachment support.
+A robust, strictly-typed Node.js and Browser library for parsing and generating office files. It not only extracts content from [`docx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML), [`odt`](https://en.wikipedia.org/wiki/OpenDocument), [`odp`](https://en.wikipedia.org/wiki/OpenDocument), [`ods`](https://en.wikipedia.org/wiki/OpenDocument), [`pdf`](https://en.wikipedia.org/wiki/PDF), [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format), [`csv`](https://en.wikipedia.org/wiki/Comma-separated_values), [`md`](https://en.wikipedia.org/wiki/Markdown), and [`html`](https://en.wikipedia.org/wiki/HTML) into a rich Abstract Syntax Tree (AST), but also provides a powerful generation engine to convert that AST into formats like **Markdown**, **HTML**, **CSV**, **RTF**, **Text**, **PDF**, and **JSON**, including native **RAG-focused chunking** support.
 
 [![npm version](https://badge.fury.io/js/officeparser.svg)](https://badge.fury.io/js/officeparser)
 [![Total Downloads](https://img.shields.io/npm/dt/officeparser.svg)](https://www.npmjs.com/package/officeparser)
@@ -17,8 +17,6 @@ A robust, strictly-typed Node.js and Browser library for parsing office files ([
 - **Config Configurator**: Tweak parsing options (like `ignoreNotes`, `ocr`, `newlineDelimiter`) and see the results instantly.
 - **Debugging**: Use the visualizer to debug parsing issues by inspecting exactly how nodes are interpreted.
 - **Format Specs**: Read detailed specifications for the AST structure and configuration options.
-
-*(Legacy Visualizer: If you prefer the [old simple visualizer](https://harshankur.github.io/officeParser/visualizer_old.html), it is still available.)*
 
 ---
 
@@ -37,7 +35,7 @@ npm i officeparser
 ```
 
 ## Command Line usage
-You can use `officeparser` directly from the terminal to get either the full AST (as JSON) or plain text.
+You can use `officeparser` directly from the terminal to extract content as JSON AST, plain text, or generate new formats like Markdown and HTML.
 
 ```bash
 # Get full AST as JSON (default)
@@ -46,25 +44,33 @@ npx officeparser /path/to/officeFile.docx
 # Get plain text only
 npx officeparser /path/to/officeFile.docx --toText=true
 
-# Use configuration options
-npx officeparser /path/to/officeFile.docx --ignoreNotes=true --newlineDelimiter=" "
+# Generate Markdown file
+npx officeparser report.docx --format=md --output=report.md
+
+# Generate HTML file with specific output
+npx officeparser presentation.pptx --format=html --output=preview.html
+
+# Convert spreadsheet to CSV
+npx officeparser data.xlsx --format=csv
 ```
 
 ### Config Options:
-- `--toText=[true|false]`              Flag to output only plain text instead of JSON AST.
+- `--format=[json|text|md|html|csv|rtf|pdf|chunks]` The output format. Default is `json`.
+- `--output=[path]`                    Optional file path to write the output to.
+- `--toText=[true|false]`              Legacy flag to output only plain text. Use `--format=text` instead.
 - `--ignoreNotes=[true|false]`          Flag to ignore notes from files like PowerPoint. Default is false.
 - `--newlineDelimiter=[delimiter]`      The delimiter to use for new lines. Default is `\n`.
 - `--putNotesAtLast=[true|false]`       Flag to collect notes at the end of files like PowerPoint. Default is false.
-- `--outputErrorToConsole=[true|false]` Flag to output errors to the console. Default is false.
+- `--outputErrorToConsole=[true|false]` **(Deprecated)** Flag to output errors to the console. Use `onWarning` callback in library usage.
 - `--extractAttachments=[true|false]`   Flag to extract images/charts as Base64. Default is false.
 - `--ocr=[true|false]`                  Flag to enable OCR for extracted images. Default is false.
 - `--includeRawContent=[true|false]`    Flag to include raw XML/RTF content in nodes. Default is false.
-- `--includeBreakNodes=[true|false]`    Flag to include break nodes. Currently only available for DOCX documents
+- `--includeBreakNodes=[true|false]`    Flag to include break nodes. Currently only available for DOCX documents.
 - `--verbose=[true|false]`              Show full error stack traces.
 
 
 ## Library Usage
-In **v6.0.0**, the library has moved to a structured AST output. While this is a change for those expecting a string directly, it provides significantly more power and flexibility.
+In **v7.0.0**, the library has evolved into a dual-purpose **Parser** and **Generator**. You can first parse any office file into a structured AST and then use the `OfficeGenerator` to transform that AST into various formats or chunks.
 
 ### Getting Started (Async/Await)
 ```js
@@ -97,6 +103,101 @@ const getText = async (file, config) => (await officeParser.parseOffice(file, co
 // usage
 const text = await getText("/path/to/officeFile.docx");
 console.log(text);
+```
+
+## Using the OfficeGenerator
+The `OfficeGenerator` is a powerful tool to convert your AST into human-readable formats or structured data.
+
+```typescript
+import { OfficeParser, OfficeGenerator } from 'officeparser';
+
+const ast = await OfficeParser.parseOffice('report.docx');
+
+// 1. Convert to Markdown
+const md = await OfficeGenerator.generate(ast, 'md');
+console.log(md.value);
+
+// 2. Convert to HTML with structured style mapping (Recommended)
+const html = await OfficeGenerator.generate(ast, 'html', {
+    includeFormatting: true,
+    styleMap: [
+        { 
+            selector: { nodeType: 'paragraph', attributes: { style: 'Heading 1' } }, 
+            output: { tag: 'h1', classes: ['main-title'] } 
+        }
+    ]
+});
+console.log(html.value);
+
+// 3. Convert to CSV (for spreadsheets)
+const csv = await OfficeGenerator.generate(ast, 'csv');
+console.log(csv.value);
+```
+
+## The New "One-Step" API: `OfficeConverter`
+In **v7.0.0**, we introduced the `OfficeConverter.convert` method. This is the new high-level API designed for one-step transformations where you don't need to manually interact with the AST. It automatically handles parser and generator configuration synchronization.
+
+```typescript
+import { OfficeConverter } from 'officeparser';
+
+// One-step conversion from DOCX to Markdown
+const result = await OfficeConverter.convert('report.docx', 'md');
+console.log(result.value); // The generated Markdown string
+console.log(result.messages); // Array of warnings/info (e.g., "Skipped unsupported drawing")
+
+// Complex conversion with nested configuration
+const htmlResult = await OfficeConverter.convert('data.xlsx', 'html', {
+    parseConfig: { 
+        ignoreNotes: true 
+    },
+    generatorConfig: {
+        includeFormatting: true,
+        styleMap: [
+            { 
+                selector: { attributes: { style: { value: 'Header', operator: '~=' } } }, 
+                output: { tag: 'h2', classes: ['data-header'] } 
+            }
+        ]
+    },
+    onWarning: (msg) => console.warn("Conversion Warning:", msg)
+});
+```
+
+## Native RAG Chunking
+`officeParser` provides native support for document chunking, specifically designed for Retrieval-Augmented Generation (RAG) workflows. It offers three distinct strategies to split your documents while maintaining context and metadata.
+
+### 1. Fixed-Size Strategy (Recursive)
+Splits text into chunks based on character count with a specified overlap. It uses smart boundary detection to avoid cutting in the middle of sentences or paragraphs.
+
+### 2. Document Structure Strategy
+Splits the document at natural structural boundaries like pages (PDF/Word), slides (PPTX), or high-level headings. This preserves the logical flow of the document.
+
+### 3. Semantic Strategy
+Uses cosine similarity between sentence embeddings to identify coherent topic boundaries. This ensures that each chunk contains semantically related content (requires an embedding function).
+
+### The `OfficeChunk` Interface
+Every chunk produced contains not just text, but rich metadata to help your RAG pipeline:
+```typescript
+{
+  text: string;           // The chunk content
+  metadata: {
+    sourceType: string;   // e.g., "docx", "pdf"
+    pageNumber?: number;  // Current page
+    slideNumber?: number; // Current slide
+    closestHeading?: string; // The heading this chunk belongs to
+    chunkIndex: number;   // Sequential index
+  }
+}
+```
+
+#### Example: Generating Chunks
+```typescript
+const chunks = await OfficeGenerator.generate(ast, 'chunks', {
+    strategy: 'fixed-size',
+    maxChunkSize: 1000,
+    chunkOverlap: 200
+});
+console.log(`Generated ${chunks.value.length} chunks`);
 ```
 
 ### Using Callbacks (Backward Compatibility Support)
@@ -134,7 +235,7 @@ The `OfficeParserAST` provides a format-agnostic representation of your document
 
 ```text
 OfficeParserAST
-├── type: "docx" | "pptx" | "xlsx" | ...
+├── type: "docx" | "pdf" | "xlsx" | "csv" | "md" | ... (11 formats supported)
 ├── metadata: { author, title, created, modified, ..., customProperties }
 ├── content: [ OfficeContentNode ]
 │   ├── type: "paragraph" | "heading" | "table" | "list" | ...
@@ -313,6 +414,14 @@ console.log("Custom Metadata:", ast.metadata.customProperties);
 // Output: { "ProjectID": "ABC-123", "InternalReview": true }
 ```
 
+## Performance & Fidelity Highlights (v7.0.0)
+The v7.0.0 release brings significant internal optimizations and fidelity improvements:
+- **OpenOffice Speedups**: Up to **23x faster** parsing for ODP presentations thanks to optimized XML caching.
+- **Excel Memory Efficiency**: Resolved $O(n)$ memory overhead issues for large spreadsheets (#91) by switching to iterative stream-based parsing.
+- **RTF Performance**: Rewritten core loop to resolve $O(n^2)$ bottlenecks during string accumulation.
+- **Advanced Table Fidelity**: Native support for **vertical cell merging** (`vMerge`) and **horizontal spanning** (`gridSpan`) in DOCX, ensuring complex tables look exactly as they do in Word.
+- **Parser Extensions**: You can now parse `CSV`, `Markdown`, and `HTML` files *into* the unified Office AST, allowing you to use the `OfficeGenerator` on them just like any other format.
+
 ### Advanced AST Usage
 Beyond using `ast.toText()`, you can interact with the structural data directly:
 
@@ -407,24 +516,108 @@ Pass an optional config object as the second argument to `parseOffice`.
 
 | Flag | DataType | Default | Explanation |
 |------|----------|---------|-------------|
-| `outputErrorToConsole` | boolean | `false` | Show logs to console in case of an error. |
+| `outputErrorToConsole` | boolean | `false` | **Deprecated**: Use `onWarning` instead. Show logs to console in case of an error. |
 | `newlineDelimiter` | string | `\n` | Delimiter for new lines in text output. |
 | `ignoreNotes` | boolean | `false` | Ignore notes in files like PowerPoint/ODP. |
-| `putNotesAtLast` | boolean | `false` | Put notes text at the end of the document. (Note: Does not work for RTF. It is treated as true always.) |
+| `putNotesAtLast` | boolean | `false` | Put notes text at the end of the document. |
 | `extractAttachments` | boolean | `false` | Extract images and charts as Base64. |
 | `includeRawContent` | boolean | `false` | Include raw XML/RTF markup in the nodes. |
-| `serializeRawContent` | boolean | `true` | When `includeRawContent` is true, re-serializes raw XML to clean strings. If false, extracts original raw substring. |
-| `preserveXmlWhitespace` | boolean | `false` | When `serializeRawContent` is true, preserves original XML whitespace and line endings. |
+| `serializeRawContent` | boolean | `true` | Re-serializes raw XML to clean strings. |
+| `preserveXmlWhitespace` | boolean | `false` | Preserves original XML whitespace. |
 | `ocr` | boolean | `false` | Enable OCR for images (requires `extractAttachments: true`). |
-| `ocrLanguage` | string | `eng` | **Deprecated**: Use `ocrConfig.language` instead. Language for OCR. |
-| `pdfWorkerSrc` | string | `(see below)` | Path to PDF.js worker. Defaults to a CDN link if not provided. |
-| `ocrConfig` | object | `{}` | **OCR Scheduler** configuration for fine-grained worker control. |
-| `ocrConfig.language` | string | `eng` | Language(s) for OCR (e.g., 'eng', 'fra', 'eng+fra'). |
-| `ocrConfig.autoTerminateTimeout` | number | `10000` | Inactivity timeout in milliseconds before workers are killed. |
-| `ocrConfig.workerPath` | string | `undefined` | Path to Tesseract worker script (for offline use). |
-| `ocrConfig.corePath` | string | `undefined` | Path to Tesseract core script (for offline use). |
-| `ocrConfig.langPath` | string | `undefined` | Path for Tesseract language files (for offline use). |
-| `includeBreakNodes` | boolean | `false` | Specifically targets Word documents (DOCX). When set to true, officeParser will also parse `w:br`, `w:cr` and `w:lastRenderedPageBreak` nodes.|
+| `pdfWorkerSrc` | string | `(see below)` | Path to PDF.js worker. |
+| `ocrConfig` | object | `{}` | OCR Scheduler configuration. |
+| `includeBreakNodes` | boolean | `false` | Include `w:br`, `w:cr` nodes (DOCX only).|
+| `ignoreInternalLinks` | boolean | `false` | Remove all bookmarks and internal jumps. |
+| `csvDelimiter` | string | `,` | Custom delimiter for parsing CSV files. |
+| `fileType` | string | `null` | Manual format override (authoritative). |
+
+## Generator Configuration: GeneratorConfig
+Configuration options for `OfficeGenerator.generate`.
+
+| Flag | DataType | Default | Explanation |
+|------|----------|---------|-------------|
+| `includeFormatting` | boolean | `false` | Whether to include semantic styles (bold, italic) in output. |
+| `styleMap` | string[] \| array | `[]` | Array of style mappings (DSL strings or structured objects). |
+| `ignoreDefaultStyleMap`| boolean | `false` | Ignore the library's default style mappings. |
+| `includeMetadata` | boolean | `false` | Include document metadata in the output (e.g., as frontmatter). |
+| `onNode` | function | `undefined` | Callback to intercept/modify any node during generation. |
+
+### 🛠️ Advanced Node Manipulation (Pro Users)
+The `onNode` callback is a powerful tool that gives you complete control over the generation process. It is called for **every single node** in the AST before it is rendered.
+
+#### Callback Capabilities:
+1.  **Filter/Remove Nodes**: Return `false` to skip a node and all its children.
+2.  **Override Rendering**: Return a `string` to use that exact text as the output, bypassing default logic and recursion.
+3.  **Mutate Nodes**: Modify the `node` object directly (e.g., changing `node.text`) and return `void` to let the generator proceed with your changes.
+4.  **Async Support**: The callback can be `async`, allowing you to fetch external data or perform complex logic during generation.
+
+#### Pro Example:
+```typescript
+const result = await ast.to('md', {
+    onNode: async (node) => {
+        // 1. Skip all images
+        if (node.type === 'image') return false;
+
+        // 2. Redact sensitive info by mutating the node
+        if (node.text?.includes('SECRET_KEY')) {
+            node.text = node.text.replace(/SECRET_KEY: \w+/, 'SECRET_KEY: [REDACTED]');
+        }
+
+        // 3. Custom rendering for specific styles
+        if (node.metadata?.style === 'Callout') {
+            return `> [!INFO]\n> ${node.text}`;
+        }
+
+        // 4. Proceed with default rendering (implicitly returns void)
+    }
+});
+```
+
+### Advanced Style Mapping (Semantic Translation)
+The `styleMap` configuration is the primary way to define the "semantic meaning" of document styles. We recommend using **Structured Style Mappings** for full type safety and power.
+
+#### 1. Structured Style Mappings (Recommended)
+Use structured objects to match nodes based on type and attributes, and specify detailed output properties like classes and custom attributes.
+
+```typescript
+styleMap: [
+    { 
+        selector: { 
+            nodeType: 'paragraph', 
+            attributes: { style: 'Heading 1' } 
+        }, 
+        output: { 
+            tag: 'h1', 
+            classes: ['main-title'], 
+            attributes: { id: 'top' } 
+        } 
+    },
+    {
+        // Use operators like '~=' for partial matches
+        selector: { attributes: { style: { value: 'Quote', operator: '~=' } } },
+        output: { tag: 'blockquote' }
+    }
+]
+```
+
+#### 2. Legacy String DSL
+The library also maintains support for a simple string-based DSL, highly compatible with `mammoth.js`.
+
+- **Literal Matching**: `"p[style-name='Heading 1'] => h1"`
+- **Regex-like Matching**: `"p[style~='Title'] => h2"`
+- **Attribute Filters**: `"p[style-name='Quote'][lang='en'] => blockquote"`
+
+## Chunking Configuration: ChunkingConfig
+Specific options when using `format: 'chunks'`.
+
+| Flag | DataType | Default | Explanation |
+|------|----------|---------|-------------|
+| `strategy` | string | `'fixed-size'`| The chunking strategy (`fixed-size`, `document-structure`, `semantic`). |
+| `maxChunkSize` | number | `1000` | Maximum characters per chunk. |
+| `chunkOverlap` | number | `200` | Overlap between consecutive chunks. |
+| `similarityThreshold`| number | `0.5` | Threshold for semantic splitting (0.0 to 1.0). |
+| `embedBatchSize` | number | `50` | Batch size for embedding requests. |
 
 ### OCR Scheduler & Resource Management
 If your application uses OCR, `officeParser` utilizes an intelligent **Smart Worker Pool** to maintain a background worker pool and optimize repeated parse requests.
@@ -555,7 +748,7 @@ const ast = await officeParser.parseOffice(file);
 
 // Or override it with your own path or a different version:
 const ast2 = await officeParser.parseOffice(file, {
-    pdfWorkerSrc: "https://unpkg.com/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs"
+    pdfWorkerSrc: "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs"
 });
 ```
 

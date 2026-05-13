@@ -4,13 +4,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>officeParser | The Most Versatile Office Parser for Node.js & Browser</title>
+    <title>officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser</title>
     <link rel="icon" type="image/png" href="./favicon.png">
 
     <!-- OpenGraph Metadata -->
-    <meta property="og:title" content="officeParser | The Most Versatile Office Parser for Node.js & Browser">
+    <meta property="og:title"
+        content="officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser">
     <meta property="og:description"
-        content="One library, every format. Extract content, metadata, and attachments into a structured AST from DOCX, PPTX, XLSX, PDF, ODT, ODP, ODS and RTF.">
+        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 11+ formats and generate RAG-ready Markdown, HTML, and high-fidelity PDF with native document awareness.">
     <meta property="og:image"
         content="https://raw.githubusercontent.com/harshankur/officeParser/master/docs/favicon.png">
     <meta property="og:url" content="https://officeparser.harshankur.com">
@@ -21,6 +22,10 @@
         href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script>
         // Pre-load theme to avoid flash
         (function () {
@@ -367,6 +372,47 @@
             margin-bottom: 1.5rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
+            transition: all 0.2s ease;
+        }
+
+        .badge-link {
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .badge-link:hover .badge {
+            background: rgba(99, 102, 241, 0.15);
+            border-color: rgba(99, 102, 241, 0.4);
+            transform: translateY(-1px);
+        }
+
+        .shimmer {
+            display: inline-block;
+            color: transparent !important;
+            -webkit-text-fill-color: transparent !important;
+            background-image: linear-gradient(90deg,
+                    rgba(99, 102, 241, 0.05) 0%,
+                    rgba(99, 102, 241, 0.2) 20%,
+                    rgba(99, 102, 241, 0.4) 50%,
+                    rgba(99, 102, 241, 0.2) 80%,
+                    rgba(99, 102, 241, 0.05) 100%) !important;
+            background-size: 200% 100% !important;
+            background-repeat: no-repeat !important;
+            animation: shimmer-swipe 1.5s infinite linear !important;
+            border-radius: 4px;
+            min-width: 4rem;
+            background-clip: padding-box !important;
+            -webkit-background-clip: padding-box !important;
+        }
+
+        @keyframes shimmer-swipe {
+            0% {
+                background-position: -200% 0;
+            }
+
+            100% {
+                background-position: 200% 0;
+            }
         }
 
         .hero h1 {
@@ -449,6 +495,10 @@
             background: var(--bg-card);
             border: 1px solid var(--border);
             border-radius: 20px;
+        }
+
+        .stat-item {
+            text-align: center;
         }
 
         .stat-item h3 {
@@ -691,10 +741,22 @@
         }
 
         /* Results Area - New Layout */
-        .visual-panel-full {
-            width: 100%;
+        .results-layout {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 2rem;
             margin-bottom: 2rem;
-            height: 600px;
+        }
+
+        @media (max-width: 1024px) {
+            .results-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .visual-panel-window {
+            width: 100%;
+            height: 700px;
             background: var(--bg-card);
             border: 1px solid var(--border);
             border-radius: 20px;
@@ -703,11 +765,165 @@
             overflow: hidden;
         }
 
+        /* AST JSON Viewer Styles */
+        .json-tree {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            color: var(--text-main);
+            padding: 1rem;
+        }
+
+        .json-tree details {
+            margin-left: 0.5rem;
+        }
+
+        .json-tree summary {
+            cursor: pointer;
+            outline: none;
+            display: flex;
+            align-items: center;
+        }
+
+        .json-tree summary:hover {
+            background-color: var(--bg-card-hover);
+        }
+
+        .json-key {
+            color: var(--json-key);
+        }
+
+        .json-string {
+            color: var(--json-string);
+        }
+
+        .json-number {
+            color: var(--json-number);
+        }
+
+        .json-boolean {
+            color: var(--json-boolean);
+        }
+
+        .json-null {
+            color: var(--json-null);
+            font-weight: bold;
+        }
+
+        .json-punctuation {
+            color: var(--json-punctuation);
+        }
+
+        .chunk-gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+            padding: 1rem;
+        }
+
+        .chunk-card {
+            background: var(--bg-card-hover);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            transition: all 0.2s;
+        }
+
+        .chunk-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .chunk-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .meta-chip {
+            font-size: 0.7rem;
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary);
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .chunk-text {
+            font-size: 0.85rem;
+            color: var(--text-main);
+            white-space: pre-wrap;
+            flex: 1;
+        }
+
+        .md-preview {
+            padding: 2rem;
+            background: var(--bg-card);
+            color: var(--text-main);
+            font-family: 'Outfit', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .md-preview h1,
+        .md-preview h2,
+        .md-preview h3 {
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+            color: var(--text-main);
+        }
+
+        .md-preview table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 1rem 0;
+        }
+
+        .md-preview th,
+        .md-preview td {
+            border: 1px solid var(--border);
+            padding: 0.5rem;
+        }
+
+        .html-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: #fff;
+            border-radius: 8px;
+        }
+
+        .code-container {
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            border-radius: 8px;
+            text-align: left;
+        }
+
+        .code-container pre {
+            margin: 0;
+            min-height: 100%;
+            padding: 1.5rem;
+            white-space: pre;
+        }
+
+        .code-container code {
+            font-family: 'JetBrains Mono', monospace;
+            white-space: inherit;
+        }
+
+
         .bottom-panels {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 2rem;
-            height: 500px;
+            height: 700px;
         }
 
         .result-panel {
@@ -817,6 +1033,146 @@
             padding: 1rem 1.5rem;
             margin: 1.5rem 0;
             border-radius: 0 8px 8px 0;
+        }
+
+        .doc-body ul,
+        .doc-body ol {
+            margin: 1.5rem 0;
+            padding-left: 1.5rem;
+            list-style-position: outside;
+        }
+
+        .doc-body li {
+            margin-bottom: 0.5rem;
+            color: var(--text-dim);
+        }
+
+        /* --- Modern Callouts --- */
+        .callout {
+            margin: 2rem 0;
+            padding: 1.5rem;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.01);
+            backdrop-filter: blur(8px);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .callout::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+        }
+
+        .callout-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+            font-weight: 700;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .callout-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+        }
+
+        .callout-content {
+            font-size: 0.95rem;
+            color: var(--text-dim);
+            line-height: 1.6;
+        }
+
+        .callout-content p {
+            margin: 0.5rem 0;
+        }
+
+        .callout-content p:first-child {
+            margin-top: 0;
+        }
+
+        .callout-content p:last-child {
+            margin-bottom: 0;
+        }
+
+        .callout-content strong {
+            color: var(--text-main);
+        }
+
+        /* Callout Types */
+        .callout-note {
+            border-color: rgba(99, 102, 241, 0.2);
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.05), transparent);
+        }
+
+        .callout-note::before {
+            background: var(--primary);
+        }
+
+        .callout-note .callout-header {
+            color: var(--primary);
+        }
+
+        .callout-tip {
+            border-color: rgba(16, 185, 129, 0.2);
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.05), transparent);
+        }
+
+        .callout-tip::before {
+            background: #10b981;
+        }
+
+        .callout-tip .callout-header {
+            color: #10b981;
+        }
+
+        .callout-important {
+            border-color: rgba(139, 92, 246, 0.2);
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.05), transparent);
+        }
+
+        .callout-important::before {
+            background: #8b5cf6;
+        }
+
+        .callout-important .callout-header {
+            color: #8b5cf6;
+        }
+
+        .callout-warning {
+            border-color: rgba(245, 158, 11, 0.2);
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.05), transparent);
+        }
+
+        .callout-warning::before {
+            background: #f59e0b;
+        }
+
+        .callout-warning .callout-header {
+            color: #f59e0b;
+        }
+
+        .callout-caution {
+            border-color: rgba(239, 68, 68, 0.2);
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.05), transparent);
+        }
+
+        .callout-caution::before {
+            background: #ef4444;
+        }
+
+        .callout-caution .callout-header {
+            color: #ef4444;
         }
 
         /* JSON Highlighting */
@@ -1082,6 +1438,8 @@
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
         }
 
+        /* Spreadsheet styles managed by generator */
+
         .slide-card {
             border-left: 6px solid #ff9500;
             background: var(--bg-card);
@@ -1165,6 +1523,114 @@
             padding: 2px;
             border-radius: 2px;
         }
+
+        /* --- Switch Styles --- */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 36px;
+            height: 18px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border);
+            transition: .3s;
+            border-radius: 20px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 12px;
+            width: 12px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked+.slider {
+            background-color: var(--primary);
+        }
+
+        input:checked+.slider:before {
+            transform: translateX(18px);
+        }
+
+        .config-group {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .config-group:last-of-type {
+            border-bottom: none;
+        }
+
+        .config-group-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--primary);
+            font-weight: 800;
+        }
+
+        .config-items-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            justify-content: flex-start;
+        }
+
+        .window-config-group {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+            padding: 0.4rem 0.8rem;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            font-size: 0.75rem;
+        }
+
+        .window-config-item {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .window-config-item input[type="text"],
+        .window-config-item input[type="number"],
+        .window-config-item select {
+            background: var(--bg-deep);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            outline: none;
+        }
+
+        .window-config-item input[type="text"]:focus,
+        .window-config-item input[type="number"]:focus,
+        .window-config-item select:focus {
+            border-color: var(--primary);
+        }
     </style>
 </head>
 
@@ -1174,6 +1640,7 @@
         <nav class="nav-links">
             <a href="#support">Support</a>
             <a href="#features">Features</a>
+            <a href="#rag">RAG & Chunking</a>
             <a href="#specs">Specifications</a>
             <a href="#visualizer">Visualizer</a>
             <div class="theme-switcher">
@@ -1194,13 +1661,14 @@
 
     <main>
         <section class="hero">
-            <div class="badge">260k+ Weekly Downloads</div>
-            <h1>The Industry's Most <span class="gradient-text">Versatile</span> Office Parser</h1>
-            <p>One library, every format. Extract content, metadata, and attachments into a structured Abstract Syntax
-                Tree with <a href="https://npm-stat.com/charts.html?package=officeparser&from=2019-04-15"
-                    target="_blank"
-                    style="color: inherit; text-decoration: underline; text-underline-offset: 4px; opacity: 0.9;">10
-                    Million+ total downloads</a> and counting.</p>
+            <a id="weekly-badge-link" href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser"
+                target="_blank" class="badge-link">
+                <div class="badge shimmer" id="weekly-badge">--- Weekly Downloads</div>
+            </a>
+            <h1>The Industry's First <span class="gradient-text">Parser & Generator</span></h1>
+            <p>One library, every transformation. Parse complex documents into a structured AST and generate
+                high-fidelity Markdown, HTML, or RAG-ready chunks optimized for LLM integration and modern AI workflows.
+            </p>
             <div class="cta-group">
                 <a href="#visualizer" class="btn btn-primary">Try Visualizer</a>
                 <a href="https://www.npmjs.com/package/officeparser" class="btn btn-outline" target="_blank">View on
@@ -1210,21 +1678,22 @@
 
         <section class="stats-grid">
             <div class="stat-item">
-                <a href="https://npm-stat.com/charts.html?package=officeparser&from=2026-01-01&to=2026-04-13"
-                    target="_blank" style="text-decoration: none;">
-                    <h3>260k+</h3>
+                <a id="weekly-stats-link"
+                    href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser" target="_blank"
+                    style="text-decoration: none;">
+                    <h3 id="weekly-stats-count" class="shimmer">---</h3>
                     <p>Weekly Downloads*</p>
                 </a>
             </div>
             <div class="stat-item">
-                <a href="https://npm-stat.com/charts.html?package=officeparser&from=2019-01-01&to=2026-04-13"
+                <a id="total-stats-link" href="https://api.npmjs.org/downloads/point/2019-04-15:2026-05-12/officeparser"
                     target="_blank" style="text-decoration: none;">
-                    <h3>10M+</h3>
+                    <h3 id="total-stats-count" class="shimmer">---</h3>
                     <p>Total Downloads</p>
                 </a>
             </div>
             <div class="stat-item">
-                <h3>8+</h3>
+                <h3>11+</h3>
                 <p>Formats Supported</p>
             </div>
         </section>
@@ -1332,6 +1801,42 @@
                     <h3>RTF</h3>
                     <p>Rich Text</p>
                 </div>
+                <div class="support-card">
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#1e293b" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="5.5" y="16" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="5">CSV</text>
+                        </svg>
+                    </span>
+                    <h3>CSV</h3>
+                    <p>Spreadsheets</p>
+                </div>
+                <div class="support-card">
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#0ea5e9" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="5" y="16" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="5">MD</text>
+                        </svg>
+                    </span>
+                    <h3>MD</h3>
+                    <p>Markdown</p>
+                </div>
+                <div class="support-card">
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#f43f5e" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="5" y="15.5" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="4.5">&lt;/&gt;</text>
+                        </svg>
+                    </span>
+                    <h3>HTML</h3>
+                    <p>Web Pages</p>
+                </div>
             </div>
         </section>
 
@@ -1342,48 +1847,101 @@
             </div>
             <div class="features-grid">
                 <div class="feature-card">
+                    <span class="feature-icon">🔄</span>
+                    <h3>One-Stop API</h3>
+                    <p>Powered by <code>OfficeGenerator</code>. Use <code>OfficeConverter.convert</code> for seamless,
+                        one-step transformations with Intelligent Auto-Sync.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">🧩</span>
+                    <h3>RAG Chunking</h3>
+                    <p>Native document splitting for AI. Supports fixed-size, structural, and semantic strategies with
+                        metadata awareness.</p>
+                </div>
+                <div class="feature-card">
                     <span class="feature-icon">🌳</span>
-                    <h3>AST Output</h3>
-                    <p>Get a structured Abstract Syntax Tree reflecting the document's true hierarchy.</p>
+                    <h3>Structured AST</h3>
+                    <p>The foundation for generation. Use <code>.to(format)</code> directly on the AST for high-fidelity
+                        conversion.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">🌍</span>
+                    <h3>Universal Parser</h3>
+                    <p>Now supports **CSV, HTML, and Markdown** as input formats, enabling true any-to-any document
+                        pipelines.</p>
                 </div>
                 <div class="feature-card">
                     <span class="feature-icon">📎</span>
-                    <h3>Attachments</h3>
-                    <p>Extract embedded images, charts, and objects directly from the source.</p>
-                </div>
-                <div class="feature-card">
-                    <span class="feature-icon">🔍</span>
-                    <h3>OCR Integration</h3>
-                    <p>Seamlessly read text from images within documents using Tesseract.js.</p>
-                </div>
-                <div class="feature-card">
-                    <span class="feature-icon">ℹ️</span>
-                    <h3>Full Metadata</h3>
-                    <p>Access document properties, author info, creation dates, and more.</p>
+                    <h3>High Fidelity</h3>
+                    <p>Unmatched support for merged table cells, anchors, bookmarks, and complex document hierarchies.
+                    </p>
                 </div>
                 <div class="feature-card">
                     <span class="feature-icon">⚡</span>
-                    <h3>High Performance</h3>
-                    <p>Optimized for both heavy server-side processing and light browser usage.</p>
+                    <h3>Extreme Performance</h3>
+                    <p>Up to 23x speedup for ODP parsing; highly optimized engines for RTF, PDF, and large Excel
+                        workbooks.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">🔍</span>
+                    <h3>Vision & OCR</h3>
+                    <p>Seamlessly read text from images within documents using our integrated, pooled Tesseract.js
+                        worker engine.</p>
                 </div>
                 <div class="feature-card">
                     <span class="feature-icon">⚙️</span>
-                    <h3>Customizable</h3>
-                    <p>Fine-tune delimiters, note handling, and parsing depth via robust configuration.</p>
+                    <h3>Deep Metadata</h3>
+                    <p>Access full document properties, author info, and custom XML/ODF properties across all major
+                        formats.</p>
                 </div>
             </div>
         </section>
 
-        <section id="specs" class="specs" style="padding-bottom: 6rem;">
+        <section id="rag" class="rag-guide"
+            style="padding: 6rem 0; background: rgba(99, 102, 241, 0.02); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+            <div class="section-title">
+                <div class="badge">Optimized for AI</div>
+                <h2>Native RAG & Chunking</h2>
+                <p>Don't just split text—understand it. Our structural chunking preserves the semantic context that
+                    naive splitters destroy.</p>
+            </div>
+            <div class="features-grid" style="margin-bottom: 0;">
+                <div class="feature-card">
+                    <span class="feature-icon">📑</span>
+                    <h3>Heading Awareness</h3>
+                    <p>Chunks automatically inherit the context of their parent headings, ensuring the LLM knows the
+                        exact topic of every fragment.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">📍</span>
+                    <h3>Physical Metadata</h3>
+                    <p>Every chunk includes its physical origin: page number, slide name, or sheet index from the
+                        original source document.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">📊</span>
+                    <h3>Table Integrity</h3>
+                    <p>Intelligent row-level splitting for large tables. Automatically repeats headers in every chunk to
+                        maintain structural clarity.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="specs" class="specs" style="padding-bottom: 6rem; padding-top: 6rem;">
             <div class="section-title">
                 <h2>Specifications</h2>
                 <p>Detailed technical documentation for the core components of officeParser.</p>
             </div>
             <div class="specs-grid">
                 <div class="spec-card" id="card-config" onclick="location.hash='#spec/config'">
-                    <h3>Configuration</h3>
+                    <h3>Parser Config</h3>
                     <p>Full reference of parsing options including OCR, attachment handling, and delimiters.</p>
-                    <div class="spec-link-hint">Read Config Spec →</div>
+                    <div class="spec-link-hint">Read Parser Spec →</div>
+                </div>
+                <div class="spec-card" id="card-generator" onclick="location.hash='#spec/generator'">
+                    <h3>Generator & RAG</h3>
+                    <p>Document conversion settings, RAG chunking strategies, and the StyleMapper DSL.</p>
+                    <div class="spec-link-hint">Read Generator Spec →</div>
                 </div>
                 <div class="spec-card" id="card-ast" onclick="location.hash='#spec/ast'">
                     <h3>AST Reference</h3>
@@ -1392,7 +1950,7 @@
                 </div>
                 <div class="spec-card" id="card-debugging" onclick="location.hash='#spec/debugging'">
                     <h3>Debugging</h3>
-                    <p>Tips and tricks for handling edge cases, large files, and common parsing hurdles.</p>
+                    <p>Tips for handling edge cases, large files, and process lifecycle management.</p>
                     <div class="spec-link-hint">Read Debugging Spec →</div>
                 </div>
             </div>
@@ -1429,21 +1987,15 @@
                         depth and structural accuracy of our parsing engine—allowing us to reconstruct complex document
                         layouts with near-perfect fidelity solely from the structured data.
                     </div>
-
-                    <div style="font-size: 0.85rem; color: var(--text-dark);">
-                        Looking for the old tool? <a href="visualizer_old.html"
-                            style="color: var(--primary); text-decoration: none; font-weight: 600;">Legacy Visualizer
-                            →</a>
-                    </div>
                 </div>
 
                 <div class="drop-zone" id="drop-zone">
                     <div id="drop-zone-prompt">
                         <i>📤</i>
                         <p>Drag & Drop your file here or <span>Click to Browse</span></p>
-                        <p style="font-size: 0.8rem; margin-top: 1rem; opacity: 0.6;">DOCX, PPTX, XLSX, PDF, RTF, ODT,
-                            ODP,
-                            ODS</p>
+                        <p style="font-size: 0.8rem; margin-top: 1rem; opacity: 0.6;">DOCX, PPTX, XLSX, PDF, RTF, CSV,
+                            MD,
+                            HTML, ODT, ODP, ODS</p>
                     </div>
                     <div id="file-selected-info" class="file-info hidden">
                         <span class="file-icon">📄</span>
@@ -1452,148 +2004,384 @@
                         </div>
                     </div>
                     <input type="file" id="file-input" class="hidden-input"
-                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.pdf,.rtf">
+                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.pdf,.rtf,.csv,.md,.html">
                 </div>
 
-                <div class="config-bar">
-                    <div class="config-item">
-                        <span class="config-label">Extract Attachments</span>
-                        <label class="switch">
-                            <input type="checkbox" id="cfg_extractAttachments" checked>
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="config-item">
-                        <span class="config-label">Enable OCR</span>
-                        <label class="switch">
-                            <input type="checkbox" id="cfg_ocr" checked>
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="config-item">
-                        <span class="config-label">Include Raw Source</span>
-                        <label class="switch">
-                            <input type="checkbox" id="cfg_includeRawContent">
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="config-item">
-                        <span class="config-label">Serialize Raw XML</span>
-                        <label class="switch">
-                            <input type="checkbox" id="cfg_serializeRawContent" checked>
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="config-item">
-                        <span class="config-label">Preserve XML Space</span>
-                        <label class="switch">
-                            <input type="checkbox" id="cfg_preserveXmlWhitespace">
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="config-item">
-                        <span class="config-label">Ignore Notes</span>
-                        <label class="switch">
-                            <input type="checkbox" id="cfg_ignoreNotes">
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="config-item">
-                        <span class="config-label">Notes At Last</span>
-                        <label class="switch">
-                            <input type="checkbox" id="cfg_putNotesAtLast">
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="config-item">
-                        <span class="config-label">Include Break Nodes</span>
-                        <label class="switch">
-                            <input type="checkbox" id="cfg_includeBreakNodes" checked>
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="config-item">
-                        <span class="config-label">Verbose Errors</span>
-                        <label class="switch">
-                            <input type="checkbox" id="cfg_outputErrorToConsole">
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                    <div class="config-item">
-                        <span class="config-label">OCR Lang</span>
-                        <input type="text" id="cfg_ocrLanguage" class="btn btn-outline"
-                            style="padding: 0.4rem 0.8rem; width: 80px; font-size: 0.8rem;" value="eng">
-                    </div>
-                    <div class="config-item">
-                        <span class="config-label">Delimiter</span>
-                        <input type="text" id="cfg_newlineDelimiter" class="btn btn-outline"
-                            style="padding: 0.4rem 0.8rem; width: 60px; font-size: 0.8rem;" value="\n">
-                    </div>
-                    <div class="config-item">
-                        <span class="config-label">OCR Timeout (s)</span>
-                        <input type="number" id="cfg_ocrTimeout" class="btn btn-outline"
-                            style="padding: 0.4rem 0.8rem; width: 60px; font-size: 0.8rem;" value="10" min="0">
-                    </div>
-                </div>
-            </div>
-
-            <div id="status-msg"
-                style="text-align: center; margin-bottom: 2rem; color: var(--accent); font-weight: 600;"></div>
-
-            <div class="results-layout">
-                <!-- Full Width Preview -->
-                <div class="visual-panel-full">
-                    <div class="panel-header" style="justify-content: space-between;">
-                        <div style="display: flex; gap: 1rem; align-items: center;">
-                            <h4>Visual Preview</h4>
-                            <button id="cleanup-ocr-btn" class="sync-btn" title="Manual Resource Cleanup"
-                                style="border-color: #ef4444; color: #ef4444; background: rgba(239, 68, 68, 0.05);">
-                                🗑️ Cleanup OCR Pool
-                            </button>
+                <div class="config-bar" style="flex-direction: column; align-items: stretch; gap: 0;">
+                    <!-- Parser Section -->
+                    <div class="config-group">
+                        <div class="config-group-title">Parser Configuration</div>
+                        <div class="config-items-container">
+                            <div class="config-item">
+                                <span class="config-label">File Type Hint</span>
+                                <select id="cfg_fileType" class="btn btn-outline"
+                                    style="padding: 0.4rem; font-size: 0.8rem; width: 100px;">
+                                    <option value="">Auto</option>
+                                    <option value="docx">DOCX</option>
+                                    <option value="xlsx">XLSX</option>
+                                    <option value="pptx">PPTX</option>
+                                    <option value="pdf">PDF</option>
+                                    <option value="rtf">RTF</option>
+                                    <option value="csv">CSV</option>
+                                    <option value="md">Markdown</option>
+                                    <option value="html">HTML</option>
+                                    <option value="odt">ODT</option>
+                                    <option value="ods">ODS</option>
+                                    <option value="odp">ODP</option>
+                                </select>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Extract Attachments</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_extractAttachments" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Enable OCR</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_ocr">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Ignore Internal Links</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_ignoreInternalLinks_parser">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Include Raw Source</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_includeRawContent">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Serialize Raw XML</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_serializeRawContent" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Preserve XML Space</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_preserveXmlWhitespace">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Ignore Notes</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_ignoreNotes">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Notes At Last</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_putNotesAtLast">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Include Break Nodes</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_includeBreakNodes" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Verbose Errors <small
+                                        style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small></span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_outputErrorToConsole">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">OCR Lang</span>
+                                <input type="text" id="cfg_ocrLanguage" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.8rem; width: 80px; font-size: 0.8rem;" value="eng">
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">CSV Delimiter</span>
+                                <input type="text" id="cfg_csvDelimiter" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.8rem; width: 60px; font-size: 0.8rem;" value=",">
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">OCR Timeout (s)</span>
+                                <input type="number" id="cfg_ocrTimeout" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.8rem; width: 60px; font-size: 0.8rem;" value="10" min="0">
+                            </div>
+                            <div class="config-item" style="width: 100%;">
+                                <span class="config-label">PDF Worker URL</span>
+                                <input type="text" id="cfg_pdfWorkerSrc" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.8rem; width: 100%; max-width: 500px; font-size: 0.75rem;"
+                                    value="https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs">
+                            </div>
                         </div>
-                        <button id="reparse-btn" class="sync-btn" title="Update Visual Preview" style="display: none;">
+                    </div>
+
+                    <!-- Generator Section -->
+                    <div class="config-group">
+                        <div class="config-group-title">Common Generator Configuration</div>
+                        <div class="config-items-container">
+                            <div class="config-item">
+                                <span class="config-label">Generate IDs</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_generateIds" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Render Metadata</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_renderMetadata">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Include Images</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_includeImages" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Include Charts</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_includeCharts" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Ignore Internal Links</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_ignoreInternalLinks_generator">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Ignore Default Style Map</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_ignoreDefaultStyleMap">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem;">
+                        <button id="reparse-btn" class="sync-btn" title="Update Preview"
+                            style="display: flex; justify-content: center; padding: 0.75rem;" disabled>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                stroke-linecap="round" stroke-linejoin="round" style="width: 1rem; height: 1rem;">
+                                stroke-linecap="round" stroke-linejoin="round" style="width: 1.25rem; height: 1.25rem;">
                                 <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
                                 <path d="M21 3v5h-5"></path>
                                 <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
                                 <path d="M8 16H3v5"></path>
                             </svg>
-                            Refresh View
+                            Refresh Parsing Engine
                         </button>
-                    </div>
-                    <div class="panel-body" id="visual-preview">
-                        <div style="color: #64748b; text-align: center; margin-top: 10rem;">Drop a file to generate
-                            preview</div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <button id="cleanup-ocr-btn" class="sync-btn" title="Manual Resource Cleanup"
+                                style="border-color: #ef4444; color: #ef4444; background: rgba(239, 68, 68, 0.05); display: flex; justify-content: center;"
+                                disabled>
+                                🗑️ Cleanup OCR Pool
+                            </button>
+                            <button id="download-pdf-btn" class="sync-btn" title="Download as PDF"
+                                style="border-color: #E02A26; color: #E02A26; background: rgba(224, 42, 38, 0.05); display: flex; justify-content: center;"
+                                disabled>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                    stroke-linecap="round" stroke-linejoin="round" style="width: 1rem; height: 1rem;">
+                                    <path d="M4 4V20H20V8L16 4H4Z"></path>
+                                </svg>
+                                Export to PDF
+                            </button>
+                        </div>
                     </div>
                 </div>
+            </div>
 
-                <!-- Side by Side Bottom Panels -->
-                <div class="bottom-panels">
-                    <div class="result-panel">
-                        <div class="panel-header">
-                            <h4>Abstract Syntax Tree (JSON)</h4>
-                            <button id="copy-json-btn" class="btn-outline"
-                                style="padding: 0.25rem 0.75rem; font-size: 0.75rem; border-radius: 5px; cursor: pointer;">Copy
-                                JSON</button>
-                        </div>
-                        <div class="panel-body" id="ast-output">
-                            <div style="color: #475569; text-align: center; margin-top: 5rem;">JSON structure will
-                                appear here</div>
+            <div id="warning-banner"
+                style="display: none; max-width: 1000px; margin: 0 auto 2rem; padding: 1rem 1.5rem; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 12px; color: #fbbf24; font-size: 0.9rem; align-items: center; gap: 1rem; backdrop-filter: blur(8px); animation: slideUp 0.3s ease-out;">
+                <span style="font-size: 1.25rem;">⚠️</span>
+                <div style="flex: 1;">
+                    <strong style="display: block; margin-bottom: 0.25rem;">Parser Warning</strong>
+                    <span id="warning-text"></span>
+                </div>
+                <button onclick="document.getElementById('warning-banner').style.display='none'"
+                    style="background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.1rem;">✕</button>
+            </div>
+
+            <div id="status-msg"
+                style="text-align: center; margin-bottom: 2rem; color: var(--accent); font-weight: 600;"></div>
+
+            <div class="results-layout" id="results-container">
+                <!-- HTML Window -->
+                <div class="visual-panel-window" id="window-html">
+                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                        <h4 style="margin:0;">HTML PREVIEW</h4>
+                        <div class="window-config-group">
+                            <div class="window-config-item">
+                                Formatting <input type="checkbox" id="cfg_html_includeFormatting" checked>
+                            </div>
+                            <div class="window-config-item">
+                                Standalone <input type="checkbox" id="cfg_html_standalone" checked>
+                            </div>
+                            <div class="window-config-item" title="Chart.js Source URL">
+                                Charts URL <input type="text" id="cfg_html_chartJsSrc" style="width: 80px;"
+                                    value="https://cdn.jsdelivr.net/npm/chart.js">
+                            </div>
+                            <button id="copy-html-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                            <button id="download-html-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
                         </div>
                     </div>
-                    <div class="result-panel">
-                        <div class="panel-header">
-                            <h4>Plain Text Output</h4>
+                    <div class="panel-body" id="visual-html" style="position: relative; padding: 0;"></div>
+                </div>
+
+                <!-- Markdown Window -->
+                <div class="visual-panel-window" id="window-md">
+                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                        <h4 style="margin:0;">MARKDOWN</h4>
+                        <div class="window-config-group">
+                            <div class="window-config-item">
+                                Formatting <input type="checkbox" id="cfg_md_includeFormatting" checked>
+                            </div>
+                            <div class="window-config-item">
+                                HTML Fallback <input type="checkbox" id="cfg_md_fallbackToHtml" checked>
+                            </div>
+                            <button id="copy-md-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                            <button id="download-md-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        </div>
+                    </div>
+                    <div class="panel-body" id="visual-md" style="position: relative; padding: 0;"></div>
+                </div>
+
+                <!-- Chunks Window -->
+                <div class="visual-panel-window" id="window-chunks">
+                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                        <h4 style="margin:0;">CHUNKS</h4>
+                        <div class="window-config-group">
+                            <div class="window-config-item">
+                                Strategy
+                                <select id="cfg_chunks_strategy">
+                                    <option value="document-structure">Structure</option>
+                                    <option value="fixed-size">Fixed Size</option>
+                                    <option value="semantic" disabled
+                                        title="Semantic chunking requires a user-provided embedding function (e.g. OpenAI) which is not available in this static demo.">
+                                        Semantic (External Only)</option>
+                                </select>
+                            </div>
+                            <div class="window-config-item">
+                                Max Size <input type="number" id="cfg_chunks_maxChunkSize" style="width: 50px;"
+                                    value="1000">
+                            </div>
+                            <div class="window-config-item">
+                                Overlap <input type="number" id="cfg_chunks_chunkOverlap" style="width: 45px;"
+                                    value="200">
+                            </div>
+                            <div class="window-config-item">
+                                Split By
+                                <select id="cfg_chunks_splitBy">
+                                    <option value="paragraph">Paragraph</option>
+                                    <option value="heading">Heading</option>
+                                    <option value="page">Page</option>
+                                    <option value="slide">Slide</option>
+                                    <option value="sheet">Sheet</option>
+                                </select>
+                            </div>
+                            <div class="window-config-item">
+                                Table
+                                <select id="cfg_chunks_tableSplitStrategy">
+                                    <option value="row">Row (Repeat Header)</option>
+                                    <option value="flatten">Flatten</option>
+                                </select>
+                            </div>
+                            <button id="copy-chunks-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                            <button id="download-chunks-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        </div>
+                    </div>
+                    <div class="panel-body" id="visual-chunks" style="position: relative; padding: 0;"></div>
+                </div>
+
+                <!-- CSV Window -->
+                <div class="visual-panel-window" id="window-csv">
+                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                        <h4 style="margin:0;">CSV</h4>
+                        <div class="window-config-group">
+                            <div class="window-config-item">
+                                Sheets <input type="text" id="cfg_csv_sheets" style="width: 50px;" placeholder="1,2...">
+                            </div>
+                            <div class="window-config-item">
+                                Merge <input type="checkbox" id="cfg_csv_mergeSheets" checked>
+                            </div>
+                            <div class="window-config-item">
+                                Delim <input type="text" id="cfg_csv_columnDelimiter" style="width: 30px;" value=",">
+                            </div>
+                            <button id="copy-csv-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                            <button id="download-csv-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        </div>
+                    </div>
+                    <div class="panel-body" id="visual-csv" style="position: relative; padding: 0;"></div>
+                </div>
+
+                <!-- RTF Window -->
+                <div class="visual-panel-window" id="window-rtf">
+                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                        <h4 style="margin:0;">RTF (RICH TEXT)</h4>
+                        <div class="window-config-group">
+                            <button id="copy-rtf-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                            <button id="download-rtf-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        </div>
+                    </div>
+                    <div class="panel-body" id="visual-rtf" style="position: relative; padding: 0;"></div>
+                </div>
+
+                <!-- Text Window -->
+                <div class="visual-panel-window" id="window-text">
+                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                        <h4 style="margin:0;">PLAIN TEXT</h4>
+                        <div class="window-config-group">
+                            <div class="window-config-item">
+                                Layout <input type="checkbox" id="cfg_text_preserveLayout">
+                            </div>
+                            <div class="window-config-item">
+                                Newline <input type="text" id="cfg_text_newlineDelimiter" style="width: 30px;"
+                                    value="\n">
+                            </div>
                             <button id="copy-text-btn" class="btn-outline"
-                                style="padding: 0.25rem 0.75rem; font-size: 0.75rem; border-radius: 5px; cursor: pointer;">Copy
-                                Text</button>
-                        </div>
-                        <div class="panel-body" id="text-output" style="color: var(--text-dim);">
-                            <div style="color: #475569; text-align: center; margin-top: 5rem;">Extracted text will
-                                appear here</div>
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                            <button id="download-text-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
                         </div>
                     </div>
+                    <div class="panel-body" id="visual-text" style="position: relative; padding: 0;"></div>
+                </div>
+
+                <!-- AST Window -->
+                <div class="visual-panel-window" id="window-ast">
+                    <div class="panel-header" style="justify-content: space-between;">
+                        <h4 style="margin:0;">JSON (AST)</h4>
+                        <button id="copy-ast-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                        <button id="download-ast-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                    </div>
+                    <div class="panel-body" id="visual-ast" style="position: relative; padding: 0;"></div>
                 </div>
             </div>
             </div>
@@ -1619,11 +2407,7 @@
             const dropZone = document.getElementById('drop-zone');
             const fileInput = document.getElementById('file-input');
             const visualPreview = document.getElementById('visual-preview');
-            const astOutput = document.getElementById('ast-output');
-            const textOutput = document.getElementById('text-output');
             const statusMsg = document.getElementById('status-msg');
-            const copyJsonBtn = document.getElementById('copy-json-btn');
-            const copyTextBtn = document.getElementById('copy-text-btn');
             const docViewer = document.getElementById('doc-viewer');
             const docBody = document.getElementById('doc-body-placeholder');
             const dropZonePrompt = document.getElementById('drop-zone-prompt');
@@ -1647,6 +2431,9 @@
                 ods: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#00A950"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><rect x="7" y="10" width="6" height="6" stroke="white" stroke-width="1.5"/></svg>`,
                 odp: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#7B2B8D"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><path d="M8 10L13 13L8 16V10Z" fill="white"/></svg>`,
                 rtf: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#475569"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><path d="M7 11H13M7 14H11" stroke="white" stroke-width="1.5"/></svg>`,
+                csv: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#1e293b"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5.5" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="5">CSV</text></svg>`,
+                md: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#0ea5e9"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="5">MD</text></svg>`,
+                html: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#f43f5e"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5" y="15.5" fill="white" font-family="Outfit" font-weight="800" font-size="4.5">&lt;/&gt;</text></svg>`,
                 default: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#94a3b8"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/></svg>`
             };
 
@@ -1738,6 +2525,39 @@
                 }
             }
 
+            function transformCallouts(container) {
+                const blockquotes = container.querySelectorAll('blockquote');
+                const types = {
+                    'NOTE': { class: 'note', icon: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>' },
+                    'TIP': { class: 'tip', icon: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/></svg>' },
+                    'IMPORTANT': { class: 'important', icon: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' },
+                    'WARNING': { class: 'warning', icon: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' },
+                    'CAUTION': { class: 'caution', icon: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' }
+                };
+
+                blockquotes.forEach(bq => {
+                    // Look for [!TYPE] in the innerHTML to handle potential wrapper tags (like <p>)
+                    const html = bq.innerHTML.trim();
+                    for (const [key, config] of Object.entries(types)) {
+                        const marker = `[!${key}]`;
+                        if (html.includes(marker)) {
+                            const newContent = html.replace(marker, '').trim();
+                            const callout = document.createElement('div');
+                            callout.className = `callout callout-${config.class}`;
+                            callout.innerHTML = `
+                                <div class="callout-header">
+                                    <span class="callout-icon">${config.icon}</span>
+                                    ${key}
+                                </div>
+                                <div class="callout-content">${newContent}</div>
+                            `;
+                            bq.parentNode.replaceChild(callout, bq);
+                            break;
+                        }
+                    }
+                });
+            }
+
             async function loadDocContent(type) {
                 try {
                     // Highlight active card
@@ -1749,6 +2569,10 @@
                     if (!response.ok) throw new Error('Failed to load document');
                     const content = await response.text();
                     docBody.innerHTML = content;
+
+                    // Transform GitHub-style callouts
+                    transformCallouts(docBody);
+
                     docViewer.style.display = 'block';
 
                     // Only scroll if it's a direct hash change, not initial load default
@@ -1788,9 +2612,21 @@
             });
 
             // Config Persistence
-            const configIds = ['cfg_extractAttachments', 'cfg_ocr', 'cfg_includeRawContent', 'cfg_serializeRawContent', 'cfg_preserveXmlWhitespace', 'cfg_ignoreNotes', 'cfg_putNotesAtLast', 'cfg_includeBreakNodes', 'cfg_outputErrorToConsole', 'cfg_ocrLanguage', 'cfg_newlineDelimiter'];
+            const configIds = [
+                'cfg_fileType', 'cfg_extractAttachments', 'cfg_ocr', 'cfg_ignoreInternalLinks_parser',
+                'cfg_includeRawContent', 'cfg_serializeRawContent', 'cfg_preserveXmlWhitespace',
+                'cfg_ignoreNotes', 'cfg_putNotesAtLast', 'cfg_includeBreakNodes',
+                'cfg_outputErrorToConsole', 'cfg_ocrLanguage', 'cfg_csvDelimiter', 'cfg_ocrTimeout', 'cfg_pdfWorkerSrc',
+                'cfg_generateIds', 'cfg_renderMetadata', 'cfg_includeImages', 'cfg_includeCharts', 'cfg_ignoreInternalLinks_generator', 'cfg_ignoreDefaultStyleMap',
+                'cfg_html_includeFormatting', 'cfg_html_standalone', 'cfg_html_chartJsSrc',
+                'cfg_md_includeFormatting', 'cfg_md_fallbackToHtml',
+                'cfg_chunks_strategy', 'cfg_chunks_maxChunkSize', 'cfg_chunks_chunkOverlap', 'cfg_chunks_splitBy', 'cfg_chunks_tableSplitStrategy',
+                'cfg_csv_sheets', 'cfg_csv_mergeSheets', 'cfg_csv_columnDelimiter',
+                'cfg_text_preserveLayout', 'cfg_text_newlineDelimiter'
+            ];
             configIds.forEach(id => {
                 const el = document.getElementById(id);
+                if (!el) return;
                 const saved = localStorage.getItem(id);
                 if (saved !== null) {
                     if (el.type === 'checkbox') el.checked = saved === 'true';
@@ -1799,6 +2635,11 @@
                 el.addEventListener('change', () => {
                     localStorage.setItem(id, el.type === 'checkbox' ? el.checked : el.value);
                 });
+                if (el.type !== 'checkbox') {
+                    el.addEventListener('input', () => {
+                        localStorage.setItem(id, el.value);
+                    });
+                }
             });
 
             // Reparse Action
@@ -1808,16 +2649,78 @@
                 }
             });
 
+            document.getElementById('download-pdf-btn').addEventListener('click', async () => {
+                if (!currentAst) return;
+                const btn = document.getElementById('download-pdf-btn');
+                const originalHtml = btn.innerHTML;
+                try {
+                    btn.innerHTML = '⌛ Generating...';
+                    btn.disabled = true;
+
+                    const genConfig = {
+                        ...getGeneratorConfig(),
+                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                        htmlConfig: {
+                            includeFormatting: document.getElementById('cfg_html_includeFormatting').checked,
+                            standalone: true, // Always standalone for PDF/Print
+                        }
+                    };
+
+                    const result = await window.officeParser.OfficeGenerator.generate(currentAst, 'pdf', genConfig);
+
+                    // The browser implementation returns HTML string for PDF format
+                    const printWindow = window.open('', '_blank');
+                    if (!printWindow) {
+                        throw new Error("Pop-up blocked! Please allow pop-ups for this site to export PDF.");
+                    }
+                    printWindow.document.open();
+                    printWindow.document.write(result.value);
+                    printWindow.document.close();
+
+                    // Wait for assets (like Chart.js) to load before printing
+                    printWindow.onload = () => {
+                        printWindow.print();
+                    };
+
+                    btn.innerHTML = '✅ Generated';
+                    setTimeout(() => {
+                        btn.innerHTML = originalHtml;
+                        btn.disabled = false;
+                    }, 2000);
+                } catch (err) {
+                    console.error('PDF generation failed', err);
+                    btn.innerHTML = '❌ Failed';
+                    statusMsg.textContent = `Error: ${err.message}`;
+                    setTimeout(() => {
+                        btn.innerHTML = originalHtml;
+                        btn.disabled = false;
+                    }, 2000);
+                }
+            });
+
             // Config change detection for reparse button
             let lastConfigJson = "";
+
+            function getGeneratorConfig() {
+                return {
+                    generateIds: document.getElementById('cfg_generateIds').checked,
+                    renderMetadata: document.getElementById('cfg_renderMetadata').checked,
+                    includeImages: document.getElementById('cfg_includeImages').checked,
+                    includeCharts: document.getElementById('cfg_includeCharts').checked,
+                    ignoreDefaultStyleMap: document.getElementById('cfg_ignoreDefaultStyleMap').checked
+                };
+            }
+
             function updateReparseButtonState() {
                 if (!lastFileBuffer) {
-                    reparseBtn.style.display = 'none';
+                    reparseBtn.disabled = true;
                     return;
                 }
                 const currentConfig = {
+                    fileType: document.getElementById('cfg_fileType').value,
                     extractAttachments: document.getElementById('cfg_extractAttachments').checked,
                     ocr: document.getElementById('cfg_ocr').checked,
+                    ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_parser').checked,
                     includeRawContent: document.getElementById('cfg_includeRawContent').checked,
                     serializeRawContent: document.getElementById('cfg_serializeRawContent').checked,
                     preserveXmlWhitespace: document.getElementById('cfg_preserveXmlWhitespace').checked,
@@ -1826,7 +2729,9 @@
                     includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
                     outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
                     ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
-                    newlineDelimiter: document.getElementById('cfg_newlineDelimiter').value
+                    csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
+                    ocrTimeout: document.getElementById('cfg_ocrTimeout').value,
+                    pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value
                 };
                 const currentJson = JSON.stringify(currentConfig);
                 reparseBtn.disabled = (currentJson === lastConfigJson);
@@ -1838,12 +2743,24 @@
                 document.getElementById(id).addEventListener('change', updateReparseButtonState);
             });
 
+            // Common generator config listeners
+            ['cfg_generateIds', 'cfg_renderMetadata', 'cfg_includeImages', 'cfg_includeCharts', 'cfg_ignoreInternalLinks_generator', 'cfg_ignoreDefaultStyleMap'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.addEventListener('change', async () => {
+                        if (currentAst) {
+                            const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                            await Promise.all(formats.map(f => renderFormatWindow(f)));
+                        }
+                    });
+                }
+            });
+
             async function handleFile(file) {
                 const buffer = await file.arrayBuffer();
                 lastFileBuffer = buffer;
                 lastFileName = file.name;
 
-                // Update UI to show file selected
                 displayFilename.textContent = file.name;
                 displayFileIcon.innerHTML = getFormatIcon(file.name);
                 fileInfo.classList.remove('hidden');
@@ -1859,14 +2776,18 @@
                 }
 
                 statusMsg.textContent = `Parsing ${filename}...`;
-                visualPreview.innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">Parsing document structure...</div>';
-                astOutput.innerHTML = '<div style="text-align:center; padding: 2rem; color: var(--text-dim);">Processing AST...</div>';
-                textOutput.innerHTML = '<div style="text-align:center; padding: 2rem; color: var(--text-dim);">Extracting text...</div>';
+                document.getElementById('download-pdf-btn').disabled = false;
+                const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                formats.forEach(f => {
+                    document.getElementById(`visual-${f}`).innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">Parsing document structure...</div>';
+                });
 
                 try {
                     const config = {
+                        fileType: document.getElementById('cfg_fileType').value || null,
                         extractAttachments: document.getElementById('cfg_extractAttachments').checked,
                         ocr: document.getElementById('cfg_ocr').checked,
+                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_parser').checked,
                         includeRawContent: document.getElementById('cfg_includeRawContent').checked,
                         serializeRawContent: document.getElementById('cfg_serializeRawContent').checked,
                         preserveXmlWhitespace: document.getElementById('cfg_preserveXmlWhitespace').checked,
@@ -1875,26 +2796,26 @@
                         includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
                         outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
                         ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
-                        newlineDelimiter: document.getElementById('cfg_newlineDelimiter').value.replace(/\\n/g, '\n'),
-                        pdfWorkerSrc: 'https://unpkg.com/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs',
+                        csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
+                        pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value,
                         ocrConfig: {
                             autoTerminateTimeout: parseInt(document.getElementById('cfg_ocrTimeout').value, 10) * 1000
+                        },
+                        onWarning: (issue) => {
+                            console.warn("Parser Warning:", issue);
+                            const banner = document.getElementById('warning-banner');
+                            const text = document.getElementById('warning-text');
+                            text.textContent = issue.message || String(issue);
+                            banner.style.display = 'flex';
                         }
                     };
+
+                    document.getElementById('warning-banner').style.display = 'none';
 
                     if (config.ocr) ocrWasUsedInCurrentPreview = true;
                     updateOcrCleanupState();
 
-                    lastConfigJson = JSON.stringify({
-                        extractAttachments: config.extractAttachments,
-                        ocr: config.ocr,
-                        includeRawContent: config.includeRawContent,
-                        ignoreNotes: config.ignoreNotes,
-                        putNotesAtLast: config.putNotesAtLast,
-                        outputErrorToConsole: config.outputErrorToConsole,
-                        ocrLanguage: config.ocrLanguage,
-                        newlineDelimiter: document.getElementById('cfg_newlineDelimiter').value
-                    });
+                    lastConfigJson = JSON.stringify(config);
                     updateReparseButtonState();
 
                     const startTime = performance.now();
@@ -1903,40 +2824,215 @@
                     const duration = ((endTime - startTime) / 1000).toFixed(2);
 
                     currentAst = ast;
-                    renderResults(ast);
+                    statusMsg.textContent = `Successfully parsed ${filename} in ${duration}s. Generating views...`;
+
+                    await Promise.all(formats.map(f => renderFormatWindow(f)));
+
                     statusMsg.textContent = `Successfully parsed ${filename} in ${duration}s`;
                 } catch (err) {
                     console.error(err);
                     statusMsg.textContent = `Error: ${err.message}`;
-                    visualPreview.innerHTML = `<div style="color: #ef4444; padding: 2rem;">Error: ${err.message}</div>`;
+                    formats.forEach(f => {
+                        document.getElementById(`visual-${f}`).innerHTML = `<div style="color: #ef4444; padding: 2rem;">Error: ${err.message}</div>`;
+                    });
                 }
             }
 
-            function renderResults(ast) {
-                renderJsonTree(ast, astOutput);
-                textOutput.textContent = typeof ast.toText === 'function' ? ast.toText() : "Text extraction not available";
+            // Window-specific generator config listeners
+            ['cfg_html_includeFormatting', 'cfg_html_standalone', 'cfg_html_chartJsSrc'].forEach(id => {
+                document.getElementById(id).addEventListener('change', () => renderFormatWindow('html'));
+                if (document.getElementById(id).type === 'text') {
+                    document.getElementById(id).addEventListener('input', () => renderFormatWindow('html'));
+                }
+            });
+            ['cfg_md_includeFormatting', 'cfg_md_fallbackToHtml'].forEach(id => {
+                document.getElementById(id).addEventListener('change', () => renderFormatWindow('md'));
+            });
+            ['cfg_chunks_strategy', 'cfg_chunks_maxChunkSize', 'cfg_chunks_chunkOverlap', 'cfg_chunks_splitBy', 'cfg_chunks_tableSplitStrategy'].forEach(id => {
+                document.getElementById(id).addEventListener('change', () => renderFormatWindow('chunks'));
+                if (document.getElementById(id).type !== 'checkbox' && document.getElementById(id).tagName !== 'SELECT') {
+                    document.getElementById(id).addEventListener('input', () => renderFormatWindow('chunks'));
+                }
+            });
+            ['cfg_csv_sheets', 'cfg_csv_mergeSheets', 'cfg_csv_columnDelimiter'].forEach(id => {
+                document.getElementById(id).addEventListener('change', () => renderFormatWindow('csv'));
+                if (document.getElementById(id).type === 'text') {
+                    document.getElementById(id).addEventListener('input', () => renderFormatWindow('csv'));
+                }
+            });
+            ['cfg_text_preserveLayout', 'cfg_text_newlineDelimiter'].forEach(id => {
+                document.getElementById(id).addEventListener('change', () => renderFormatWindow('text'));
+                if (document.getElementById(id).type === 'text') {
+                    document.getElementById(id).addEventListener('input', () => renderFormatWindow('text'));
+                }
+            });
 
-                visualPreview.innerHTML = '';
-                if (ast.content && Array.isArray(ast.content)) {
-                    // Create a map for faster attachment lookup - from visualizer_old.html
-                    const attachmentMap = new Map();
-                    if (ast.attachments) {
-                        ast.attachments.forEach(att => {
-                            attachmentMap.set(att.name, att);
+            async function renderFormatWindow(format) {
+                if (!currentAst) return;
+                const container = document.getElementById(`visual-${format}`);
+                container.innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">Generating...</div>';
+
+                let result;
+                try {
+                    if (format === 'ast') {
+                        result = currentAst;
+                    } else {
+                        let genConfig = {
+                            ...getGeneratorConfig(),
+                            ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked
+                        };
+                        if (format === 'html') {
+                            genConfig.htmlConfig = {
+                                includeFormatting: document.getElementById('cfg_html_includeFormatting').checked,
+                                standalone: document.getElementById('cfg_html_standalone').checked,
+                                chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined
+                            };
+                            genConfig.includeFormatting = genConfig.htmlConfig.includeFormatting;
+                        } else if (format === 'md') {
+                            genConfig.mdConfig = {
+                                includeFormatting: document.getElementById('cfg_md_includeFormatting').checked,
+                                fallbackToHtml: document.getElementById('cfg_md_fallbackToHtml').checked
+                            };
+                            genConfig.includeFormatting = genConfig.mdConfig.includeFormatting;
+                        } else if (format === 'chunks') {
+                            genConfig.chunksConfig = {
+                                strategy: document.getElementById('cfg_chunks_strategy').value,
+                                maxChunkSize: parseInt(document.getElementById('cfg_chunks_maxChunkSize').value, 10),
+                                chunkOverlap: parseInt(document.getElementById('cfg_chunks_chunkOverlap').value, 10),
+                                splitBy: document.getElementById('cfg_chunks_splitBy').value,
+                                tableSplitStrategy: document.getElementById('cfg_chunks_tableSplitStrategy').value
+                            };
+                        } else if (format === 'csv') {
+                            genConfig.csvConfig = {
+                                sheets: document.getElementById('cfg_csv_sheets').value,
+                                mergeSheets: document.getElementById('cfg_csv_mergeSheets').checked,
+                                columnDelimiter: document.getElementById('cfg_csv_columnDelimiter').value
+                            };
+                        } else if (format === 'text') {
+                            genConfig.textConfig = {
+                                preserveLayout: document.getElementById('cfg_text_preserveLayout').checked,
+                                newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n')
+                            };
+                        }
+                        result = await window.officeParser.OfficeGenerator.generate(currentAst, format, genConfig);
+                    }
+                } catch (e) {
+                    container.innerHTML = `<div style="color: #ef4444; padding: 2rem;">Error generating format: ${e.message}</div>`;
+                    return;
+                }
+
+                container.innerHTML = '';
+
+                if (format === 'html') {
+                    const contentFrame = document.createElement('iframe');
+                    contentFrame.className = 'html-iframe';
+                    contentFrame.style.width = '100%';
+                    contentFrame.style.border = 'none';
+                    container.appendChild(contentFrame);
+                    const doc = contentFrame.contentDocument || contentFrame.contentWindow.document;
+                    doc.open();
+                    doc.write(result.value);
+                    doc.close();
+
+                    // Ensure the iframe fits the panel body
+                    contentFrame.style.height = '100%';
+                    contentFrame.style.display = 'block';
+                }
+                else if (format === 'md') {
+                    const preview = document.createElement('div');
+                    preview.className = 'md-preview';
+                    preview.innerHTML = window.marked ? marked.parse(result.value) : `<pre>${result.value}</pre>`;
+                    container.appendChild(preview);
+                }
+                else if (format === 'csv' || format === 'text') {
+                    if (result.value instanceof Uint8Array) {
+                        const messageDiv = document.createElement('div');
+                        messageDiv.style.padding = '2rem';
+                        messageDiv.style.textAlign = 'center';
+                        messageDiv.style.color = 'var(--text-dim)';
+
+                        const textMsg = document.createElement('p');
+                        textMsg.textContent = 'Binary ZIP archive generated (cannot be displayed inline). Enable "Merge Sheets" in the config to view as plain text.';
+                        messageDiv.appendChild(textMsg);
+
+                        const dlBtn = document.createElement('button');
+                        dlBtn.className = 'btn btn-primary';
+                        dlBtn.style.marginTop = '1rem';
+                        dlBtn.textContent = 'Download ZIP';
+                        dlBtn.onclick = () => {
+                            const blob = new Blob([result.value], { type: 'application/zip' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `${lastFileName || 'output'}.zip`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                        };
+                        messageDiv.appendChild(dlBtn);
+
+                        container.appendChild(messageDiv);
+                    } else {
+                        const codeCont = document.createElement('div');
+                        codeCont.className = 'code-container';
+                        const pre = document.createElement('pre');
+                        const code = document.createElement('code');
+                        code.className = format === 'csv' ? 'language-csv' : 'language-plaintext';
+                        code.textContent = result.value;
+                        pre.appendChild(code);
+                        codeCont.appendChild(pre);
+                        container.appendChild(codeCont);
+                        if (window.hljs) hljs.highlightElement(code);
+                    }
+                }
+                else if (format === 'rtf') {
+                    const codeCont = document.createElement('div');
+                    codeCont.className = 'code-container';
+                    const pre = document.createElement('pre');
+                    const code = document.createElement('code');
+                    code.className = 'language-plaintext';
+                    code.textContent = result.value;
+                    pre.appendChild(code);
+                    codeCont.appendChild(pre);
+                    container.appendChild(codeCont);
+                    if (window.hljs) hljs.highlightElement(code);
+                }
+                else if (format === 'chunks') {
+                    const gallery = document.createElement('div');
+                    gallery.className = 'chunk-gallery';
+                    const chunks = result.value;
+                    if (!Array.isArray(chunks) || chunks.length === 0) {
+                        gallery.innerHTML = '<div style="color: var(--text-dim); padding: 2rem;">No chunks generated.</div>';
+                    } else {
+                        chunks.forEach((chunk, idx) => {
+                            const card = document.createElement('div');
+                            card.className = 'chunk-card';
+                            const metaDiv = document.createElement('div');
+                            metaDiv.className = 'chunk-meta';
+                            metaDiv.innerHTML = `<span class="meta-chip">#${idx + 1}</span>`;
+                            if (chunk.metadata) {
+                                if (chunk.metadata.pageNumber) metaDiv.innerHTML += `<span class="meta-chip">Page ${chunk.metadata.pageNumber}</span>`;
+                                if (chunk.metadata.slideNumber) metaDiv.innerHTML += `<span class="meta-chip">Slide ${chunk.metadata.slideNumber}</span>`;
+                                if (chunk.metadata.closestHeading) metaDiv.innerHTML += `<span class="meta-chip" style="background: rgba(14, 165, 233, 0.1); color: #0ea5e9;">H: ${chunk.metadata.closestHeading}</span>`;
+                            }
+                            const textDiv = document.createElement('div');
+                            textDiv.className = 'chunk-text';
+                            textDiv.textContent = chunk.text;
+                            card.appendChild(metaDiv);
+                            card.appendChild(textDiv);
+                            gallery.appendChild(card);
                         });
                     }
-                    renderMetadataSummary(ast.metadata, visualPreview);
-                    renderNodes(ast.content, visualPreview, attachmentMap);
-                } else {
-                    visualPreview.innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">No content structure found in AST.</div>';
+                    container.appendChild(gallery);
+                }
+                else if (format === 'ast') {
+                    container.style.overflow = 'auto';
+                    container.innerHTML = `<div class="json-tree">${buildJsonHtml(result)}</div>`;
                 }
             }
 
-            // --- Advanced JSON Viewer (Collapsible) ---
-            function renderJsonTree(obj, container) {
-                container.innerHTML = `<div class="json-tree">${buildJsonHtml(obj)}</div>`;
-            }
-
+            // --- AST JSON Collapsible Logic ---
             function buildJsonHtml(obj) {
                 if (obj === null) return '<span class="json-null">null</span>';
                 if (typeof obj === 'boolean') return `<span class="json-boolean">${obj}</span>`;
@@ -1978,523 +3074,260 @@
                 return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
             }
 
-            function renderMetadataSummary(metadata, container) {
-                if (!metadata) return;
-
-                const metaDiv = document.createElement('div');
-                metaDiv.style.cssText = 'background: var(--visual-card-bg); border: 1px solid var(--visual-card-border); border-radius: 12px; padding: 1.5rem; margin-bottom: 2rem;';
-
-                let html = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">';
-
-                const addField = (label, value) => {
-                    if (value) {
-                        html += `<div><div style="font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; font-weight: 700;">${label}</div><div style="font-weight: 600; color: var(--text-main);">${value}</div></div>`;
-                    }
-                };
-
-                addField('Title', metadata.title);
-                addField('Author', metadata.author);
-                addField('Created', metadata.created ? new Date(metadata.created).toLocaleString() : null);
-                addField('Modified', metadata.modified ? new Date(metadata.modified).toLocaleString() : null);
-
-                html += '</div>';
-
-                if (metadata.customProperties && Object.keys(metadata.customProperties).length > 0) {
-                    html += '<div style="margin-top: 1.5rem; border-top: 1px solid var(--visual-card-border); padding-top: 1rem;">';
-                    html += '<div style="font-size: 0.75rem; color: var(--primary); font-weight: 700; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">🏷️ Custom Properties</div>';
-                    html += '<div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">';
-                    for (const [key, val] of Object.entries(metadata.customProperties)) {
-                        html += `<div style="background: rgba(99, 102, 241, 0.05); border: 1px solid rgba(99, 102, 241, 0.2); padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.8rem;"><span style="color: var(--text-dim); font-weight: 500;">${escapeHtml(key)}:</span> <span style="color: var(--text-main); font-weight: 600;">${escapeHtml(String(val))}</span></div>`;
-                    }
-                    html += '</div></div>';
-                }
-
-                metaDiv.innerHTML = html;
-                container.appendChild(metaDiv);
-            }
-
-            /**
-             * Renders a list of nodes into a container, grouping adjacent list items.
-             * EXACT PORT from visualizer_old.html
-             */
-            function renderNodes(nodes, container, attachmentMap) {
-                if (!nodes || !Array.isArray(nodes)) return;
-
-                // Stack of active lists: { indentation, listId, element, lastLi }
-                let listStack = [];
-
-                nodes.forEach(node => {
-                    if (node.type === 'list') {
-                        const listType = node.metadata?.listType || 'unordered';
-                        const indentation = node.metadata?.indentation || 0;
-                        const listId = node.metadata?.listId || 'no-id';
-
-                        // 1. Manage Stack Depth
-                        // Pop any lists deeper than current indentation
-                        while (listStack.length > 0 && listStack[listStack.length - 1].indentation > indentation) {
-                            listStack.pop();
+            // Copy Buttons
+            const copyHandlers = {
+                'html': async () => {
+                    const genConfig = {
+                        ...getGeneratorConfig(),
+                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                        htmlConfig: {
+                            includeFormatting: document.getElementById('cfg_html_includeFormatting').checked,
+                            standalone: document.getElementById('cfg_html_standalone').checked,
+                            chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined
                         }
-
-                        // 2. Check for Continuation
-                        let currentList = null;
-                        if (listStack.length > 0) {
-                            const top = listStack[listStack.length - 1];
-                            if (top.indentation === indentation && top.listId === listId && top.listType === listType) {
-                                currentList = top;
-                            } else if (top.indentation === indentation) {
-                                // Same level but different list -> Replace top
-                                listStack.pop();
-                            }
+                    };
+                    genConfig.includeFormatting = genConfig.htmlConfig.includeFormatting;
+                    return (await window.officeParser.OfficeGenerator.generate(currentAst, 'html', genConfig)).value;
+                },
+                'md': async () => {
+                    const genConfig = {
+                        ...getGeneratorConfig(),
+                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                        mdConfig: {
+                            includeFormatting: document.getElementById('cfg_md_includeFormatting').checked,
+                            fallbackToHtml: document.getElementById('cfg_md_fallbackToHtml').checked
                         }
-
-                        // 3. Create New List if needed
-                        if (!currentList) {
-                            const newListEl = document.createElement(listType === 'ordered' ? 'ol' : 'ul');
-
-                            // Decide where to attach
-                            if (listStack.length > 0) {
-                                // We are deeper than top (or just pushed).
-                                // Attach to last LI of the parent list for proper nesting
-                                const parent = listStack[listStack.length - 1];
-                                if (parent.lastLi) {
-                                    parent.lastLi.appendChild(newListEl);
-                                } else {
-                                    // Fallback: sibling of parent list (should rarely happen if strict nesting)
-                                    parent.element.appendChild(newListEl);
-                                }
-                            } else {
-                                // Root level list
-                                // Add indentation margin only for root lists to avoid double indent
-                                if (indentation > 0) {
-                                    newListEl.style.marginLeft = `${indentation * 20}px`;
-                                }
-                                container.appendChild(newListEl);
-                            }
-
-                            currentList = {
-                                indentation,
-                                listId,
-                                listType,
-                                element: newListEl,
-                                lastLi: null
-                            };
-                            listStack.push(currentList);
+                    };
+                    genConfig.includeFormatting = genConfig.mdConfig.includeFormatting;
+                    return (await window.officeParser.OfficeGenerator.generate(currentAst, 'md', genConfig)).value;
+                },
+                'chunks': async () => {
+                    const genConfig = {
+                        ...getGeneratorConfig(),
+                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                        chunksConfig: {
+                            strategy: document.getElementById('cfg_chunks_strategy').value,
+                            maxChunkSize: parseInt(document.getElementById('cfg_chunks_maxChunkSize').value, 10),
+                            chunkOverlap: parseInt(document.getElementById('cfg_chunks_chunkOverlap').value, 10),
+                            splitBy: document.getElementById('cfg_chunks_splitBy').value,
+                            tableSplitStrategy: document.getElementById('cfg_chunks_tableSplitStrategy').value
                         }
-
-                        // 4. Create and Append Item
-                        const li = createNodeElement(node, attachmentMap);
-                        if (li) {
-                            currentList.element.appendChild(li);
-                            currentList.lastLi = li;
+                    };
+                    const res = await window.officeParser.OfficeGenerator.generate(currentAst, 'chunks', genConfig);
+                    return JSON.stringify(res.value, null, 2);
+                },
+                'csv': async () => {
+                    const genConfig = {
+                        ...getGeneratorConfig(),
+                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                        csvConfig: {
+                            sheets: document.getElementById('cfg_csv_sheets').value,
+                            mergeSheets: document.getElementById('cfg_csv_mergeSheets').checked,
+                            columnDelimiter: document.getElementById('cfg_csv_columnDelimiter').value
                         }
+                    };
+                    return (await window.officeParser.OfficeGenerator.generate(currentAst, 'csv', genConfig)).value;
+                },
+                'text': async () => {
+                    const genConfig = {
+                        ...getGeneratorConfig(),
+                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                        textConfig: {
+                            preserveLayout: document.getElementById('cfg_text_preserveLayout').checked,
+                            newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n')
+                        }
+                    };
+                    return (await window.officeParser.OfficeGenerator.generate(currentAst, 'text', genConfig)).value;
+                },
+                'rtf': async () => {
+                    const genConfig = {
+                        ...getGeneratorConfig(),
+                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked
+                    };
+                    return (await window.officeParser.OfficeGenerator.generate(currentAst, 'rtf', genConfig)).value;
+                },
+                'ast': async () => JSON.stringify(currentAst, null, 2)
+            };
 
-                    } else {
-                        // Non-list node breaks the stack
-                        listStack = [];
-                        const el = createNodeElement(node, attachmentMap);
-                        if (el) container.appendChild(el);
+            ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].forEach(fmt => {
+                document.getElementById(`copy-${fmt}-btn`).addEventListener('click', async (e) => {
+                    if (!currentAst) return;
+                    const btn = e.target;
+                    try {
+                        const text = await copyHandlers[fmt]();
+                        await navigator.clipboard.writeText(text);
+                        const orig = btn.textContent;
+                        btn.textContent = 'Copied!';
+                        setTimeout(() => btn.textContent = orig, 2000);
+                    } catch (err) {
+                        console.error('Copy failed', err);
+                        btn.textContent = 'Failed';
+                        setTimeout(() => btn.textContent = 'Copy', 2000);
                     }
                 });
-            }
 
-            function createNodeElement(node, attachmentMap) {
-                let el = null;
-
-                switch (node.type) {
-                    case 'paragraph':
-                        el = document.createElement('p');
-
-                        if (node.metadata && node.metadata.alignment) {
-                            el.style.textAlign = node.metadata.alignment;
-                        }
-                        applyParagraphIndentation(el, node.metadata);
-                        break;
-                    case 'heading':
-                        const level = (node.metadata && node.metadata.level) || 1;
-                        el = document.createElement(`h${Math.min(level, 6)}`);
-
-                        if (node.metadata && node.metadata.alignment) {
-                            el.style.textAlign = node.metadata.alignment;
-                        }
-                        applyParagraphIndentation(el, node.metadata);
-                        break;
-                    case 'table':
-                        el = document.createElement('table');
-                        el.style.borderCollapse = 'collapse';
-                        el.style.width = '100%';
-                        el.style.border = '1px solid #ccc';
-                        el.style.marginBottom = '10px';
-                        break;
-                    case 'row':
-                        el = document.createElement('tr');
-                        break;
-                    case 'cell':
-                        el = document.createElement('td');
-                        el.style.border = '1px solid #ccc';
-                        el.style.padding = '5px';
-                        break;
-                    case 'list':
-                        el = document.createElement('li');
-                        if (node.metadata?.listType === 'ordered' && typeof node.metadata.itemIndex === 'number') {
-                            el.value = node.metadata.itemIndex + 1;
-                        }
-                        applyParagraphIndentation(el, node.metadata);
-                        break;
-                    case 'text':
-                        const textSpan = document.createElement('span');
-                        renderTextFormatting(textSpan, node.formatting);
-                        textSpan.textContent = node.text || '';
-
-                        if (node.metadata?.link && node.metadata?.linkType === 'external') {
-                            const link = document.createElement('a');
-                            link.href = node.metadata.link;
-                            link.target = '_blank';
-                            link.className = 'content-link';
-                            link.appendChild(textSpan);
-                            return link;
-                        }
-                        return textSpan;
-
-                    case 'break':
-                        const bType = node.metadata?.breakType || 'textWrapping';
-                        if (bType === 'page') {
-                            const wrapper = document.createElement('div');
-                            wrapper.style.cssText = 'text-align: center; margin: 3rem 0; position: relative;';
-                            const line = document.createElement('hr');
-                            line.style.cssText = 'border: none; border-top: 1px dashed var(--border); position: absolute; top: 50%; width: 100%; z-index: 0; margin: 0;';
-                            const label = document.createElement('span');
-                            label.textContent = 'PAGE BREAK';
-                            label.style.cssText = 'background: var(--preview-bg); padding: 0 1rem; position: relative; z-index: 1; font-size: 0.65rem; color: var(--text-dim); font-weight: 700; letter-spacing: 0.1em;';
-                            wrapper.appendChild(line);
-                            wrapper.appendChild(label);
-                            return wrapper;
-                        } else if (bType === 'column') {
-                            const hr = document.createElement('hr');
-                            hr.style.cssText = 'border: none; border-top: 1px dotted var(--accent); margin: 1.5rem 0; height: 1px;';
-                            return hr;
-                        } else if (bType === 'lastRenderedPage') {
-                            const wrapper = document.createElement('div');
-                            wrapper.style.cssText = 'text-align: center; margin: 2rem 0; position: relative; opacity: 0.5;';
-                            const line = document.createElement('hr');
-                            line.style.cssText = 'border: none; border-top: 1px dotted var(--text-dim); position: absolute; top: 50%; width: 100%; z-index: 0; margin: 0;';
-                            const label = document.createElement('span');
-                            label.textContent = 'SOFT PAGE BREAK';
-                            label.style.cssText = 'background: var(--preview-bg); padding: 0 1rem; position: relative; z-index: 1; font-size: 0.55rem; color: var(--text-dim); font-weight: 700; letter-spacing: 0.1em;';
-                            wrapper.appendChild(line);
-                            wrapper.appendChild(label);
-                            return wrapper;
-                        } else {
-                            return document.createElement('br');
-                        }
-
-                    case 'image':
-                        el = document.createElement('div');
-                        el.style.textAlign = 'center';
-                        el.style.margin = '20px 0';
-
-                        const attName = node.metadata?.attachmentName;
-                        const attachment = attName && attachmentMap ? attachmentMap.get(attName) : null;
-
-                        if (attachment && attachment.data) {
-                            const img = document.createElement('img');
-                            let b64Data = attachment.data;
-                            // Handle Node.js Buffer JSON representation ({ type: 'Buffer', data: [...] })
-                            if (typeof attachment.data === 'object' && attachment.data.data && Array.isArray(attachment.data.data)) {
-                                // Convert byte array to Base64
-                                const binary = String.fromCharCode.apply(null, attachment.data.data);
-                                b64Data = btoa(binary);
-                            } else if (Array.isArray(attachment.data)) {
-                                // Handle raw array
-                                const binary = String.fromCharCode.apply(null, attachment.data);
-                                b64Data = btoa(binary);
-                            }
-
-                            img.src = `data:${attachment.mimeType || 'image/png'};base64,${b64Data}`;
-                            img.style.maxWidth = '100%';
-                            img.style.maxHeight = '400px';
-                            img.style.border = '1px solid #ddd';
-                            img.alt = node.metadata?.altText || attachment.altText || 'Document Image';
-                            el.appendChild(img);
-
-                            const caption = document.createElement('div');
-                            caption.style.fontSize = '12px';
-                            caption.style.color = '#666';
-                            caption.textContent = `Image: ${attName}`;
-                            el.appendChild(caption);
-                        } else {
-                            el.textContent = `[Image: ${attName || 'Unknown'} - Data not found]`;
-                            el.style.backgroundColor = '#eee';
-                            el.style.padding = '10px';
-                        }
-
-                        if (node.metadata?.link && node.metadata?.linkType === 'external') {
-                            const link = document.createElement('a');
-                            link.href = node.metadata.link;
-                            link.target = '_blank';
-                            link.className = 'content-link';
-                            link.style.display = 'block';
-                            link.style.textDecoration = 'none';
-                            link.appendChild(el);
-                            return link;
-                        }
-                        return el;
-
-                    case 'chart':
-                        el = document.createElement('div');
-                        el.style.margin = '20px 0';
-                        el.style.padding = '20px';
-                        el.style.border = '1px solid #eee';
-                        el.style.borderRadius = '8px';
-                        el.style.maxWidth = '600px';
-                        el.style.marginLeft = 'auto';
-                        el.style.marginRight = 'auto';
-
-                        const chartAttName = node.metadata?.attachmentName;
-                        const chartAttachment = chartAttName && attachmentMap ? attachmentMap.get(chartAttName) : null;
-
-                        if (chartAttachment && chartAttachment.chartData) {
-                            const canvas = document.createElement('canvas');
-                            el.appendChild(canvas);
-
-                            // Render Chart.js
-                            const chartData = chartAttachment.chartData;
-                            const ctx = canvas.getContext('2d');
-
-                            // Helper for chart colors
-                            const getRandomColor = (index, alpha) => {
-                                const colors = [
-                                    `rgba(255, 99, 132, ${alpha})`,
-                                    `rgba(54, 162, 235, ${alpha})`,
-                                    `rgba(255, 206, 86, ${alpha})`,
-                                    `rgba(75, 192, 192, ${alpha})`,
-                                    `rgba(153, 102, 255, ${alpha})`,
-                                    `rgba(255, 159, 64, ${alpha})`
-                                ];
-                                return colors[index % colors.length];
-                            };
-
-                            // Prepare datasets for Chart.js
-                            const datasets = chartData.dataSets.map((ds, index) => ({
-                                label: ds.name || `Series ${index + 1}`,
-                                data: ds.values.map(Number), // Convert strings to numbers
-                                backgroundColor: getRandomColor(index, 0.5),
-                                borderColor: getRandomColor(index, 1),
-                                borderWidth: 1
-                            }));
-
-                            new Chart(ctx, {
-                                type: 'bar', // Default to bar
-                                data: {
-                                    labels: chartData.labels,
-                                    datasets: datasets
-                                },
-                                options: {
-                                    responsive: true,
-                                    plugins: {
-                                        title: {
-                                            display: !!chartData.title,
-                                            text: chartData.title
-                                        }
-                                    },
-                                    scales: {
-                                        x: { title: { display: !!chartData.xAxisTitle, text: chartData.xAxisTitle } },
-                                        y: { title: { display: !!chartData.yAxisTitle, text: chartData.yAxisTitle } }
-                                    }
-                                }
-                            });
-
-                        } else {
-                            el.textContent = `[Chart: ${chartAttName || 'Unknown'} - Data not found]`;
-                            el.style.backgroundColor = '#eee';
-                            el.style.padding = '10px';
-                        }
-                        break;
-
-                    case 'slide':
-                        el = document.createElement('div');
-                        el.className = 'slide-card';
-
-                        const slideHeader = document.createElement('div');
-                        slideHeader.className = 'slide-number';
-                        slideHeader.textContent = `Slide ${node.metadata?.slideNumber || ''}`;
-                        el.appendChild(slideHeader);
-
-                        const slideContent = document.createElement('div');
-                        renderNodes(node.children, slideContent, attachmentMap);
-                        el.appendChild(slideContent);
-                        return el;
-
-                    case 'note':
-                        el = document.createElement('div');
-                        el.className = 'slide-note-card';
-
-                        const noteHeader = document.createElement('div');
-                        noteHeader.className = 'slide-note-number';
-                        noteHeader.textContent = !node.metadata?.noteType
-                            ? `Slide ${node.metadata?.slideNumber || ''} Notes`
-                            : node.metadata?.noteType == 'footnote'
-                                ? 'Footnotes'
-                                : node.metadata?.noteType == 'endnote'
-                                    ? 'Endnotes'
-                                    : 'Notes';
-                        el.appendChild(noteHeader);
-
-                        const noteContent = document.createElement('div');
-                        renderNodes(node.children, noteContent, attachmentMap);
-                        el.appendChild(noteContent);
-                        return el;
-
-                    case 'page':
-                        el = document.createElement('div');
-                        el.className = 'page-card';
-
-                        const pageHeader = document.createElement('div');
-                        pageHeader.className = 'page-number';
-                        pageHeader.textContent = `Page ${node.metadata?.pageNumber || ''}`;
-                        el.appendChild(pageHeader);
-
-                        const pageContent = document.createElement('div');
-                        renderNodes(node.children, pageContent, attachmentMap);
-                        el.appendChild(pageContent);
-                        return el;
-
-                    case 'sheet':
-                        el = document.createElement('div');
-                        el.className = 'sheet-card';
-
-                        const sheetHeader = document.createElement('div');
-                        sheetHeader.className = 'sheet-number';
-                        sheetHeader.textContent = `Sheet: ${node.metadata?.sheetName || ''}`;
-                        el.appendChild(sheetHeader);
-
-                        const sheetContainer = document.createElement('div');
-                        sheetContainer.className = 'sheet-container';
-
-                        const grid = document.createElement('table');
-                        grid.className = 'spreadsheet-grid';
-
-                        if (node.children) {
-                            node.children.forEach(rowNode => {
-                                if (rowNode.type === 'row') {
-                                    const tr = document.createElement('tr');
-                                    if (rowNode.children) {
-                                        rowNode.children.forEach(cellNode => {
-                                            if (cellNode.type === 'cell') {
-                                                const td = document.createElement('td');
-                                                renderNodes(cellNode.children, td, attachmentMap);
-                                                if (!cellNode.children || cellNode.children.length === 0) {
-                                                    if (cellNode.text) td.textContent = cellNode.text;
-                                                }
-                                                tr.appendChild(td);
-                                            }
-                                        });
-                                    }
-                                    grid.appendChild(tr);
-                                } else {
-                                    const childEl = createNodeElement(rowNode, attachmentMap);
-                                    if (childEl) sheetContainer.appendChild(childEl);
-                                }
-                            });
-                        }
-                        sheetContainer.appendChild(grid);
-                        el.appendChild(sheetContainer);
-                        return el;
-
-                    default:
-                        el = document.createElement('div');
-                        break;
-                }
-
-                // Prevent text from overwriting rich content (images, charts)
-                const isRichContent = node.type === 'image' || node.type === 'chart' || node.type === 'table';
-                if (node.text && !isRichContent && (!node.children || node.children.length === 0)) {
-                    el.textContent = node.text;
-                }
-
-                if (node.children) {
-                    node.children.forEach(child => {
-                        const childEl = createNodeElement(child, attachmentMap);
-                        if (childEl) el.appendChild(childEl);
-                    });
-                }
-
-                return el;
-            }
-
-            function applyParagraphIndentation(el, metadata) {
-                if (metadata && metadata.paragraphIndentation) {
-                    const ind = metadata.paragraphIndentation;
-                    if (ind.left) el.style.marginLeft = `${ind.left / 20}pt`;
-                    if (ind.right) el.style.marginRight = `${ind.right / 20}pt`;
-                    if (ind.firstLine) el.style.textIndent = `${ind.firstLine / 20}pt`;
-                    if (ind.hanging) {
-                        const currentLeft = parseFloat(el.style.marginLeft) || 0;
-                        el.style.marginLeft = `${currentLeft + (ind.hanging / 20)}pt`;
-                        el.style.textIndent = `-${ind.hanging / 20}pt`;
+                document.getElementById(`download-${fmt}-btn`).addEventListener('click', async (e) => {
+                    if (!currentAst) return;
+                    const btn = e.target;
+                    try {
+                        const orig = btn.textContent;
+                        btn.textContent = '⌛...';
+                        await downloadHandlers[fmt]();
+                        btn.textContent = 'Done!';
+                        setTimeout(() => btn.textContent = orig, 2000);
+                    } catch (err) {
+                        console.error('Download failed', err);
+                        btn.textContent = 'Failed';
+                        setTimeout(() => btn.textContent = 'Download', 2000);
                     }
-                }
-            }
+                });
+            });
 
-            function renderTextFormatting(el, formatting) {
-                if (!formatting) return;
-                if (formatting.bold) el.style.fontWeight = 'bold';
-                if (formatting.italic) el.style.fontStyle = 'italic';
-                if (formatting.underline) el.style.textDecoration = 'underline';
-                if (formatting.strikethrough) el.style.textDecoration = formatting.strikethrough ? (el.style.textDecoration + ' line-through') : 'line-through';
+            const downloadFile = (content, filename, type) => {
+                const blob = new Blob([content], { type });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
 
-                if (formatting.color && formatting.color.startsWith('#')) {
-                    el.style.color = formatting.color;
-                    // Check for light colors to ensure visibility
-                    const hex = formatting.color.substring(1);
-                    // Handle shorthand hex like #fff
-                    const fullHex = hex.length === 3
-                        ? hex.split('').map(c => c + c).join('')
-                        : hex;
-
-                    if (fullHex.length === 6) {
-                        const r = parseInt(fullHex.substring(0, 2), 16);
-                        const g = parseInt(fullHex.substring(2, 4), 16);
-                        const b = parseInt(fullHex.substring(4, 6), 16);
-                        // Simple brightness formula
-                        const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-                        if (brightness > 200 && !formatting.backgroundColor) { // > 200 is fairly light (255 is white)
-                            el.classList.add('light-text-bg');
-                            el.title = `Original Color: ${formatting.color} (Background added for visibility)`;
+            const downloadHandlers = {
+                'html': async () => {
+                    const content = await copyHandlers['html']();
+                    const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.html';
+                    downloadFile(content, name, 'text/html');
+                },
+                'md': async () => {
+                    const content = await copyHandlers['md']();
+                    const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.md';
+                    downloadFile(content, name, 'text/markdown');
+                },
+                'chunks': async () => {
+                    const content = await copyHandlers['chunks']();
+                    const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '_chunks.json';
+                    downloadFile(content, name, 'application/json');
+                },
+                'csv': async () => {
+                    const genConfig = {
+                        ...getGeneratorConfig(),
+                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                        csvConfig: {
+                            sheets: document.getElementById('cfg_csv_sheets').value,
+                            mergeSheets: document.getElementById('cfg_csv_mergeSheets').checked,
+                            columnDelimiter: document.getElementById('cfg_csv_columnDelimiter').value
                         }
-                    }
-                }
-
-                if (formatting.backgroundColor && formatting.backgroundColor.startsWith('#')) el.style.backgroundColor = formatting.backgroundColor;
-                if (formatting.size) {
-                    // If the size already has a unit (contains letters), use it as is.
-                    // Otherwise, append 'pt' for backward compatibility.
-                    const sizeStr = String(formatting.size);
-                    if (/[a-zA-Z]/.test(sizeStr)) {
-                        el.style.fontSize = sizeStr;
+                    };
+                    const res = await window.officeParser.OfficeGenerator.generate(currentAst, 'csv', genConfig);
+                    const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "");
+                    if (res.value instanceof Uint8Array) {
+                        downloadFile(res.value, name + '.zip', 'application/zip');
                     } else {
-                        const sizeVal = sizeStr.replace(/[^0-9.]/g, '');
-                        if (sizeVal) el.style.fontSize = `${sizeVal}pt`;
+                        downloadFile(res.value, name + '.csv', 'text/csv');
                     }
+                },
+                'rtf': async () => {
+                    const content = await copyHandlers['rtf']();
+                    const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.rtf';
+                    downloadFile(content, name, 'application/rtf');
+                },
+                'text': async () => {
+                    const content = await copyHandlers['text']();
+                    const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.txt';
+                    downloadFile(content, name, 'text/plain');
+                },
+                'ast': async () => {
+                    const content = await copyHandlers['ast']();
+                    const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '_ast.json';
+                    downloadFile(content, name, 'application/json');
+                }
+            };
+
+            // --- Live Download Stats ---
+            async function updateDownloadStats() {
+                const yesterday = new Date();
+                yesterday.setDate(yesterday.getDate() - 1);
+                const formatDate = (date) => date.toISOString().split('T')[0];
+
+                const toStr = formatDate(yesterday);
+                const lastWeek = new Date(yesterday);
+                lastWeek.setDate(lastWeek.getDate() - 6);
+                const fromWeeklyStr = formatDate(lastWeek);
+
+                const weeklyUrl = `https://api.npmjs.org/downloads/point/${fromWeeklyStr}:${toStr}/officeparser`;
+                const totalUrl = `https://api.npmjs.org/downloads/point/2019-04-15:${toStr}/officeparser`;
+
+                // Update links in HTML to match dynamic dates
+                const weeklyLinks = ['weekly-badge-link', 'weekly-stats-link'];
+                const totalLinks = ['total-stats-link'];
+
+                weeklyLinks.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.href = weeklyUrl;
+                });
+                totalLinks.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.href = totalUrl;
+                });
+
+                const formatNumber = (num) => {
+                    if (num >= 1000000) return (Math.floor(num / 100000) / 10) + 'M+';
+                    if (num >= 1000) return Math.floor(num / 1000) + 'k+';
+                    return num;
+                };
+
+
+
+                try {
+                    const [weeklyRes, totalRes] = await Promise.all([
+                        fetch(weeklyUrl).then(r => r.json()),
+                        fetch(totalUrl).then(r => r.json())
+                    ]);
+
+                    if (weeklyRes.downloads) {
+                        const weeklyCount = weeklyRes.downloads;
+                        const formattedWeekly = formatNumber(weeklyCount);
+                        const weeklyBadge = document.getElementById('weekly-badge');
+                        const weeklyStatsCount = document.getElementById('weekly-stats-count');
+
+                        if (weeklyBadge) {
+                            weeklyBadge.textContent = `${formattedWeekly} Weekly Downloads`;
+                            weeklyBadge.classList.remove('shimmer');
+                        }
+                        if (weeklyStatsCount) {
+                            weeklyStatsCount.textContent = formattedWeekly;
+                            weeklyStatsCount.classList.remove('shimmer');
+                        }
+                    }
+
+                    if (totalRes.downloads) {
+                        const totalCount = totalRes.downloads;
+                        const totalStatsCount = document.getElementById('total-stats-count');
+
+                        if (totalStatsCount) {
+                            totalStatsCount.textContent = formatNumber(totalCount);
+                            totalStatsCount.classList.remove('shimmer');
+                        }
+                    }
+                } catch (err) {
+                    console.error('Failed to fetch download stats', err);
+                    // Remove shimmer even on error to avoid infinite pulsing on broken states
+                    document.querySelectorAll('.shimmer').forEach(el => el.classList.remove('shimmer'));
                 }
             }
-            // Copy Buttons
-            copyJsonBtn.addEventListener('click', () => {
-                if (currentAst) {
-                    navigator.clipboard.writeText(JSON.stringify(currentAst, null, 2));
-                    let orig = copyJsonBtn.textContent;
-                    copyJsonBtn.textContent = 'Copied!';
-                    setTimeout(() => copyJsonBtn.textContent = orig, 2000);
-                }
+
+
+            // Initialize windows with placeholder
+            const initialFormats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+            initialFormats.forEach(f => {
+                document.getElementById(`visual-${f}`).innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">Waiting for file upload...</div>';
             });
-            copyTextBtn.addEventListener('click', () => {
-                const txt = textOutput.textContent;
-                if (txt) {
-                    navigator.clipboard.writeText(txt);
-                    let orig = copyTextBtn.textContent;
-                    copyTextBtn.textContent = 'Copied!';
-                    setTimeout(() => copyTextBtn.textContent = orig, 2000);
-                }
-            });
+
+            updateOcrCleanupState();
+            updateDownloadStats();
         });
     </script>
 </body>

@@ -35,6 +35,7 @@ const sharedConfig = {
     alias: {
         'fs': path.resolve(__dirname, 'scripts/browser-stubs/fs.js'),
         'fs/promises': path.resolve(__dirname, 'scripts/browser-stubs/fs.js'),
+        'puppeteer': path.resolve(__dirname, 'scripts/browser-stubs/puppeteer.js'),
     },
     define: {
         'process.env.NODE_ENV': '"production"',

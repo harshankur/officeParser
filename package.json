@@ -1,7 +1,7 @@
 {
   "name": "officeparser",
-  "version": "6.1.1",
-  "description": "A robust, strictly-typed Node.js and Browser library for parsing office files (.docx, .pptx, .xlsx, .odt, .odp, .ods, .pdf, .rtf) into structured AST with rich metadata, formatting, and attachment support.",
+  "version": "7.0.0",
+  "description": "A robust, strictly-typed Node.js and Browser library for parsing office files (.docx, .pptx, .xlsx, .odt, .odp, .ods, .pdf, .rtf, .csv, .md, .html) and generating high-fidelity outputs in Markdown, HTML, CSV, RTF, and RAG-focused chunks.",
   "funding": "https://github.com/sponsors/harshankur",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -30,12 +30,16 @@
     "build:browser": "node build_browser.js && npm run sync:docs",
     "sync:versions": "node scripts/sync-pdfjs-versions.js",
     "sync:docs": "mkdir -p docs/dist && cp dist/officeparser.browser.iife.js docs/dist/ && cp dist/officeparser.browser.mjs docs/dist/",
-    "test": "npm run test:clean && npm run build && npm run test:license && npm run test:artifacts && npm run test:parser",
-    "test:baseline": "npm run test baseline",
-    "test:parser": "npx tsx test/testOfficeParser.ts",
+    "lint": "eslint src",
+    "test": "npm run lint && npm run test:clean && npm run build && npm run test:license && npm run test:artifacts && npm run test:parser && npm run test:generator",
+    "test:baseline": "npm run test:parser:baseline && npm run test:generator:baseline",
+    "test:parser": "npx tsx test/parser/testOfficeParser.ts",
+    "test:parser:baseline": "npx tsx test/parser/testOfficeParser.ts baseline",
+    "test:generator": "npx tsx test/generator/testOfficeGenerator.ts",
+    "test:generator:baseline": "npx tsx test/generator/testOfficeGenerator.ts baseline",
     "test:artifacts": "npx tsx test/testShippingArtifacts.ts",
     "test:license": "npm run sbom && node scripts/validate-licenses.js",
-    "test:clean": "rm -rf test/results",
+    "test:clean": "rm -rf test/results test/generator/results test/generator/output test/parser/results test/parser/output",
     "clean": "rm -rf dist && npm run test:clean",
     "sbom": "npx --yes @cyclonedx/cyclonedx-npm --output-format json --output-file dist/sbom.cdx.json --omit dev",
     "prepublishOnly": "npm run build",
@@ -62,6 +66,7 @@
     "ods",
     "pdf",
     "rtf",
+    "csv",
     "parser",
     "text extraction",
     "document parser",
@@ -82,7 +87,12 @@
     "pdf.js",
     "structured-data",
     "openoffice",
-    "libreoffice"
+    "libreoffice",
+    "generator",
+    "rag",
+    "chunking",
+    "markdown",
+    "html"
   ],
   "author": "Harsh Ankur",
   "license": "MIT",
@@ -97,14 +107,23 @@
     "pdfjs-dist": "5.6.205",
     "tesseract.js": "^7.0.0"
   },
+  "peerDependenciesMeta": {
+    "puppeteer": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.3",
+    "@typescript-eslint/parser": "^8.59.3",
     "buffer": "^6.0.3",
     "dts-bundle-generator": "^9.5.1",
     "esbuild": "^0.27.4",
     "esbuild-plugins-node-modules-polyfill": "^1.8.1",
+    "eslint": "^10.3.0",
     "husky": "^9.1.7",
     "process": "^0.11.10",
+    "puppeteer": "^22.15.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   }

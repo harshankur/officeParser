@@ -22,7 +22,8 @@
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
  */
 
-import { ChartMetadata, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
+import { ChartMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
+import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
@@ -37,7 +38,7 @@ import { extractFiles } from '../utils/zipUtils.js';
  * @param config - Parser configuration
  * @returns A promise resolving to the parsed AST
  */
-export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Promise<OfficeParserAST> => {
+export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     const sheetsRegex = /xl\/worksheets\/sheet\d+.xml/g;
     const drawingsRegex = /xl\/drawings\/drawing\d+.xml/g;
     const chartsRegex = /xl\/charts\/chart\d+.xml/g;
@@ -319,12 +320,12 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
             if (config.ocr) {
                 if (attachment.mimeType.startsWith('image/')) {
                     try {
-                        const ocrText = (await performOcr(media.content, { language: config.ocrLanguage, ...config.ocrConfig })).trim();
+                        const ocrText = (await performOcr(media.content, { ...config.ocrConfig })).trim();
                         if (ocrText) {
                             attachment.ocrText = ocrText;
                         }
                     } catch (e) {
-                        logWarning(`OCR failed for ${attachment.name}:`, config, e);
+                        logWarning(OfficeWarningType.OCR_FAILED, config, attachment.name, e);
                     }
                 }
             }
@@ -344,7 +345,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                 const chartData = extractChartData(chart.content);
                 attachment.chartData = chartData;
             } catch (e) {
-                logWarning(`Failed to extract chart data from ${chart.path}:`, config, e);
+                logWarning(OfficeWarningType.CHART_DATA_EXTRACTION_FAILED, config, chart.path, e);
             }
 
             attachments.push(attachment);
@@ -689,7 +690,7 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
                     if (node.type === 'chart') {
                         // Link chart data text to chart node
                         if (attachment.chartData) {
-                            node.text = attachment.chartData.rawTexts.join(config.newlineDelimiter || '\n');
+                            node.text = attachment.chartData.rawTexts.join(config.newlineDelimiter);
                         }
                     }
                 }
@@ -701,23 +702,26 @@ export const parseExcel = async (buffer: Buffer, config: OfficeParserConfig): Pr
     };
     assignAttachmentData(content);
 
-    return {
-        type: 'xlsx',
-        metadata: metadata,
-        content: content,
-        attachments: attachments,
-        toText: () => content.map(c => {
-            // Recursive text extraction
-            const getText = (node: OfficeContentNode): string => {
-                let t = '';
-                if (node.children) {
-                    t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter ?? '\n');
-                }
-                else
-                    t += node.text || '';
-                return t;
-            };
-            return getText(c);
-        }).filter(t => t != '').join(config.newlineDelimiter ?? '\n')
-    };
+    const toTextSync = () => content.map(c => {
+        // Recursive text extraction
+        const getText = (node: OfficeContentNode): string => {
+            let t = '';
+            if (node.children) {
+                t += node.children.map(getText).filter(t => t != '').join(!node.children[0]?.children ? '' : config.newlineDelimiter);
+            }
+            else
+                t += node.text || '';
+            return t;
+        };
+        return getText(c);
+    }).filter(t => t != '').join(config.newlineDelimiter);
+
+    return createAST(
+        'xlsx',
+        metadata,
+        content,
+        attachments,
+        config,
+        toTextSync
+    );
 };

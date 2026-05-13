@@ -72,13 +72,15 @@ export const getElementsByTagName = (element: Element | Document, tagName: strin
  * @param options - Serialization options
  * @returns The XML string representation
  */
+const serializer = new XMLSerializer();
+
 export const serializeXml = (node: Node, options: { preserveWhitespace?: boolean } = {}): string => {
     // Note: xmldom's XMLSerializer doesn't natively support a 'pretty' or 'preserve' 
     // flag in a way that matches all user expectations, but it defaults to 
     // preserving structure. Formatting (indentation) is usually handled by the 
     // parser's initial whitespace handling.
     // @ts-ignore - xmldom's Node is compatible with the global Node interface
-    return new XMLSerializer().serializeToString(node as any);
+    return serializer.serializeToString(node as any);
 };
 
 /**
@@ -112,7 +114,7 @@ export const getSourceSubstring = (node: any, sourceXml: string): string | undef
         if (endIdx !== -1) {
             return sourceXml.substring(startIdx, endIdx + closingTag.length);
         }
-        
+
         // Self-closing tag handling (e.g., <w:p/>)
         const selfClosingEnd = sourceXml.indexOf('/>', startIdx);
         const nextOpenTag = sourceXml.indexOf('<', startIdx + 1);
@@ -137,7 +139,7 @@ export const getRawContent = (node: Node, sourceXml: string, config: { serialize
         const original = getSourceSubstring(node, sourceXml);
         if (original) return original;
     }
-    
+
     return serializeXml(node, { preserveWhitespace: config.preserveXmlWhitespace });
 };
 /**

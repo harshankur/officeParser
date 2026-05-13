@@ -43,8 +43,8 @@ function syncVersions() {
 
     const filesToUpdate = [
         'src/types.ts',
+        'src/defaults.ts',
         'docs/index.html',
-        'docs/visualizer_old.html',
         'README.md'
     ];
 
@@ -56,7 +56,16 @@ function syncVersions() {
         const filePath = path.join(__dirname, '..', relativePath);
         if (fs.existsSync(filePath)) {
             const content = fs.readFileSync(filePath, 'utf8');
-            const newContent = content.replace(versionRegex, targetVersionString);
+            
+            // Standard replacement (pdfjs-dist@x.y.z)
+            let newContent = content.replace(versionRegex, targetVersionString);
+            
+            // Special replacement for src/defaults.ts (PDFJS_VERSION constant)
+            if (relativePath === 'src/defaults.ts') {
+                const rawVersionRegex = /const PDFJS_VERSION = '[\d.]+';/;
+                const targetRawVersionString = `const PDFJS_VERSION = '${pdfJsVersion}';`;
+                newContent = newContent.replace(rawVersionRegex, targetRawVersionString);
+            }
 
             if (content !== newContent) {
                 fs.writeFileSync(filePath, newContent, 'utf8');
