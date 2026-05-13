@@ -11,16 +11,21 @@
 import { isBrowser, ensureDomMatrix } from './envUtils.js';
 import type * as FileTypeModule from 'file-type' with { 'resolution-mode': 'import' };
 
-/**
- * Dynamically loads an ESM module in a Node.js CJS context.
- * 
- * @param specifier - The module specifier to load
- * @returns The loaded module
- */
 async function loadNodeEsmModule<T>(specifier: string): Promise<T> {
-    // We use 'new Function' to bypass static analysis of tsc and some bundlers.
-    // This ensures that Node.js sees a real 'import()' at runtime, even in a CJS file.
-    return new Function('s', 'return import(s)')(specifier);
+    // In Node.js, we resolve the specifier to an absolute file URL.
+    // This ensures that the dynamic import() call (executed via new Function)
+    // always finds the correct module regardless of the caller's context.
+    // This is especially important in Node 18 for sub-paths of packages.
+    try {
+        const { pathToFileURL } = await import('url');
+        // @ts-ignore - require.resolve is available in Node.js
+        const absolutePath = require.resolve(specifier);
+        const fileUrl = pathToFileURL(absolutePath).href;
+        return new Function('s', 'return import(s)')(fileUrl);
+    } catch (e) {
+        // Fallback for cases where require.resolve might fail (e.g. non-file specifiers)
+        return new Function('s', 'return import(s)')(specifier);
+    }
 }
 
 /** 

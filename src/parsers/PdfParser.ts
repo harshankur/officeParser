@@ -338,7 +338,10 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 // We use require.resolve to find the exact path of the installed package.
                 // @ts-ignore - 'require' is available in Node.js/CommonJS environment
                 const localWorkerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
-                pdfjs.GlobalWorkerOptions.workerSrc = localWorkerPath;
+                // Use file:// URL for the worker source in Node.js to ensure compatibility with ESM-native PDF.js 5.x
+                // We use dynamic import for 'url' to avoid breaking browser bundles
+                const { pathToFileURL } = await import('url');
+                pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(localWorkerPath).href;
                 resolved = true;
             } catch (e) {
                 logWarning(OfficeWarningType.PDF_WORKER_FALLBACK, config, undefined, e);
