@@ -17,6 +17,7 @@ name: Build and Publish
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 # Permissions:
 #  contents: write   — upload release assets
@@ -34,11 +35,11 @@ jobs:
     steps:
       # ── Step 1: Checkout ───────────────────────────────────────────────────
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # ── Step 2: Node.js environment ────────────────────────────────────────
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: 'npm'
@@ -57,6 +58,7 @@ jobs:
       # The build was already run by `npm test` (which calls `npm run build`).
       # We just need to copy artifacts to the staging directory.
       - name: Prepare Release Assets
+        if: github.event_name == 'release'
         run: |
           VERSION=${{ github.event.release.tag_name }}
           VERSION_CLEAN=${VERSION#v}
@@ -72,6 +74,7 @@ jobs:
       # The SBOM complements npm provenance: provenance links source→binary,
       # the SBOM documents the complete dependency inventory.
       - name: Generate SBOM (CycloneDX)
+        if: github.event_name == 'release'
         run: |
           npx --yes @cyclonedx/cyclonedx-npm \
             --output-format json \
@@ -84,6 +87,7 @@ jobs:
       #   officeparser@<version>.browser.d.ts — TypeScript declarations
       #   sbom.cdx.json                       — CycloneDX SBOM
       - name: Upload Release Assets
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: release_assets/*
@@ -95,7 +99,7 @@ jobs:
       # verifiable link between the package on the registry, its source code,
       # and this workflow run.
       - name: Setup Node.js for npm
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           registry-url: 'https://registry.npmjs.org'
@@ -107,7 +111,7 @@ jobs:
 
       # ── Step 9: Publish to GitHub Packages ────────────────────────────────
       - name: Setup Node.js for GitHub Packages
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           registry-url: 'https://npm.pkg.github.com'

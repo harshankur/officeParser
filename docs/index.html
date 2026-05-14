@@ -1933,14 +1933,24 @@
                 <p>Detailed technical documentation for the core components of officeParser.</p>
             </div>
             <div class="specs-grid">
+                <div class="spec-card" id="card-converter" onclick="location.hash='#spec/converter'">
+                    <h3>OfficeConverter</h3>
+                    <p>High-level API for simple, one-step document transformations with zero-config defaults.</p>
+                    <div class="spec-link-hint">Read Converter Spec →</div>
+                </div>
                 <div class="spec-card" id="card-config" onclick="location.hash='#spec/config'">
                     <h3>Parser Config</h3>
                     <p>Full reference of parsing options including OCR, attachment handling, and delimiters.</p>
                     <div class="spec-link-hint">Read Parser Spec →</div>
                 </div>
+                <div class="spec-card" id="card-generator_config" onclick="location.hash='#spec/generator_config'">
+                    <h3>Generator Config</h3>
+                    <p>Complete guide to common and format-specific settings for HTML, Markdown, PDF, and more.</p>
+                    <div class="spec-link-hint">Read Config Spec →</div>
+                </div>
                 <div class="spec-card" id="card-generator" onclick="location.hash='#spec/generator'">
-                    <h3>Generator & RAG</h3>
-                    <p>Document conversion settings, RAG chunking strategies, and the StyleMapper DSL.</p>
+                    <h3>Generator API & RAG</h3>
+                    <p>Core API usage for granular control and native strategies for AI-ready chunking.</p>
                     <div class="spec-link-hint">Read Generator Spec →</div>
                 </div>
                 <div class="spec-card" id="card-ast" onclick="location.hash='#spec/ast'">
@@ -2128,82 +2138,95 @@
                     <!-- Generator Section -->
                     <div class="config-group">
                         <div class="config-group-title">Common Generator Configuration</div>
-                        <div class="config-items-container">
-                            <div class="config-item">
-                                <span class="config-label">Generate IDs</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_generateIds" checked>
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Render Metadata</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_renderMetadata">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Include Images</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_includeImages" checked>
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Include Charts</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_includeCharts" checked>
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Ignore Internal Links</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_ignoreInternalLinks_generator">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Ignore Default Style Map</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_ignoreDefaultStyleMap">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
+                        <div class="config-item">
+                            <span class="config-label">Include Formatting</span>
+                            <label class="switch">
+                                <input type="checkbox" id="cfg_includeFormatting" checked>
+                                <span class="slider"></span>
+                            </label>
                         </div>
-                    </div>
-
-                    <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem;">
-                        <button id="reparse-btn" class="sync-btn" title="Update Preview"
-                            style="display: flex; justify-content: center; padding: 0.75rem;" disabled>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                stroke-linecap="round" stroke-linejoin="round" style="width: 1.25rem; height: 1.25rem;">
-                                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
-                                <path d="M21 3v5h-5"></path>
-                                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
-                                <path d="M8 16H3v5"></path>
-                            </svg>
-                            Refresh Parsing Engine
-                        </button>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                            <button id="cleanup-ocr-btn" class="sync-btn" title="Manual Resource Cleanup"
-                                style="border-color: #ef4444; color: #ef4444; background: rgba(239, 68, 68, 0.05); display: flex; justify-content: center;"
-                                disabled>
-                                🗑️ Cleanup OCR Pool
-                            </button>
-                            <button id="download-pdf-btn" class="sync-btn" title="Download as PDF"
-                                style="border-color: #E02A26; color: #E02A26; background: rgba(224, 42, 38, 0.05); display: flex; justify-content: center;"
-                                disabled>
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                    stroke-linecap="round" stroke-linejoin="round" style="width: 1rem; height: 1rem;">
-                                    <path d="M4 4V20H20V8L16 4H4Z"></path>
-                                </svg>
-                                Export to PDF
-                            </button>
+                        <div class="config-item">
+                            <span class="config-label">Generate IDs</span>
+                            <label class="switch">
+                                <input type="checkbox" id="cfg_generateIds" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-item">
+                            <span class="config-label">Render Metadata</span>
+                            <label class="switch">
+                                <input type="checkbox" id="cfg_renderMetadata">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-item">
+                            <span class="config-label">Include Images</span>
+                            <label class="switch">
+                                <input type="checkbox" id="cfg_includeImages" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-item">
+                            <span class="config-label">Include Charts</span>
+                            <label class="switch">
+                                <input type="checkbox" id="cfg_includeCharts" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-item">
+                            <span class="config-label">Ignore Internal Links</span>
+                            <label class="switch">
+                                <input type="checkbox" id="cfg_ignoreInternalLinks_generator">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-item">
+                            <span class="config-label">Ignore Default Style Map</span>
+                            <label class="switch">
+                                <input type="checkbox" id="cfg_ignoreDefaultStyleMap">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-item"
+                            style="width: 100%; flex-direction: column; align-items: flex-start; gap: 0.5rem;">
+                            <span class="config-label">Custom Style Map (JSON/DSL)</span>
+                            <textarea id="cfg_styleMap" class="btn btn-outline"
+                                style="padding: 0.4rem; width: 100%; min-height: 80px; font-size: 0.75rem; font-family: monospace; resize: vertical;"
+                                placeholder='["p[style-name=\"Heading 1\"] => h1"]'></textarea>
                         </div>
                     </div>
                 </div>
+
+                <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem;">
+                    <button id="reparse-btn" class="sync-btn" title="Update Preview"
+                        style="display: flex; justify-content: center; padding: 0.75rem;" disabled>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" style="width: 1.25rem; height: 1.25rem;">
+                            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+                            <path d="M21 3v5h-5"></path>
+                            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+                            <path d="M8 16H3v5"></path>
+                        </svg>
+                        Refresh Parsing Engine
+                    </button>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                        <button id="cleanup-ocr-btn" class="sync-btn" title="Manual Resource Cleanup"
+                            style="border-color: #ef4444; color: #ef4444; background: rgba(239, 68, 68, 0.05); display: flex; justify-content: center;"
+                            disabled>
+                            🗑️ Cleanup OCR Pool
+                        </button>
+                        <button id="download-pdf-btn" class="sync-btn" title="Download as PDF"
+                            style="border-color: #E02A26; color: #E02A26; background: rgba(224, 42, 38, 0.05); display: flex; justify-content: center;"
+                            disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round" style="width: 1rem; height: 1rem;">
+                                <path d="M4 4V20H20V8L16 4H4Z"></path>
+                            </svg>
+                            Export to PDF
+                        </button>
+                    </div>
+                </div>
+            </div>
             </div>
 
             <div id="warning-banner"
@@ -2227,9 +2250,6 @@
                         <h4 style="margin:0;">HTML PREVIEW</h4>
                         <div class="window-config-group">
                             <div class="window-config-item">
-                                Formatting <input type="checkbox" id="cfg_html_includeFormatting" checked>
-                            </div>
-                            <div class="window-config-item">
                                 Standalone <input type="checkbox" id="cfg_html_standalone" checked>
                             </div>
                             <div class="window-config-item" title="Chart.js Source URL">
@@ -2250,9 +2270,6 @@
                     <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
                         <h4 style="margin:0;">MARKDOWN</h4>
                         <div class="window-config-group">
-                            <div class="window-config-item">
-                                Formatting <input type="checkbox" id="cfg_md_includeFormatting" checked>
-                            </div>
                             <div class="window-config-item">
                                 HTML Fallback <input type="checkbox" id="cfg_md_fallbackToHtml" checked>
                             </div>
@@ -2393,9 +2410,9 @@
         <div class="footer-links">
             <a href="https://github.com/harshankur/officeParser">GitHub</a>
             <a href="https://www.npmjs.com/package/officeparser">NPM</a>
-            <a href="#spec/config">Configuration</a>
+            <a href="#spec/converter">OfficeConverter</a>
+            <a href="#spec/generator_config">Generator Config</a>
             <a href="#spec/ast">AST Reference</a>
-            <a href="#spec/debugging">Debugging</a>
         </div>
         <p class="copyright">© 2026 officeParser. Built with ❤️ for the Open Source community.</p>
     </footer>
@@ -2617,9 +2634,9 @@
                 'cfg_includeRawContent', 'cfg_serializeRawContent', 'cfg_preserveXmlWhitespace',
                 'cfg_ignoreNotes', 'cfg_putNotesAtLast', 'cfg_includeBreakNodes',
                 'cfg_outputErrorToConsole', 'cfg_ocrLanguage', 'cfg_csvDelimiter', 'cfg_ocrTimeout', 'cfg_pdfWorkerSrc',
-                'cfg_generateIds', 'cfg_renderMetadata', 'cfg_includeImages', 'cfg_includeCharts', 'cfg_ignoreInternalLinks_generator', 'cfg_ignoreDefaultStyleMap',
-                'cfg_html_includeFormatting', 'cfg_html_standalone', 'cfg_html_chartJsSrc',
-                'cfg_md_includeFormatting', 'cfg_md_fallbackToHtml',
+                'cfg_includeFormatting', 'cfg_generateIds', 'cfg_renderMetadata', 'cfg_includeImages', 'cfg_includeCharts', 'cfg_ignoreInternalLinks_generator', 'cfg_ignoreDefaultStyleMap', 'cfg_styleMap',
+                'cfg_html_standalone', 'cfg_html_chartJsSrc',
+                'cfg_md_fallbackToHtml',
                 'cfg_chunks_strategy', 'cfg_chunks_maxChunkSize', 'cfg_chunks_chunkOverlap', 'cfg_chunks_splitBy', 'cfg_chunks_tableSplitStrategy',
                 'cfg_csv_sheets', 'cfg_csv_mergeSheets', 'cfg_csv_columnDelimiter',
                 'cfg_text_preserveLayout', 'cfg_text_newlineDelimiter'
@@ -2661,7 +2678,6 @@
                         ...getGeneratorConfig(),
                         ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
                         htmlConfig: {
-                            includeFormatting: document.getElementById('cfg_html_includeFormatting').checked,
                             standalone: true, // Always standalone for PDF/Print
                         }
                     };
@@ -2702,12 +2718,25 @@
             let lastConfigJson = "";
 
             function getGeneratorConfig() {
+                let styleMap = [];
+                try {
+                    const raw = document.getElementById('cfg_styleMap').value.trim();
+                    if (raw) {
+                        if (raw.startsWith('[') || raw.startsWith('{')) styleMap = JSON.parse(raw);
+                        else styleMap = raw.split('\n').map(s => s.trim()).filter(s => !!s);
+                    }
+                } catch (e) {
+                    console.error("Invalid StyleMap JSON", e);
+                }
+
                 return {
+                    includeFormatting: document.getElementById('cfg_includeFormatting').checked,
                     generateIds: document.getElementById('cfg_generateIds').checked,
                     renderMetadata: document.getElementById('cfg_renderMetadata').checked,
                     includeImages: document.getElementById('cfg_includeImages').checked,
                     includeCharts: document.getElementById('cfg_includeCharts').checked,
-                    ignoreDefaultStyleMap: document.getElementById('cfg_ignoreDefaultStyleMap').checked
+                    ignoreDefaultStyleMap: document.getElementById('cfg_ignoreDefaultStyleMap').checked,
+                    styleMap: styleMap
                 };
             }
 
@@ -2744,7 +2773,7 @@
             });
 
             // Common generator config listeners
-            ['cfg_generateIds', 'cfg_renderMetadata', 'cfg_includeImages', 'cfg_includeCharts', 'cfg_ignoreInternalLinks_generator', 'cfg_ignoreDefaultStyleMap'].forEach(id => {
+            ['cfg_includeFormatting', 'cfg_generateIds', 'cfg_renderMetadata', 'cfg_includeImages', 'cfg_includeCharts', 'cfg_ignoreInternalLinks_generator', 'cfg_ignoreDefaultStyleMap', 'cfg_styleMap'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', async () => {
@@ -2839,13 +2868,13 @@
             }
 
             // Window-specific generator config listeners
-            ['cfg_html_includeFormatting', 'cfg_html_standalone', 'cfg_html_chartJsSrc'].forEach(id => {
+            ['cfg_html_standalone', 'cfg_html_chartJsSrc'].forEach(id => {
                 document.getElementById(id).addEventListener('change', () => renderFormatWindow('html'));
                 if (document.getElementById(id).type === 'text') {
                     document.getElementById(id).addEventListener('input', () => renderFormatWindow('html'));
                 }
             });
-            ['cfg_md_includeFormatting', 'cfg_md_fallbackToHtml'].forEach(id => {
+            ['cfg_md_fallbackToHtml'].forEach(id => {
                 document.getElementById(id).addEventListener('change', () => renderFormatWindow('md'));
             });
             ['cfg_chunks_strategy', 'cfg_chunks_maxChunkSize', 'cfg_chunks_chunkOverlap', 'cfg_chunks_splitBy', 'cfg_chunks_tableSplitStrategy'].forEach(id => {
@@ -2883,17 +2912,13 @@
                         };
                         if (format === 'html') {
                             genConfig.htmlConfig = {
-                                includeFormatting: document.getElementById('cfg_html_includeFormatting').checked,
                                 standalone: document.getElementById('cfg_html_standalone').checked,
                                 chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined
                             };
-                            genConfig.includeFormatting = genConfig.htmlConfig.includeFormatting;
                         } else if (format === 'md') {
                             genConfig.mdConfig = {
-                                includeFormatting: document.getElementById('cfg_md_includeFormatting').checked,
                                 fallbackToHtml: document.getElementById('cfg_md_fallbackToHtml').checked
                             };
-                            genConfig.includeFormatting = genConfig.mdConfig.includeFormatting;
                         } else if (format === 'chunks') {
                             genConfig.chunksConfig = {
                                 strategy: document.getElementById('cfg_chunks_strategy').value,
@@ -3081,12 +3106,10 @@
                         ...getGeneratorConfig(),
                         ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
                         htmlConfig: {
-                            includeFormatting: document.getElementById('cfg_html_includeFormatting').checked,
                             standalone: document.getElementById('cfg_html_standalone').checked,
                             chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined
                         }
                     };
-                    genConfig.includeFormatting = genConfig.htmlConfig.includeFormatting;
                     return (await window.officeParser.OfficeGenerator.generate(currentAst, 'html', genConfig)).value;
                 },
                 'md': async () => {
@@ -3094,11 +3117,9 @@
                         ...getGeneratorConfig(),
                         ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
                         mdConfig: {
-                            includeFormatting: document.getElementById('cfg_md_includeFormatting').checked,
                             fallbackToHtml: document.getElementById('cfg_md_fallbackToHtml').checked
                         }
                     };
-                    genConfig.includeFormatting = genConfig.mdConfig.includeFormatting;
                     return (await window.officeParser.OfficeGenerator.generate(currentAst, 'md', genConfig)).value;
                 },
                 'chunks': async () => {

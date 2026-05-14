@@ -1,0 +1,10 @@
+node_modules
+dist
+test/results
+test/generator/results
+test/generator/output
+test/parser/results
+test/parser/output
+.git
+.github
+docs

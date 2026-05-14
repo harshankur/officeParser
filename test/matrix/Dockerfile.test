@@ -1,0 +1,17 @@
+ARG NODE_VERSION=18
+FROM node:${NODE_VERSION}
+
+# Set the working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies (including devDependencies for testing)
+RUN npm install
+
+# Copy the rest of the application
+COPY . .
+
+# Run the build and then the tests
+CMD ["npm", "run", "test:parser"]

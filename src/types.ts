@@ -62,6 +62,8 @@ export enum OfficeWarningType {
     SHEET_RANGE_NOT_FOUND = 'SHEET_RANGE_NOT_FOUND',
     /** Buffer content type does not match the provided or expected file extension */
     BUFFER_TYPE_MISMATCH = 'BUFFER_TYPE_MISMATCH',
+    /** Failed to detect file type from buffer due to library error or incompatibility */
+    FILE_TYPE_DETECTION_FAILED = 'FILE_TYPE_DETECTION_FAILED',
     /** No chunks were generated for the document given the current strategy */
     EMPTY_CHUNK_GENERATED = 'EMPTY_CHUNK_GENERATED',
     /** A node was skipped because it only contained whitespace */

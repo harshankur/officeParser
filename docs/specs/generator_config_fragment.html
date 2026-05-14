@@ -1,0 +1,234 @@
+<div class="doc-body">
+    <h1>Generator Configuration Specification</h1>
+    <p>The <code>GeneratorConfig</code> object controls how the AST is transformed into final output formats like HTML, Markdown, or PDF. It consists of common options and specialized sub-configurations.</p>
+
+    <h2>CommonGeneratorConfig</h2>
+    <p>These settings apply to every generator unless specifically overridden in a sub-config.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>includeFormatting</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td><strong>Visual Fidelity</strong>: Whether to include colors, font sizes, and text decorations (underline, strike, etc.) in the output.</td>
+            </tr>
+            <tr>
+                <td><code>generateIds</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td><strong>Navigation</strong>: Automatically generates unique slug-based IDs for heading nodes, enabling internal anchor links.</td>
+            </tr>
+            <tr>
+                <td><code>renderMetadata</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Branding</strong>: If true, renders the document metadata (Title, Author, Creation Date) as a visible header block.</td>
+            </tr>
+            <tr>
+                <td><code>includeImages</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td><strong>Resources</strong>: Whether to include <code>&lt;img&gt;</code> tags or Markdown image syntax in the output.</td>
+            </tr>
+            <tr>
+                <td><code>includeCharts</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td><strong>Visuals</strong>: (HTML Only) Whether to render interactive charts. Requires Chart.js.</td>
+            </tr>
+            <tr>
+                <td><code>ignoreInternalLinks</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Cleanup</strong>: Suppresses all internal bookmarks and anchor references.</td>
+            </tr>
+            <tr>
+                <td><code>ignoreDefaultStyleMap</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Control</strong>: If true, ignores the built-in mapping of standard Word/Office styles to semantic tags.</td>
+            </tr>
+            <tr>
+                <td><code>styleMap</code></td>
+                <td><code>string[] | object[]</code></td>
+                <td><code>[]</code></td>
+                <td><strong>Semantic Bridge</strong>: Maps source styles (e.g., 'Intense Quote') to semantic tags (e.g., 'blockquote').</td>
+            </tr>
+            <tr>
+                <td><code>onNode</code></td>
+                <td><code>function</code></td>
+                <td><code>undefined</code></td>
+                <td><strong>Interception</strong>: Callback to filter, override, or mutate every node during generation.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>Specialized Sub-Configurations</h2>
+    <p>Format-specific settings nested under keys like <code>htmlConfig</code>, <code>mdConfig</code>, etc.</p>
+
+    <h3>HtmlGeneratorConfig (<code>htmlConfig</code>)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>standalone</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Wraps output in a full <code>&lt;html&gt;</code> shell with CSS and metadata.</td>
+            </tr>
+            <tr>
+                <td><code>chartJsSrc</code></td>
+                <td><code>string</code></td>
+                <td>(CDN)</td>
+                <td>URL for the Chart.js script.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>MdGeneratorConfig (<code>mdConfig</code>)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>fallbackToHtml</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Uses raw HTML tags for features Markdown cannot express (underlines, alignment).</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>PdfGeneratorConfig (<code>pdfConfig</code>)</h3>
+    <blockquote>
+        [!IMPORTANT]
+        PDF generation uses Puppeteer (Node.js) and supports full page layout options.
+    </blockquote>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>format</code></td>
+                <td><code>string</code></td>
+                <td><code>'A4'</code></td>
+                <td>Paper format (Letter, A4, etc.).</td>
+            </tr>
+            <tr>
+                <td><code>landscape</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Orientation.</td>
+            </tr>
+            <tr>
+                <td><code>margin</code></td>
+                <td><code>object</code></td>
+                <td><code>{0,0,0,0}</code></td>
+                <td>Page margins in inches or mm.</td>
+            </tr>
+            <tr>
+                <td><code>displayHeaderFooter</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Enables PDF native headers/footers.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>CsvGeneratorConfig (<code>csvConfig</code>)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>sheets</code></td>
+                <td><code>string</code></td>
+                <td><code>''</code></td>
+                <td>Range of sheets to export (e.g., "1,3-5").</td>
+            </tr>
+            <tr>
+                <td><code>mergeSheets</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Merges all sheets into one file. If false, returns a ZIP.</td>
+            </tr>
+            <tr>
+                <td><code>columnDelimiter</code></td>
+                <td><code>string</code></td>
+                <td><code>','</code></td>
+                <td>Separator character.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>TextGeneratorConfig (<code>textConfig</code>)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>newlineDelimiter</code></td>
+                <td><code>string</code></td>
+                <td><code>\n</code></td>
+                <td>Separator for blocks.</td>
+            </tr>
+            <tr>
+                <td><code>preserveLayout</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Attempts to align table columns using spaces.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>Style Mapping (The Semantic Bridge)</h2>
+    <p>Style mapping allows you to define the <strong>semantic meaning</strong> of arbitrary document styles.</p>
+    
+    <h3>Legacy String DSL</h3>
+    <pre><code>["p[style-name='Heading 1'] => h1", "p[style='Quote'] => blockquote"]</code></pre>
+    
+    <h3>Structured Objects (Recommended)</h3>
+    <pre><code>{ 
+  selector: { nodeType: 'paragraph', attributes: { style: 'Heading 1' } }, 
+  output: { tag: 'h1', classes: ['main-title'] } 
+}</code></pre>
+</div>

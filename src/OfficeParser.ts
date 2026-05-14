@@ -160,13 +160,14 @@ export class OfficeParser {
                 throw getOfficeError(OfficeErrorType.INVALID_INPUT, internalConfig);
             }
 
-            // Always attempt to detect file type from buffer if it exists, 
-            // but respect the authoritative 'ext' if it was already set.
-            if (buffer.length > 0) {
-                const { fileTypeFromBuffer } = await loadFileType();
-                const type = await fileTypeFromBuffer(buffer);
+            // Attempt to detect file type from buffer only if extension is unknown.
+            // This matches v6 behavior and prevents crashes in older Node environments
+            // where file-type 22.x might be incompatible.
+            if (buffer.length > 0 && !ext) {
+                try {
+                    const { fileTypeFromBuffer } = await loadFileType();
+                    const type = await fileTypeFromBuffer(buffer);
 
-                if (!ext) {
                     if (type) {
                         ext = type.ext;
                     } else {
@@ -174,9 +175,23 @@ export class OfficeParser {
                         // it might be a text-based format (csv, md, html) which 
                         // lack magic bytes. We'll let the switch default handle it.
                     }
-                } else if (type && type.ext.toLowerCase() !== ext.toLowerCase()) {
-                    // Mismatch found between authoritative extension and detected content
-                    logWarning(OfficeWarningType.BUFFER_TYPE_MISMATCH, internalConfig, { detected: type.ext, expected: ext });
+                } catch (error: any) {
+                    // Log warning but don't crash; the switch below will handle unsupported/missing ext
+                    logWarning(OfficeWarningType.FILE_TYPE_DETECTION_FAILED, internalConfig, { error });
+                }
+            } else if (buffer.length > 0 && ext) {
+                // If extension is known, we can optionally verify it, but we wrap it 
+                // in a try-catch to avoid breaking Node 18 if file-type fails to load.
+                try {
+                    const { fileTypeFromBuffer } = await loadFileType();
+                    const type = await fileTypeFromBuffer(buffer);
+                    if (type && type.ext.toLowerCase() !== ext.toLowerCase()) {
+                        // Mismatch found between authoritative extension and detected content
+                        logWarning(OfficeWarningType.BUFFER_TYPE_MISMATCH, internalConfig, { detected: type.ext, expected: ext });
+                    }
+                } catch (error: any) {
+                    // Log warning so user knows verification could not be performed
+                    logWarning(OfficeWarningType.FILE_TYPE_DETECTION_FAILED, internalConfig, { error });
                 }
             }
 

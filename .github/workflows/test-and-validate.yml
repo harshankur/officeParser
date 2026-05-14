@@ -32,11 +32,11 @@ jobs:
     steps:
       # Step 1: Check out the full repository
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # Step 2: Set up Node.js with npm dependency caching
       - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'

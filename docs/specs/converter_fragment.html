@@ -1,0 +1,81 @@
+<div class="doc-body">
+    <h1>OfficeConverter Specification</h1>
+    <p>The <code>OfficeConverter</code> is the highest-level API in the library. It provides a simple, "one-step" method to transform documents from one format to another without manually handling the intermediate AST.</p>
+
+    <h2>OfficeConverter.convert()</h2>
+    <p>Converts a source document to a destination format in a single asynchronous call.</p>
+    <pre><code>import { OfficeConverter } from 'officeparser';
+
+const { value, messages } = await OfficeConverter.convert('report.docx', 'pdf', {
+    generatorConfig: {
+        includeFormatting: true,
+        pdfConfig: { format: 'A4' }
+    }
+});</code></pre>
+
+    <h3>Arguments</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Argument</th>
+                <th>Type</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>source</code></td>
+                <td><code>string | Buffer | ArrayBuffer</code></td>
+                <td>The source file path or binary data.</td>
+            </tr>
+            <tr>
+                <td><code>destination</code></td>
+                <td><code>UniversalGeneratorFormat</code></td>
+                <td>Target format: 'html', 'md', 'pdf', 'csv', 'text', 'rtf', 'chunks'.</td>
+            </tr>
+            <tr>
+                <td><code>config</code></td>
+                <td><code>OfficeConverterConfig</code></td>
+                <td>Optional combined configuration for parser and generator.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>OfficeConverterConfig</h2>
+    <p>Combines settings for both the parsing phase and the generation phase.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>parseConfig</code></td>
+                <td><code>OfficeParserConfig</code></td>
+                <td><code>{}</code></td>
+                <td>Settings for how the source file is parsed.</td>
+            </tr>
+            <tr>
+                <td><code>generatorConfig</code></td>
+                <td><code>GeneratorConfig</code></td>
+                <td><code>{}</code></td>
+                <td>Settings for how the output is generated.</td>
+            </tr>
+            <tr>
+                <td><code>onWarning</code></td>
+                <td><code>function</code></td>
+                <td><code>undefined</code></td>
+                <td>Global callback for issues in either phase. Overrides phase-specific <code>onWarning</code> callbacks.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <blockquote>
+        [!TIP]
+        Use <code>OfficeConverter</code> for simple CLI tools or scripts where you only need a single output. For complex pipelines (e.g., generating both HTML and Markdown from the same file), use <code>OfficeParser</code> followed by <code>OfficeGenerator</code> to avoid redundant parsing.
+    </blockquote>
+</div>

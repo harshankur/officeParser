@@ -1,120 +1,58 @@
 <div class="doc-body">
     <h1>OfficeGenerator & RAG Specification</h1>
-    <p>v7.0.0 introduces a powerful document generation engine and native RAG chunking suite. This specification details how to transform ASTs into usable formats and prepare documents for AI pipelines.</p>
-
-    <h2>OfficeConverter.convert()</h2>
-    <p>The primary entry point for one-step transformations. It automatically handles parser settings (like enabling attachments if needed for the generator).</p>
-    <pre><code>import { OfficeConverter } from 'officeparser';
-
-const { value, messages } = await OfficeConverter.convert('input.docx', 'md', {
-    generatorConfig: {
-        includeFormatting: false
-    }
-});</code></pre>
+    <p>The <code>OfficeGenerator</code> is the engine that transforms the universal <code>OfficeParserAST</code> into destination formats. It is designed to be format-agnostic and supports advanced AI-ready chunking strategies.</p>
 
     <h2>OfficeGenerator.generate()</h2>
-    <p>The core generation engine. Use this when you already have an AST and want to transform it into multiple formats without re-parsing.</p>
+    <p>Transforms an existing AST into a destination format.</p>
     <pre><code>import { OfficeGenerator } from 'officeparser';
 
-const html = await OfficeGenerator.generate(ast, 'html');
-const pdf = await OfficeGenerator.generate(ast, 'pdf');</code></pre>
+const result = await OfficeGenerator.generate(ast, 'html', config);
+console.log(result.value); // The generated string or buffer</code></pre>
 
-    <h2>GeneratorConfig</h2>
-    <p>Unified configuration for all output formats. Common settings apply to every generator.</p>
+    <h2>RAG & Chunking Strategies</h2>
+    <p>When the destination format is <code>'chunks'</code>, the generator returns an array of <code>OfficeChunk</code> objects. These are optimized for ingestion into Vector Databases for RAG pipelines.</p>
+    
+    <h3>1. Document Structure Chunking (Recommended)</h3>
+    <p>Splits at natural boundaries (paragraphs/headings) while respecting a maximum size limit.</p>
+    <pre><code>chunksConfig: {
+    strategy: 'document-structure',
+    splitBy: 'paragraph',
+    maxChunkSize: 1000,
+    tableSplitStrategy: 'row'
+}</code></pre>
+
+    <h3>2. Fixed-Size Chunking</h3>
+    <p>Splits text by character count with a sliding window overlap.</p>
+
+    <h3>3. Semantic Chunking</h3>
+    <p>Uses embedding similarity to find topic breakpoints. Requires an external <code>embeddingFunction</code>.</p>
+
+    <h2>ConversionResult Reference</h2>
+    <p>All generation methods return this object, which includes the output and any diagnostic messages.</p>
     <table>
         <thead>
             <tr>
                 <th>Property</th>
                 <th>Type</th>
-                <th>Default</th>
                 <th>Description</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td><code>includeFormatting</code></td>
-                <td><code>boolean</code></td>
-                <td><code>true</code></td>
-                <td>Whether to include visual styles (colors, sizes) in the output.</td>
+                <td><code>value</code></td>
+                <td><code>string | Buffer | OfficeChunk[]</code></td>
+                <td>The actual generated content.</td>
             </tr>
             <tr>
-                <td><code>generateIds</code></td>
-                <td><code>boolean</code></td>
-                <td><code>true</code></td>
-                <td>Automatically generates unique slug-based IDs for headings (for anchors).</td>
-            </tr>
-            <tr>
-                <td><code>styleMap</code></td>
-                <td><code>string[] | object[]</code></td>
-                <td>(Standard)</td>
-                <td>Custom mapping for document styles (e.g., 'Heading 1' -> 'h1').</td>
-            </tr>
-            <tr>
-                <td><code>onNode</code></td>
-                <td><code>function</code></td>
-                <td><code>undefined</code></td>
-                <td>
-                    Hook to intercept every node. 
-                    <br><strong>Pro Tip:</strong> Return <code>false</code> to skip, a <code>string</code> to override, or mutate <code>node</code> and return <code>void</code> to continue.
-                </td>
+                <td><code>messages</code></td>
+                <td><code>OfficeIssue[]</code></td>
+                <td>Array of warnings or info messages encountered during generation.</td>
             </tr>
         </tbody>
     </table>
 
-    <div class="pro-tip" style="margin-top: 20px; padding: 15px; background: rgba(255, 215, 0, 0.1); border-left: 4px solid #ffd700; border-radius: 4px;">
-        <h4 style="margin-top: 0; color: #ffd700;">🚀 Pro User: Advanced Node Manipulation</h4>
-        <p>The <code>onNode</code> callback is your "Swiss Army Knife" for generation. It allows for three main workflows:</p>
-        <ul>
-            <li><strong>Filtering:</strong> Return <code>false</code> to prune branches of the document.</li>
-            <li><strong>Overriding:</strong> Return a <code>string</code> to provide custom HTML/Markdown for a specific node type.</li>
-            <li><strong>Interception:</strong> Mutate <code>node.text</code> or <code>node.metadata</code> and return <code>void</code> to use the standard generator with your modifications.</li>
-        </ul>
-        <pre><code>// Example: Dynamic redaction and custom callouts
-onNode: (node) => {
-    if (node.text?.includes('CONFIDENTIAL')) {
-        node.text = node.text.replace('CONFIDENTIAL', '***');
-    }
-    if (node.metadata?.style === 'Alert') {
-        return `&lt;div class="alert"&gt;${node.text}&lt;/div&gt;`;
-    }
-}</code></pre>
+    <div class="pro-tip" style="margin-top: 20px; padding: 15px; background: rgba(14, 165, 233, 0.1); border-left: 4px solid #0ea5e9; border-radius: 4px;">
+        <h4 style="margin-top: 0; color: #0ea5e9;">🚀 Performance Note</h4>
+        <p>The <code>OfficeGenerator</code> is highly optimized. Once a document is parsed into an AST, generating multiple formats is extremely fast as it involves a single traversal of the tree.</p>
     </div>
-
-    <h2>RAG & Chunking Strategies</h2>
-    <p>When the destination is <code>chunks</code>, the library returns an array of <code>OfficeChunk</code> objects with rich metadata.</p>
-    
-    <h3>1. Document Structure Chunking (Recommended)</h3>
-    <p>Leverages the AST to split at natural boundaries like paragraphs or headings. This is the most semantically stable strategy.</p>
-    <pre><code>const { value: chunks } = await ast.to('chunks', {
-    chunksConfig: {
-        strategy: 'document-structure',
-        splitBy: 'heading',
-        maxChunkSize: 1000,
-        tableSplitStrategy: 'row' // Repeats headers in every chunk!
-    }
-});</code></pre>
-
-    <h3>2. Fixed-Size Chunking</h3>
-    <p>Splits text by character count with a sliding window overlap. Best for strict token-limit adherence.</p>
-
-    <h2>Style Mapping (The Semantic Bridge)</h2>
-    <p><code>officeParser</code> uses a "Universal Intermediate Language" (HTML tags) to define the semantic meaning of document styles.</p>
-    
-    <h3>Legacy String DSL</h3>
-    <pre><code>["p[style-name='Heading 1'] => h1", "p[style='Quote'] => blockquote"]</code></pre>
-    
-    <h3>Structured Style Mappings (Recommended)</h3>
-    <pre><code>[
-  { 
-    selector: { nodeType: 'paragraph', attributes: { style: 'Heading 1' } }, 
-    output: { tag: 'h1', classes: ['main-title'] } 
-  }
-]</code></pre>
-
-    <h2>ConversionResult</h2>
-    <p>All generation methods return a <code>ConversionResult</code> object. This ensures that non-fatal issues (like missing fonts or layout approximations) are reported without failing the entire process.</p>
-    <ul>
-        <li><code>value</code>: The generated content (string, Buffer, or Chunk array).</li>
-        <li><code>messages</code>: Array of warnings, info, and errors encountered.</li>
-    </ul>
 </div>

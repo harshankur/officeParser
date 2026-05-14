@@ -22,7 +22,7 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.FILE_DOES_NOT_EXIST]: (filepath: string) => `File ${filepath} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
     [OfficeErrorType.LOCATION_NOT_FOUND]: (location: string) => `Entered location ${location} is not reachable! Please make sure that the entered directory location exists. Check relative paths and reenter.`,
     [OfficeErrorType.IMPROPER_ARGUMENTS]: `Improper arguments`,
-    [OfficeErrorType.IMPROPER_BUFFERS]: `Error occured while reading the file buffers. If you are passing text-based formats like md, html, or csv as a Buffer, you must provide the 'fileType' hint in the configuration as they lack magic bytes for auto-detection.`,
+    [OfficeErrorType.IMPROPER_BUFFERS]: `Auto-detection of file type from buffer failed. This can happen if the format lacks magic bytes (like md, html, or csv) or if the detection library is incompatible with your Node.js version. Please provide the 'fileType' hint in your configuration (e.g., { fileType: 'docx' }) to proceed.`,
     [OfficeErrorType.INVALID_INPUT]: `Invalid input type: Expected a Buffer or a valid file path`,
     [OfficeErrorType.PDF_WORKER_MISSING]: `Missing PDF worker configuration. PDF parsing in browser environments requires a worker source. Please provide "pdfWorkerSrc" in your configuration.`,
     [OfficeErrorType.FEATURE_NOT_SUPPORTED_IN_BROWSER]: (feature: string) => `'${feature}' is not supported in the browser. Browser users must pass file content as Buffer or ArrayBuffer directly.`,
@@ -49,6 +49,7 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.BROWSER_GENERATION_LIMITATION]: (msg: string) => msg,
     [OfficeWarningType.SHEET_RANGE_NOT_FOUND]: (range: string) => `No sheets found matching the range: ${range}`,
     [OfficeWarningType.BUFFER_TYPE_MISMATCH]: (info: { detected: string, expected: string }) => `File content type mismatch: Detected '${info.detected}' but expected/provided '${info.expected}'. Parsing will proceed with '${info.expected}' as requested.`,
+    [OfficeWarningType.FILE_TYPE_DETECTION_FAILED]: `Auto-detection of file type failed. This can happen on older Node.js versions with modern file-type versions. Please provide the 'fileType' hint in the configuration if parsing fails.`,
     [OfficeWarningType.EMPTY_CHUNK_GENERATED]: (strategy: string) => `No chunks generated for document. Check if the document content is compatible with the '${strategy}' strategy.`,
     [OfficeWarningType.WHITESPACE_NODE_SKIPPED]: (nodeType: string) => `Skipped whitespace-only node of type: ${nodeType}`
 };

@@ -28,6 +28,30 @@ A robust, strictly-typed Node.js and Browser library for parsing and generating 
 
 ---
 
+## Table of Contents
+- [Install via npm](#install-via-npm)
+- [Command Line Usage](#command-line-usage)
+- [Library Usage](#library-usage)
+- [Using the OfficeGenerator](#using-the-officegenerator)
+- [The New "One-Step" API: OfficeConverter](#the-new-one-step-api-officeconverter)
+- [Native RAG Chunking](#native-rag-chunking)
+- [The AST Structure](#the-ast-structure)
+- [Deep Dive: Document Components](#deep-dive-document-components)
+- [Performance & Fidelity Highlights (v7.0.0)](#performance--fidelity-highlights-v700)
+- [Advanced AST Usage](#advanced-ast-usage)
+- [Configuration Object: OfficeParserConfig](#configuration-object-officeparserconfig)
+- [Generator Configuration: GeneratorConfig](#generator-configuration-generatorconfig)
+- [Format-Specific Generator Configuration](#format-specific-generator-configuration)
+- [One-Step Conversion: OfficeConverterConfig](#one-step-conversion-officeconverterconfig)
+- [Chunking Configuration: ChunkingConfig](#chunking-configuration-chunkingconfig)
+- [OCR Scheduler & Resource Management](#ocr-scheduler--resource-management)
+- [Examples](#examples)
+- [Browser Usage](#browser-usage)
+- [Troubleshooting & Common Issues](#troubleshooting--common-issues)
+- [Known Limitations](#known-limitations)
+
+---
+
 ## Install via npm
 
 ```bash
@@ -537,11 +561,23 @@ Configuration options for `OfficeGenerator.generate`.
 
 | Flag | DataType | Default | Explanation |
 |------|----------|---------|-------------|
-| `includeFormatting` | boolean | `false` | Whether to include semantic styles (bold, italic) in output. |
-| `styleMap` | string[] \| array | `[]` | Array of style mappings (DSL strings or structured objects). |
+| `includeFormatting` | boolean | `true` | Whether to include semantic styles (bold, italic, colors, sizes) in output. |
+| `generateIds` | boolean | `true` | Automatically generates unique slug-based IDs for heading nodes. |
+| `renderMetadata` | boolean | `false` | Renders document metadata (Title, Author) as a visible header block. |
+| `includeImages` | boolean | `true` | Whether to include image nodes in the generated output. |
+| `includeCharts` | boolean | `true` | Whether to include interactive charts (HTML only). |
+| `ignoreInternalLinks`| boolean | `false` | Suppresses all internal bookmarks and anchor references. |
 | `ignoreDefaultStyleMap`| boolean | `false` | Ignore the library's default style mappings. |
-| `includeMetadata` | boolean | `false` | Include document metadata in the output (e.g., as frontmatter). |
-| `onNode` | function | `undefined` | Callback to intercept/modify any node during generation. |
+| `styleMap` | string[] \| array | `[]` | Array of style mappings (DSL strings or structured objects). |
+| `onNode` | function | `undefined` | Callback to filter, override, or mutate any node during generation. |
+| `onWarning` | function | `undefined` | Callback for generation-phase warnings. |
+| `htmlConfig` | object | `{}` | Format-specific settings for HTML generation. |
+| `mdConfig` | object | `{}` | Format-specific settings for Markdown generation. |
+| `pdfConfig` | object | `{}` | Format-specific settings for PDF generation. |
+| `csvConfig` | object | `{}` | Format-specific settings for CSV generation. |
+| `textConfig` | object | `{}` | Format-specific settings for Plain Text generation. |
+| `rtfConfig` | object | `{}` | Format-specific settings for RTF generation. |
+| `chunksConfig` | object | `(doc-struct)` | Settings for RAG chunking strategies. |
 
 ### 🛠️ Advanced Node Manipulation (Pro Users)
 The `onNode` callback is a powerful tool that gives you complete control over the generation process. It is called for **every single node** in the AST before it is rendered.
@@ -607,6 +643,52 @@ The library also maintains support for a simple string-based DSL, highly compati
 - **Literal Matching**: `"p[style-name='Heading 1'] => h1"`
 - **Regex-like Matching**: `"p[style~='Title'] => h2"`
 - **Attribute Filters**: `"p[style-name='Quote'][lang='en'] => blockquote"`
+
+## Format-Specific Generator Configuration
+Each destination format has its own specialized sub-configuration object nested within the main `GeneratorConfig`.
+
+### 1. HtmlGeneratorConfig (`htmlConfig`)
+| Flag | DataType | Default | Explanation |
+|------|----------|---------|-------------|
+| `standalone` | boolean | `true` | Wraps output in a full `<html>` document with CSS and metadata. |
+| `chartJsSrc` | string | `(CDN)` | URL for the Chart.js library used for interactive charts. |
+
+### 2. MdGeneratorConfig (`mdConfig`)
+| Flag | DataType | Default | Explanation |
+|------|----------|---------|-------------|
+| `fallbackToHtml` | boolean | `true` | Uses HTML tags for features not supported by Markdown (underlines, complex tables). |
+
+### 3. PdfGeneratorConfig (`pdfConfig`)
+| Flag | DataType | Default | Explanation |
+|------|----------|---------|-------------|
+| `format` | string | `'A4'` | Paper format (e.g., 'Letter', 'A4', 'Legal'). |
+| `landscape` | boolean | `false` | Page orientation. |
+| `margin` | object | `{0,0,0,0}` | Top, right, bottom, left margins. |
+| `displayHeaderFooter`| boolean | `false` | Whether to display print headers and footers. |
+| `headerTemplate` | string | `''` | HTML template for the print header. |
+| `footerTemplate` | string | `''` | HTML template for the print footer. |
+
+### 4. CsvGeneratorConfig (`csvConfig`)
+| Flag | DataType | Default | Explanation |
+|------|----------|---------|-------------|
+| `sheets` | string | `''` | Range of sheets to export (e.g., "1", "1-3", "1,3"). |
+| `mergeSheets` | boolean | `true` | Merges all sheets into one CSV string. If false, returns a ZIP. |
+| `columnDelimiter` | string | `','` | Custom delimiter for the CSV output. |
+
+### 5. TextGeneratorConfig (`textConfig`)
+| Flag | DataType | Default | Explanation |
+|------|----------|---------|-------------|
+| `newlineDelimiter` | string | `\n` | String inserted between structural blocks. |
+| `preserveLayout` | boolean | `false` | Attempts to maintain table structures using whitespace. |
+
+## One-Step Conversion: OfficeConverterConfig
+Configuration for the `OfficeConverter.convert()` API.
+
+| Flag | DataType | Default | Explanation |
+|------|----------|---------|-------------|
+| `parseConfig` | object | `{}` | Settings for the `OfficeParser` phase. |
+| `generatorConfig` | object | `{}` | Settings for the `OfficeGenerator` phase. |
+| `onWarning` | function | `undefined` | Global callback for issues in either phase. Overrides phase-specific callbacks. |
 
 ## Chunking Configuration: ChunkingConfig
 Specific options when using `format: 'chunks'`.
