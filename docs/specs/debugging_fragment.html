@@ -1,16 +1,24 @@
 <div class="doc-body">
     <h1>Troubleshooting & Debugging</h1>
-    <p>Solutions for common integration challenges and performance optimizations in <code>officeParser</code> v7.0.0.</p>
+    <p>Solutions for common integration challenges and performance optimizations in <code>officeParser</code> v7.0.0+.
+    </p>
 
     <div class="callout callout-tip">
         <div class="callout-header">
             <span class="callout-icon">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 18h6" />
+                    <path d="M10 22h4" />
+                    <path
+                        d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" />
+                </svg>
             </span>
             Pro Tip
         </div>
         <div class="callout-content">
-            Use the <code>onWarning</code> callback to capture internal diagnostic information and trace logs during the parsing process.
+            Use the <code>onWarning</code> callback to capture internal diagnostic information and trace logs during the
+            parsing process.
         </div>
     </div>
 
@@ -19,13 +27,19 @@
 };</code></pre>
 
     <h2>1. Node.js Process Hanging (OCR)</h2>
-    <p>In v6.1.0, if you use <code>ocr: true</code>, the library maintains a persistent worker pool to make subsequent OCR tasks much faster. However, this background pool will keep your Node.js process alive for <strong>10 seconds</strong> of inactivity by default.</p>
-    
+    <p>In v6.1.0, if you use <code>ocr: true</code>, the library maintains a persistent worker pool to make subsequent
+        OCR tasks much faster. However, this background pool will keep your Node.js process alive for <strong>10
+            seconds</strong> of inactivity by default.</p>
+
     <h3>Solutions:</h3>
     <ul>
-        <li><strong>For CLI/Short-lived scripts:</strong> Call <code>await terminateOcr()</code> manually after your <code>parseOffice</code> call.</li>
-        <li><strong>Change Timeout:</strong> Set a shorter idle period via <code>ocrConfig.autoTerminateTimeout</code>.</li>
-        <li><strong>Disable Pooled Persistence:</strong> Set <code>autoTerminateTimeout: 0</code> to kill workers immediately (similar to legacy behavior).</li>
+        <li><strong>For CLI/Short-lived scripts:</strong> Call <code>await terminateOcr()</code> manually after your
+            <code>parseOffice</code> call.
+        </li>
+        <li><strong>Change Timeout:</strong> Set a shorter idle period via <code>ocrConfig.autoTerminateTimeout</code>.
+        </li>
+        <li><strong>Disable Pooled Persistence:</strong> Set <code>autoTerminateTimeout: 0</code> to kill workers
+            immediately (similar to legacy behavior).</li>
     </ul>
     <pre><code>import { parseOffice, terminateOcr } from 'officeparser';
 
@@ -36,37 +50,127 @@ await terminateOcr(); // Snappy exit</code></pre>
     <h2>2. PDF Rendering Issues (Browser)</h2>
     <p>If PDF parsing fails in the browser with "Worker not found" or "Version mismatch" errors:</p>
     <ul>
-        <li><strong>Worker Source:</strong> Ensure <code>pdfWorkerSrc</code> points to a valid URL. By default, it uses a CDN pointing to version <code>5.6.205</code>.</li>
-        <li><strong>Version Matching:</strong> If you host the worker locally, ensure it matches the <code>pdfjs-dist</code> version <code>5.6.205</code> used by the library.</li>
+        <li><strong>Worker Source:</strong> Ensure <code>pdfWorkerSrc</code> points to a valid URL. By default, it uses
+            a CDN pointing to version <code>5.6.205</code>.</li>
+        <li><strong>Version Matching:</strong> If you host the worker locally, ensure it matches the
+            <code>pdfjs-dist</code> version <code>5.6.205</code> used by the library.
+        </li>
     </ul>
 
     <h2>3. OCR Accuracy & Performance</h2>
     <p>If OCR results are missing or incorrect:</p>
     <ul>
-        <li><strong>Language Selection:</strong> Ensure you've provided the correct language code. You can combine multiple languages with a <code>+</code> sign (e.g., <code>eng+deu</code>).</li>
-        <li><strong>Air-gapped Environments:</strong> In restricted environments, <code>tesseract.js</code> cannot download language files. You must provide local paths via <code>ocrConfig.workerPath</code>, <code>ocrConfig.corePath</code>, and <code>ocrConfig.langPath</code>.</li>
-        <li><strong>Memory:</strong> Parallel OCR on many images can be intensive. <code>officeParser</code> limits the pool to 4 concurrent workers by default to prevent crashes.</li>
+        <li><strong>Language Selection:</strong> Ensure you've provided the correct language code. You can combine
+            multiple languages with a <code>+</code> sign (e.g., <code>eng+deu</code>).</li>
+        <li><strong>Air-gapped Environments:</strong> In restricted environments, <code>tesseract.js</code> cannot
+            download language files. You must provide local paths via <code>ocrConfig.workerPath</code>,
+            <code>ocrConfig.corePath</code>, and <code>ocrConfig.langPath</code>.
+        </li>
+        <li><strong>Memory:</strong> Parallel OCR on many images can be intensive. <code>officeParser</code> limits the
+            pool to 4 concurrent workers by default to prevent crashes.</li>
     </ul>
 
     <h2>4. Memory Management (Giant Files)</h2>
     <p>When parsing extremely large Excel (.xlsx) or PowerPoint (.pptx) files:</p>
     <ul>
-        <li><strong>AST vs. Text:</strong> The structured AST consumes significantly more memory than plain text. If you don't need the hierarchy, use <code>ast.toText()</code> and allow the AST to be garbage-collected immediately.</li>
-        <li><strong>Ignore Notes:</strong> For complex PowerPoints, setting <code>ignoreNotes: true</code> can reduce memory usage by skipping entire XML trees.</li>
+        <li><strong>AST vs. Text:</strong> The structured AST consumes significantly more memory than plain text. If you
+            don't need the hierarchy, use <code>ast.toText()</code> and allow the AST to be garbage-collected
+            immediately.</li>
+        <li><strong>Ignore Notes:</strong> For complex PowerPoints, setting <code>ignoreNotes: true</code> can reduce
+            memory usage by skipping entire XML trees.</li>
     </ul>
 
     <h2>5. Metadata & Custom Properties</h2>
     <p>If <code>metadata.customProperties</code> is empty:</p>
     <ul>
-        <li>Custom property extraction is currently limited to <strong>OOXML (DOCX, XLSX, PPTX)</strong>, <strong>ODF (ODT, ODS, ODP)</strong>, and <strong>PDF</strong>.</li>
+        <li>Custom property extraction is currently limited to <strong>OOXML (DOCX, XLSX, PPTX)</strong>, <strong>ODF
+                (ODT, ODS, ODP)</strong>, and <strong>PDF</strong>.</li>
         <li>Legacy formats like <strong>RTF</strong> do not support custom property extraction.</li>
     </ul>
 
     <h2>6. Bundle Selection</h2>
     <p>Ensure you are importing the correct build for your environment:</p>
     <ul>
-        <li><strong>Node.js (CJS/ESM)</strong>: Standard <code>import</code> or <code>require</code> works automatically via <code>package.json</code> exports.</li>
+        <li><strong>Node.js (CJS/ESM)</strong>: Standard <code>import</code> or <code>require</code> works automatically
+            via <code>package.json</code> exports.</li>
         <li><strong>Modern Bundlers (Vite/Webpack)</strong>: Use the <code>.mjs</code> bundle for best treeshaking.</li>
-        <li><strong>Legacy Browser Scripts</strong>: Use <code>dist/officeparser.browser.iife.js</code> for a global <code>officeParser</code> namespace.</li>
+        <li><strong>Legacy Browser Scripts</strong>: Use <code>dist/officeparser.browser.iife.js</code> for a global
+            <code>officeParser</code> namespace.
+        </li>
     </ul>
+
+    <h2>7. Text-Based Buffer Detection Failure (<code>IMPROPER_BUFFERS</code>)</h2>
+    <p>When passing a <code>Buffer</code> or <code>ArrayBuffer</code> for <code>md</code>, <code>html</code>, or
+        <code>csv</code> files, the parser cannot auto-detect the format — these formats have no magic bytes. You must
+        provide a <code>fileType</code> hint:
+    </p>
+    <pre><code>// Without fileType → throws IMPROPER_BUFFERS
+await officeParser.parseOffice(markdownBuffer);
+
+// Correct:
+await officeParser.parseOffice(markdownBuffer, { fileType: 'md' });
+await officeParser.parseOffice(htmlBuffer,     { fileType: 'html' });
+await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre>
+    <p>The <code>fileType</code> option is authoritative — it bypasses magic-bytes detection even for binary formats.
+    </p>
+
+    <h2>8. PDF Generation Fails (Node.js)</h2>
+    <p>PDF output (<code>format: 'pdf'</code>) uses <strong>Puppeteer</strong>, which is an optional peer dependency not
+        included by default. If generation throws a dependency error, install it:</p>
+    <pre><code>npm install puppeteer</code></pre>
+    <p>In CI/CD environments where Puppeteer cannot download Chromium automatically, pass a custom executable path via
+        <code>pdfConfig.launchOptions</code>:
+    </p>
+    <pre><code>await OfficeGenerator.generate(ast, 'pdf', {
+    pdfConfig: {
+        launchOptions: {
+            executablePath: '/usr/bin/chromium-browser',
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        }
+    }
+});</code></pre>
+
+    <h2>Quick Reference</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Symptom</th>
+                <th>Fix</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Process stays alive after script finishes</td>
+                <td>Call <code>await terminateOcr()</code> when OCR was used</td>
+            </tr>
+            <tr>
+                <td>"Worker not found" in browser (PDF)</td>
+                <td>Set <code>pdfWorkerSrc</code> to a valid URL for pdfjs-dist <code>5.6.205</code></td>
+            </tr>
+            <tr>
+                <td>Low OCR accuracy</td>
+                <td>Verify <code>ocrConfig.language</code> matches the document language</td>
+            </tr>
+            <tr>
+                <td>Out of memory on large Excel files</td>
+                <td>Call <code>ast.toText()</code> early and discard the AST to allow GC</td>
+            </tr>
+            <tr>
+                <td><code>md</code>/<code>html</code>/<code>csv</code> buffer not detected</td>
+                <td>Add <code>fileType: 'md'</code> (or <code>'html'</code>, <code>'csv'</code>) to config</td>
+            </tr>
+            <tr>
+                <td><code>IMPROPER_BUFFERS</code> error</td>
+                <td>No file extension and no <code>fileType</code> hint provided</td>
+            </tr>
+            <tr>
+                <td>PDF generation fails</td>
+                <td>Install optional peer dep: <code>npm install puppeteer</code></td>
+            </tr>
+            <tr>
+                <td>RTF notes stay at end</td>
+                <td><code>putNotesAtLast</code> has no effect on RTF (behavior is fixed)</td>
+            </tr>
+        </tbody>
+    </table>
 </div>

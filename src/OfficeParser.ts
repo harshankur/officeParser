@@ -30,7 +30,7 @@
  * const ast = await OfficeParser.parseOffice(buffer);
  * 
  * // Get plain text
- * console.log(ast.toText());
+ * console.log((await ast.to('text')).value);
  * ```
  * 
  * @module OfficeParser

@@ -40,10 +40,11 @@ export class OfficeConverter {
      * // Convert Word to Markdown with a single call
      * const { value: markdown } = await OfficeConverter.convert('report.docx', 'md');
      * 
-     * // Convert PDF to HTML with OCR enabled for images
+     * // Convert PDF to HTML (Note: OCR is disabled in this one-step API)
      * const { value: html } = await OfficeConverter.convert(buffer, 'html', {
-     *   ocr: true,
-     *   includeImages: true
+     *   generatorConfig: {
+     *     includeImages: true
+     *   }
      * });
      * ```
      */

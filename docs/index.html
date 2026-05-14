@@ -339,6 +339,128 @@
             box-shadow: var(--glow);
         }
 
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .action-buttons {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        /* Hamburger Button */
+        .hamburger {
+            display: none;
+            flex-direction: column;
+            justify-content: space-between;
+            width: 20px;
+            height: 14px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            padding: 0;
+            z-index: 1100;
+        }
+
+        .hamburger span {
+            display: block;
+            width: 100%;
+            height: 2px;
+            background-color: var(--text-main);
+            border-radius: 2px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .hamburger.active span:nth-child(1) {
+            transform: translateY(6px) rotate(45deg);
+        }
+
+        .hamburger.active span:nth-child(2) {
+            opacity: 0;
+        }
+
+        .hamburger.active span:nth-child(3) {
+            transform: translateY(-6px) rotate(-45deg);
+        }
+
+        /* Mobile Menu */
+        .mobile-menu {
+            position: fixed;
+            top: 0;
+            right: -100%;
+            width: 280px;
+            height: 100vh;
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border-left: 1px solid var(--border);
+            padding: 6rem 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            transition: right 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 1050;
+            box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .mobile-menu.active {
+            right: 0;
+        }
+
+        .mobile-menu a {
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: var(--text-dim);
+            text-decoration: none;
+            padding: 0.75rem 1rem;
+            border-radius: 10px;
+            transition: all 0.2s;
+        }
+
+        .mobile-menu a:hover {
+            background: var(--bg-card-hover);
+            color: var(--primary);
+            padding-left: 1.5rem;
+        }
+
+        .sponsor-nav-btn {
+            background: rgba(234, 74, 170, 0.1);
+            color: #ea4aaa !important;
+            border: 1px solid rgba(234, 74, 170, 0.2);
+            padding: 0.5rem 1.25rem;
+            border-radius: 9999px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .sponsor-nav-btn:hover {
+            background: rgba(234, 74, 170, 0.2);
+            border-color: #ea4aaa;
+            box-shadow: 0 0 15px rgba(234, 74, 170, 0.3);
+        }
+
+        .bmc-nav-btn img {
+            height: 34px;
+            border-radius: 8px;
+            transition: transform 0.2s;
+            display: block;
+        }
+
+        .bmc-nav-btn:hover img {
+            transform: scale(1.05);
+        }
+
+        .bmc-icon-btn {
+            display: none;
+        }
+
         /* --- Hero Section --- */
         .hero {
             padding: 10rem 2rem 6rem;
@@ -1256,7 +1378,7 @@
             }
         }
 
-        @media (max-width: 768px) {
+        @media (max-width: 1024px) {
             header {
                 padding: 1rem 1.5rem;
             }
@@ -1265,6 +1387,48 @@
                 display: none;
             }
 
+            .action-buttons .theme-switcher {
+                display: none;
+            }
+
+            .hamburger {
+                display: flex;
+            }
+
+            .action-buttons .btn-text {
+                display: none;
+            }
+
+            .sponsor-nav-btn,
+            .github-btn {
+                padding: 0.5rem;
+                width: 36px;
+                height: 36px;
+                justify-content: center;
+                gap: 0;
+            }
+
+            .sponsor-nav-btn svg,
+            .github-btn svg {
+                margin: 0;
+            }
+
+            .bmc-nav-btn .bmc-full-btn {
+                display: none;
+            }
+
+            .bmc-nav-btn .bmc-icon-btn {
+                display: block;
+            }
+
+            .bmc-nav-btn img {
+                height: 36px;
+                width: 36px;
+                border-radius: 50%;
+            }
+        }
+
+        @media (max-width: 768px) {
             .hero {
                 padding: 8rem 1.5rem 4rem;
             }
@@ -1637,26 +1801,80 @@
 <body>
     <header>
         <div class="logo" onclick="window.location.href='#top'">officeParser</div>
-        <nav class="nav-links">
+        <div class="header-right">
+            <nav class="nav-links">
+                <a href="#support">Support</a>
+                <a href="#features">Features</a>
+                <a href="#rag">RAG & Chunking</a>
+                <a href="#specs">Specifications</a>
+                <a href="#visualizer">Visualizer</a>
+            </nav>
+            <div class="action-buttons">
+                <div class="theme-switcher">
+                    <button class="theme-btn theme-btn-light" title="Light Mode">☀️</button>
+                    <button class="theme-btn theme-btn-dark" title="Dark Mode">🌙</button>
+                    <button class="theme-btn theme-btn-auto" title="System Settings">💻</button>
+                </div>
+                <a href="https://github.com/sponsors/harshankur" class="sponsor-nav-btn" target="_blank"
+                    title="Sponsor on GitHub">
+                    <svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path
+                            d="M4.25 2.5c-1.336 0-2.75 1.164-2.75 3 0 2.15 1.58 4.144 3.365 5.229A10.66 10.66 0 018 12.5a10.66 10.66 0 013.135-1.771c1.786-1.085 3.365-3.079 3.365-5.229 0-1.836-1.414-3-2.75-3-1.336 0-2.25 1.164-2.25 2a.75.75 0 01-1.5 0c0-.836-.914-2-2.25-2z">
+                        </path>
+                    </svg>
+                    <span class="btn-text">Sponsor</span>
+                </a>
+                <a href="https://www.buymeacoffee.com/harshankur" class="bmc-nav-btn" target="_blank"
+                    title="Buy Me A Coffee">
+                    <div class="bmc-full-btn">
+                        <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee">
+                    </div>
+                    <div class="bmc-icon-btn">
+                        <img src="https://www.buymeacoffee.com/assets/img/guidelines/logo-mark-1.svg" alt="BMC Icon">
+                    </div>
+                </a>
+                <a href="https://github.com/harshankur/officeParser" class="github-btn" target="_blank"
+                    title="View GitHub">
+                    <svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor">
+                        <path
+                            d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z">
+                        </path>
+                    </svg>
+                    <span class="btn-text">GitHub</span>
+                </a>
+                <button class="hamburger" id="hamburger-btn" aria-label="Toggle Menu">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+        </div>
+        <!-- Mobile Menu Overlay -->
+        <div class="mobile-menu" id="mobile-menu">
             <a href="#support">Support</a>
             <a href="#features">Features</a>
             <a href="#rag">RAG & Chunking</a>
             <a href="#specs">Specifications</a>
             <a href="#visualizer">Visualizer</a>
-            <div class="theme-switcher">
-                <button class="theme-btn" id="theme-light" title="Light Mode">☀️</button>
-                <button class="theme-btn" id="theme-dark" title="Dark Mode">🌙</button>
-                <button class="theme-btn" id="theme-auto" title="System Settings">💻</button>
+            <div class="theme-switcher-mobile"
+                style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid var(--border);">
+                <p
+                    style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); margin-bottom: 1rem; font-weight: 700;">
+                    Appearance</p>
+                <div class="theme-switcher"
+                    style="display: flex; width: fit-content; background: var(--bg-deep); padding: 4px; border-radius: 12px; border: 1px solid var(--border);">
+                    <button class="theme-btn theme-btn-light" title="Light Mode"
+                        style="padding: 0.6rem 1.2rem; display: flex; align-items: center; gap: 0.5rem;">☀️
+                        Light</button>
+                    <button class="theme-btn theme-btn-dark" title="Dark Mode"
+                        style="padding: 0.6rem 1.2rem; display: flex; align-items: center; gap: 0.5rem;">🌙
+                        Dark</button>
+                    <button class="theme-btn theme-btn-auto" title="System Settings"
+                        style="padding: 0.6rem 1.2rem; display: flex; align-items: center; gap: 0.5rem;">💻
+                        Auto</button>
+                </div>
             </div>
-            <a href="https://github.com/harshankur/officeParser" class="github-btn" target="_blank">
-                <svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor">
-                    <path
-                        d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z">
-                    </path>
-                </svg>
-                GitHub
-            </a>
-        </nav>
+        </div>
     </header>
 
     <main>
@@ -1673,6 +1891,7 @@
                 <a href="#visualizer" class="btn btn-primary">Try Visualizer</a>
                 <a href="https://www.npmjs.com/package/officeparser" class="btn btn-outline" target="_blank">View on
                     NPM</a>
+            </div>
             </div>
         </section>
 
@@ -2492,19 +2711,21 @@
             });
 
             // --- Theme Switcher ---
+            const themeActions = ['light', 'dark', 'auto'];
             const themeBtns = {
-                light: document.getElementById('theme-light'),
-                dark: document.getElementById('theme-dark'),
-                auto: document.getElementById('theme-auto')
+                light: document.querySelectorAll('.theme-btn-light'),
+                dark: document.querySelectorAll('.theme-btn-dark'),
+                auto: document.querySelectorAll('.theme-btn-auto')
             };
 
             function updateThemeUI(theme) {
-                Object.values(themeBtns).forEach(btn => btn.classList.remove('active'));
-                themeBtns[theme].classList.add('active');
+                document.querySelectorAll('.theme-btn').forEach(btn => btn.classList.remove('active'));
+                document.querySelectorAll(`.theme-btn-${theme}`).forEach(btn => btn.classList.add('active'));
             }
 
             function setTheme(theme) {
                 localStorage.setItem('theme', theme);
+                const html = document.documentElement;
                 if (theme === 'auto') {
                     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
                     html.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
@@ -2514,9 +2735,11 @@
                 updateThemeUI(theme);
             }
 
-            themeBtns.light.addEventListener('click', () => setTheme('light'));
-            themeBtns.dark.addEventListener('click', () => setTheme('dark'));
-            themeBtns.auto.addEventListener('click', () => setTheme('auto'));
+            themeActions.forEach(theme => {
+                document.querySelectorAll(`.theme-btn-${theme}`).forEach(btn => {
+                    btn.addEventListener('click', () => setTheme(theme));
+                });
+            });
 
             const initialTheme = localStorage.getItem('theme') || 'auto';
             updateThemeUI(initialTheme);
@@ -3350,6 +3573,32 @@
             updateOcrCleanupState();
             updateDownloadStats();
         });
+        // Mobile Menu Toggle
+        const hamburger = document.getElementById('hamburger-btn');
+        const mobileMenu = document.getElementById('mobile-menu');
+
+        if (hamburger && mobileMenu) {
+            hamburger.addEventListener('click', () => {
+                hamburger.classList.toggle('active');
+                mobileMenu.classList.toggle('active');
+            });
+
+            // Close menu on link click
+            mobileMenu.querySelectorAll('a').forEach(link => {
+                link.addEventListener('click', () => {
+                    hamburger.classList.remove('active');
+                    mobileMenu.classList.remove('active');
+                });
+            });
+
+            // Close menu on escape key
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    hamburger.classList.remove('active');
+                    mobileMenu.classList.remove('active');
+                }
+            });
+        }
     </script>
 </body>
 

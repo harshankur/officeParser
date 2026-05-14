@@ -1,6 +1,7 @@
 <div class="doc-body">
     <h1>Generator Configuration Specification</h1>
-    <p>The <code>GeneratorConfig</code> object controls how the AST is transformed into final output formats like HTML, Markdown, or PDF. It consists of common options and specialized sub-configurations.</p>
+    <p>The <code>GeneratorConfig</code> object controls how the AST is transformed into final output formats like HTML,
+        Markdown, or PDF. It consists of common options and specialized sub-configurations.</p>
 
     <h2>CommonGeneratorConfig</h2>
     <p>These settings apply to every generator unless specifically overridden in a sub-config.</p>
@@ -18,25 +19,29 @@
                 <td><code>includeFormatting</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
-                <td><strong>Visual Fidelity</strong>: Whether to include colors, font sizes, and text decorations (underline, strike, etc.) in the output.</td>
+                <td><strong>Visual Fidelity</strong>: Whether to include colors, font sizes, and text decorations
+                    (underline, strike, etc.) in the output.</td>
             </tr>
             <tr>
                 <td><code>generateIds</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
-                <td><strong>Navigation</strong>: Automatically generates unique slug-based IDs for heading nodes, enabling internal anchor links.</td>
+                <td><strong>Navigation</strong>: Automatically generates unique slug-based IDs for heading nodes,
+                    enabling internal anchor links.</td>
             </tr>
             <tr>
                 <td><code>renderMetadata</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Branding</strong>: If true, renders the document metadata (Title, Author, Creation Date) as a visible header block.</td>
+                <td><strong>Branding</strong>: If true, renders the document metadata (Title, Author, Creation Date) as
+                    a visible header block.</td>
             </tr>
             <tr>
                 <td><code>includeImages</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
-                <td><strong>Resources</strong>: Whether to include <code>&lt;img&gt;</code> tags or Markdown image syntax in the output.</td>
+                <td><strong>Resources</strong>: Whether to include <code>&lt;img&gt;</code> tags or Markdown image
+                    syntax in the output.</td>
             </tr>
             <tr>
                 <td><code>includeCharts</code></td>
@@ -54,19 +59,31 @@
                 <td><code>ignoreDefaultStyleMap</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Control</strong>: If true, ignores the built-in mapping of standard Word/Office styles to semantic tags.</td>
+                <td><strong>Control</strong>: If true, ignores the built-in mapping of standard Word/Office styles to
+                    semantic tags.</td>
             </tr>
             <tr>
                 <td><code>styleMap</code></td>
                 <td><code>string[] | object[]</code></td>
                 <td><code>[]</code></td>
-                <td><strong>Semantic Bridge</strong>: Maps source styles (e.g., 'Intense Quote') to semantic tags (e.g., 'blockquote').</td>
+                <td><strong>Semantic Bridge</strong>: Maps source styles (e.g., 'Intense Quote') to semantic tags (e.g.,
+                    'blockquote').</td>
             </tr>
             <tr>
                 <td><code>onNode</code></td>
                 <td><code>function</code></td>
                 <td><code>undefined</code></td>
-                <td><strong>Interception</strong>: Callback to filter, override, or mutate every node during generation.</td>
+                <td><strong>Interception</strong>: Async callback called for every node during generation. Return
+                    <code>false</code> to skip, a <code>string</code> to override rendering, or <code>void</code> to
+                    proceed with default logic (mutations to <code>node</code> are applied).
+                </td>
+            </tr>
+            <tr>
+                <td><code>onWarning</code></td>
+                <td><code>function</code></td>
+                <td><code>undefined</code></td>
+                <td><strong>Diagnostics</strong>: Callback for non-fatal issues encountered during generation (e.g.
+                    unsupported drawing, skipped node). Receives an <code>OfficeIssue</code> object.</td>
             </tr>
         </tbody>
     </table>
@@ -139,25 +156,51 @@
                 <td><code>format</code></td>
                 <td><code>string</code></td>
                 <td><code>'A4'</code></td>
-                <td>Paper format (Letter, A4, etc.).</td>
+                <td>Paper format (<code>'A4'</code>, <code>'Letter'</code>, <code>'Legal'</code>, <code>'A3'</code>,
+                    etc.).</td>
             </tr>
             <tr>
                 <td><code>landscape</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td>Orientation.</td>
+                <td>Landscape page orientation.</td>
+            </tr>
+            <tr>
+                <td><code>printBackground</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Whether to print CSS background graphics.</td>
             </tr>
             <tr>
                 <td><code>margin</code></td>
                 <td><code>object</code></td>
                 <td><code>{0,0,0,0}</code></td>
-                <td>Page margins in inches or mm.</td>
+                <td>Page margins — <code>{ top, right, bottom, left }</code> in inches or mm.</td>
             </tr>
             <tr>
                 <td><code>displayHeaderFooter</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td>Enables PDF native headers/footers.</td>
+            </tr>
+            <tr>
+                <td><code>headerTemplate</code> / <code>footerTemplate</code></td>
+                <td><code>string</code></td>
+                <td><code>''</code></td>
+                <td>HTML template strings for print header/footer.</td>
+            </tr>
+            <tr>
+                <td><code>scale</code></td>
+                <td><code>number</code></td>
+                <td><code>1</code></td>
+                <td>Rendering scale factor.</td>
+            </tr>
+            <tr>
+                <td><code>launchOptions</code></td>
+                <td><code>object</code></td>
+                <td>headless defaults</td>
+                <td>Puppeteer launch options (e.g. <code>executablePath</code>, <code>args</code>). Useful for CI/CD
+                    environments.</td>
             </tr>
         </tbody>
     </table>
@@ -222,13 +265,200 @@
 
     <h2>Style Mapping (The Semantic Bridge)</h2>
     <p>Style mapping allows you to define the <strong>semantic meaning</strong> of arbitrary document styles.</p>
-    
+
     <h3>Legacy String DSL</h3>
     <pre><code>["p[style-name='Heading 1'] => h1", "p[style='Quote'] => blockquote"]</code></pre>
-    
+
     <h3>Structured Objects (Recommended)</h3>
-    <pre><code>{ 
-  selector: { nodeType: 'paragraph', attributes: { style: 'Heading 1' } }, 
-  output: { tag: 'h1', classes: ['main-title'] } 
-}</code></pre>
+    <p>Use for full type safety, class application, and the <code>~=</code> partial-match operator:</p>
+    <pre><code>styleMap: [
+    {
+        selector: { nodeType: 'paragraph', attributes: { style: 'Heading 1' } },
+        output: { tag: 'h1', classes: ['main-title'], attributes: { id: 'top' } }
+    },
+    {
+        // '~=' matches if the word 'Quote' appears anywhere in the style name
+        selector: { attributes: { style: { value: 'Quote', operator: '~=' } } },
+        output: { tag: 'blockquote', fresh: true }
+    }
+]</code></pre>
+    <p><code>fresh: true</code> prevents the generator from merging adjacent nodes of the same tag into one block.
+        Without it, consecutive paragraphs mapped to <code>blockquote</code> would be combined into a single element.
+    </p>
+
+    <h2>ChunkingConfig Reference</h2>
+    <p><code>ChunkingConfig</code> is a <strong>discriminated union</strong> — available options depend on the
+        <code>strategy</code> field. Default strategy is <code>'document-structure'</code>.
+    </p>
+
+    <h3>Common Options (all strategies)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Option</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>strategy</code></td>
+                <td><code>string</code></td>
+                <td><code>'document-structure'</code></td>
+                <td>Chunking strategy to use.</td>
+            </tr>
+            <tr>
+                <td><code>stripWhitespace</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Trim leading/trailing whitespace from each chunk.</td>
+            </tr>
+            <tr>
+                <td><code>includeMetadata</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Include page/slide/heading metadata in each chunk object.</td>
+            </tr>
+            <tr>
+                <td><code>addStartIndex</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Include <code>startIndex</code> and <code>endIndex</code> character offsets at the root of the chunk
+                    object.</td>
+            </tr>
+            <tr>
+                <td><code>lengthFunction</code></td>
+                <td><code>(text) =&gt; number</code></td>
+                <td><code>text.length</code></td>
+                <td>Custom size measurer (e.g. token counter for strict LLM context limits).</td>
+            </tr>
+            <tr>
+                <td><code>sentenceBoundaryRegex</code></td>
+                <td><code>string | RegExp</code></td>
+                <td><code>/[.!?。！？]/</code></td>
+                <td>Custom sentence boundary pattern.</td>
+            </tr>
+            <tr>
+                <td><code>abbreviations</code></td>
+                <td><code>string[]</code></td>
+                <td>common list</td>
+                <td>Words that should not trigger sentence splits when followed by a period.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>strategy: 'fixed-size'</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Option</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>chunkSize</code></td>
+                <td><code>number</code></td>
+                <td><code>1000</code></td>
+                <td>Maximum characters per chunk.</td>
+            </tr>
+            <tr>
+                <td><code>chunkOverlap</code></td>
+                <td><code>number</code></td>
+                <td><code>200</code></td>
+                <td>Character overlap between consecutive chunks to preserve context at boundaries.</td>
+            </tr>
+            <tr>
+                <td><code>separators</code></td>
+                <td><code>string[]</code></td>
+                <td><code>['
+
+','
+',' ','']</code></td>
+                <td>Ordered list of separators to try when splitting.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>strategy: 'document-structure'</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Option</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>splitBy</code></td>
+                <td><code>string</code></td>
+                <td><code>'paragraph'</code></td>
+                <td><code>'paragraph'</code> · <code>'heading'</code> · <code>'page'</code> · <code>'slide'</code> ·
+                    <code>'sheet'</code>
+                </td>
+            </tr>
+            <tr>
+                <td><code>maxChunkSize</code></td>
+                <td><code>number</code></td>
+                <td><code>1000</code></td>
+                <td>Max characters per chunk. Oversized structural units are split recursively.</td>
+            </tr>
+            <tr>
+                <td><code>tableSplitStrategy</code></td>
+                <td><code>string</code></td>
+                <td><code>'row'</code></td>
+                <td><code>'row'</code> repeats the header row in every chunk (ideal for RAG); <code>'flatten'</code>
+                    converts the table to plain text.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>strategy: 'semantic'</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Option</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>embeddingFunction</code></td>
+                <td><code>(text) =&gt; Promise&lt;number[]&gt;</code></td>
+                <td><strong>required</strong></td>
+                <td>Async function that returns a vector embedding for a text string.</td>
+            </tr>
+            <tr>
+                <td><code>similarityThreshold</code></td>
+                <td><code>number</code></td>
+                <td><code>0.8</code></td>
+                <td>Cosine similarity threshold below which a chunk boundary is created. Higher = more splits.</td>
+            </tr>
+            <tr>
+                <td><code>maxChunkSize</code></td>
+                <td><code>number</code></td>
+                <td><code>2000</code></td>
+                <td>Max characters even if similarity stays high.</td>
+            </tr>
+            <tr>
+                <td><code>bufferSize</code></td>
+                <td><code>number</code></td>
+                <td><code>1</code></td>
+                <td>Number of surrounding sentences used when computing similarity (reduces noise).</td>
+            </tr>
+            <tr>
+                <td><code>embeddingBatchSize</code></td>
+                <td><code>number</code></td>
+                <td><code>50</code></td>
+                <td>Sentences per embedding API batch call.</td>
+            </tr>
+        </tbody>
+    </table>
 </div>

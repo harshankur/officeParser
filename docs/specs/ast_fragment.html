@@ -18,7 +18,8 @@
                 <td><code>type</code></td>
                 <td><code>SupportedFileType</code></td>
                 <td>The type of the parsed file (<code>docx</code>, <code>xlsx</code>, <code>pptx</code>,
-                    <code>pdf</code>, <code>rtf</code>, <code>odt</code>, <code>ods</code>, <code>odp</code>).</td>
+                    <code>pdf</code>, <code>rtf</code>, <code>odt</code>, <code>ods</code>, <code>odp</code>,
+                    <code>csv</code>, <code>md</code>, <code>html</code>).</td>
             </tr>
             <tr>
                 <td><code>metadata</code></td>
@@ -36,14 +37,19 @@
                 <td>Unified array of binary resources (images, charts, objects) referenced in the content.</td>
             </tr>
             <tr>
+                <td><code>warnings</code></td>
+                <td><code>OfficeIssue[]</code></td>
+                <td>Non-fatal issues encountered during the parsing phase (e.g. OCR failures, skipped nodes). Always check this after parsing if you use <code>onWarning</code>.</td>
+            </tr>
+            <tr>
                 <td><code>toText()</code></td>
                 <td><code>function</code></td>
-                <td><strong>Deprecated</strong>: Utility method to flatten the entire AST into plain text. Use <code>.to('text')</code> instead.</td>
+                <td><strong>Deprecated</strong>: Synchronous utility to flatten the AST into plain text. Use the async <code>.to('text')</code> instead.</td>
             </tr>
             <tr>
                 <td><code>to(destination, config?)</code></td>
                 <td><code>Promise&lt;ConversionResult&gt;</code></td>
-                <td><strong>Recommended</strong>: Universal entry point for generation. Converts the AST to <code>md</code>, <code>html</code>, <code>pdf</code>, <code>text</code>, or <code>chunks</code>.</td>
+                <td><strong>Recommended</strong>: Universal entry point for generation. Converts the AST to <code>text</code>, <code>md</code>, <code>html</code>, <code>csv</code>, <code>rtf</code>, <code>pdf</code>, or <code>chunks</code>. Returns a <code>ConversionResult</code> with <code>{ value, messages }</code>.</td>
             </tr>
         </tbody>
     </table>
@@ -163,6 +169,17 @@
         <strong>Plain Text Conversion</strong>: Even though break nodes have no <code>text</code> property, the <code>ast.toText()</code> method automatically converts them into newlines (<code>\n</code>) or the configured <code>newlineDelimiter</code> to preserve the document's visual structure.
     </blockquote>
 
+    <h2>OfficeIssue Interface</h2>
+    <p>All warnings and errors from both parsing (<code>ast.warnings</code>) and generation (<code>result.messages</code>) use this unified shape:</p>
+    <pre><code>interface OfficeIssue {
+    type: 'warning' | 'info' | 'error';
+    code: OfficeWarningType | OfficeErrorType; // typed enum, e.g. 'OCR_FAILED'
+    message: string;
+    node?: OfficeContentNode; // the node that triggered the issue, if applicable
+    details?: any;            // original error object or extra context
+}</code></pre>
+    <p>Use <code>issue.code</code> for programmatic handling (e.g. <code>if (issue.code === 'OCR_FAILED') { ... }</code>).</p>
+
     <h2>Text Formatting</h2>
     <p>Applied to <code>text</code>, <code>paragraph</code>, or <code>heading</code> nodes.</p>
     <pre><code>{
@@ -170,6 +187,8 @@
     italic?: boolean;
     underline?: boolean;
     strikethrough?: boolean;
+    subscript?: boolean;
+    superscript?: boolean;
     color?: string;           // Hex (#RRGGBB)
     backgroundColor?: string; // Hex (#RRGGBB)
     size?: string;            // e.g., "12pt" or "14"

@@ -1,31 +1,45 @@
 <div class="doc-body">
-    <h1>OfficeGenerator & RAG Specification</h1>
-    <p>The <code>OfficeGenerator</code> is the engine that transforms the universal <code>OfficeParserAST</code> into destination formats. It is designed to be format-agnostic and supports advanced AI-ready chunking strategies.</p>
+    <h1>OfficeGenerator &amp; RAG Specification</h1>
+    <p>The <code>OfficeGenerator</code> transforms a universal <code>OfficeParserAST</code> into destination formats. It is format-agnostic and can also generate AI-ready chunking output for RAG pipelines.</p>
 
     <h2>OfficeGenerator.generate()</h2>
-    <p>Transforms an existing AST into a destination format.</p>
-    <pre><code>import { OfficeGenerator } from 'officeparser';
+    <p>Transforms an existing AST into a destination format. Returns a <code>ConversionResult</code>.</p>
+    <pre><code>import { OfficeParser, OfficeGenerator } from 'officeparser';
 
-const result = await OfficeGenerator.generate(ast, 'html', config);
-console.log(result.value); // The generated string or buffer</code></pre>
+const ast = await OfficeParser.parseOffice('report.docx');
 
-    <h2>RAG & Chunking Strategies</h2>
-    <p>When the destination format is <code>'chunks'</code>, the generator returns an array of <code>OfficeChunk</code> objects. These are optimized for ingestion into Vector Databases for RAG pipelines.</p>
-    
-    <h3>1. Document Structure Chunking (Recommended)</h3>
-    <p>Splits at natural boundaries (paragraphs/headings) while respecting a maximum size limit.</p>
-    <pre><code>chunksConfig: {
-    strategy: 'document-structure',
-    splitBy: 'paragraph',
-    maxChunkSize: 1000,
-    tableSplitStrategy: 'row'
-}</code></pre>
+// Convert to Markdown
+const { value: md } = await OfficeGenerator.generate(ast, 'md');
 
-    <h3>2. Fixed-Size Chunking</h3>
-    <p>Splits text by character count with a sliding window overlap.</p>
+// Convert to HTML with style mapping
+const { value: html } = await OfficeGenerator.generate(ast, 'html', {
+    includeFormatting: true,
+    styleMap: [
+        {
+            selector: { nodeType: 'paragraph', attributes: { style: 'Heading 1' } },
+            output: { tag: 'h1', classes: ['main-title'] }
+        }
+    ]
+});
 
-    <h3>3. Semantic Chunking</h3>
-    <p>Uses embedding similarity to find topic breakpoints. Requires an external <code>embeddingFunction</code>.</p>
+// Convert to CSV
+const { value: csv } = await OfficeGenerator.generate(ast, 'csv');</code></pre>
+
+    <p><strong>Supported destinations:</strong> <code>'text'</code> · <code>'md'</code> · <code>'html'</code> · <code>'csv'</code> · <code>'rtf'</code> · <code>'pdf'</code> · <code>'chunks'</code></p>
+
+    <blockquote>
+        [!IMPORTANT]
+        <strong>PDF generation</strong> requires the optional <code>puppeteer</code> peer dependency: <code>npm install puppeteer</code>
+    </blockquote>
+
+    <h2>ast.to() — Shorthand</h2>
+    <p>Every <code>OfficeParserAST</code> exposes a <code>.to(destination, config?)</code> method as a shorthand for <code>OfficeGenerator.generate</code>. This is the preferred way when you already have an AST:</p>
+    <pre><code>const ast = await OfficeParser.parseOffice('report.docx');
+
+const { value: markdown } = await ast.to('md');
+const { value: html }     = await ast.to('html', { includeFormatting: false });
+const { value: chunks }   = await ast.to('chunks', { strategy: 'fixed-size', chunkSize: 800 });
+const { value: pdfBytes } = await ast.to('pdf'); // returns Uint8Array</code></pre>
 
     <h2>ConversionResult Reference</h2>
     <p>All generation methods return this object, which includes the output and any diagnostic messages.</p>
@@ -40,19 +54,114 @@ console.log(result.value); // The generated string or buffer</code></pre>
         <tbody>
             <tr>
                 <td><code>value</code></td>
-                <td><code>string | Buffer | OfficeChunk[]</code></td>
-                <td>The actual generated content.</td>
+                <td><code>string | Uint8Array | OfficeChunk[]</code></td>
+                <td>The actual generated content. Type depends on destination: <code>pdf</code> → <code>Uint8Array</code>, <code>chunks</code> → <code>OfficeChunk[]</code>, <code>csv</code> → <code>string | Uint8Array</code>, all others → <code>string</code>.</td>
             </tr>
             <tr>
                 <td><code>messages</code></td>
                 <td><code>OfficeIssue[]</code></td>
-                <td>Array of warnings or info messages encountered during generation.</td>
+                <td>Array of warnings or info messages encountered during generation. For <code>OfficeConverter.convert()</code>, this also includes parsing-phase warnings.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>RAG &amp; Chunking Strategies</h2>
+    <p>When the destination format is <code>'chunks'</code>, the generator returns an array of <code>OfficeChunk</code> objects. These are optimized for ingestion into Vector Databases for RAG pipelines.</p>
+    <p>The <code>chunksConfig</code> is a <strong>discriminated union</strong> — options differ per strategy.</p>
+
+    <h3>1. Document Structure Chunking (Default)</h3>
+    <p>Splits at natural AST boundaries (paragraphs, headings, pages, slides). Preserves logical flow. This is the recommended strategy for most use cases.</p>
+    <pre><code>const { value: chunks } = await ast.to('chunks', {
+    strategy: 'document-structure',
+    splitBy: 'heading',    // 'paragraph' | 'heading' | 'page' | 'slide' | 'sheet'
+    maxChunkSize: 1500,
+    tableSplitStrategy: 'row' // repeats header row in every chunk — ideal for RAG
+});</code></pre>
+
+    <h3>2. Fixed-Size Chunking</h3>
+    <p>Splits text by character count with a sliding window overlap. Equivalent to LangChain's <code>RecursiveCharacterTextSplitter</code>.</p>
+    <pre><code>const { value: chunks } = await ast.to('chunks', {
+    strategy: 'fixed-size',
+    chunkSize: 1000,
+    chunkOverlap: 200,
+    separators: ['\n\n', '\n', ' ', '']
+});
+console.log(`Generated ${chunks.length} chunks`);</code></pre>
+
+    <h3>3. Semantic Chunking</h3>
+    <p>Uses embedding similarity to find natural topic breakpoints. Computationally expensive but produces the highest quality chunks. Requires an <code>embeddingFunction</code>.</p>
+    <pre><code>import OpenAI from 'openai';
+const openai = new OpenAI();
+
+const { value: chunks } = await ast.to('chunks', {
+    strategy: 'semantic',
+    embeddingFunction: async (text) => {
+        const res = await openai.embeddings.create({
+            input: text, model: 'text-embedding-3-small'
+        });
+        return res.data[0].embedding;
+    },
+    similarityThreshold: 0.8,  // Default: 0.8 (higher = more splits)
+    maxChunkSize: 2000,
+    embeddingBatchSize: 50      // sentences per API batch
+});</code></pre>
+
+    <h2>OfficeChunk Object</h2>
+    <p>Every chunk contains the text content and rich metadata for citations and filtered retrieval:</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>text</code></td>
+                <td><code>string</code></td>
+                <td>The chunk text content.</td>
+            </tr>
+            <tr>
+                <td><code>metadata.sourceType</code></td>
+                <td><code>string</code></td>
+                <td>The source file type (e.g., <code>'docx'</code>, <code>'pdf'</code>).</td>
+            </tr>
+            <tr>
+                <td><code>metadata.pageNumber</code></td>
+                <td><code>number?</code></td>
+                <td>Page number this chunk originates from (PDF).</td>
+            </tr>
+            <tr>
+                <td><code>metadata.slideNumber</code></td>
+                <td><code>number?</code></td>
+                <td>Slide number this chunk originates from (PPTX/ODP).</td>
+            </tr>
+            <tr>
+                <td><code>metadata.sheetName</code></td>
+                <td><code>string?</code></td>
+                <td>Sheet name this chunk originates from (XLSX/ODS).</td>
+            </tr>
+            <tr>
+                <td><code>metadata.closestHeading</code></td>
+                <td><code>string?</code></td>
+                <td>The nearest heading above this chunk. Invaluable for citations.</td>
+            </tr>
+            <tr>
+                <td><code>metadata.chunkIndex</code></td>
+                <td><code>number</code></td>
+                <td>Sequential index of this chunk within the document.</td>
+            </tr>
+            <tr>
+                <td><code>metadata.startIndex</code></td>
+                <td><code>number?</code></td>
+                <td>Character offset of the chunk start in the full document text (only when <code>addStartIndex: true</code>).</td>
             </tr>
         </tbody>
     </table>
 
     <div class="pro-tip" style="margin-top: 20px; padding: 15px; background: rgba(14, 165, 233, 0.1); border-left: 4px solid #0ea5e9; border-radius: 4px;">
         <h4 style="margin-top: 0; color: #0ea5e9;">🚀 Performance Note</h4>
-        <p>The <code>OfficeGenerator</code> is highly optimized. Once a document is parsed into an AST, generating multiple formats is extremely fast as it involves a single traversal of the tree.</p>
+        <p>The <code>OfficeGenerator</code> is highly optimized. Once a document is parsed into an AST, generating multiple formats is extremely fast as it involves a single traversal of the tree. Parse once, generate many times with <code>OfficeGenerator.generate(ast, ...)</code> or <code>ast.to(...)</code>.</p>
     </div>
 </div>
