@@ -1,7 +1,6 @@
 {
     "$schema": "https://fundingjson.org/schema/v1.1.0.json",
     "version": "v1.1.0",
-
     "entity": {
         "type": "individual",
         "role": "maintainer",
@@ -13,7 +12,6 @@
             "wellKnown": "https://officeparser.harshankur.com/.well-known/funding-manifest-urls"
         }
     },
-
     "projects": [
         {
             "guid": "officeparser",
@@ -25,9 +23,11 @@
             },
             "repositoryUrl": {
                 "url": "https://github.com/harshankur/officeParser",
-                "wellKnown": "https://raw.githubusercontent.com/harshankur/officeParser/master/.well-known/funding-manifest-urls"
+                "wellKnown": "https://github.com/harshankur/officeParser/raw/master/.well-known/funding-manifest-urls"
             },
-            "licenses": ["spdx:MIT"],
+            "licenses": [
+                "spdx:MIT"
+            ],
             "tags": [
                 "ai-ingestion",
                 "document-ast",
@@ -42,7 +42,6 @@
             ]
         }
     ],
-
     "funding": {
         "channels": [
             {
@@ -64,7 +63,6 @@
                 "description": "Buy Me A Coffee - Micro-contributions from the developer community."
             }
         ],
-
         "plans": [
             {
                 "guid": "core-sustainability-annual",
@@ -74,7 +72,10 @@
                 "amount": 25000,
                 "currency": "EUR",
                 "frequency": "yearly",
-                "channels": ["github-sponsors", "paypal"]
+                "channels": [
+                    "github-sponsors",
+                    "paypal"
+                ]
             },
             {
                 "guid": "multi-runtime-excellence-annual",
@@ -84,7 +85,10 @@
                 "amount": 50000,
                 "currency": "EUR",
                 "frequency": "yearly",
-                "channels": ["github-sponsors", "paypal"]
+                "channels": [
+                    "github-sponsors",
+                    "paypal"
+                ]
             },
             {
                 "guid": "enterprise-connectivity-annual",
@@ -94,10 +98,12 @@
                 "amount": 75000,
                 "currency": "EUR",
                 "frequency": "yearly",
-                "channels": ["github-sponsors", "paypal"]
+                "channels": [
+                    "github-sponsors",
+                    "paypal"
+                ]
             }
         ],
-
         "history": [
             {
                 "year": 2025,
