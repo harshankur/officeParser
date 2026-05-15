@@ -870,6 +870,16 @@
             margin-bottom: 2rem;
         }
 
+        /* --- Results Grid System --- */
+        .results-layout {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 2rem;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 1rem 4rem;
+        }
+
         @media (max-width: 1024px) {
             .results-layout {
                 grid-template-columns: 1fr;
@@ -877,14 +887,56 @@
         }
 
         .visual-panel-window {
-            width: 100%;
-            height: 700px;
             background: var(--bg-card);
             border: 1px solid var(--border);
-            border-radius: 20px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
             display: flex;
             flex-direction: column;
+            min-height: 400px;
+            max-height: 700px;
+            transition: transform 0.3s ease, border-color 0.3s ease;
+            backdrop-filter: blur(10px);
             overflow: hidden;
+        }
+
+        .visual-panel-window:hover {
+            border-color: rgba(0, 113, 227, 0.3);
+            transform: translateY(-4px);
+        }
+
+        .visual-panel-window.full-width {
+            grid-column: 1 / -1;
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: rgba(255, 255, 255, 0.03);
+            border-bottom: 1px solid var(--border);
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
+            min-height: 3rem;
+        }
+
+        .panel-header h4 {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--primary);
+            font-weight: 800;
+        }
+
+        .panel-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+            font-family: 'Ubuntu Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.6;
+            color: var(--text-main);
+            position: relative;
         }
 
         /* AST JSON Viewer Styles */
@@ -1756,10 +1808,198 @@
         }
 
         .config-items-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 1rem 1.5rem;
+            align-items: center;
+        }
+
+        .config-item {
             display: flex;
-            flex-wrap: wrap;
-            gap: 1.5rem;
-            justify-content: flex-start;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 0.5rem 0.75rem;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .config-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: var(--primary);
+        }
+
+        .config-item.full-width {
+            grid-column: 1 / -1;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.5rem;
+        }
+
+        .config-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            white-space: nowrap;
+        }
+
+        .config-item.full-width .config-label {
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-size: 0.7rem;
+        }
+
+        /* Style Map Builder UI */
+        .hidden {
+            display: none !important;
+        }
+
+        .mode-toggle {
+            display: flex;
+            background: var(--bg-deep);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 2px;
+            gap: 2px;
+        }
+
+        .btn-toggle {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            padding: 0.25rem 0.75rem;
+            font-size: 0.7rem;
+            font-weight: 600;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .btn-toggle:hover {
+            color: var(--text-main);
+        }
+
+        .btn-toggle.active {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .style-map-builder {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            padding: 0.5rem 0;
+        }
+
+        .mapping-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 1rem;
+            background: rgba(255, 255, 255, 0.02);
+            padding: 1rem;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            animation: slideDown 0.3s ease-out;
+            position: relative;
+        }
+
+        .mapping-row:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(0, 113, 227, 0.3);
+        }
+
+        .mapping-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            flex: 1;
+        }
+
+        .mapping-group-label {
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            letter-spacing: 0.1em;
+            font-weight: 800;
+        }
+
+        .mapping-inputs {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .mapping-inputs select,
+        .mapping-inputs input {
+            background: var(--bg-deep);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 0.4rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            width: 100%;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .mapping-inputs select:focus,
+        .mapping-inputs input:focus {
+            border-color: var(--primary);
+        }
+
+        .btn-remove {
+            background: rgba(239, 68, 68, 0.05);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            border-radius: 6px;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.2s;
+            margin-bottom: 2px;
+        }
+
+        .btn-remove:hover {
+            background: #ef4444;
+            color: white;
+            border-color: #ef4444;
+        }
+
+        .btn-add-mapping {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.6rem;
+            background: transparent;
+            border: 1px dashed var(--border);
+            color: var(--text-dim);
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-add-mapping:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: rgba(0, 113, 227, 0.02);
+        }
+
+        .mapping-arrow {
+            color: var(--text-dim);
+            font-size: 1rem;
+            margin-bottom: 0.6rem;
+            opacity: 0.4;
         }
 
         .window-config-group {
@@ -1770,12 +2010,36 @@
             background: rgba(255, 255, 255, 0.03);
             border-radius: 8px;
             font-size: 0.75rem;
+            white-space: nowrap;
+        }
+
+        .panel-sub-header {
+            background: rgba(0, 0, 0, 0.1);
+            border-bottom: 1px solid var(--border);
+            padding: 0.4rem 1rem;
+            display: flex;
+            align-items: center;
+            overflow-x: auto;
+            scrollbar-width: none;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .panel-sub-header::-webkit-scrollbar {
+            display: none;
+        }
+
+        .panel-sub-header .window-config-group {
+            background: transparent;
+            padding: 0;
+            gap: 1.5rem;
         }
 
         .window-config-item {
             display: flex;
             align-items: center;
-            gap: 0.4rem;
+            gap: 0.5rem;
+            color: var(--text-dim);
+            font-weight: 500;
         }
 
         .window-config-item input[type="text"],
@@ -2345,10 +2609,10 @@
                                 <input type="number" id="cfg_ocrTimeout" class="btn btn-outline"
                                     style="padding: 0.4rem 0.8rem; width: 60px; font-size: 0.8rem;" value="10" min="0">
                             </div>
-                            <div class="config-item" style="width: 100%;">
+                            <div class="config-item full-width">
                                 <span class="config-label">PDF Worker URL</span>
                                 <input type="text" id="cfg_pdfWorkerSrc" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.8rem; width: 100%; max-width: 500px; font-size: 0.75rem;"
+                                    style="padding: 0.4rem 0.8rem; width: 100%; font-size: 0.75rem;"
                                     value="https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs">
                             </div>
                         </div>
@@ -2357,61 +2621,82 @@
                     <!-- Generator Section -->
                     <div class="config-group">
                         <div class="config-group-title">Common Generator Configuration</div>
-                        <div class="config-item">
-                            <span class="config-label">Include Formatting</span>
-                            <label class="switch">
-                                <input type="checkbox" id="cfg_includeFormatting" checked>
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="config-item">
-                            <span class="config-label">Generate IDs</span>
-                            <label class="switch">
-                                <input type="checkbox" id="cfg_generateIds" checked>
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="config-item">
-                            <span class="config-label">Render Metadata</span>
-                            <label class="switch">
-                                <input type="checkbox" id="cfg_renderMetadata">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="config-item">
-                            <span class="config-label">Include Images</span>
-                            <label class="switch">
-                                <input type="checkbox" id="cfg_includeImages" checked>
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="config-item">
-                            <span class="config-label">Include Charts</span>
-                            <label class="switch">
-                                <input type="checkbox" id="cfg_includeCharts" checked>
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="config-item">
-                            <span class="config-label">Ignore Internal Links</span>
-                            <label class="switch">
-                                <input type="checkbox" id="cfg_ignoreInternalLinks_generator">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="config-item">
-                            <span class="config-label">Ignore Default Style Map</span>
-                            <label class="switch">
-                                <input type="checkbox" id="cfg_ignoreDefaultStyleMap">
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                        <div class="config-item"
-                            style="width: 100%; flex-direction: column; align-items: flex-start; gap: 0.5rem;">
-                            <span class="config-label">Custom Style Map (JSON/DSL)</span>
-                            <textarea id="cfg_styleMap" class="btn btn-outline"
-                                style="padding: 0.4rem; width: 100%; min-height: 80px; font-size: 0.75rem; font-family: monospace; resize: vertical;"
-                                placeholder='["p[style-name=\"Heading 1\"] => h1"]'></textarea>
+                        <div class="config-items-container">
+                            <div class="config-item">
+                                <span class="config-label">Include Formatting</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_includeFormatting" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Generate IDs</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_generateIds" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Render Metadata</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_renderMetadata">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Include Images</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_includeImages" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Include Charts</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_includeCharts" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Ignore Internal Links</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_ignoreInternalLinks_generator">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Ignore Default Style Map</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="cfg_ignoreDefaultStyleMap">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="config-item full-width" style="gap: 1rem;">
+                                <div
+                                    style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                                    <span class="config-label">Custom Style Map</span>
+                                    <div class="mode-toggle">
+                                        <button class="btn-toggle active" id="btn_styleMap_visual">Visual</button>
+                                        <button class="btn-toggle" id="btn_styleMap_raw">Code</button>
+                                    </div>
+                                </div>
+                                <div id="styleMap_visual_container" class="style-map-builder">
+                                    <div id="mapping_list">
+                                        <!-- Dynamic mapping rows will be injected here -->
+                                    </div>
+                                    <button id="add_style_mapping" class="btn-add-mapping">
+                                        <span>+</span> Add Style Mapping Rule
+                                    </button>
+                                </div>
+                                <textarea id="cfg_styleMap" class="btn btn-outline hidden"
+                                    style="padding: 0.6rem; width: 100%; min-height: 120px; font-size: 0.75rem; font-family: 'Ubuntu Mono', monospace; resize: vertical;"
+                                    placeholder='[
+  {
+    "selector": { "nodeType": "paragraph", "attributes": { "style": "Heading 1" } },
+    "output": { "tag": "h1", "classes": ["main-title"] }
+  }
+]'></textarea>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -2465,8 +2750,20 @@
             <div class="results-layout" id="results-container">
                 <!-- HTML Window -->
                 <div class="visual-panel-window" id="window-html">
-                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                    <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">HTML PREVIEW</h4>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span
+                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
+                                ⚙️ Config
+                            </span>
+                            <button id="copy-html-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                            <button id="download-html-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        </div>
+                    </div>
+                    <div class="panel-sub-header">
                         <div class="window-config-group">
                             <div class="window-config-item">
                                 Standalone <input type="checkbox" id="cfg_html_standalone" checked>
@@ -2475,10 +2772,6 @@
                                 Charts URL <input type="text" id="cfg_html_chartJsSrc" style="width: 80px;"
                                     value="https://cdn.jsdelivr.net/npm/chart.js">
                             </div>
-                            <button id="copy-html-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                            <button id="download-html-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
                         </div>
                     </div>
                     <div class="panel-body" id="visual-html" style="position: relative; padding: 0;"></div>
@@ -2486,16 +2779,24 @@
 
                 <!-- Markdown Window -->
                 <div class="visual-panel-window" id="window-md">
-                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                    <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">MARKDOWN</h4>
-                        <div class="window-config-group">
-                            <div class="window-config-item">
-                                HTML Fallback <input type="checkbox" id="cfg_md_fallbackToHtml" checked>
-                            </div>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span
+                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
+                                ⚙️ Config
+                            </span>
                             <button id="copy-md-btn" class="btn-outline"
                                 style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
                             <button id="download-md-btn" class="btn-outline"
                                 style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        </div>
+                    </div>
+                    <div class="panel-sub-header">
+                        <div class="window-config-group">
+                            <div class="window-config-item">
+                                HTML Fallback <input type="checkbox" id="cfg_md_fallbackToHtml" checked>
+                            </div>
                         </div>
                     </div>
                     <div class="panel-body" id="visual-md" style="position: relative; padding: 0;"></div>
@@ -2503,8 +2804,20 @@
 
                 <!-- Chunks Window -->
                 <div class="visual-panel-window" id="window-chunks">
-                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
-                        <h4 style="margin:0;">CHUNKS</h4>
+                    <div class="panel-header" style="justify-content: space-between;">
+                        <h4 style="margin:0;">CHUNKS (RAG READY)</h4>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span
+                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
+                                ⚙️ Config
+                            </span>
+                            <button id="copy-chunks-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                            <button id="download-chunks-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        </div>
+                    </div>
+                    <div class="panel-sub-header">
                         <div class="window-config-group">
                             <div class="window-config-item">
                                 Strategy
@@ -2541,10 +2854,6 @@
                                     <option value="flatten">Flatten</option>
                                 </select>
                             </div>
-                            <button id="copy-chunks-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                            <button id="download-chunks-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
                         </div>
                     </div>
                     <div class="panel-body" id="visual-chunks" style="position: relative; padding: 0;"></div>
@@ -2552,8 +2861,20 @@
 
                 <!-- CSV Window -->
                 <div class="visual-panel-window" id="window-csv">
-                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
-                        <h4 style="margin:0;">CSV</h4>
+                    <div class="panel-header" style="justify-content: space-between;">
+                        <h4 style="margin:0;">CSV / SPREADSHEET</h4>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span
+                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
+                                ⚙️ Config
+                            </span>
+                            <button id="copy-csv-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                            <button id="download-csv-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        </div>
+                    </div>
+                    <div class="panel-sub-header">
                         <div class="window-config-group">
                             <div class="window-config-item">
                                 Sheets <input type="text" id="cfg_csv_sheets" style="width: 50px;" placeholder="1,2...">
@@ -2564,10 +2885,6 @@
                             <div class="window-config-item">
                                 Delim <input type="text" id="cfg_csv_columnDelimiter" style="width: 30px;" value=",">
                             </div>
-                            <button id="copy-csv-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                            <button id="download-csv-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
                         </div>
                     </div>
                     <div class="panel-body" id="visual-csv" style="position: relative; padding: 0;"></div>
@@ -2575,13 +2892,22 @@
 
                 <!-- RTF Window -->
                 <div class="visual-panel-window" id="window-rtf">
-                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                    <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">RTF (RICH TEXT)</h4>
-                        <div class="window-config-group">
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span
+                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
+                                ⚙️ Config
+                            </span>
                             <button id="copy-rtf-btn" class="btn-outline"
                                 style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
                             <button id="download-rtf-btn" class="btn-outline"
                                 style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        </div>
+                    </div>
+                    <div class="panel-sub-header">
+                        <div class="window-config-group">
+                            <span style="font-size: 0.75rem; color: var(--text-dim);">No extra config available</span>
                         </div>
                     </div>
                     <div class="panel-body" id="visual-rtf" style="position: relative; padding: 0;"></div>
@@ -2589,8 +2915,20 @@
 
                 <!-- Text Window -->
                 <div class="visual-panel-window" id="window-text">
-                    <div class="panel-header" style="justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                    <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">PLAIN TEXT</h4>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span
+                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
+                                ⚙️ Config
+                            </span>
+                            <button id="copy-text-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                            <button id="download-text-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        </div>
+                    </div>
+                    <div class="panel-sub-header">
                         <div class="window-config-group">
                             <div class="window-config-item">
                                 Layout <input type="checkbox" id="cfg_text_preserveLayout">
@@ -2599,17 +2937,13 @@
                                 Newline <input type="text" id="cfg_text_newlineDelimiter" style="width: 30px;"
                                     value="\n">
                             </div>
-                            <button id="copy-text-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                            <button id="download-text-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
                         </div>
                     </div>
                     <div class="panel-body" id="visual-text" style="position: relative; padding: 0;"></div>
                 </div>
 
                 <!-- AST Window -->
-                <div class="visual-panel-window" id="window-ast">
+                <div class="visual-panel-window full-width" id="window-ast">
                     <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">JSON (AST)</h4>
                         <button id="copy-ast-btn" class="btn-outline"
@@ -3007,6 +3341,167 @@
                     });
                 }
             });
+
+            // --- Style Map Builder Logic ---
+            const btnVisual = document.getElementById('btn_styleMap_visual');
+            const btnRaw = document.getElementById('btn_styleMap_raw');
+            const containerVisual = document.getElementById('styleMap_visual_container');
+            const textareaRaw = document.getElementById('cfg_styleMap');
+            const mappingList = document.getElementById('mapping_list');
+            const btnAddMapping = document.getElementById('add_style_mapping');
+
+            btnVisual.addEventListener('click', () => {
+                btnVisual.classList.add('active');
+                btnRaw.classList.remove('active');
+                containerVisual.classList.remove('hidden');
+                textareaRaw.classList.add('hidden');
+                syncStyleMapFromRawToVisual();
+            });
+
+            btnRaw.addEventListener('click', () => {
+                btnRaw.classList.add('active');
+                btnVisual.classList.remove('active');
+                textareaRaw.classList.remove('hidden');
+                containerVisual.classList.add('hidden');
+                syncStyleMapFromVisualToRaw();
+            });
+
+            btnAddMapping.addEventListener('click', () => {
+                addMappingRow();
+                syncStyleMapFromVisualToRaw();
+            });
+
+            function addMappingRow(data = null) {
+                const row = document.createElement('div');
+                row.className = 'mapping-row';
+                row.innerHTML = `
+                    <div class="mapping-group">
+                        <span class="mapping-group-label">Selector</span>
+                        <div class="mapping-inputs">
+                            <select class="map-node-type">
+                                <option value="paragraph">Paragraph</option>
+                                <option value="run">Run (Text)</option>
+                                <option value="heading">Heading</option>
+                                <option value="table">Table</option>
+                                <option value="image">Image</option>
+                                <option value="chart">Chart</option>
+                                <option value="slide">Slide</option>
+                                <option value="sheet">Sheet</option>
+                                <option value="note">Note/Footnote</option>
+                                <option value="hyperlink">Link</option>
+                            </select>
+                            <input type="text" class="map-style-name" placeholder="Style Name (e.g. Heading 1)">
+                        </div>
+                    </div>
+                    <div class="mapping-arrow">→</div>
+                    <div class="mapping-group">
+                        <span class="mapping-group-label">Output</span>
+                        <div class="mapping-inputs">
+                            <input type="text" class="map-tag" placeholder="Tag (e.g. h1)">
+                            <input type="text" class="map-classes" placeholder="Classes (comma separated)">
+                        </div>
+                    </div>
+                    <button class="btn-remove" title="Remove Rule">×</button>
+                `;
+
+                if (data) {
+                    if (data.selector) {
+                        row.querySelector('.map-node-type').value = data.selector.nodeType || 'paragraph';
+                        row.querySelector('.map-style-name').value = (data.selector.attributes && data.selector.attributes.style) || '';
+                    }
+                    if (data.output) {
+                        row.querySelector('.map-tag').value = data.output.tag || '';
+                        row.querySelector('.map-classes').value = Array.isArray(data.output.classes) ? data.output.classes.join(', ') : (data.output.classes || '');
+                    }
+                }
+
+                row.querySelector('.btn-remove').addEventListener('click', () => {
+                    row.remove();
+                    syncStyleMapFromVisualToRaw();
+                });
+
+                row.querySelectorAll('input, select').forEach(el => {
+                    el.addEventListener('input', syncStyleMapFromVisualToRaw);
+                    el.addEventListener('change', syncStyleMapFromVisualToRaw);
+                });
+
+                mappingList.appendChild(row);
+            }
+
+            function syncStyleMapFromVisualToRaw() {
+                const rows = mappingList.querySelectorAll('.mapping-row');
+                const mappings = Array.from(rows).map(row => {
+                    const nodeType = row.querySelector('.map-node-type').value;
+                    const styleName = row.querySelector('.map-style-name').value.trim();
+                    const tag = row.querySelector('.map-tag').value.trim();
+                    const classesRaw = row.querySelector('.map-classes').value.trim();
+
+                    const mapping = {
+                        selector: { nodeType },
+                        output: { tag }
+                    };
+
+                    if (styleName) mapping.selector.attributes = { style: styleName };
+                    if (classesRaw) mapping.output.classes = classesRaw.split(',').map(c => c.trim()).filter(c => !!c);
+
+                    return mapping;
+                });
+
+                textareaRaw.value = mappings.length > 0 ? JSON.stringify(mappings, null, 2) : '';
+                // Trigger change to update reparse button and previews
+                textareaRaw.dispatchEvent(new Event('change'));
+            }
+
+            function syncStyleMapFromRawToVisual() {
+                const raw = textareaRaw.value.trim();
+                mappingList.innerHTML = '';
+                if (!raw) return;
+
+                try {
+                    if (raw.startsWith('[') || raw.startsWith('{')) {
+                        const data = JSON.parse(raw);
+                        const list = Array.isArray(data) ? data : [data];
+                        list.forEach(item => {
+                            if (typeof item === 'object') addMappingRow(item);
+                            else if (typeof item === 'string') addMappingRowFromDsl(item);
+                        });
+                    } else {
+                        const lines = raw.split('\n').map(s => s.trim()).filter(s => !!s);
+                        lines.forEach(line => addMappingRowFromDsl(line));
+                    }
+                } catch (e) {
+                    console.warn("Could not parse raw StyleMap for Visual Builder", e);
+                }
+            }
+
+            function addMappingRowFromDsl(dsl) {
+                // Best effort parsing for DSL: "p[style-name='Heading 1'] => h1.title"
+                const parts = dsl.split('=>').map(s => s.trim());
+                if (parts.length < 2) return;
+
+                const selectorRaw = parts[0];
+                const outputRaw = parts[1];
+
+                let nodeType = 'paragraph';
+                if (selectorRaw.startsWith('p')) nodeType = 'paragraph';
+                else if (selectorRaw.startsWith('span') || selectorRaw.startsWith('run')) nodeType = 'run';
+                else if (selectorRaw.startsWith('table')) nodeType = 'table';
+
+                const styleMatch = selectorRaw.match(/style-name=["\'](.*?)["\']/);
+                const styleName = styleMatch ? styleMatch[1] : '';
+
+                const outputParts = outputRaw.split('.');
+                const tag = outputParts[0];
+                const classes = outputParts.slice(1);
+
+                addMappingRow({
+                    selector: { nodeType, attributes: { style: styleName } },
+                    output: { tag, classes }
+                });
+            }
+
+            // Initial sync
+            syncStyleMapFromRawToVisual();
 
             async function handleFile(file) {
                 const buffer = await file.arrayBuffer();
