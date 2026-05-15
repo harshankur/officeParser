@@ -49,7 +49,7 @@ export class OfficeConverter {
      * ```
      */
     public static async convert<
-        F extends string | Buffer | ArrayBuffer,
+        F extends string | Buffer | ArrayBuffer | Uint8Array,
         T extends SupportedFileType = InferFileTypeFromPath<F>
     >(
         file: F,

@@ -12,11 +12,10 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         super('rtf', ast, config);
     }
 
-
     async generate(): Promise<ConversionResult> {
         this.colorTable = [];
 
-        // We first process all nodes to collect colors
+        // We first process all nodes to collect colors and analyze structure
         const bodyContent = await this.renderBody(this.ast);
 
         let output = '{\\rtf1\\ansi\\deff0\n';
@@ -69,7 +68,6 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         this.inTable = false;
 
         const processor = async (node: OfficeContentNode, childrenOutput: string): Promise<string> => {
-            // Handle Semantic Style Mapping for RTF using the semantic mapping helper
             const mapping = this.getSemanticMapping(node);
             if (mapping) {
                 if (mapping.tag === 'blockquote') {
@@ -113,7 +111,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                             prefix += `\\fs${pt * 2} `;
                         }
 
-                        text = `{\\rtlch\\f1 ${prefix}${text}${suffix}}`;
+                        text = `{\\f0 ${prefix}${text}${suffix}}`;
                     }
 
                     if (meta?.link) {
@@ -144,23 +142,17 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                             else if (meta.alignment === 'right') pPr += '\\qr';
                             else if (meta.alignment === 'justify') pPr += '\\qj';
                         }
-                        if (meta.paragraphIndentation) {
-                            const ind = meta.paragraphIndentation;
-                            if (ind.left) pPr += `\\li${ind.left}`;
-                            if (ind.right) pPr += `\\ri${ind.right}`;
-                            if (ind.firstLine) pPr += `\\fi${ind.firstLine}`;
-                        }
                     }
                     return `${pPr} ${childrenOutput}\\par\n`;
                 }
 
                 case 'list': {
                     const meta = node.metadata as ListMetadata;
-                    const indent = ((meta?.indentation || 0) + 1) * 360;
+                    const level = meta?.indentation || 0;
+                    const indent = (level + 1) * 360;
                     const isOrdered = meta?.listType === 'ordered';
                     const marker = isOrdered ? `${(meta.itemIndex ?? 0) + 1}. ` : '\\bullet ';
                     const listControl = isOrdered ? '\\pndec' : '\\pnbullet';
-                    const level = meta?.indentation || 0;
                     const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
                     return `${pPr}\\li${indent}\\fi-360\\ilvl${level}${listControl} ${marker}${childrenOutput}\\par\n`;
                 }
@@ -170,12 +162,42 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 }
 
                 case 'row': {
-                    return `\\trowd\\trgaph108\\trleft-108\n${childrenOutput}\\row\n`;
+                    const cells = node.children || [];
+                    const pageWidth = 9000; // Standard twips width
+                    const cellWidth = Math.floor(pageWidth / (cells.length || 1));
+                    let cellDefs = '';
+                    for (let i = 0; i < cells.length; i++) {
+                        // Add basic cell borders and calculate width
+                        cellDefs += `\\clbrdrt\\brdrs\\brdrw10\\clbrdrl\\brdrs\\brdrw10\\clbrdrb\\brdrs\\brdrw10\\clbrdrr\\brdrs\\brdrw10\\cellx${(i + 1) * cellWidth}`;
+                    }
+                    return `\\trowd\\trgaph108\\trleft-108${cellDefs}\n${childrenOutput}\\row\n`;
                 }
 
                 case 'cell': {
-                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
-                    return `${pPr}\\intbl\\sb60\\sa60 ${childrenOutput}\\cell\n`;
+                    return `\\pard\\intbl\\sb60\\sa60 ${childrenOutput}\\cell\n`;
+                }
+
+                case 'image': {
+                    if (!this.config.includeImages) return '';
+                    const meta = node.metadata as any;
+                    const attachmentName = meta?.attachmentName;
+                    const attachment = this.ast.attachments.find(a => a.name === attachmentName);
+                    
+                    if (attachment && attachment.data) {
+                        const type = attachment.extension === 'png' ? 'pngblip' : 'jpegblip';
+                        // Convert base64 to hex
+                        const binary = atob(attachment.data);
+                        let hex = '';
+                        for (let i = 0; i < binary.length; i++) {
+                            const h = binary.charCodeAt(i).toString(16);
+                            hex += h.length === 1 ? '0' + h : h;
+                            if (i % 64 === 63) hex += '\n'; // Add newlines for better RTF readability
+                        }
+                        
+                        // Default goals (approx 3 inches wide at 1440 twips per inch)
+                        return `{\\pict\\${type}\\picwgoal4320\\pichgoal3240\n${hex}\n}\n`;
+                    }
+                    return '';
                 }
 
                 case 'break': {

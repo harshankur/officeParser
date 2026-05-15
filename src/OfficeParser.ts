@@ -107,7 +107,7 @@ export class OfficeParser {
      * const text = ast.toText();
      * ```
      */
-    public static async parseOffice(file: string | Buffer | ArrayBuffer, configOrCallback?: OfficeParserConfig | ((ast: OfficeParserAST, err?: any) => void), config?: OfficeParserConfig): Promise<OfficeParserAST> {
+    public static async parseOffice(file: string | Buffer | ArrayBuffer | Uint8Array, configOrCallback?: OfficeParserConfig | ((ast: OfficeParserAST, err?: any) => void), config?: OfficeParserConfig): Promise<OfficeParserAST> {
         let callback: ((ast: OfficeParserAST, err?: any) => void) | undefined;
         let actualConfig: OfficeParserConfig = {};
 
@@ -137,6 +137,8 @@ export class OfficeParser {
 
             if (file instanceof ArrayBuffer) {
                 buffer = Buffer.from(file);
+            } else if (file instanceof Uint8Array) {
+                buffer = Buffer.from(file.buffer, file.byteOffset, file.byteLength);
             } else if (Buffer.isBuffer(file)) {
                 buffer = file;
             } else if (typeof file === 'string') {

@@ -15,7 +15,53 @@
     <meta property="og:image"
         content="https://raw.githubusercontent.com/harshankur/officeParser/master/docs/favicon.png">
     <meta property="og:url" content="https://officeparser.harshankur.com">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --bg: #f8fafc;
+            --bg-deep: #ffffff;
+            --text: #0f172a;
+            --text-dim: #64748b;
+            --border: #e2e8f0;
+            --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            --card-bg: #ffffff;
+            --accent-bg: #f1f5f9;
+        }
 
+        [data-theme="dark"] {
+            --primary: #818cf8;
+            --primary-hover: #6366f1;
+            --bg: #0f172a;
+            --bg-deep: #020617;
+            --text: #f1f5f9;
+            --text-dim: #94a3b8;
+            --border: #1e293b;
+            --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.3);
+            --card-bg: #1e293b;
+            --accent-bg: #0f172a;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            overflow-x: hidden;
+            opacity: 0; /* Prevent FOUC */
+            transition: opacity 0.15s ease-in;
+        }
+
+        body.ready {
+            opacity: 1;
+        }
+    </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -23,7 +69,7 @@
         rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <link rel="stylesheet"
+    <link id="hljs-theme" rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script>
@@ -31,11 +77,17 @@
         (function () {
             const savedTheme = localStorage.getItem('theme') || 'auto';
             const html = document.documentElement;
+            let activeTheme = savedTheme;
             if (savedTheme === 'auto') {
                 const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                html.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
-            } else {
-                html.setAttribute('data-theme', savedTheme);
+                activeTheme = prefersDark ? 'dark' : 'light';
+            }
+            html.setAttribute('data-theme', activeTheme);
+
+            // Set initial HLJS theme to avoid flash
+            const hljsLink = document.getElementById('hljs-theme');
+            if (hljsLink) {
+                hljsLink.href = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-${activeTheme === 'dark' ? 'dark' : 'light'}.min.css`;
             }
         })();
     </script>
@@ -55,15 +107,41 @@
             --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
             --glow: 0 0 20px rgba(99, 102, 241, 0.2);
             --header-bg: rgba(10, 10, 12, 0.8);
+            --tooltip-bg: rgba(30, 41, 59, 0.95);
+            --tooltip-text: #ffffff;
             --preview-bg: #141417;
             --preview-text: #f8fafc;
             --visual-card-bg: #1c1c21;
             --visual-card-border: #27272a;
-            --json-key: #818cf8;
-            --json-string: #34d399;
-            --json-number: #fbbf24;
             --json-boolean: #f87171;
             --json-null: #94a3b8;
+            --container-width: 1400px;
+            /* Base for standard monitors */
+        }
+
+        /* Large Screen Scaling */
+        @media (min-width: 1600px) {
+            :root {
+                --container-width: 1500px;
+            }
+        }
+
+        @media (min-width: 1900px) {
+            :root {
+                --container-width: 1700px;
+            }
+        }
+
+        @media (min-width: 2500px) {
+            :root {
+                --container-width: 2200px;
+            }
+        }
+
+        @media (min-width: 3200px) {
+            :root {
+                --container-width: 2800px;
+            }
         }
 
         [data-theme="light"] {
@@ -80,6 +158,8 @@
             --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
             --glow: 0 0 20px rgba(79, 70, 229, 0.1);
             --header-bg: rgba(248, 250, 252, 0.8);
+            --tooltip-bg: rgba(255, 255, 255, 0.98);
+            --tooltip-text: #1e293b;
             --preview-bg: #ffffff;
             --preview-text: #1a202c;
             --visual-card-bg: #f8fafc;
@@ -181,8 +261,9 @@
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 2rem;
-            max-width: 1000px;
+            max-width: var(--container-width);
             margin: 0 auto;
+            padding: 0 2rem;
         }
 
         .spec-card {
@@ -236,7 +317,7 @@
             background: var(--visual-card-bg);
             border: 1px solid var(--visual-card-border);
             border-radius: 12px;
-            max-width: 600px;
+            max-width: 100%;
         }
 
         .nested-table-container {
@@ -249,11 +330,17 @@
             position: fixed;
             top: 0;
             width: 100%;
-            padding: 1rem 2rem;
+            padding: 1rem 0;
             background: var(--header-bg);
             backdrop-filter: blur(12px);
             z-index: 1000;
             border-bottom: 1px solid var(--border);
+        }
+
+        .header-container {
+            max-width: var(--container-width);
+            margin: 0 auto;
+            padding: 0 2rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -317,7 +404,9 @@
         }
 
         .theme-btn:hover:not(.active) {
-            color: var(--text-main);
+            color: var(--primary);
+            background: var(--bg-card-hover);
+            transform: translateY(-1px);
         }
 
         .github-btn {
@@ -336,7 +425,8 @@
 
         .github-btn:hover {
             border-color: var(--primary);
-            box-shadow: var(--glow);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+            transform: translateY(-2px);
         }
 
         .header-right {
@@ -443,18 +533,21 @@
         .sponsor-nav-btn:hover {
             background: rgba(234, 74, 170, 0.2);
             border-color: #ea4aaa;
-            box-shadow: 0 0 15px rgba(234, 74, 170, 0.3);
+            box-shadow: 0 4px 12px rgba(234, 74, 170, 0.3);
+            transform: translateY(-2px);
         }
 
         .bmc-nav-btn img {
             height: 34px;
             border-radius: 8px;
-            transition: transform 0.2s;
+            transition: all 0.2s;
             display: block;
         }
 
         .bmc-nav-btn:hover img {
-            transform: scale(1.05);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 221, 0, 0.3);
+            filter: brightness(1.05);
         }
 
         .bmc-icon-btn {
@@ -463,11 +556,15 @@
 
         /* --- Hero Section --- */
         .hero {
-            padding: 10rem 2rem 6rem;
+            padding: 10rem 0 6rem;
             text-align: center;
-            max-width: 900px;
-            margin: 0 auto;
             position: relative;
+        }
+
+        .hero-container {
+            max-width: var(--container-width);
+            margin: 0 auto;
+            padding: 0 2rem;
         }
 
         .hero::before {
@@ -505,7 +602,6 @@
         .badge-link:hover .badge {
             background: rgba(99, 102, 241, 0.15);
             border-color: rgba(99, 102, 241, 0.4);
-            transform: translateY(-1px);
         }
 
         .shimmer {
@@ -590,7 +686,6 @@
         }
 
         .btn-primary:hover {
-            transform: translateY(-2px);
             opacity: 0.9;
             box-shadow: 0 0 30px rgba(99, 102, 241, 0.4);
         }
@@ -607,12 +702,17 @@
         }
 
         /* --- Stats Section --- */
+        .stats-section {
+            max-width: var(--container-width);
+            margin: 4rem auto;
+            padding: 0 2rem;
+        }
+
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 2rem;
-            max-width: 1000px;
-            margin: 4rem auto;
+            width: 100%;
             padding: 2rem;
             background: var(--bg-card);
             border: 1px solid var(--border);
@@ -654,15 +754,15 @@
 
         .section-title p {
             color: var(--text-dim);
-            max-width: 600px;
+            max-width: 800px;
             margin: 0 auto;
         }
 
         .features-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 2rem;
-            max-width: 1200px;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 2.5rem;
+            max-width: var(--container-width);
             margin: 0 auto 4rem;
             padding: 0 2rem;
         }
@@ -679,16 +779,14 @@
 
         .feature-card:hover {
             border-color: var(--primary);
-            transform: translateY(-5px);
             background: var(--bg-card-hover);
-            box-shadow: var(--glow);
         }
 
         .support-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 1.5rem;
-            max-width: 1200px;
+            max-width: var(--container-width);
             margin: 0 auto;
             padding: 0 2rem;
         }
@@ -704,7 +802,6 @@
 
         .support-card:hover {
             border-color: var(--accent);
-            transform: scale(1.05);
         }
 
         .feature-icon {
@@ -727,13 +824,14 @@
         .visualizer-section {
             background: radial-gradient(circle at bottom right, rgba(168, 85, 247, 0.05), transparent 40%),
                 radial-gradient(circle at top left, rgba(99, 102, 241, 0.05), transparent 40%);
-            padding: 6rem 2rem;
+            padding: 6rem 0;
             border-top: 1px solid var(--border);
         }
 
         .visualizer-container {
-            max-width: 1280px;
+            max-width: var(--container-width);
             margin: 0 auto;
+            padding: 0 2rem;
         }
 
         .drop-zone {
@@ -809,7 +907,6 @@
         .sync-btn:hover:not(:disabled) {
             background: #0071e3;
             color: white;
-            transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(0, 113, 227, 0.2);
         }
 
@@ -874,10 +971,10 @@
         .results-layout {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 2rem;
-            max-width: 1400px;
+            gap: 2.5rem;
+            max-width: var(--container-width);
             margin: 0 auto;
-            padding: 0 1rem 4rem;
+            padding: 0 2rem 4rem;
         }
 
         @media (max-width: 1024px) {
@@ -895,14 +992,13 @@
             flex-direction: column;
             min-height: 400px;
             max-height: 700px;
-            transition: transform 0.3s ease, border-color 0.3s ease;
+            transition: border-color 0.3s ease;
             backdrop-filter: blur(10px);
             overflow: hidden;
         }
 
         .visual-panel-window:hover {
             border-color: rgba(0, 113, 227, 0.3);
-            transform: translateY(-4px);
         }
 
         .visual-panel-window.full-width {
@@ -1008,8 +1104,6 @@
 
         .chunk-card:hover {
             border-color: var(--primary);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
         }
 
         .chunk-meta {
@@ -1040,7 +1134,7 @@
             background: var(--bg-card);
             color: var(--text-main);
             font-family: 'Outfit', sans-serif;
-            max-width: 800px;
+            max-width: 1000px;
             margin: 0 auto;
         }
 
@@ -1058,18 +1152,42 @@
             margin: 1rem 0;
         }
 
-        .md-preview th,
-        .md-preview td {
+        .md-preview table th,
+        .md-preview table td {
             border: 1px solid var(--border);
-            padding: 0.5rem;
+            padding: 0.75rem;
+            text-align: left;
+        }
+
+        .md-preview ul,
+        .md-preview ol {
+            padding-left: 2.5rem !important;
+            margin-bottom: 1.5rem;
+            list-style: revert !important;
+        }
+
+        .md-preview li {
+            margin-bottom: 0.5rem;
+            display: list-item !important;
+        }
+
+        .md-preview img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            margin: 1rem 0;
         }
 
         .html-iframe {
             width: 100%;
+            max-width: 850px;
             height: 100%;
+            margin: 0 auto;
             border: none;
             background: #fff;
             border-radius: 8px;
+            display: block;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
         }
 
         .code-container {
@@ -1144,7 +1262,7 @@
         /* --- SPA Documentation Section --- */
         .doc-viewer {
             display: none;
-            max-width: 1000px;
+            max-width: var(--container-width);
             margin: 6rem auto;
             padding: 0 2rem;
             animation: fadeIn 0.4s ease;
@@ -1383,38 +1501,132 @@
         footer {
             padding: 6rem 2rem 3rem;
             border-top: 1px solid var(--border);
-            text-align: center;
+            background: var(--bg-card);
         }
 
-        .footer-logo {
-            font-size: 1.25rem;
-            font-weight: 800;
-            margin-bottom: 2rem;
-            display: block;
+        .footer-grid {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1.5fr 1fr 1fr 1fr 1fr 1fr;
+            gap: 2rem;
+            text-align: left;
+            margin-bottom: 4rem;
         }
 
-        .footer-links {
+        .footer-brand .footer-logo {
+            font-size: 1.5rem;
+            font-weight: 900;
+            margin-bottom: 1rem;
+            color: var(--primary);
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .footer-tagline {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+            max-width: 300px;
+        }
+
+        .footer-column h5 {
+            color: var(--text-main);
+            font-size: 0.85rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .footer-column {
             display: flex;
-            gap: 3rem;
-            justify-content: center;
-            margin-bottom: 3rem;
-            flex-wrap: wrap;
+            flex-direction: column;
+            gap: 0.75rem;
         }
 
-        .footer-links a {
+        .footer-column a {
             color: var(--text-dim);
             text-decoration: none;
-            transition: color 0.2s;
             font-size: 0.9rem;
+            transition: all 0.2s;
+            width: fit-content;
         }
 
-        .footer-links a:hover {
-            color: var(--text-main);
+        .footer-column a:hover {
+            color: var(--primary);
+            transform: translateX(5px);
         }
 
-        .copyright {
-            color: var(--text-dark);
+        .footer-social {
+            display: flex;
+            gap: 1.25rem;
+        }
+
+        .footer-social a {
+            color: var(--text-dim);
+            transition: color 0.2s, transform 0.2s;
+        }
+
+        .footer-social a:hover {
+            color: var(--primary);
+            transform: translateY(-3px);
+        }
+
+        .footer-bottom {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--text-dim);
             font-size: 0.85rem;
+        }
+
+        @media (max-width: 1200px) {
+            .footer-grid {
+                grid-template-columns: 1.5fr 1fr 1fr;
+                gap: 2.5rem;
+            }
+        }
+
+        @media (max-width: 850px) {
+            .footer-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .footer-grid {
+                grid-template-columns: 1fr;
+                text-align: center;
+                gap: 2.5rem;
+            }
+
+            .footer-brand,
+            .footer-tagline,
+            .footer-social {
+                margin-left: auto;
+                margin-right: auto;
+            }
+
+            .footer-column a {
+                margin: 0 auto;
+            }
+
+            .footer-column a:hover {
+                transform: translateY(-2px);
+            }
+
+            .footer-bottom {
+                flex-direction: column;
+                gap: 1rem;
+                text-align: center;
+            }
         }
 
         /* --- Responsive --- */
@@ -1430,7 +1642,7 @@
             }
         }
 
-        @media (max-width: 1024px) {
+        @media (max-width: 1200px) {
             header {
                 padding: 1rem 1.5rem;
             }
@@ -1738,6 +1950,205 @@
             background-color: #333 !important;
             padding: 2px;
             border-radius: 2px;
+        }
+
+        /* --- Viewer Toggle Switch --- */
+        .viewer-toggle {
+            display: flex;
+            background: var(--border);
+            padding: 2px;
+            border-radius: 8px;
+            position: relative;
+            width: fit-content;
+            margin: 0 0.5rem;
+        }
+
+        .toggle-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            padding: 0.3rem 0.8rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.65rem;
+            font-weight: 800;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            position: relative;
+            z-index: 1;
+        }
+
+        .toggle-btn.active {
+            color: var(--primary);
+        }
+
+        .toggle-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        /* --- Custom Tooltip --- */
+        .custom-tooltip {
+            position: fixed;
+            background: var(--tooltip-bg);
+            color: var(--tooltip-text);
+            padding: 1.5rem;
+            border-radius: 16px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            pointer-events: none;
+            /* Block events only when visible */
+            visibility: hidden;
+            /* Ensure it doesn't block clicks when hidden */
+            opacity: 0;
+            transform: translate(-50%, -80%);
+            transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 10000;
+            max-width: 460px;
+            text-align: left;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--border);
+            line-height: 1.7;
+            backdrop-filter: blur(12px);
+        }
+
+        .tooltip-header {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            margin-bottom: 1rem;
+            color: var(--primary);
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-size: 0.75rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 0.5rem;
+        }
+
+        .pipeline-container {
+            margin-top: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .pipeline-phase {
+            position: relative;
+            background: rgba(15, 23, 42, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 1.25rem 0.75rem 0.75rem;
+        }
+
+        .phase-label {
+            position: absolute;
+            top: -10px;
+            left: 12px;
+            background: #1e293b;
+            padding: 2px 8px;
+            font-size: 0.55rem;
+            font-weight: 900;
+            color: var(--text-dim);
+            letter-spacing: 0.15em;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .pipeline-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.25rem;
+        }
+
+        .pipeline-node {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+            flex: 1;
+        }
+
+        .node-icon-box {
+            width: 36px;
+            height: 36px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .pipeline-node.active .node-icon-box {
+            background: rgba(99, 102, 241, 0.15);
+            border-color: var(--primary);
+            box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
+            color: white;
+            transform: scale(1.1) translateY(-2px);
+        }
+
+        .node-text {
+            font-size: 0.6rem;
+            font-weight: 800;
+            color: var(--text-dark);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            text-align: center;
+        }
+
+        .pipeline-node.active .node-text {
+            color: var(--primary);
+        }
+
+        .pipeline-arrow {
+            color: var(--primary);
+            font-size: 1.1rem;
+            margin-top: -18px;
+            opacity: 0.8;
+            font-weight: bold;
+        }
+
+        .phase-connector {
+            display: flex;
+            justify-content: center;
+            height: 16px;
+            margin: -0.25rem 0;
+            opacity: 0.2;
+            color: var(--text-dim);
+            font-size: 0.8rem;
+        }
+
+        .custom-tooltip.visible {
+            opacity: 1;
+            transform: translate(-50%, -100%);
+            pointer-events: auto;
+            visibility: visible;
+        }
+
+        .custom-tooltip.bottom {
+            transform: translate(-50%, 20%);
+        }
+
+        .custom-tooltip.visible.bottom {
+            transform: translate(-50%, 0);
+        }
+
+        .viewer-toggle .toggle-slider {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            height: calc(100% - 4px);
+            background: var(--bg-card);
+            border-radius: 6px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
 
         /* --- Switch Styles --- */
@@ -2060,57 +2471,153 @@
             border-color: var(--primary);
         }
     </style>
+    <script>
+        // Global schemas for dynamic control generation
+        window.CONFIG_SCHEMAS = {
+            parser: [
+                { id: 'cfg_fileType', label: 'File Type Hint', type: 'select', options: ['', 'docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp'], names: ['Auto', 'DOCX', 'XLSX', 'PPTX', 'PDF', 'RTF', 'CSV', 'Markdown', 'HTML', 'ODT', 'ODS', 'ODP'], width: '100px' },
+                { id: 'cfg_extractAttachments', label: 'Extract Attachments', type: 'switch', default: true },
+                { id: 'cfg_ocr', label: 'Enable OCR', type: 'switch', default: false },
+                { id: 'cfg_ignoreInternalLinks_parser', label: 'Ignore Internal Links', type: 'switch', default: false },
+                { id: 'cfg_includeRawContent', label: 'Include Raw Source', type: 'switch', default: false },
+                { id: 'cfg_serializeRawContent', label: 'Serialize Raw XML', type: 'switch', default: true },
+                { id: 'cfg_preserveXmlWhitespace', label: 'Preserve XML Space', type: 'switch', default: false },
+                { id: 'cfg_ignoreNotes', label: 'Ignore Notes', type: 'switch', default: false },
+                { id: 'cfg_putNotesAtLast', label: 'Notes At Last', type: 'switch', default: false },
+                { id: 'cfg_includeBreakNodes', label: 'Include Break Nodes', type: 'switch', default: true },
+                { id: 'cfg_outputErrorToConsole', label: 'Verbose Errors <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'switch', default: false },
+                { id: 'cfg_ocrLanguage', label: 'OCR Lang', type: 'text', default: 'eng', width: '80px' },
+                { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: ',', width: '60px' },
+                { id: 'cfg_ocrTimeout', label: 'OCR Timeout (s)', type: 'number', default: 10, width: '60px', min: 0 },
+                { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs', fullWidth: true }
+            ],
+            generator: [
+                { id: 'cfg_includeFormatting', label: 'Include Formatting', type: 'switch', default: true },
+                { id: 'cfg_generateIds', label: 'Generate IDs', type: 'switch', default: true },
+                { id: 'cfg_renderMetadata', label: 'Render Metadata', type: 'switch', default: false },
+                { id: 'cfg_includeImages', label: 'Include Images', type: 'switch', default: true },
+                { id: 'cfg_includeCharts', label: 'Include Charts', type: 'switch', default: true },
+                { id: 'cfg_ignoreInternalLinks_generator', label: 'Ignore Internal Links', type: 'switch', default: false },
+                { id: 'cfg_ignoreDefaultStyleMap', label: 'Ignore Default Style Map', type: 'switch', default: false }
+            ],
+            html: [
+                { id: 'cfg_html_standalone', label: 'Standalone', type: 'inline-switch', default: true },
+                { id: 'cfg_html_chartJsSrc', label: 'Charts URL', type: 'inline-text', default: 'https://cdn.jsdelivr.net/npm/chart.js', width: '80px' }
+            ],
+            md: [
+                { id: 'cfg_md_fallbackToHtml', label: 'HTML Fallback', type: 'inline-switch', default: true }
+            ],
+            chunks: [
+                { id: 'cfg_chunks_strategy', label: 'Strategy', type: 'inline-select', options: ['document-structure', 'fixed-size', 'semantic'], names: ['Structure', 'Fixed Size', 'Semantic (External Only)'], default: 'document-structure' },
+                { id: 'cfg_chunks_maxChunkSize', label: 'Max Size', type: 'inline-number', default: 1000, width: '50px' },
+                { id: 'cfg_chunks_chunkOverlap', label: 'Overlap', type: 'inline-number', default: 200, width: '45px' },
+                { id: 'cfg_chunks_splitBy', label: 'Split By', type: 'inline-select', options: ['paragraph', 'heading', 'page', 'slide', 'sheet'], names: ['Paragraph', 'Heading', 'Page', 'Slide', 'Sheet'], default: 'paragraph' },
+                { id: 'cfg_chunks_tableSplitStrategy', label: 'Table', type: 'inline-select', options: ['row', 'flatten'], names: ['Row (Repeat Header)', 'Flatten'], default: 'row' }
+            ],
+            csv: [
+                { id: 'cfg_csv_sheets', label: 'Sheets', type: 'inline-text', default: '', placeholder: '1,2...', width: '50px' },
+                { id: 'cfg_csv_mergeSheets', label: 'Merge', type: 'inline-switch', default: true },
+                { id: 'cfg_csv_columnDelimiter', label: 'Delim', type: 'inline-text', default: ',', width: '30px' }
+            ],
+            text: [
+                { id: 'cfg_text_preserveLayout', label: 'Layout', type: 'inline-switch', default: false },
+                { id: 'cfg_text_newlineDelimiter', label: 'Newline', type: 'inline-text', default: '\\n', width: '30px' }
+            ]
+        };
+
+        function renderConfigItems(sectionKey, containerId) {
+            const schema = window.CONFIG_SCHEMAS[sectionKey];
+            let html = '';
+            
+            schema.forEach(item => {
+                const saved = localStorage.getItem(item.id);
+                const value = saved !== null ? (item.type.includes('switch') ? saved === 'true' : saved) : item.default;
+                const isInline = item.type.startsWith('inline-');
+                
+                if (item.type.includes('switch')) {
+                    html += `
+                        <div class="${isInline ? 'window-config-item' : 'config-item'}">
+                            <span class="config-label">${item.label}</span>
+                            <label class="switch">
+                                <input type="checkbox" id="${item.id}" ${value ? 'checked' : ''}>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    `;
+                } else if (item.type.includes('select')) {
+                    html += `
+                        <div class="${isInline ? 'window-config-item' : 'config-item'}">
+                            <span class="config-label">${item.label}</span>
+                            <select id="${item.id}" class="btn btn-outline" style="padding: ${isInline ? '0.2rem' : '0.4rem'}; font-size: 0.8rem; width: ${item.width || 'auto'};">
+                                ${item.options.map((opt, i) => `<option value="${opt}" ${opt === value ? 'selected' : ''}>${item.names[i]}</option>`).join('')}
+                            </select>
+                        </div>
+                    `;
+                } else {
+                    html += `
+                        <div class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}">
+                            <span class="config-label">${item.label}</span>
+                            <input type="${item.type.replace('inline-', '')}" id="${item.id}" class="btn btn-outline" 
+                                style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; font-size: ${isInline ? '0.75rem' : '0.8rem'};" 
+                                value="${value}" ${item.min !== undefined ? `min="${item.min}"` : ''} ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>
+                        </div>
+                    `;
+                }
+            });
+            document.write(html);
+        }
+    </script>
 </head>
 
 <body>
     <header>
-        <div class="logo" onclick="window.location.href='#top'">officeParser</div>
-        <div class="header-right">
-            <nav class="nav-links">
-                <a href="#support">Support</a>
-                <a href="#features">Features</a>
-                <a href="#rag">RAG & Chunking</a>
-                <a href="#specs">Specifications</a>
-                <a href="#visualizer">Visualizer</a>
-            </nav>
-            <div class="action-buttons">
-                <div class="theme-switcher">
-                    <button class="theme-btn theme-btn-light" title="Light Mode">☀️</button>
-                    <button class="theme-btn theme-btn-dark" title="Dark Mode">🌙</button>
-                    <button class="theme-btn theme-btn-auto" title="System Settings">💻</button>
+        <div class="header-container">
+            <div class="logo" onclick="window.location.href='#top'">officeParser</div>
+            <div class="header-right">
+                <nav class="nav-links">
+                    <a href="#support">Support</a>
+                    <a href="#features">Features</a>
+                    <a href="#rag">RAG & Chunking</a>
+                    <a href="#specs">Specifications</a>
+                    <a href="#visualizer">Visualizer</a>
+                </nav>
+                <div class="action-buttons">
+                    <div class="theme-switcher">
+                        <button class="theme-btn theme-btn-light">☀️</button>
+                        <button class="theme-btn theme-btn-dark">🌙</button>
+                        <button class="theme-btn theme-btn-auto">💻</button>
+                    </div>
+                    <a href="https://github.com/sponsors/harshankur" class="sponsor-nav-btn" target="_blank">
+                        <svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor">
+                            <path
+                                d="M4.25 2.5c-1.336 0-2.75 1.164-2.75 3 0 2.15 1.58 4.144 3.365 5.229A10.66 10.66 0 018 12.5a10.66 10.66 0 013.135-1.771c1.786-1.085 3.365-3.079 3.365-5.229 0-1.836-1.414-3-2.75-3-1.336 0-2.25 1.164-2.25 2a.75.75 0 01-1.5 0c0-.836-.914-2-2.25-2z">
+                            </path>
+                        </svg>
+                        <span class="btn-text">Sponsor</span>
+                    </a>
+                    <a href="https://www.buymeacoffee.com/harshankur" class="bmc-nav-btn" target="_blank">
+                        <div class="bmc-full-btn">
+                            <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee">
+                        </div>
+                        <div class="bmc-icon-btn">
+                            <img src="https://www.buymeacoffee.com/assets/img/guidelines/logo-mark-1.svg"
+                                alt="BMC Icon">
+                        </div>
+                    </a>
+                    <a href="https://github.com/harshankur/officeParser" class="github-btn" target="_blank">
+                        <svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor">
+                            <path
+                                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z">
+                            </path>
+                        </svg>
+                        <span class="btn-text">GitHub</span>
+                    </a>
+                    <button class="hamburger" id="hamburger-btn" aria-label="Toggle Menu">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </button>
                 </div>
-                <a href="https://github.com/sponsors/harshankur" class="sponsor-nav-btn" target="_blank"
-                    title="Sponsor on GitHub">
-                    <svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor">
-                        <path
-                            d="M4.25 2.5c-1.336 0-2.75 1.164-2.75 3 0 2.15 1.58 4.144 3.365 5.229A10.66 10.66 0 018 12.5a10.66 10.66 0 013.135-1.771c1.786-1.085 3.365-3.079 3.365-5.229 0-1.836-1.414-3-2.75-3-1.336 0-2.25 1.164-2.25 2a.75.75 0 01-1.5 0c0-.836-.914-2-2.25-2z">
-                        </path>
-                    </svg>
-                    <span class="btn-text">Sponsor</span>
-                </a>
-                <a href="https://www.buymeacoffee.com/harshankur" class="bmc-nav-btn" target="_blank"
-                    title="Buy Me A Coffee">
-                    <div class="bmc-full-btn">
-                        <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee">
-                    </div>
-                    <div class="bmc-icon-btn">
-                        <img src="https://www.buymeacoffee.com/assets/img/guidelines/logo-mark-1.svg" alt="BMC Icon">
-                    </div>
-                </a>
-                <a href="https://github.com/harshankur/officeParser" class="github-btn" target="_blank"
-                    title="View GitHub">
-                    <svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor">
-                        <path
-                            d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z">
-                        </path>
-                    </svg>
-                    <span class="btn-text">GitHub</span>
-                </a>
-                <button class="hamburger" id="hamburger-btn" aria-label="Toggle Menu">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </button>
             </div>
         </div>
         <!-- Mobile Menu Overlay -->
@@ -2127,13 +2634,13 @@
                     Appearance</p>
                 <div class="theme-switcher"
                     style="display: flex; width: fit-content; background: var(--bg-deep); padding: 4px; border-radius: 12px; border: 1px solid var(--border);">
-                    <button class="theme-btn theme-btn-light" title="Light Mode"
+                    <button class="theme-btn theme-btn-light"
                         style="padding: 0.6rem 1.2rem; display: flex; align-items: center; gap: 0.5rem;">☀️
                         Light</button>
-                    <button class="theme-btn theme-btn-dark" title="Dark Mode"
+                    <button class="theme-btn theme-btn-dark"
                         style="padding: 0.6rem 1.2rem; display: flex; align-items: center; gap: 0.5rem;">🌙
                         Dark</button>
-                    <button class="theme-btn theme-btn-auto" title="System Settings"
+                    <button class="theme-btn theme-btn-auto"
                         style="padding: 0.6rem 1.2rem; display: flex; align-items: center; gap: 0.5rem;">💻
                         Auto</button>
                 </div>
@@ -2142,42 +2649,49 @@
     </header>
 
     <main>
+        <div id="custom-tooltip" class="custom-tooltip"></div>
         <section class="hero">
-            <a id="weekly-badge-link" href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser"
-                target="_blank" class="badge-link">
-                <div class="badge shimmer" id="weekly-badge">--- Weekly Downloads</div>
-            </a>
-            <h1>The Industry's First <span class="gradient-text">Parser & Generator</span></h1>
-            <p>One library, every transformation. Parse complex documents into a structured AST and generate
-                high-fidelity Markdown, HTML, or RAG-ready chunks optimized for LLM integration and modern AI workflows.
-            </p>
-            <div class="cta-group">
-                <a href="#visualizer" class="btn btn-primary">Try Visualizer</a>
-                <a href="https://www.npmjs.com/package/officeparser" class="btn btn-outline" target="_blank">View on
-                    NPM</a>
-            </div>
+            <div class="hero-container">
+                <a id="weekly-badge-link"
+                    href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser" target="_blank"
+                    class="badge-link">
+                    <div class="badge shimmer" id="weekly-badge">--- Weekly Downloads</div>
+                </a>
+                <h1>The Industry's First <span class="gradient-text">Parser & Generator</span></h1>
+                <p>One library, every transformation. Parse complex documents into a structured AST and generate
+                    high-fidelity Markdown, HTML, or RAG-ready chunks optimized for LLM integration and modern AI
+                    workflows.
+                </p>
+                <div class="cta-group">
+                    <a href="#visualizer" class="btn btn-primary">Try Visualizer</a>
+                    <a href="https://www.npmjs.com/package/officeparser" class="btn btn-outline" target="_blank">View on
+                        NPM</a>
+                </div>
             </div>
         </section>
 
-        <section class="stats-grid">
-            <div class="stat-item">
-                <a id="weekly-stats-link"
-                    href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser" target="_blank"
-                    style="text-decoration: none;">
-                    <h3 id="weekly-stats-count" class="shimmer">---</h3>
-                    <p>Weekly Downloads*</p>
-                </a>
-            </div>
-            <div class="stat-item">
-                <a id="total-stats-link" href="https://api.npmjs.org/downloads/point/2019-04-15:2026-05-12/officeparser"
-                    target="_blank" style="text-decoration: none;">
-                    <h3 id="total-stats-count" class="shimmer">---</h3>
-                    <p>Total Downloads</p>
-                </a>
-            </div>
-            <div class="stat-item">
-                <h3>11+</h3>
-                <p>Formats Supported</p>
+        <section class="stats-section">
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <a id="weekly-stats-link"
+                        href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser" target="_blank"
+                        style="text-decoration: none;">
+                        <h3 id="weekly-stats-count" class="shimmer">---</h3>
+                        <p>Weekly Downloads*</p>
+                    </a>
+                </div>
+                <div class="stat-item">
+                    <a id="total-stats-link"
+                        href="https://api.npmjs.org/downloads/point/2019-04-15:2026-05-12/officeparser" target="_blank"
+                        style="text-decoration: none;">
+                        <h3 id="total-stats-count" class="shimmer">---</h3>
+                        <p>Total Downloads</p>
+                    </a>
+                </div>
+                <div class="stat-item">
+                    <h3>11+</h3>
+                    <p>Formats Supported</p>
+                </div>
             </div>
         </section>
 
@@ -2505,116 +3019,7 @@
                     <div class="config-group">
                         <div class="config-group-title">Parser Configuration</div>
                         <div class="config-items-container">
-                            <div class="config-item">
-                                <span class="config-label">File Type Hint</span>
-                                <select id="cfg_fileType" class="btn btn-outline"
-                                    style="padding: 0.4rem; font-size: 0.8rem; width: 100px;">
-                                    <option value="">Auto</option>
-                                    <option value="docx">DOCX</option>
-                                    <option value="xlsx">XLSX</option>
-                                    <option value="pptx">PPTX</option>
-                                    <option value="pdf">PDF</option>
-                                    <option value="rtf">RTF</option>
-                                    <option value="csv">CSV</option>
-                                    <option value="md">Markdown</option>
-                                    <option value="html">HTML</option>
-                                    <option value="odt">ODT</option>
-                                    <option value="ods">ODS</option>
-                                    <option value="odp">ODP</option>
-                                </select>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Extract Attachments</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_extractAttachments" checked>
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Enable OCR</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_ocr">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Ignore Internal Links</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_ignoreInternalLinks_parser">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Include Raw Source</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_includeRawContent">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Serialize Raw XML</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_serializeRawContent" checked>
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Preserve XML Space</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_preserveXmlWhitespace">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Ignore Notes</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_ignoreNotes">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Notes At Last</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_putNotesAtLast">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Include Break Nodes</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_includeBreakNodes" checked>
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Verbose Errors <small
-                                        style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small></span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_outputErrorToConsole">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">OCR Lang</span>
-                                <input type="text" id="cfg_ocrLanguage" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.8rem; width: 80px; font-size: 0.8rem;" value="eng">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">CSV Delimiter</span>
-                                <input type="text" id="cfg_csvDelimiter" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.8rem; width: 60px; font-size: 0.8rem;" value=",">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">OCR Timeout (s)</span>
-                                <input type="number" id="cfg_ocrTimeout" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.8rem; width: 60px; font-size: 0.8rem;" value="10" min="0">
-                            </div>
-                            <div class="config-item full-width">
-                                <span class="config-label">PDF Worker URL</span>
-                                <input type="text" id="cfg_pdfWorkerSrc" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.8rem; width: 100%; font-size: 0.75rem;"
-                                    value="https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs">
-                            </div>
+                            <script>renderConfigItems('parser');</script>
                         </div>
                     </div>
 
@@ -2622,55 +3027,10 @@
                     <div class="config-group">
                         <div class="config-group-title">Common Generator Configuration</div>
                         <div class="config-items-container">
-                            <div class="config-item">
-                                <span class="config-label">Include Formatting</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_includeFormatting" checked>
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Generate IDs</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_generateIds" checked>
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Render Metadata</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_renderMetadata">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Include Images</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_includeImages" checked>
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Include Charts</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_includeCharts" checked>
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Ignore Internal Links</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_ignoreInternalLinks_generator">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Ignore Default Style Map</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="cfg_ignoreDefaultStyleMap">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
+                            <script>renderConfigItems('generator');</script>
+                        </div>
+                    </div>
+                </div>
                             <div class="config-item full-width" style="gap: 1rem;">
                                 <div
                                     style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
@@ -2698,11 +3058,8 @@
 ]'></textarea>
                             </div>
                         </div>
-                    </div>
-                </div>
-
-                <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem;">
-                    <button id="reparse-btn" class="sync-btn" title="Update Preview"
+                <div style="padding: 1.5rem 0; display: flex; flex-direction: column; gap: 0.75rem; border-top: 1px solid var(--border); margin-top: 1.5rem; width: 100%; max-width: 600px; margin-left: auto; margin-right: auto;">
+                    <button id="reparse-btn" class="sync-btn"
                         style="display: flex; justify-content: center; padding: 0.75rem;" disabled>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round" style="width: 1.25rem; height: 1.25rem;">
@@ -2714,12 +3071,12 @@
                         Refresh Parsing Engine
                     </button>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                        <button id="cleanup-ocr-btn" class="sync-btn" title="Manual Resource Cleanup"
+                        <button id="cleanup-ocr-btn" class="sync-btn"
                             style="border-color: #ef4444; color: #ef4444; background: rgba(239, 68, 68, 0.05); display: flex; justify-content: center;"
                             disabled>
                             🗑️ Cleanup OCR Pool
                         </button>
-                        <button id="download-pdf-btn" class="sync-btn" title="Download as PDF"
+                        <button id="download-pdf-btn" class="sync-btn"
                             style="border-color: #E02A26; color: #E02A26; background: rgba(224, 42, 38, 0.05); display: flex; justify-content: center;"
                             disabled>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -2731,7 +3088,7 @@
                     </div>
                 </div>
             </div>
-            </div>
+        </section>
 
             <div id="warning-banner"
                 style="display: none; max-width: 1000px; margin: 0 auto 2rem; padding: 1rem 1.5rem; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 12px; color: #fbbf24; font-size: 0.9rem; align-items: center; gap: 1rem; backdrop-filter: blur(8px); animation: slideUp 0.3s ease-out;">
@@ -2752,11 +3109,12 @@
                 <div class="visual-panel-window" id="window-html">
                     <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">HTML PREVIEW</h4>
+                        <div class="viewer-toggle" id="toggle-html">
+                            <div class="toggle-slider"></div>
+                            <button class="toggle-btn active" data-state="preview">Preview</button>
+                            <button class="toggle-btn" data-state="raw">Raw</button>
+                        </div>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <span
-                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
-                                ⚙️ Config
-                            </span>
                             <button id="copy-html-btn" class="btn-outline"
                                 style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
                             <button id="download-html-btn" class="btn-outline"
@@ -2765,27 +3123,22 @@
                     </div>
                     <div class="panel-sub-header">
                         <div class="window-config-group">
-                            <div class="window-config-item">
-                                Standalone <input type="checkbox" id="cfg_html_standalone" checked>
-                            </div>
-                            <div class="window-config-item" title="Chart.js Source URL">
-                                Charts URL <input type="text" id="cfg_html_chartJsSrc" style="width: 80px;"
-                                    value="https://cdn.jsdelivr.net/npm/chart.js">
-                            </div>
+                            <script>renderConfigItems('html');</script>
                         </div>
                     </div>
-                    <div class="panel-body" id="visual-html" style="position: relative; padding: 0;"></div>
+                    <div class="panel-body" id="visual-html" style="position: relative;"></div>
                 </div>
 
                 <!-- Markdown Window -->
                 <div class="visual-panel-window" id="window-md">
                     <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">MARKDOWN</h4>
+                        <div class="viewer-toggle" id="toggle-md">
+                            <div class="toggle-slider"></div>
+                            <button class="toggle-btn active" data-state="preview">Preview</button>
+                            <button class="toggle-btn" data-state="raw">Raw</button>
+                        </div>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <span
-                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
-                                ⚙️ Config
-                            </span>
                             <button id="copy-md-btn" class="btn-outline"
                                 style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
                             <button id="download-md-btn" class="btn-outline"
@@ -2794,9 +3147,7 @@
                     </div>
                     <div class="panel-sub-header">
                         <div class="window-config-group">
-                            <div class="window-config-item">
-                                HTML Fallback <input type="checkbox" id="cfg_md_fallbackToHtml" checked>
-                            </div>
+                            <script>renderConfigItems('md');</script>
                         </div>
                     </div>
                     <div class="panel-body" id="visual-md" style="position: relative; padding: 0;"></div>
@@ -2806,11 +3157,12 @@
                 <div class="visual-panel-window" id="window-chunks">
                     <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">CHUNKS (RAG READY)</h4>
+                        <div class="viewer-toggle" id="toggle-chunks">
+                            <div class="toggle-slider"></div>
+                            <button class="toggle-btn active" data-state="preview">Preview</button>
+                            <button class="toggle-btn" data-state="raw">Raw</button>
+                        </div>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <span
-                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
-                                ⚙️ Config
-                            </span>
                             <button id="copy-chunks-btn" class="btn-outline"
                                 style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
                             <button id="download-chunks-btn" class="btn-outline"
@@ -2819,41 +3171,7 @@
                     </div>
                     <div class="panel-sub-header">
                         <div class="window-config-group">
-                            <div class="window-config-item">
-                                Strategy
-                                <select id="cfg_chunks_strategy">
-                                    <option value="document-structure">Structure</option>
-                                    <option value="fixed-size">Fixed Size</option>
-                                    <option value="semantic" disabled
-                                        title="Semantic chunking requires a user-provided embedding function (e.g. OpenAI) which is not available in this static demo.">
-                                        Semantic (External Only)</option>
-                                </select>
-                            </div>
-                            <div class="window-config-item">
-                                Max Size <input type="number" id="cfg_chunks_maxChunkSize" style="width: 50px;"
-                                    value="1000">
-                            </div>
-                            <div class="window-config-item">
-                                Overlap <input type="number" id="cfg_chunks_chunkOverlap" style="width: 45px;"
-                                    value="200">
-                            </div>
-                            <div class="window-config-item">
-                                Split By
-                                <select id="cfg_chunks_splitBy">
-                                    <option value="paragraph">Paragraph</option>
-                                    <option value="heading">Heading</option>
-                                    <option value="page">Page</option>
-                                    <option value="slide">Slide</option>
-                                    <option value="sheet">Sheet</option>
-                                </select>
-                            </div>
-                            <div class="window-config-item">
-                                Table
-                                <select id="cfg_chunks_tableSplitStrategy">
-                                    <option value="row">Row (Repeat Header)</option>
-                                    <option value="flatten">Flatten</option>
-                                </select>
-                            </div>
+                            <script>renderConfigItems('chunks');</script>
                         </div>
                     </div>
                     <div class="panel-body" id="visual-chunks" style="position: relative; padding: 0;"></div>
@@ -2863,11 +3181,12 @@
                 <div class="visual-panel-window" id="window-csv">
                     <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">CSV / SPREADSHEET</h4>
+                        <div class="viewer-toggle" id="toggle-csv">
+                            <div class="toggle-slider"></div>
+                            <button class="toggle-btn active" data-state="preview">Preview</button>
+                            <button class="toggle-btn" data-state="raw">Raw</button>
+                        </div>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <span
-                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
-                                ⚙️ Config
-                            </span>
                             <button id="copy-csv-btn" class="btn-outline"
                                 style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
                             <button id="download-csv-btn" class="btn-outline"
@@ -2876,15 +3195,7 @@
                     </div>
                     <div class="panel-sub-header">
                         <div class="window-config-group">
-                            <div class="window-config-item">
-                                Sheets <input type="text" id="cfg_csv_sheets" style="width: 50px;" placeholder="1,2...">
-                            </div>
-                            <div class="window-config-item">
-                                Merge <input type="checkbox" id="cfg_csv_mergeSheets" checked>
-                            </div>
-                            <div class="window-config-item">
-                                Delim <input type="text" id="cfg_csv_columnDelimiter" style="width: 30px;" value=",">
-                            </div>
+                            <script>renderConfigItems('csv');</script>
                         </div>
                     </div>
                     <div class="panel-body" id="visual-csv" style="position: relative; padding: 0;"></div>
@@ -2894,11 +3205,17 @@
                 <div class="visual-panel-window" id="window-rtf">
                     <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">RTF (RICH TEXT)</h4>
+                        <div style="display: flex; gap: 0.75rem; align-items: center;">
+                            <div id="rtf-info-icon" class="info-icon"
+                                style="cursor: help; background: rgba(99, 102, 241, 0.05); color: var(--primary); font-family: serif; font-weight: 800; font-style: italic; border: 1.5px solid var(--primary); border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; opacity: 0.8; transition: all 0.2s;">
+                                i</div>
+                            <div class="viewer-toggle" id="toggle-rtf">
+                                <div class="toggle-slider"></div>
+                                <button class="toggle-btn active" data-state="preview">Preview</button>
+                                <button class="toggle-btn" data-state="raw">Raw</button>
+                            </div>
+                        </div>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <span
-                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
-                                ⚙️ Config
-                            </span>
                             <button id="copy-rtf-btn" class="btn-outline"
                                 style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
                             <button id="download-rtf-btn" class="btn-outline"
@@ -2907,21 +3224,24 @@
                     </div>
                     <div class="panel-sub-header">
                         <div class="window-config-group">
-                            <span style="font-size: 0.75rem; color: var(--text-dim);">No extra config available</span>
+                            <div class="window-config-item" style="visibility: hidden;">
+                                Placeholder <input type="text" style="width: 1px; visibility: hidden;">
+                            </div>
                         </div>
                     </div>
-                    <div class="panel-body" id="visual-rtf" style="position: relative; padding: 0;"></div>
+                    <div class="panel-body" id="visual-rtf" style="position: relative;"></div>
                 </div>
 
                 <!-- Text Window -->
                 <div class="visual-panel-window" id="window-text">
                     <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">PLAIN TEXT</h4>
+                        <div class="viewer-toggle" id="toggle-text">
+                            <div class="toggle-slider"></div>
+                            <button class="toggle-btn active" data-state="preview">Preview</button>
+                            <button class="toggle-btn" data-state="raw">Raw</button>
+                        </div>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <span
-                                style="font-size: 0.75rem; color: var(--text-dim); margin-right: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
-                                ⚙️ Config
-                            </span>
                             <button id="copy-text-btn" class="btn-outline"
                                 style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
                             <button id="download-text-btn" class="btn-outline"
@@ -2930,13 +3250,7 @@
                     </div>
                     <div class="panel-sub-header">
                         <div class="window-config-group">
-                            <div class="window-config-item">
-                                Layout <input type="checkbox" id="cfg_text_preserveLayout">
-                            </div>
-                            <div class="window-config-item">
-                                Newline <input type="text" id="cfg_text_newlineDelimiter" style="width: 30px;"
-                                    value="\n">
-                            </div>
+                            <script>renderConfigItems('text');</script>
                         </div>
                     </div>
                     <div class="panel-body" id="visual-text" style="position: relative; padding: 0;"></div>
@@ -2946,10 +3260,17 @@
                 <div class="visual-panel-window full-width" id="window-ast">
                     <div class="panel-header" style="justify-content: space-between;">
                         <h4 style="margin:0;">JSON (AST)</h4>
-                        <button id="copy-ast-btn" class="btn-outline"
-                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                        <button id="download-ast-btn" class="btn-outline"
-                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        <div class="viewer-toggle" id="toggle-ast">
+                            <div class="toggle-slider"></div>
+                            <button class="toggle-btn active" data-state="preview">Preview</button>
+                            <button class="toggle-btn" data-state="raw">Raw</button>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <button id="copy-ast-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                            <button id="download-ast-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                        </div>
                     </div>
                     <div class="panel-body" id="visual-ast" style="position: relative; padding: 0;"></div>
                 </div>
@@ -2959,15 +3280,70 @@
     </main>
 
     <footer>
-        <div class="footer-logo">officeParser</div>
-        <div class="footer-links">
-            <a href="https://github.com/harshankur/officeParser">GitHub</a>
-            <a href="https://www.npmjs.com/package/officeparser">NPM</a>
-            <a href="#spec/converter">OfficeConverter</a>
-            <a href="#spec/generator_config">Generator Config</a>
-            <a href="#spec/ast">AST Reference</a>
+        <div class="footer-grid">
+            <div class="footer-brand">
+                <div class="footer-logo">officeParser</div>
+                <p class="footer-tagline">Advanced document knowledge engine for AI and RAG workflows. High-fidelity
+                    parsing for the modern web.</p>
+                <div class="footer-social">
+                    <a href="https://github.com/harshankur/officeParser" target="_blank">
+                        <svg height="20" width="20" viewBox="0 0 16 16" fill="currentColor">
+                            <path
+                                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z">
+                            </path>
+                        </svg>
+                    </a>
+                    <a href="https://www.npmjs.com/package/officeparser" target="_blank">
+                        <svg height="20" width="20" viewBox="0 0 256 256" fill="currentColor">
+                            <path d="M0 0h256v256H0z" fill="transparent" />
+                            <path d="M64 64h128v128h-32V96h-32v96H64z" />
+                        </svg>
+                    </a>
+                </div>
+            </div>
+
+            <div class="footer-column">
+                <h5>Product</h5>
+                <a href="#features">Features</a>
+                <a href="#formats">Supported Formats</a>
+                <a href="#visualizer">Interactive Visualizer</a>
+            </div>
+
+            <div class="footer-column">
+                <h5>Core APIs</h5>
+                <a href="#spec/converter">OfficeConverter</a>
+                <a href="#spec/generator">OfficeGenerator</a>
+            </div>
+
+            <div class="footer-column">
+                <h5>Configuration</h5>
+                <a href="#spec/config">Global Config</a>
+                <a href="#spec/generator_config">Generator Config</a>
+            </div>
+
+            <div class="footer-column">
+                <h5>Reference</h5>
+                <a href="#spec/ast">AST Reference</a>
+                <a href="#spec/debugging">Debugging Guide</a>
+            </div>
+
+            <div class="footer-column">
+                <h5>Community</h5>
+                <a href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md"
+                    target="_blank">Changelog</a>
+                <a href="https://github.com/harshankur/officeParser/blob/master/README.md" target="_blank">Readme</a>
+                <a href="https://github.com/harshankur/officeParser/blob/master/CONTRIBUTING.md"
+                    target="_blank">Contributing</a>
+            </div>
         </div>
-        <p class="copyright">© 2026 officeParser. Built with ❤️ for the Open Source community.</p>
+
+        <div class="footer-bottom">
+            <p class="copyright">© 2026 officeParser. Built with ❤️ for the Open Source community.</p>
+            <div class="footer-legal">
+                <a href="https://github.com/harshankur/officeParser/blob/master/LICENSE" target="_blank"
+                    style="color: var(--text-dim); text-decoration: none; margin-left: 1.5rem;">MIT License</a>
+            </div>
+        </div>
     </footer>
 
     <script src="dist/officeparser.browser.iife.js"></script>
@@ -2986,7 +3362,7 @@
             const displayFileIcon = fileInfo.querySelector('.file-icon');
             const reparseBtn = document.getElementById('reparse-btn');
 
-            let currentAst = null;
+            window.currentAst = null;
             let lastFileBuffer = null;
             let lastFileName = "";
             let ocrWasUsedInCurrentPreview = false;
@@ -3060,14 +3436,186 @@
             function setTheme(theme) {
                 localStorage.setItem('theme', theme);
                 const html = document.documentElement;
+                let activeTheme = theme;
                 if (theme === 'auto') {
                     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                    html.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
-                } else {
-                    html.setAttribute('data-theme', theme);
+                    activeTheme = prefersDark ? 'dark' : 'light';
                 }
+                html.setAttribute('data-theme', activeTheme);
                 updateThemeUI(theme);
+
+                // Update HLJS theme
+                const hljsLink = document.getElementById('hljs-theme');
+                if (hljsLink) {
+                    hljsLink.href = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-${activeTheme === 'dark' ? 'dark' : 'light'}.min.css`;
+                }
+
+                // Re-render active format windows if window.currentAst exists
+                if (window.currentAst) {
+                    const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                    formats.forEach(f => {
+                        const win = document.getElementById(`window-${f}`);
+                        if (win && win.style.display !== 'none') {
+                            window.renderFormatWindow(f);
+                        }
+                    });
+                }
             }
+
+            // --- Viewer Toggle Logic ---
+            window.viewerStates = {
+                html: 'preview',
+                md: 'preview',
+                chunks: 'preview',
+                csv: 'preview',
+                rtf: 'preview',
+                text: 'preview',
+                ast: 'preview'
+            };
+
+            function updateToggleUI(format) {
+                const state = window.viewerStates[format];
+                const toggle = document.getElementById(`toggle-${format}`);
+                if (!toggle) return;
+
+                const buttons = toggle.querySelectorAll('.toggle-btn');
+                const slider = toggle.querySelector('.toggle-slider');
+                const activeBtn = toggle.querySelector(`.toggle-btn[data-state="${state}"]`);
+
+                buttons.forEach(btn => btn.classList.remove('active'));
+                activeBtn.classList.add('active');
+
+                if (slider) {
+                    slider.style.width = activeBtn.offsetWidth + 'px';
+                    slider.style.left = activeBtn.offsetLeft + 'px';
+                }
+            }
+
+            // Initialize toggles
+            ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].forEach(fmt => {
+                const toggle = document.getElementById(`toggle-${fmt}`);
+                if (toggle) {
+                    toggle.querySelectorAll('.toggle-btn').forEach(btn => {
+                        btn.addEventListener('click', () => {
+                            window.viewerStates[fmt] = btn.getAttribute('data-state');
+                            updateToggleUI(fmt);
+                            if (window.currentAst) window.renderFormatWindow(fmt);
+                        });
+                    });
+                    // Initial UI sync
+                    setTimeout(() => updateToggleUI(fmt), 100);
+                }
+            });
+
+            // Adjust toggle sliders on window resize
+            window.addEventListener('resize', () => {
+                ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].forEach(fmt => updateToggleUI(fmt));
+            });
+
+            // --- Custom Tooltip Logic ---
+            const tooltip = document.getElementById('custom-tooltip');
+            let tooltipTimeout;
+
+            function hideTooltip() {
+                tooltipTimeout = setTimeout(() => {
+                    tooltip.classList.remove('visible');
+                }, 100);
+            }
+
+            function showTooltip(target, content) {
+                clearTimeout(tooltipTimeout);
+                tooltip.innerHTML = content;
+
+                // Temporarily show to measure dimensions
+                tooltip.classList.remove('bottom');
+                tooltip.classList.add('visible');
+
+                const rect = target.getBoundingClientRect();
+                const tooltipHeight = tooltip.offsetHeight;
+                const tooltipWidth = tooltip.offsetWidth;
+                const margin = 12;
+                const viewportPadding = 20;
+
+                // Vertical positioning (with flip)
+                if (rect.top < tooltipHeight + margin + 20) {
+                    tooltip.classList.add('bottom');
+                    tooltip.style.top = (rect.bottom + margin) + 'px';
+                } else {
+                    tooltip.style.top = (rect.top - margin) + 'px';
+                }
+
+                // Horizontal positioning (with boundary check)
+                let left = (rect.left + rect.width / 2);
+                if (left - tooltipWidth / 2 < viewportPadding) {
+                    left = tooltipWidth / 2 + viewportPadding;
+                } else if (left + tooltipWidth / 2 > window.innerWidth - viewportPadding) {
+                    left = window.innerWidth - tooltipWidth / 2 - viewportPadding;
+                }
+
+                tooltip.style.left = left + 'px';
+            }
+
+            document.addEventListener('mouseover', (e) => {
+                const target = e.target.closest('[data-tooltip]') || e.target.closest('#rtf-info-icon');
+                if (target) {
+                    let content = target.getAttribute('data-tooltip');
+
+                    if (target.id === 'rtf-info-icon') {
+                        const sourceFormat = window.currentAst ? window.currentAst.type.toUpperCase() : 'FILE';
+
+                        content = `
+                            <div class="tooltip-header"><span>⚙️</span> RTF Preview Engine</div>
+                            <div style="margin-bottom: 1.25rem; opacity: 0.8; font-size: 0.75rem; line-height: 1.6;">Due to the lack of reliable browser-side RTF renderers, OfficeParser performs a dual-pass conversion to enable high-fidelity previewing.</div>
+                            
+                            <div class="pipeline-container">
+                                <div class="pipeline-phase">
+                                    <div class="phase-label">Phase 1: RTF Generation</div>
+                                    <div class="pipeline-row">
+                                        <div class="pipeline-node active"><div class="node-icon-box">📄</div><div class="node-text">${sourceFormat}</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">🌳</div><div class="node-text">AST</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">📝</div><div class="node-text">RTF</div></div>
+                                    </div>
+                                </div>
+                                
+                                <div class="phase-connector">▼</div>
+                                
+                                <div class="pipeline-phase">
+                                    <div class="phase-label">Phase 2: HTML Preview</div>
+                                    <div class="pipeline-row">
+                                        <div class="pipeline-node active"><div class="node-icon-box">📝</div><div class="node-text">RTF</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">🌳</div><div class="node-text">AST</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">🌐</div><div class="node-text">HTML</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">👁️</div><div class="node-text">UI</div></div>
+                                    </div>
+                                </div>
+                            </div>`;
+                    }
+
+                    if (content) {
+                        showTooltip(target, content);
+                    }
+                }
+            });
+
+            document.addEventListener('mouseout', (e) => {
+                const target = e.target.closest('[data-tooltip]') || e.target.closest('#rtf-info-icon');
+                if (target) {
+                    hideTooltip();
+                }
+            });
+
+            tooltip.addEventListener('mouseenter', () => {
+                clearTimeout(tooltipTimeout);
+            });
+
+            tooltip.addEventListener('mouseleave', () => {
+                hideTooltip();
+            });
 
             themeActions.forEach(theme => {
                 document.querySelectorAll(`.theme-btn-${theme}`).forEach(btn => {
@@ -3075,8 +3623,9 @@
                 });
             });
 
+
             const initialTheme = localStorage.getItem('theme') || 'auto';
-            updateThemeUI(initialTheme);
+            setTheme(initialTheme);
 
             window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
                 if (localStorage.getItem('theme') === 'auto') {
@@ -3185,36 +3734,24 @@
                 if (file) handleFile(file);
             });
 
-            // Config Persistence
-            const configIds = [
-                'cfg_fileType', 'cfg_extractAttachments', 'cfg_ocr', 'cfg_ignoreInternalLinks_parser',
-                'cfg_includeRawContent', 'cfg_serializeRawContent', 'cfg_preserveXmlWhitespace',
-                'cfg_ignoreNotes', 'cfg_putNotesAtLast', 'cfg_includeBreakNodes',
-                'cfg_outputErrorToConsole', 'cfg_ocrLanguage', 'cfg_csvDelimiter', 'cfg_ocrTimeout', 'cfg_pdfWorkerSrc',
-                'cfg_includeFormatting', 'cfg_generateIds', 'cfg_renderMetadata', 'cfg_includeImages', 'cfg_includeCharts', 'cfg_ignoreInternalLinks_generator', 'cfg_ignoreDefaultStyleMap', 'cfg_styleMap',
-                'cfg_html_standalone', 'cfg_html_chartJsSrc',
-                'cfg_md_fallbackToHtml',
-                'cfg_chunks_strategy', 'cfg_chunks_maxChunkSize', 'cfg_chunks_chunkOverlap', 'cfg_chunks_splitBy', 'cfg_chunks_tableSplitStrategy',
-                'cfg_csv_sheets', 'cfg_csv_mergeSheets', 'cfg_csv_columnDelimiter',
-                'cfg_text_preserveLayout', 'cfg_text_newlineDelimiter'
-            ];
-            configIds.forEach(id => {
-                const el = document.getElementById(id);
+            // Config Persistence Logic
+            localStorage.removeItem('cfg_fileType');
+            Object.values(window.CONFIG_SCHEMAS).flat().forEach(item => {
+                const el = document.getElementById(item.id);
                 if (!el) return;
-                const saved = localStorage.getItem(id);
-                if (saved !== null) {
-                    if (el.type === 'checkbox') el.checked = saved === 'true';
-                    else el.value = saved;
-                }
+                
                 el.addEventListener('change', () => {
-                    localStorage.setItem(id, el.type === 'checkbox' ? el.checked : el.value);
+                    localStorage.setItem(item.id, el.type === 'checkbox' ? el.checked : el.value);
                 });
                 if (el.type !== 'checkbox') {
                     el.addEventListener('input', () => {
-                        localStorage.setItem(id, el.value);
+                        localStorage.setItem(item.id, el.value);
                     });
                 }
             });
+
+            // Signal ready state to show body (prevent FOUC/flicker)
+            document.body.classList.add('ready');
 
             // Reparse Action
             reparseBtn.addEventListener('click', () => {
@@ -3224,7 +3761,7 @@
             });
 
             document.getElementById('download-pdf-btn').addEventListener('click', async () => {
-                if (!currentAst) return;
+                if (!window.currentAst) return;
                 const btn = document.getElementById('download-pdf-btn');
                 const originalHtml = btn.innerHTML;
                 try {
@@ -3239,7 +3776,7 @@
                         }
                     };
 
-                    const result = await window.officeParser.OfficeGenerator.generate(currentAst, 'pdf', genConfig);
+                    const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'pdf', genConfig);
 
                     // The browser implementation returns HTML string for PDF format
                     const printWindow = window.open('', '_blank');
@@ -3324,21 +3861,34 @@
                 reparseBtn.style.display = 'flex';
             }
 
-            configIds.forEach(id => {
-                document.getElementById(id).addEventListener('input', updateReparseButtonState);
-                document.getElementById(id).addEventListener('change', updateReparseButtonState);
+            Object.values(window.CONFIG_SCHEMAS).flat().forEach(item => {
+                const el = document.getElementById(item.id);
+                if (el) {
+                    el.addEventListener('input', updateReparseButtonState);
+                    el.addEventListener('change', updateReparseButtonState);
+                }
             });
 
-            // Common generator config listeners
-            ['cfg_includeFormatting', 'cfg_generateIds', 'cfg_renderMetadata', 'cfg_includeImages', 'cfg_includeCharts', 'cfg_ignoreInternalLinks_generator', 'cfg_ignoreDefaultStyleMap', 'cfg_styleMap'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) {
-                    el.addEventListener('change', async () => {
-                        if (currentAst) {
-                            const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
-                            await Promise.all(formats.map(f => renderFormatWindow(f)));
-                        }
-                    });
+            // Instant re-render for generator and format-specific settings
+            ['generator', 'html', 'md', 'chunks', 'csv', 'text'].forEach(key => {
+                window.CONFIG_SCHEMAS[key].forEach(item => {
+                    const el = document.getElementById(item.id);
+                    if (el) {
+                        el.addEventListener('change', async () => {
+                            if (window.currentAst) {
+                                const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                                await Promise.all(formats.map(f => window.renderFormatWindow(f)));
+                            }
+                        });
+                    }
+                });
+            });
+
+            // Special handling for styleMap (which triggers re-render via hidden textarea)
+            document.getElementById('cfg_styleMap').addEventListener('change', async () => {
+                if (window.currentAst) {
+                    const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                    await Promise.all(formats.map(f => window.renderFormatWindow(f)));
                 }
             });
 
@@ -3401,7 +3951,7 @@
                             <input type="text" class="map-classes" placeholder="Classes (comma separated)">
                         </div>
                     </div>
-                    <button class="btn-remove" title="Remove Rule">×</button>
+                    <button class="btn-remove">×</button>
                 `;
 
                 if (data) {
@@ -3570,10 +4120,10 @@
                     const endTime = performance.now();
                     const duration = ((endTime - startTime) / 1000).toFixed(2);
 
-                    currentAst = ast;
+                    window.currentAst = ast;
                     statusMsg.textContent = `Successfully parsed ${filename} in ${duration}s. Generating views...`;
 
-                    await Promise.all(formats.map(f => renderFormatWindow(f)));
+                    await Promise.all(formats.map(f => window.renderFormatWindow(f)));
 
                     statusMsg.textContent = `Successfully parsed ${filename} in ${duration}s`;
                 } catch (err) {
@@ -3587,42 +4137,42 @@
 
             // Window-specific generator config listeners
             ['cfg_html_standalone', 'cfg_html_chartJsSrc'].forEach(id => {
-                document.getElementById(id).addEventListener('change', () => renderFormatWindow('html'));
+                document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('html'));
                 if (document.getElementById(id).type === 'text') {
-                    document.getElementById(id).addEventListener('input', () => renderFormatWindow('html'));
+                    document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('html'));
                 }
             });
             ['cfg_md_fallbackToHtml'].forEach(id => {
-                document.getElementById(id).addEventListener('change', () => renderFormatWindow('md'));
+                document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('md'));
             });
             ['cfg_chunks_strategy', 'cfg_chunks_maxChunkSize', 'cfg_chunks_chunkOverlap', 'cfg_chunks_splitBy', 'cfg_chunks_tableSplitStrategy'].forEach(id => {
-                document.getElementById(id).addEventListener('change', () => renderFormatWindow('chunks'));
+                document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('chunks'));
                 if (document.getElementById(id).type !== 'checkbox' && document.getElementById(id).tagName !== 'SELECT') {
-                    document.getElementById(id).addEventListener('input', () => renderFormatWindow('chunks'));
+                    document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('chunks'));
                 }
             });
             ['cfg_csv_sheets', 'cfg_csv_mergeSheets', 'cfg_csv_columnDelimiter'].forEach(id => {
-                document.getElementById(id).addEventListener('change', () => renderFormatWindow('csv'));
+                document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('csv'));
                 if (document.getElementById(id).type === 'text') {
-                    document.getElementById(id).addEventListener('input', () => renderFormatWindow('csv'));
+                    document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('csv'));
                 }
             });
             ['cfg_text_preserveLayout', 'cfg_text_newlineDelimiter'].forEach(id => {
-                document.getElementById(id).addEventListener('change', () => renderFormatWindow('text'));
+                document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('text'));
                 if (document.getElementById(id).type === 'text') {
-                    document.getElementById(id).addEventListener('input', () => renderFormatWindow('text'));
+                    document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('text'));
                 }
             });
 
-            async function renderFormatWindow(format) {
-                if (!currentAst) return;
+            window.renderFormatWindow = async function (format) {
+                if (!window.currentAst) return;
                 const container = document.getElementById(`visual-${format}`);
                 container.innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">Generating...</div>';
 
                 let result;
                 try {
                     if (format === 'ast') {
-                        result = currentAst;
+                        result = window.currentAst;
                     } else {
                         let genConfig = {
                             ...getGeneratorConfig(),
@@ -3657,7 +4207,7 @@
                                 newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n')
                             };
                         }
-                        result = await window.officeParser.OfficeGenerator.generate(currentAst, format, genConfig);
+                        result = await window.officeParser.OfficeGenerator.generate(window.currentAst, format, genConfig);
                     }
                 } catch (e) {
                     container.innerHTML = `<div style="color: #ef4444; padding: 2rem;">Error generating format: ${e.message}</div>`;
@@ -3667,25 +4217,35 @@
                 container.innerHTML = '';
 
                 if (format === 'html') {
-                    const contentFrame = document.createElement('iframe');
-                    contentFrame.className = 'html-iframe';
-                    contentFrame.style.width = '100%';
-                    contentFrame.style.border = 'none';
-                    container.appendChild(contentFrame);
-                    const doc = contentFrame.contentDocument || contentFrame.contentWindow.document;
-                    doc.open();
-                    doc.write(result.value);
-                    doc.close();
-
-                    // Ensure the iframe fits the panel body
-                    contentFrame.style.height = '100%';
-                    contentFrame.style.display = 'block';
+                    if (window.viewerStates['html'] === 'preview') {
+                        const contentFrame = document.createElement('iframe');
+                        contentFrame.className = 'html-iframe';
+                        contentFrame.style.width = '100%';
+                        contentFrame.style.border = 'none';
+                        container.appendChild(contentFrame);
+                        const doc = contentFrame.contentDocument || contentFrame.contentWindow.document;
+                        doc.open();
+                        // Inject CSS to ensure the preview has margins and padding
+                        const styledHtml = result.value.includes('<body')
+                            ? result.value.replace('<body', '<body style="padding: 3rem; max-width: 800px; margin: 0 auto; font-family: sans-serif; line-height: 1.6;"')
+                            : `<div style="padding: 3rem; max-width: 800px; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${result.value}</div>`;
+                        doc.write(styledHtml);
+                        doc.close();
+                        contentFrame.style.height = '100%';
+                        contentFrame.style.display = 'block';
+                    } else {
+                        renderRawCode(result.value, 'language-html', container);
+                    }
                 }
                 else if (format === 'md') {
-                    const preview = document.createElement('div');
-                    preview.className = 'md-preview';
-                    preview.innerHTML = window.marked ? marked.parse(result.value) : `<pre>${result.value}</pre>`;
-                    container.appendChild(preview);
+                    if (window.viewerStates['md'] === 'preview') {
+                        const preview = document.createElement('div');
+                        preview.className = 'md-preview';
+                        preview.innerHTML = window.marked ? marked.parse(result.value) : `<pre>${result.value}</pre>`;
+                        container.appendChild(preview);
+                    } else {
+                        renderRawCode(result.value, 'language-markdown', container);
+                    }
                 }
                 else if (format === 'csv' || format === 'text') {
                     if (result.value instanceof Uint8Array) {
@@ -3717,62 +4277,142 @@
 
                         container.appendChild(messageDiv);
                     } else {
-                        const codeCont = document.createElement('div');
-                        codeCont.className = 'code-container';
-                        const pre = document.createElement('pre');
-                        const code = document.createElement('code');
-                        code.className = format === 'csv' ? 'language-csv' : 'language-plaintext';
-                        code.textContent = result.value;
-                        pre.appendChild(code);
-                        codeCont.appendChild(pre);
-                        container.appendChild(codeCont);
-                        if (window.hljs) hljs.highlightElement(code);
+                        if (format === 'csv' && window.viewerStates['csv'] === 'preview') {
+                            renderCsvTable(result.value, container);
+                        } else {
+                            renderRawCode(result.value, format === 'csv' ? 'language-csv' : 'language-plaintext', container);
+                        }
                     }
                 }
                 else if (format === 'rtf') {
-                    const codeCont = document.createElement('div');
-                    codeCont.className = 'code-container';
-                    const pre = document.createElement('pre');
-                    const code = document.createElement('code');
-                    code.className = 'language-plaintext';
-                    code.textContent = result.value;
-                    pre.appendChild(code);
-                    codeCont.appendChild(pre);
-                    container.appendChild(codeCont);
-                    if (window.hljs) hljs.highlightElement(code);
+                    if (window.viewerStates['rtf'] === 'preview') {
+                        try {
+                            // Parse the generated RTF string back into an AST
+                            // Use TextEncoder to pass content as a Uint8Array
+                            const rtfContent = new TextEncoder().encode(result.value);
+                            const rtfAst = await window.officeParser.parseOffice(rtfContent, { fileType: 'rtf' });
+                            // Generate HTML from that AST using the helper method on the AST
+                            const htmlResult = await rtfAst.to('html');
+
+                            const contentFrame = document.createElement('iframe');
+                            contentFrame.className = 'html-iframe';
+                            contentFrame.style.width = '100%';
+                            contentFrame.style.border = 'none';
+                            container.style.padding = '2rem';
+                            container.appendChild(contentFrame);
+                            const doc = contentFrame.contentDocument || contentFrame.contentWindow.document;
+                            doc.open();
+                            // Inject CSS to ensure the preview has margins and padding
+                            const styledHtml = htmlResult.value.includes('<body')
+                                ? htmlResult.value.replace('<body', '<body style="padding: 3rem; max-width: 800px; margin: 0 auto; font-family: sans-serif; line-height: 1.6;"')
+                                : `<div style="padding: 3rem; max-width: 800px; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${htmlResult.value}</div>`;
+                            doc.write(styledHtml);
+                            doc.close();
+                            contentFrame.style.height = '100%';
+                            contentFrame.style.display = 'block';
+                        } catch (e) {
+                            container.innerHTML = `<div style="color: #ef4444; padding: 2rem;">Error generating RTF preview: ${e.message}</div>`;
+                        }
+                    } else {
+                        container.style.padding = '0';
+                        renderRawCode(result.value, 'language-plaintext', container);
+                    }
                 }
                 else if (format === 'chunks') {
-                    const gallery = document.createElement('div');
-                    gallery.className = 'chunk-gallery';
-                    const chunks = result.value;
-                    if (!Array.isArray(chunks) || chunks.length === 0) {
-                        gallery.innerHTML = '<div style="color: var(--text-dim); padding: 2rem;">No chunks generated.</div>';
+                    if (window.viewerStates['chunks'] === 'preview') {
+                        const gallery = document.createElement('div');
+                        gallery.className = 'chunk-gallery';
+                        const chunks = result.value;
+                        if (!Array.isArray(chunks) || chunks.length === 0) {
+                            gallery.innerHTML = '<div style="color: var(--text-dim); padding: 2rem;">No chunks generated.</div>';
+                        } else {
+                            chunks.forEach((chunk, idx) => {
+                                const card = document.createElement('div');
+                                card.className = 'chunk-card';
+                                const metaDiv = document.createElement('div');
+                                metaDiv.className = 'chunk-meta';
+                                metaDiv.innerHTML = `<span class="meta-chip">#${idx + 1}</span>`;
+                                if (chunk.metadata) {
+                                    if (chunk.metadata.pageNumber) metaDiv.innerHTML += `<span class="meta-chip">Page ${chunk.metadata.pageNumber}</span>`;
+                                    if (chunk.metadata.slideNumber) metaDiv.innerHTML += `<span class="meta-chip">Slide ${chunk.metadata.slideNumber}</span>`;
+                                    if (chunk.metadata.closestHeading) metaDiv.innerHTML += `<span class="meta-chip" style="background: rgba(14, 165, 233, 0.1); color: #0ea5e9;">H: ${chunk.metadata.closestHeading}</span>`;
+                                }
+                                const textDiv = document.createElement('div');
+                                textDiv.className = 'chunk-text';
+                                textDiv.textContent = chunk.text;
+                                card.appendChild(metaDiv);
+                                card.appendChild(textDiv);
+                                gallery.appendChild(card);
+                            });
+                        }
+                        container.appendChild(gallery);
                     } else {
-                        chunks.forEach((chunk, idx) => {
-                            const card = document.createElement('div');
-                            card.className = 'chunk-card';
-                            const metaDiv = document.createElement('div');
-                            metaDiv.className = 'chunk-meta';
-                            metaDiv.innerHTML = `<span class="meta-chip">#${idx + 1}</span>`;
-                            if (chunk.metadata) {
-                                if (chunk.metadata.pageNumber) metaDiv.innerHTML += `<span class="meta-chip">Page ${chunk.metadata.pageNumber}</span>`;
-                                if (chunk.metadata.slideNumber) metaDiv.innerHTML += `<span class="meta-chip">Slide ${chunk.metadata.slideNumber}</span>`;
-                                if (chunk.metadata.closestHeading) metaDiv.innerHTML += `<span class="meta-chip" style="background: rgba(14, 165, 233, 0.1); color: #0ea5e9;">H: ${chunk.metadata.closestHeading}</span>`;
-                            }
-                            const textDiv = document.createElement('div');
-                            textDiv.className = 'chunk-text';
-                            textDiv.textContent = chunk.text;
-                            card.appendChild(metaDiv);
-                            card.appendChild(textDiv);
-                            gallery.appendChild(card);
-                        });
+                        renderRawCode(JSON.stringify(result.value, null, 2), 'language-json', container);
                     }
-                    container.appendChild(gallery);
                 }
                 else if (format === 'ast') {
-                    container.style.overflow = 'auto';
-                    container.innerHTML = `<div class="json-tree">${buildJsonHtml(result)}</div>`;
+                    if (window.viewerStates['ast'] === 'preview') {
+                        container.style.overflow = 'auto';
+                        container.innerHTML = `<div class="json-tree">${buildJsonHtml(result)}</div>`;
+                    } else {
+                        renderRawCode(JSON.stringify(result, null, 2), 'language-json', container);
+                    }
                 }
+            }
+
+            // Helper to render raw code with highlight.js
+            function renderRawCode(content, langClass, container) {
+                container.style.padding = '0';
+                const codeCont = document.createElement('div');
+                codeCont.className = 'code-container';
+                const pre = document.createElement('pre');
+                const code = document.createElement('code');
+                code.className = langClass;
+                code.textContent = content;
+                pre.appendChild(code);
+                codeCont.appendChild(pre);
+                container.appendChild(codeCont);
+                if (window.hljs) hljs.highlightElement(code);
+            }
+
+            // Helper to render CSV as table
+            function renderCsvTable(csvContent, container) {
+                container.style.padding = '1.5rem';
+                container.style.overflow = 'auto';
+                const lines = csvContent.split('\n').filter(line => line.trim() !== '');
+                if (lines.length === 0) {
+                    container.innerHTML = '<div style="color: var(--text-dim); padding: 2rem;">Empty CSV.</div>';
+                    return;
+                }
+
+                const table = document.createElement('table');
+                table.style.width = '100%';
+                table.style.borderCollapse = 'collapse';
+                table.style.fontSize = '0.85rem';
+                table.style.background = 'var(--bg-card)';
+                table.style.border = '1px solid var(--border)';
+
+                lines.forEach((line, idx) => {
+                    const row = document.createElement('tr');
+                    const cells = line.split(','); // Basic splitting, might need better CSV parsing but for demo it's fine
+                    cells.forEach(cell => {
+                        const cellEl = document.createElement(idx === 0 ? 'th' : 'td');
+                        cellEl.textContent = cell.replace(/^"(.*)"$/, '$1'); // Basic unquote
+                        cellEl.style.padding = '0.75rem';
+                        cellEl.style.border = '1px solid var(--border)';
+                        cellEl.style.textAlign = 'left';
+                        if (idx === 0) {
+                            cellEl.style.background = 'rgba(99, 102, 241, 0.1)';
+                            cellEl.style.color = 'var(--primary)';
+                            cellEl.style.fontWeight = '800';
+                        }
+                        row.appendChild(cellEl);
+                    });
+                    table.appendChild(row);
+                });
+
+                container.innerHTML = '';
+                container.appendChild(table);
             }
 
             // --- AST JSON Collapsible Logic ---
@@ -3828,7 +4468,7 @@
                             chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined
                         }
                     };
-                    return (await window.officeParser.OfficeGenerator.generate(currentAst, 'html', genConfig)).value;
+                    return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'html', genConfig)).value;
                 },
                 'md': async () => {
                     const genConfig = {
@@ -3838,7 +4478,7 @@
                             fallbackToHtml: document.getElementById('cfg_md_fallbackToHtml').checked
                         }
                     };
-                    return (await window.officeParser.OfficeGenerator.generate(currentAst, 'md', genConfig)).value;
+                    return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'md', genConfig)).value;
                 },
                 'chunks': async () => {
                     const genConfig = {
@@ -3852,7 +4492,7 @@
                             tableSplitStrategy: document.getElementById('cfg_chunks_tableSplitStrategy').value
                         }
                     };
-                    const res = await window.officeParser.OfficeGenerator.generate(currentAst, 'chunks', genConfig);
+                    const res = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'chunks', genConfig);
                     return JSON.stringify(res.value, null, 2);
                 },
                 'csv': async () => {
@@ -3865,7 +4505,7 @@
                             columnDelimiter: document.getElementById('cfg_csv_columnDelimiter').value
                         }
                     };
-                    return (await window.officeParser.OfficeGenerator.generate(currentAst, 'csv', genConfig)).value;
+                    return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'csv', genConfig)).value;
                 },
                 'text': async () => {
                     const genConfig = {
@@ -3876,21 +4516,21 @@
                             newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n')
                         }
                     };
-                    return (await window.officeParser.OfficeGenerator.generate(currentAst, 'text', genConfig)).value;
+                    return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'text', genConfig)).value;
                 },
                 'rtf': async () => {
                     const genConfig = {
                         ...getGeneratorConfig(),
                         ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked
                     };
-                    return (await window.officeParser.OfficeGenerator.generate(currentAst, 'rtf', genConfig)).value;
+                    return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'rtf', genConfig)).value;
                 },
-                'ast': async () => JSON.stringify(currentAst, null, 2)
+                'ast': async () => JSON.stringify(window.currentAst, null, 2)
             };
 
             ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].forEach(fmt => {
                 document.getElementById(`copy-${fmt}-btn`).addEventListener('click', async (e) => {
-                    if (!currentAst) return;
+                    if (!window.currentAst) return;
                     const btn = e.target;
                     try {
                         const text = await copyHandlers[fmt]();
@@ -3906,7 +4546,7 @@
                 });
 
                 document.getElementById(`download-${fmt}-btn`).addEventListener('click', async (e) => {
-                    if (!currentAst) return;
+                    if (!window.currentAst) return;
                     const btn = e.target;
                     try {
                         const orig = btn.textContent;
@@ -3960,7 +4600,7 @@
                             columnDelimiter: document.getElementById('cfg_csv_columnDelimiter').value
                         }
                     };
-                    const res = await window.officeParser.OfficeGenerator.generate(currentAst, 'csv', genConfig);
+                    const res = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'csv', genConfig);
                     const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "");
                     if (res.value instanceof Uint8Array) {
                         downloadFile(res.value, name + '.zip', 'application/zip');

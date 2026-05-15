@@ -606,7 +606,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `preserveXmlWhitespace` | `boolean` | `false` | Preserve original XML whitespace during serialization |
 | `includeBreakNodes` | `boolean` | `false` | Include `w:br` / `w:cr` as typed break nodes (DOCX only) |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal cross-references from AST |
-| `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based buffers** (`'md'`, `'html'`, `'csv'`) with no magic bytes |
+| `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`) as these lack magic bytes. |
 | `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
 | `pdfWorkerSrc` | `string` | CDN (jsDelivr) | Path/URL to `pdf.worker.min.mjs` (required in browser) |
 | `onWarning` | `(issue: OfficeIssue) => void` | — | Callback for non-fatal parsing issues |

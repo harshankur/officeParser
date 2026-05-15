@@ -15,7 +15,7 @@ export enum OfficeErrorType {
     IMPROPER_ARGUMENTS = 'IMPROPER_ARGUMENTS',
     /** Error occurred while reading or processing file buffers */
     IMPROPER_BUFFERS = 'IMPROPER_BUFFERS',
-    /** Input type is not a supported type (string, Buffer, ArrayBuffer) */
+    /** Input type is not a supported type (string, Buffer, ArrayBuffer, Uint8Array) */
     INVALID_INPUT = 'INVALID_INPUT',
     /** PDF worker source is missing (required in browser) */
     PDF_WORKER_MISSING = 'PDF_WORKER_MISSING',
