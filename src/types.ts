@@ -1666,6 +1666,6 @@ export interface OfficeParserAST {
         this: T,
         destination: D,
         config?: GeneratorConfig<D>
-    ): Promise<ConversionResult>;
+    ): Promise<ConversionResult<D>>;
 }
 
