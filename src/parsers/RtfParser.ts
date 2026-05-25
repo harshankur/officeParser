@@ -42,7 +42,7 @@
 
 import { FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeMimeType, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
-import { logWarning } from '../utils/errorUtils.js';
+import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
 
 /**
@@ -459,6 +459,7 @@ export class SimpleRtfParser {
  * @returns The parsed AST.
  */
 export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
+    checkAbortSignal(config.abortSignal);
     const parser = new SimpleRtfParser(buffer);
     const doc = parser.parse();
 
@@ -1817,6 +1818,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Perform OCR if enabled
     if (config.ocr && config.extractAttachments) {
         for (const attachment of attachments) {
+            checkAbortSignal(config.abortSignal);
             if (attachment.mimeType.startsWith('image/')) {
                 try {
                     // Convert base64 data back to Buffer for Tesseract.js

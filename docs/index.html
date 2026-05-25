@@ -54,8 +54,15 @@
             color: var(--text);
             line-height: 1.5;
             overflow-x: hidden;
-            opacity: 0; /* Prevent FOUC */
+            opacity: 0;
+            /* Prevent FOUC */
             transition: opacity 0.15s ease-in;
+        }
+
+        input::placeholder,
+        textarea::placeholder {
+            color: var(--text-dim);
+            opacity: 0.58;
         }
 
         body.ready {
@@ -2470,6 +2477,217 @@
         .window-config-item select:focus {
             border-color: var(--primary);
         }
+
+        /* --- Sample Document Picker --- */
+        .sample-picker-container {
+            margin-top: 1.5rem;
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+
+        .sample-picker-title {
+            font-size: 0.95rem;
+            color: var(--text-dim);
+            margin-bottom: 1.25rem;
+            font-weight: 500;
+        }
+
+        .sample-picker-grid {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 0.75rem;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .sample-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .sample-btn:hover {
+            border-color: var(--primary);
+            background: var(--bg-card-hover);
+            transform: translateY(-2px);
+            box-shadow: var(--glow);
+        }
+
+        .sample-btn svg {
+            width: 1.25rem !important;
+            height: 1.25rem !important;
+            display: inline-block;
+            vertical-align: middle;
+        }
+
+        /* --- Privacy Note Highlight --- */
+        .privacy-note {
+            margin-top: 1rem;
+            padding: 0.75rem 1rem;
+            background: rgba(16, 185, 129, 0.08);
+            border: 1px solid rgba(16, 185, 129, 0.25);
+            border-radius: 8px;
+            font-size: 0.85rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            color: #34d399;
+            /* Vibrant green in dark mode */
+            font-weight: 500;
+        }
+
+        [data-theme="light"] .privacy-note {
+            background: rgba(4, 120, 87, 0.05);
+            border-color: rgba(4, 120, 87, 0.2);
+            color: #047857;
+            /* Dark green for readability in light mode */
+        }
+
+        /* --- Fullscreen Preview Modal --- */
+        .preview-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(10, 10, 12, 0.95);
+            backdrop-filter: blur(8px);
+            z-index: 2000;
+            display: none;
+            /* Hidden by default */
+            flex-direction: column;
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        .preview-modal-overlay.active {
+            display: flex;
+        }
+
+        .preview-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 2rem;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            height: 4rem;
+        }
+
+        .preview-modal-title-group {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .preview-modal-format {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--primary);
+            font-weight: 800;
+        }
+
+        .preview-modal-filename {
+            font-size: 0.9rem;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .preview-modal-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .modal-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.2s;
+        }
+
+        .modal-close-btn:hover {
+            color: #ef4444;
+        }
+
+        .preview-modal-body {
+            flex: 1;
+            padding: 2rem;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: stretch;
+            max-width: 95%;
+            /* Wider view for enlarged previews */
+            width: 100%;
+            margin: 0 auto;
+        }
+
+        /* Ensure markdown preview utilizes the wider space in the enlarged modal */
+        .preview-modal-body .md-preview {
+            max-width: 100%;
+        }
+
+        .preview-modal-body iframe {
+            width: 100%;
+            max-width: 100%;
+            height: 100%;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: #fff;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+        }
+
+        .preview-modal-body .code-container,
+        .preview-modal-body .md-preview,
+        .preview-modal-body .chunk-gallery,
+        .preview-modal-body .json-tree {
+            width: 100%;
+            height: 100%;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            overflow: auto;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+        }
+
+        .preview-modal-body table {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+        }
+
+        .btn-maximize:hover svg {
+            transform: scale(1.15);
+            transition: transform 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
     </style>
     <script>
         // Global schemas for dynamic control generation
@@ -2488,7 +2706,9 @@
                 { id: 'cfg_outputErrorToConsole', label: 'Verbose Errors <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'switch', default: false },
                 { id: 'cfg_ocrLanguage', label: 'OCR Lang', type: 'text', default: 'eng', width: '80px' },
                 { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: ',', width: '60px' },
-                { id: 'cfg_ocrTimeout', label: 'OCR Timeout (s)', type: 'number', default: 10, width: '60px', min: 0 },
+                { id: 'cfg_ocrAutoTerminate', label: 'OCR Auto Terminate (s)', type: 'number', default: 10, width: '70px', min: 0 },
+                { id: 'cfg_ocrWorkerLoad', label: 'OCR Worker Load (s)', type: 'number', default: 60, width: '70px', min: 0 },
+                { id: 'cfg_ocrRecognition', label: 'OCR Recog (s)', type: 'number', default: 30, width: '70px', min: 0 },
                 { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs', fullWidth: true }
             ],
             generator: [
@@ -2502,38 +2722,38 @@
             ],
             html: [
                 { id: 'cfg_html_standalone', label: 'Standalone', type: 'inline-switch', default: true },
-                { id: 'cfg_html_chartJsSrc', label: 'Charts URL', type: 'inline-text', default: 'https://cdn.jsdelivr.net/npm/chart.js', width: '80px' }
+                { id: 'cfg_html_chartJsSrc', label: 'Charts URL', type: 'inline-text', default: 'https://cdn.jsdelivr.net/npm/chart.js', width: '180px' }
             ],
             md: [
                 { id: 'cfg_md_fallbackToHtml', label: 'HTML Fallback', type: 'inline-switch', default: true }
             ],
             chunks: [
                 { id: 'cfg_chunks_strategy', label: 'Strategy', type: 'inline-select', options: ['document-structure', 'fixed-size', 'semantic'], names: ['Structure', 'Fixed Size', 'Semantic (External Only)'], default: 'document-structure' },
-                { id: 'cfg_chunks_maxChunkSize', label: 'Max Size', type: 'inline-number', default: 1000, width: '50px' },
-                { id: 'cfg_chunks_chunkOverlap', label: 'Overlap', type: 'inline-number', default: 200, width: '45px' },
+                { id: 'cfg_chunks_maxChunkSize', label: 'Max Size', type: 'inline-number', default: 1000, width: '85px' },
+                { id: 'cfg_chunks_chunkOverlap', label: 'Overlap', type: 'inline-number', default: 200, width: '80px' },
                 { id: 'cfg_chunks_splitBy', label: 'Split By', type: 'inline-select', options: ['paragraph', 'heading', 'page', 'slide', 'sheet'], names: ['Paragraph', 'Heading', 'Page', 'Slide', 'Sheet'], default: 'paragraph' },
                 { id: 'cfg_chunks_tableSplitStrategy', label: 'Table', type: 'inline-select', options: ['row', 'flatten'], names: ['Row (Repeat Header)', 'Flatten'], default: 'row' }
             ],
             csv: [
-                { id: 'cfg_csv_sheets', label: 'Sheets', type: 'inline-text', default: '', placeholder: '1,2...', width: '50px' },
+                { id: 'cfg_csv_sheets', label: 'Sheets', type: 'inline-text', default: '', placeholder: '1,2...', width: '85px' },
                 { id: 'cfg_csv_mergeSheets', label: 'Merge', type: 'inline-switch', default: true },
-                { id: 'cfg_csv_columnDelimiter', label: 'Delim', type: 'inline-text', default: ',', width: '30px' }
+                { id: 'cfg_csv_columnDelimiter', label: 'Delim', type: 'inline-text', default: ',', width: '60px' }
             ],
             text: [
-                { id: 'cfg_text_preserveLayout', label: 'Layout', type: 'inline-switch', default: false },
-                { id: 'cfg_text_newlineDelimiter', label: 'Newline', type: 'inline-text', default: '\\n', width: '30px' }
+                { id: 'cfg_text_preserveLayout', label: 'Layout', type: 'inline-switch', default: true },
+                { id: 'cfg_text_newlineDelimiter', label: 'Newline', type: 'inline-text', default: '\\n', width: '60px' }
             ]
         };
 
         function renderConfigItems(sectionKey, containerId) {
             const schema = window.CONFIG_SCHEMAS[sectionKey];
             let html = '';
-            
+
             schema.forEach(item => {
                 const saved = localStorage.getItem(item.id);
                 const value = saved !== null ? (item.type.includes('switch') ? saved === 'true' : saved) : item.default;
                 const isInline = item.type.startsWith('inline-');
-                
+
                 if (item.type.includes('switch')) {
                     html += `
                         <div class="${isInline ? 'window-config-item' : 'config-item'}">
@@ -2993,6 +3213,12 @@
                         This preview is built <strong>100% from the AST output</strong>. This demonstrates the extreme
                         depth and structural accuracy of our parsing engine—allowing us to reconstruct complex document
                         layouts with near-perfect fidelity solely from the structured data.
+                        <br>
+                        <div class="privacy-note">
+                            <span>🔒</span> <span><strong>Privacy Guaranteed:</strong> None of your uploaded files or
+                                data ever leave your browser. All parsing and rendering are performed 100%
+                                locally.</span>
+                        </div>
                     </div>
                 </div>
 
@@ -3014,6 +3240,12 @@
                         accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.pdf,.rtf,.csv,.md,.html">
                 </div>
 
+                <!-- Sample Document Picker -->
+                <div class="sample-picker-container">
+                    <div class="sample-picker-title">Or try one of our pre-loaded test documents:</div>
+                    <div class="sample-picker-grid" id="sample-picker-grid"></div>
+                </div>
+
                 <div class="config-bar" style="flex-direction: column; align-items: stretch; gap: 0;">
                     <!-- Parser Section -->
                     <div class="config-group">
@@ -3031,251 +3263,332 @@
                         </div>
                     </div>
                 </div>
-                            <div class="config-item full-width" style="gap: 1rem;">
-                                <div
-                                    style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
-                                    <span class="config-label">Custom Style Map</span>
-                                    <div class="mode-toggle">
-                                        <button class="btn-toggle active" id="btn_styleMap_visual">Visual</button>
-                                        <button class="btn-toggle" id="btn_styleMap_raw">Code</button>
-                                    </div>
-                                </div>
-                                <div id="styleMap_visual_container" class="style-map-builder">
-                                    <div id="mapping_list">
-                                        <!-- Dynamic mapping rows will be injected here -->
-                                    </div>
-                                    <button id="add_style_mapping" class="btn-add-mapping">
-                                        <span>+</span> Add Style Mapping Rule
-                                    </button>
-                                </div>
-                                <textarea id="cfg_styleMap" class="btn btn-outline hidden"
-                                    style="padding: 0.6rem; width: 100%; min-height: 120px; font-size: 0.75rem; font-family: 'Ubuntu Mono', monospace; resize: vertical;"
-                                    placeholder='[
+                <div class="config-item full-width" style="gap: 1rem;">
+                    <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                            <span class="config-label">Custom Style Map</span>
+                            <div
+                                style="display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.45rem; border: 1px dashed var(--accent); border-radius: 4px; background: rgba(56, 189, 248, 0.04); color: var(--accent); font-size: 0.65rem; font-weight: 500;">
+                                <span
+                                    style="display: inline-flex; align-items: center; justify-content: center; width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--accent); font-size: 0.55rem; font-family: serif; font-weight: bold; font-style: italic; text-align: center; line-height: 1;">i</span>
+                                Mammoth.js legacy DSL is directly supported in Code mode
+                            </div>
+                        </div>
+                        <div class="mode-toggle">
+                            <button class="btn-toggle active" id="btn_styleMap_visual">Visual</button>
+                            <button class="btn-toggle" id="btn_styleMap_raw">Code</button>
+                        </div>
+                    </div>
+                    <div id="styleMap_visual_container" class="style-map-builder">
+                        <div id="mapping_list">
+                            <!-- Dynamic mapping rows will be injected here -->
+                        </div>
+                        <button id="add_style_mapping" class="btn-add-mapping">
+                            <span>+</span> Add Style Mapping Rule
+                        </button>
+                    </div>
+                    <div id="styleMap_code_container" class="hidden"
+                        style="display: flex; flex-direction: column; gap: 0.5rem; width: 100%;">
+                        <div
+                            style="display: flex; gap: 1rem; align-items: center; font-size: 0.85rem; padding: 0.25rem 0;">
+                            <span style="color: var(--text-dim); font-weight: 500;">Syntax:</span>
+                            <label
+                                style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer; color: var(--text-dim);">
+                                <input type="radio" name="styleMap_format" value="json" checked
+                                    style="cursor: pointer;"> JSON
+                            </label>
+                            <label
+                                style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer; color: var(--text-dim);">
+                                <input type="radio" name="styleMap_format" value="mammoth" style="cursor: pointer;">
+                                Mammoth.js DSL (Legacy)
+                            </label>
+                        </div>
+                        <textarea id="cfg_styleMap" class="btn btn-outline"
+                            style="padding: 0.6rem; width: 100%; min-height: 120px; font-size: 0.75rem; font-family: 'Ubuntu Mono', monospace; resize: vertical;"
+                            placeholder='[
   {
     "selector": { "nodeType": "paragraph", "attributes": { "style": "Heading 1" } },
     "output": { "tag": "h1", "classes": ["main-title"] }
   }
 ]'></textarea>
-                            </div>
-                        </div>
-                <div style="padding: 1.5rem 0; display: flex; flex-direction: column; gap: 0.75rem; border-top: 1px solid var(--border); margin-top: 1.5rem; width: 100%; max-width: 600px; margin-left: auto; margin-right: auto;">
-                    <button id="reparse-btn" class="sync-btn"
-                        style="display: flex; justify-content: center; padding: 0.75rem;" disabled>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" stroke-linejoin="round" style="width: 1.25rem; height: 1.25rem;">
-                            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
-                            <path d="M21 3v5h-5"></path>
-                            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
-                            <path d="M8 16H3v5"></path>
-                        </svg>
-                        Refresh Parsing Engine
-                    </button>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                        <button id="cleanup-ocr-btn" class="sync-btn"
-                            style="border-color: #ef4444; color: #ef4444; background: rgba(239, 68, 68, 0.05); display: flex; justify-content: center;"
-                            disabled>
-                            🗑️ Cleanup OCR Pool
-                        </button>
-                        <button id="download-pdf-btn" class="sync-btn"
-                            style="border-color: #E02A26; color: #E02A26; background: rgba(224, 42, 38, 0.05); display: flex; justify-content: center;"
-                            disabled>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                stroke-linecap="round" stroke-linejoin="round" style="width: 1rem; height: 1rem;">
-                                <path d="M4 4V20H20V8L16 4H4Z"></path>
-                            </svg>
-                            Export to PDF
-                        </button>
                     </div>
                 </div>
+            </div>
+            <div
+                style="padding: 1.5rem 0; display: flex; flex-direction: column; gap: 0.75rem; border-top: 1px solid var(--border); margin-top: 1.5rem; width: 100%; max-width: 600px; margin-left: auto; margin-right: auto;">
+                <button id="reparse-btn" class="sync-btn"
+                    style="display: flex; justify-content: center; padding: 0.75rem;" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" style="width: 1.25rem; height: 1.25rem;">
+                        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+                        <path d="M21 3v5h-5"></path>
+                        <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+                        <path d="M8 16H3v5"></path>
+                    </svg>
+                    Refresh Parsing Engine
+                </button>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <button id="cleanup-ocr-btn" class="sync-btn"
+                        style="border-color: #ef4444; color: #ef4444; background: rgba(239, 68, 68, 0.05); display: flex; justify-content: center;"
+                        disabled>
+                        🗑️ Cleanup OCR Pool
+                    </button>
+                    <button id="download-pdf-btn" class="sync-btn"
+                        style="border-color: #E02A26; color: #E02A26; background: rgba(224, 42, 38, 0.05); display: flex; justify-content: center;"
+                        disabled>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" style="width: 1rem; height: 1rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z"></path>
+                        </svg>
+                        Export to PDF
+                    </button>
+                </div>
+            </div>
             </div>
         </section>
 
-            <div id="warning-banner"
-                style="display: none; max-width: 1000px; margin: 0 auto 2rem; padding: 1rem 1.5rem; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 12px; color: #fbbf24; font-size: 0.9rem; align-items: center; gap: 1rem; backdrop-filter: blur(8px); animation: slideUp 0.3s ease-out;">
-                <span style="font-size: 1.25rem;">⚠️</span>
-                <div style="flex: 1;">
-                    <strong style="display: block; margin-bottom: 0.25rem;">Parser Warning</strong>
-                    <span id="warning-text"></span>
+        <div id="warning-banner"
+            style="display: none; max-width: 1000px; margin: 0 auto 2rem; padding: 1rem 1.5rem; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 12px; color: #fbbf24; font-size: 0.9rem; align-items: center; gap: 1rem; backdrop-filter: blur(8px); animation: slideUp 0.3s ease-out;">
+            <span style="font-size: 1.25rem;">⚠️</span>
+            <div style="flex: 1;">
+                <strong style="display: block; margin-bottom: 0.25rem;">Parser Warning</strong>
+                <span id="warning-text"></span>
+            </div>
+            <button onclick="document.getElementById('warning-banner').style.display='none'"
+                style="background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.1rem;">✕</button>
+        </div>
+
+        <div id="status-msg" style="text-align: center; margin-bottom: 2rem; color: var(--accent); font-weight: 600;">
+        </div>
+
+        <div class="results-layout" id="results-container">
+            <!-- HTML Window -->
+            <div class="visual-panel-window" id="window-html">
+                <div class="panel-header" style="justify-content: space-between;">
+                    <h4 style="margin:0;">HTML PREVIEW</h4>
+                    <div class="viewer-toggle" id="toggle-html">
+                        <div class="toggle-slider"></div>
+                        <button class="toggle-btn active" data-state="preview">Preview</button>
+                        <button class="toggle-btn" data-state="raw">Raw</button>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn-outline btn-maximize" onclick="openFullscreenPreview('html')"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.25rem;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                style="width: 0.75rem; height: 0.75rem;">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                            </svg>
+                            Enlarge
+                        </button>
+                        <button id="copy-html-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                        <button id="download-html-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                    </div>
                 </div>
-                <button onclick="document.getElementById('warning-banner').style.display='none'"
-                    style="background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.1rem;">✕</button>
+                <div class="panel-sub-header">
+                    <div class="window-config-group">
+                        <script>renderConfigItems('html');</script>
+                    </div>
+                </div>
+                <div class="panel-body" id="visual-html" style="position: relative;"></div>
             </div>
 
-            <div id="status-msg"
-                style="text-align: center; margin-bottom: 2rem; color: var(--accent); font-weight: 600;"></div>
-
-            <div class="results-layout" id="results-container">
-                <!-- HTML Window -->
-                <div class="visual-panel-window" id="window-html">
-                    <div class="panel-header" style="justify-content: space-between;">
-                        <h4 style="margin:0;">HTML PREVIEW</h4>
-                        <div class="viewer-toggle" id="toggle-html">
-                            <div class="toggle-slider"></div>
-                            <button class="toggle-btn active" data-state="preview">Preview</button>
-                            <button class="toggle-btn" data-state="raw">Raw</button>
-                        </div>
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <button id="copy-html-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                            <button id="download-html-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
-                        </div>
+            <!-- Markdown Window -->
+            <div class="visual-panel-window" id="window-md">
+                <div class="panel-header" style="justify-content: space-between;">
+                    <h4 style="margin:0;">MARKDOWN</h4>
+                    <div class="viewer-toggle" id="toggle-md">
+                        <div class="toggle-slider"></div>
+                        <button class="toggle-btn active" data-state="preview">Preview</button>
+                        <button class="toggle-btn" data-state="raw">Raw</button>
                     </div>
-                    <div class="panel-sub-header">
-                        <div class="window-config-group">
-                            <script>renderConfigItems('html');</script>
-                        </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn-outline btn-maximize" onclick="openFullscreenPreview('md')"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.25rem;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                style="width: 0.75rem; height: 0.75rem;">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                            </svg>
+                            Enlarge
+                        </button>
+                        <button id="copy-md-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                        <button id="download-md-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
                     </div>
-                    <div class="panel-body" id="visual-html" style="position: relative;"></div>
                 </div>
-
-                <!-- Markdown Window -->
-                <div class="visual-panel-window" id="window-md">
-                    <div class="panel-header" style="justify-content: space-between;">
-                        <h4 style="margin:0;">MARKDOWN</h4>
-                        <div class="viewer-toggle" id="toggle-md">
-                            <div class="toggle-slider"></div>
-                            <button class="toggle-btn active" data-state="preview">Preview</button>
-                            <button class="toggle-btn" data-state="raw">Raw</button>
-                        </div>
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <button id="copy-md-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                            <button id="download-md-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
-                        </div>
+                <div class="panel-sub-header">
+                    <div class="window-config-group">
+                        <script>renderConfigItems('md');</script>
                     </div>
-                    <div class="panel-sub-header">
-                        <div class="window-config-group">
-                            <script>renderConfigItems('md');</script>
-                        </div>
-                    </div>
-                    <div class="panel-body" id="visual-md" style="position: relative; padding: 0;"></div>
                 </div>
-
-                <!-- Chunks Window -->
-                <div class="visual-panel-window" id="window-chunks">
-                    <div class="panel-header" style="justify-content: space-between;">
-                        <h4 style="margin:0;">CHUNKS (RAG READY)</h4>
-                        <div class="viewer-toggle" id="toggle-chunks">
-                            <div class="toggle-slider"></div>
-                            <button class="toggle-btn active" data-state="preview">Preview</button>
-                            <button class="toggle-btn" data-state="raw">Raw</button>
-                        </div>
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <button id="copy-chunks-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                            <button id="download-chunks-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
-                        </div>
-                    </div>
-                    <div class="panel-sub-header">
-                        <div class="window-config-group">
-                            <script>renderConfigItems('chunks');</script>
-                        </div>
-                    </div>
-                    <div class="panel-body" id="visual-chunks" style="position: relative; padding: 0;"></div>
-                </div>
-
-                <!-- CSV Window -->
-                <div class="visual-panel-window" id="window-csv">
-                    <div class="panel-header" style="justify-content: space-between;">
-                        <h4 style="margin:0;">CSV / SPREADSHEET</h4>
-                        <div class="viewer-toggle" id="toggle-csv">
-                            <div class="toggle-slider"></div>
-                            <button class="toggle-btn active" data-state="preview">Preview</button>
-                            <button class="toggle-btn" data-state="raw">Raw</button>
-                        </div>
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <button id="copy-csv-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                            <button id="download-csv-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
-                        </div>
-                    </div>
-                    <div class="panel-sub-header">
-                        <div class="window-config-group">
-                            <script>renderConfigItems('csv');</script>
-                        </div>
-                    </div>
-                    <div class="panel-body" id="visual-csv" style="position: relative; padding: 0;"></div>
-                </div>
-
-                <!-- RTF Window -->
-                <div class="visual-panel-window" id="window-rtf">
-                    <div class="panel-header" style="justify-content: space-between;">
-                        <h4 style="margin:0;">RTF (RICH TEXT)</h4>
-                        <div style="display: flex; gap: 0.75rem; align-items: center;">
-                            <div id="rtf-info-icon" class="info-icon"
-                                style="cursor: help; background: rgba(99, 102, 241, 0.05); color: var(--primary); font-family: serif; font-weight: 800; font-style: italic; border: 1.5px solid var(--primary); border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; opacity: 0.8; transition: all 0.2s;">
-                                i</div>
-                            <div class="viewer-toggle" id="toggle-rtf">
-                                <div class="toggle-slider"></div>
-                                <button class="toggle-btn active" data-state="preview">Preview</button>
-                                <button class="toggle-btn" data-state="raw">Raw</button>
-                            </div>
-                        </div>
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <button id="copy-rtf-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                            <button id="download-rtf-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
-                        </div>
-                    </div>
-                    <div class="panel-sub-header">
-                        <div class="window-config-group">
-                            <div class="window-config-item" style="visibility: hidden;">
-                                Placeholder <input type="text" style="width: 1px; visibility: hidden;">
-                            </div>
-                        </div>
-                    </div>
-                    <div class="panel-body" id="visual-rtf" style="position: relative;"></div>
-                </div>
-
-                <!-- Text Window -->
-                <div class="visual-panel-window" id="window-text">
-                    <div class="panel-header" style="justify-content: space-between;">
-                        <h4 style="margin:0;">PLAIN TEXT</h4>
-                        <div class="viewer-toggle" id="toggle-text">
-                            <div class="toggle-slider"></div>
-                            <button class="toggle-btn active" data-state="preview">Preview</button>
-                            <button class="toggle-btn" data-state="raw">Raw</button>
-                        </div>
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <button id="copy-text-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                            <button id="download-text-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
-                        </div>
-                    </div>
-                    <div class="panel-sub-header">
-                        <div class="window-config-group">
-                            <script>renderConfigItems('text');</script>
-                        </div>
-                    </div>
-                    <div class="panel-body" id="visual-text" style="position: relative; padding: 0;"></div>
-                </div>
-
-                <!-- AST Window -->
-                <div class="visual-panel-window full-width" id="window-ast">
-                    <div class="panel-header" style="justify-content: space-between;">
-                        <h4 style="margin:0;">JSON (AST)</h4>
-                        <div class="viewer-toggle" id="toggle-ast">
-                            <div class="toggle-slider"></div>
-                            <button class="toggle-btn active" data-state="preview">Preview</button>
-                            <button class="toggle-btn" data-state="raw">Raw</button>
-                        </div>
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                            <button id="copy-ast-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
-                            <button id="download-ast-btn" class="btn-outline"
-                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
-                        </div>
-                    </div>
-                    <div class="panel-body" id="visual-ast" style="position: relative; padding: 0;"></div>
-                </div>
+                <div class="panel-body" id="visual-md" style="position: relative; padding: 0;"></div>
             </div>
+
+            <!-- Chunks Window -->
+            <div class="visual-panel-window" id="window-chunks">
+                <div class="panel-header" style="justify-content: space-between;">
+                    <h4 style="margin:0;">CHUNKS (RAG READY)</h4>
+                    <div class="viewer-toggle" id="toggle-chunks">
+                        <div class="toggle-slider"></div>
+                        <button class="toggle-btn active" data-state="preview">Preview</button>
+                        <button class="toggle-btn" data-state="raw">Raw</button>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn-outline btn-maximize" onclick="openFullscreenPreview('chunks')"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.25rem;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                style="width: 0.75rem; height: 0.75rem;">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                            </svg>
+                            Enlarge
+                        </button>
+                        <button id="copy-chunks-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                        <button id="download-chunks-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                    </div>
+                </div>
+                <div class="panel-sub-header">
+                    <div class="window-config-group">
+                        <script>renderConfigItems('chunks');</script>
+                    </div>
+                </div>
+                <div class="panel-body" id="visual-chunks" style="position: relative; padding: 0;"></div>
             </div>
+
+            <!-- CSV Window -->
+            <div class="visual-panel-window" id="window-csv">
+                <div class="panel-header" style="justify-content: space-between;">
+                    <h4 style="margin:0;">CSV / SPREADSHEET</h4>
+                    <div class="viewer-toggle" id="toggle-csv">
+                        <div class="toggle-slider"></div>
+                        <button class="toggle-btn active" data-state="preview">Preview</button>
+                        <button class="toggle-btn" data-state="raw">Raw</button>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn-outline btn-maximize" onclick="openFullscreenPreview('csv')"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.25rem;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                style="width: 0.75rem; height: 0.75rem;">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                            </svg>
+                            Enlarge
+                        </button>
+                        <button id="copy-csv-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                        <button id="download-csv-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                    </div>
+                </div>
+                <div class="panel-sub-header">
+                    <div class="window-config-group">
+                        <script>renderConfigItems('csv');</script>
+                    </div>
+                </div>
+                <div class="panel-body" id="visual-csv" style="position: relative; padding: 0;"></div>
+            </div>
+
+            <!-- RTF Window -->
+            <div class="visual-panel-window" id="window-rtf">
+                <div class="panel-header" style="justify-content: space-between;">
+                    <h4 style="margin:0;">RTF (RICH TEXT)</h4>
+                    <div style="display: flex; gap: 0.75rem; align-items: center;">
+                        <div id="rtf-info-icon" class="info-icon"
+                            style="cursor: help; background: rgba(99, 102, 241, 0.05); color: var(--primary); font-family: serif; font-weight: 800; font-style: italic; border: 1.5px solid var(--primary); border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; opacity: 0.8; transition: all 0.2s;">
+                            i</div>
+                        <div class="viewer-toggle" id="toggle-rtf">
+                            <div class="toggle-slider"></div>
+                            <button class="toggle-btn active" data-state="preview">Preview</button>
+                            <button class="toggle-btn" data-state="raw">Raw</button>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn-outline btn-maximize" onclick="openFullscreenPreview('rtf')"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.25rem;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                style="width: 0.75rem; height: 0.75rem;">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                            </svg>
+                            Enlarge
+                        </button>
+                        <button id="copy-rtf-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                        <button id="download-rtf-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                    </div>
+                </div>
+                <div class="panel-sub-header">
+                    <div class="window-config-group">
+                        <div class="window-config-item" style="visibility: hidden;">
+                            Placeholder <input type="text" style="width: 1px; visibility: hidden;">
+                        </div>
+                    </div>
+                </div>
+                <div class="panel-body" id="visual-rtf" style="position: relative;"></div>
+            </div>
+
+            <!-- Text Window -->
+            <div class="visual-panel-window" id="window-text">
+                <div class="panel-header" style="justify-content: space-between;">
+                    <h4 style="margin:0;">PLAIN TEXT</h4>
+                    <div class="viewer-toggle" id="toggle-text">
+                        <div class="toggle-slider"></div>
+                        <button class="toggle-btn active" data-state="preview">Preview</button>
+                        <button class="toggle-btn" data-state="raw">Raw</button>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn-outline btn-maximize" onclick="openFullscreenPreview('text')"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.25rem;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                style="width: 0.75rem; height: 0.75rem;">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                            </svg>
+                            Enlarge
+                        </button>
+                        <button id="copy-text-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                        <button id="download-text-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                    </div>
+                </div>
+                <div class="panel-sub-header">
+                    <div class="window-config-group">
+                        <script>renderConfigItems('text');</script>
+                    </div>
+                </div>
+                <div class="panel-body" id="visual-text" style="position: relative; padding: 0;"></div>
+            </div>
+
+            <!-- AST Window -->
+            <div class="visual-panel-window full-width" id="window-ast">
+                <div class="panel-header" style="justify-content: space-between;">
+                    <h4 style="margin:0;">JSON (AST)</h4>
+                    <div class="viewer-toggle" id="toggle-ast">
+                        <div class="toggle-slider"></div>
+                        <button class="toggle-btn active" data-state="preview">Preview</button>
+                        <button class="toggle-btn" data-state="raw">Raw</button>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn-outline btn-maximize" onclick="openFullscreenPreview('ast')"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.25rem;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                style="width: 0.75rem; height: 0.75rem;">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                            </svg>
+                            Enlarge
+                        </button>
+                        <button id="copy-ast-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                        <button id="download-ast-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Download</button>
+                    </div>
+                </div>
+                <div class="panel-body" id="visual-ast" style="position: relative; padding: 0;"></div>
+            </div>
+        </div>
+        </div>
         </section>
     </main>
 
@@ -3346,8 +3659,128 @@
         </div>
     </footer>
 
+    <!-- Fullscreen Preview Overlay Modal -->
+    <div id="preview-modal" class="preview-modal-overlay">
+        <div class="preview-modal-header">
+            <div class="preview-modal-title-group">
+                <span class="preview-modal-format" id="modal-format-title">HTML PREVIEW</span>
+                <span class="preview-modal-filename" id="modal-filename">test.docx</span>
+            </div>
+            <div class="preview-modal-actions">
+                <button id="modal-copy-btn" class="btn-outline"
+                    style="padding: 0.4rem 0.8rem; font-size: 0.8rem; border-radius: 6px; cursor: pointer;">Copy</button>
+                <button id="modal-download-btn" class="btn-outline"
+                    style="padding: 0.4rem 0.8rem; font-size: 0.8rem; border-radius: 6px; cursor: pointer;">Download</button>
+                <button id="modal-close-btn" class="modal-close-btn" style="margin-left: 0.5rem;">✕</button>
+            </div>
+        </div>
+        <div class="preview-modal-body" id="modal-body-content">
+            <!-- Dynamic Content -->
+        </div>
+    </div>
+
     <script src="dist/officeparser.browser.iife.js"></script>
     <script>
+        // Global variables
+        var lastFileName = "";
+
+        // Scroll forwarding helper for same-origin document preview iframes
+        function setupIframeScrollForwarding(contentFrame, container) {
+            const win = contentFrame.contentWindow;
+            if (!win) return;
+
+            // Set up immediately and on load in case doc is overwritten/cleared during write
+            win.addEventListener('load', () => setupListeners());
+            setupListeners();
+
+            function setupListeners() {
+                if (win.__scrollForwardingSetup) return;
+                win.__scrollForwardingSetup = true;
+
+                const doc = win.document;
+
+                win.addEventListener('wheel', (e) => {
+                    const isResized = contentFrame.style.height && contentFrame.style.height !== '100%';
+
+                    if (isResized) {
+                        e.preventDefault();
+                        container.scrollTop += e.deltaY;
+                        container.scrollLeft += e.deltaX;
+
+                        const isAtTop = container.scrollTop <= 0 && e.deltaY < 0;
+                        const isAtBottom = container.scrollTop + container.clientHeight >= container.scrollHeight && e.deltaY > 0;
+                        if (isAtTop || isAtBottom) {
+                            window.scrollBy({
+                                top: e.deltaY,
+                                left: e.deltaX,
+                                behavior: 'auto'
+                            });
+                        }
+                    } else {
+                        const scrollTop = win.pageYOffset || doc.documentElement.scrollTop || doc.body.scrollTop;
+                        const scrollHeight = doc.documentElement.scrollHeight || doc.body.scrollHeight;
+                        const clientHeight = doc.documentElement.clientHeight || doc.body.clientHeight;
+
+                        const isAtTop = scrollTop <= 0 && e.deltaY < 0;
+                        const isAtBottom = scrollTop + clientHeight >= scrollHeight - 1 && e.deltaY > 0;
+
+                        if (isAtTop || isAtBottom) {
+                            window.scrollBy({
+                                top: e.deltaY,
+                                left: e.deltaX,
+                                behavior: 'auto'
+                            });
+                            e.preventDefault();
+                        }
+                    }
+                }, { passive: false });
+
+                let touchStartY = 0;
+                win.addEventListener('touchstart', (e) => {
+                    if (e.touches.length > 0) {
+                        touchStartY = e.touches[0].clientY;
+                    }
+                }, { passive: true });
+
+                win.addEventListener('touchmove', (e) => {
+                    if (e.touches.length > 0) {
+                        const touchY = e.touches[0].clientY;
+                        const deltaY = touchStartY - touchY;
+                        touchStartY = touchY;
+
+                        const isResized = contentFrame.style.height && contentFrame.style.height !== '100%';
+
+                        if (isResized) {
+                            container.scrollTop += deltaY;
+
+                            const isAtTop = container.scrollTop <= 0 && deltaY < 0;
+                            const isAtBottom = container.scrollTop + container.clientHeight >= container.scrollHeight && deltaY > 0;
+                            if (isAtTop || isAtBottom) {
+                                window.scrollBy({
+                                    top: deltaY,
+                                    behavior: 'auto'
+                                });
+                            }
+                        } else {
+                            const scrollTop = win.pageYOffset || doc.documentElement.scrollTop || doc.body.scrollTop;
+                            const scrollHeight = doc.documentElement.scrollHeight || doc.body.scrollHeight;
+                            const clientHeight = doc.documentElement.clientHeight || doc.body.clientHeight;
+
+                            const isAtTop = scrollTop <= 0 && deltaY < 0;
+                            const isAtBottom = scrollTop + clientHeight >= scrollHeight - 1 && deltaY > 0;
+
+                            if (isAtTop || isAtBottom) {
+                                window.scrollBy({
+                                    top: deltaY,
+                                    behavior: 'auto'
+                                });
+                            }
+                        }
+                    }
+                }, { passive: true });
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             const html = document.documentElement;
             const dropZone = document.getElementById('drop-zone');
@@ -3358,13 +3791,12 @@
             const docBody = document.getElementById('doc-body-placeholder');
             const dropZonePrompt = document.getElementById('drop-zone-prompt');
             const fileInfo = document.getElementById('file-selected-info');
-            const displayFilename = fileInfo.querySelector('.file-name');
-            const displayFileIcon = fileInfo.querySelector('.file-icon');
+            const displayFilename = fileInfo ? fileInfo.querySelector('.file-name') : null;
+            const displayFileIcon = fileInfo ? fileInfo.querySelector('.file-icon') : null;
             const reparseBtn = document.getElementById('reparse-btn');
 
             window.currentAst = null;
             let lastFileBuffer = null;
-            let lastFileName = "";
             let ocrWasUsedInCurrentPreview = false;
 
             // --- Brand Icons System ---
@@ -3734,12 +4166,45 @@
                 if (file) handleFile(file);
             });
 
+            // --- Sample Document Picker ---
+            const samplePickerGrid = document.getElementById('sample-picker-grid');
+            if (samplePickerGrid) {
+                const sampleFormats = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp'];
+                sampleFormats.forEach(fmt => {
+                    const btn = document.createElement('button');
+                    btn.className = 'sample-btn';
+                    btn.type = 'button';
+                    btn.innerHTML = `
+                        ${BRAND_ICONS[fmt] || BRAND_ICONS.default}
+                        <span>test.${fmt}</span>
+                    `;
+                    btn.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        try {
+                            statusMsg.textContent = `Loading test.${fmt}...`;
+                            const fileUrl = `./test/files/test.${fmt}`;
+                            const response = await fetch(fileUrl);
+                            if (!response.ok) {
+                                throw new Error(`Failed to load sample document: ${response.statusText}`);
+                            }
+                            const blob = await response.blob();
+                            const file = new File([blob], `test.${fmt}`, { type: blob.type || 'application/octet-stream' });
+                            handleFile(file);
+                        } catch (err) {
+                            console.error(err);
+                            statusMsg.textContent = `Error loading test.${fmt}: ${err.message}`;
+                        }
+                    });
+                    samplePickerGrid.appendChild(btn);
+                });
+            }
+
             // Config Persistence Logic
             localStorage.removeItem('cfg_fileType');
             Object.values(window.CONFIG_SCHEMAS).flat().forEach(item => {
                 const el = document.getElementById(item.id);
                 if (!el) return;
-                
+
                 el.addEventListener('change', () => {
                     localStorage.setItem(item.id, el.type === 'checkbox' ? el.checked : el.value);
                 });
@@ -3853,7 +4318,9 @@
                     outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
                     ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
                     csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
-                    ocrTimeout: document.getElementById('cfg_ocrTimeout').value,
+                    ocrAutoTerminate: document.getElementById('cfg_ocrAutoTerminate').value,
+                    ocrWorkerLoad: document.getElementById('cfg_ocrWorkerLoad').value,
+                    ocrRecognition: document.getElementById('cfg_ocrRecognition').value,
                     pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value
                 };
                 const currentJson = JSON.stringify(currentConfig);
@@ -3896,6 +4363,7 @@
             const btnVisual = document.getElementById('btn_styleMap_visual');
             const btnRaw = document.getElementById('btn_styleMap_raw');
             const containerVisual = document.getElementById('styleMap_visual_container');
+            const containerRaw = document.getElementById('styleMap_code_container');
             const textareaRaw = document.getElementById('cfg_styleMap');
             const mappingList = document.getElementById('mapping_list');
             const btnAddMapping = document.getElementById('add_style_mapping');
@@ -3904,14 +4372,14 @@
                 btnVisual.classList.add('active');
                 btnRaw.classList.remove('active');
                 containerVisual.classList.remove('hidden');
-                textareaRaw.classList.add('hidden');
+                containerRaw.classList.add('hidden');
                 syncStyleMapFromRawToVisual();
             });
 
             btnRaw.addEventListener('click', () => {
                 btnRaw.classList.add('active');
                 btnVisual.classList.remove('active');
-                textareaRaw.classList.remove('hidden');
+                containerRaw.classList.remove('hidden');
                 containerVisual.classList.add('hidden');
                 syncStyleMapFromVisualToRaw();
             });
@@ -3919,6 +4387,44 @@
             btnAddMapping.addEventListener('click', () => {
                 addMappingRow();
                 syncStyleMapFromVisualToRaw();
+            });
+
+            // Format switcher logic with live conversion
+            document.querySelectorAll('input[name="styleMap_format"]').forEach(radio => {
+                radio.addEventListener('change', () => {
+                    const format = radio.value;
+                    if (format === 'mammoth') {
+                        textareaRaw.placeholder = "p[style-name='Heading 1'] => h1\nr[style-name='Strong'] => strong";
+                    } else {
+                        textareaRaw.placeholder = '[\n  {\n    "selector": { "nodeType": "paragraph", "attributes": { "style": "Heading 1" } },\n    "output": { "tag": "h1", "classes": ["main-title"] }\n  }\n]';
+                    }
+
+                    // First, sync the current raw text into visual structure representation,
+                    // then immediately serialize the visual representation into the newly selected format.
+                    const currentRaw = textareaRaw.value.trim();
+                    if (currentRaw) {
+                        syncStyleMapFromRawToVisual();
+                        syncStyleMapFromVisualToRaw();
+                    }
+                });
+            });
+
+            // Auto-detect format on pasting / typing in raw textarea, and keep Visual builder in sync in real-time
+            textareaRaw.addEventListener('input', () => {
+                const raw = textareaRaw.value.trim();
+                if (raw) {
+                    const isJson = raw.startsWith('[') || raw.startsWith('{');
+                    const radio = document.querySelector(`input[name="styleMap_format"][value="${isJson ? 'json' : 'mammoth'}"]`);
+                    if (radio && !radio.checked) {
+                        radio.checked = true;
+                        if (isJson) {
+                            textareaRaw.placeholder = '[\n  {\n    "selector": { "nodeType": "paragraph", "attributes": { "style": "Heading 1" } },\n    "output": { "tag": "h1", "classes": ["main-title"] }\n  }\n]';
+                        } else {
+                            textareaRaw.placeholder = "p[style-name='Heading 1'] => h1\nr[style-name='Strong'] => strong";
+                        }
+                    }
+                }
+                syncStyleMapFromRawToVisual();
             });
 
             function addMappingRow(data = null) {
@@ -3997,30 +4503,54 @@
                     return mapping;
                 });
 
-                textareaRaw.value = mappings.length > 0 ? JSON.stringify(mappings, null, 2) : '';
+                const formatRadio = document.querySelector('input[name="styleMap_format"]:checked');
+                const format = formatRadio ? formatRadio.value : 'json';
+
+                if (format === 'mammoth') {
+                    textareaRaw.value = mappings.map(m => {
+                        let selType = 'p';
+                        if (m.selector.nodeType === 'run') selType = 'r';
+                        else if (m.selector.nodeType === 'table') selType = 'table';
+                        else if (m.selector.nodeType === 'heading') selType = 'h';
+                        else if (m.selector.nodeType === 'paragraph') selType = 'p';
+                        else if (m.selector.nodeType === 'image') selType = 'img';
+                        else selType = m.selector.nodeType;
+
+                        const styleName = m.selector.attributes ? m.selector.attributes.style : '';
+                        const selAttr = styleName ? `[style-name='${styleName}']` : '';
+                        const classes = m.output.classes && m.output.classes.length > 0 ? `.${m.output.classes.join('.')}` : '';
+                        return `${selType}${selAttr} => ${m.output.tag || 'div'}${classes}`;
+                    }).join('\n');
+                } else {
+                    textareaRaw.value = mappings.length > 0 ? JSON.stringify(mappings, null, 2) : '';
+                }
                 // Trigger change to update reparse button and previews
                 textareaRaw.dispatchEvent(new Event('change'));
             }
 
             function syncStyleMapFromRawToVisual() {
                 const raw = textareaRaw.value.trim();
-                mappingList.innerHTML = '';
-                if (!raw) return;
+                if (!raw) {
+                    mappingList.innerHTML = '';
+                    return;
+                }
 
                 try {
                     if (raw.startsWith('[') || raw.startsWith('{')) {
                         const data = JSON.parse(raw);
                         const list = Array.isArray(data) ? data : [data];
+                        mappingList.innerHTML = ''; // Only clear visual representation if parsing succeeds
                         list.forEach(item => {
                             if (typeof item === 'object') addMappingRow(item);
                             else if (typeof item === 'string') addMappingRowFromDsl(item);
                         });
                     } else {
                         const lines = raw.split('\n').map(s => s.trim()).filter(s => !!s);
+                        mappingList.innerHTML = ''; // Only clear visual representation if parsing succeeds
                         lines.forEach(line => addMappingRowFromDsl(line));
                     }
                 } catch (e) {
-                    console.warn("Could not parse raw StyleMap for Visual Builder", e);
+                    // Do not clear the Visual builder list if there's a syntax / parse error during typing
                 }
             }
 
@@ -4034,13 +4564,20 @@
 
                 let nodeType = 'paragraph';
                 if (selectorRaw.startsWith('p')) nodeType = 'paragraph';
-                else if (selectorRaw.startsWith('span') || selectorRaw.startsWith('run')) nodeType = 'run';
+                else if (selectorRaw.startsWith('span') || selectorRaw.startsWith('run') || selectorRaw.startsWith('r[')) nodeType = 'run';
                 else if (selectorRaw.startsWith('table')) nodeType = 'table';
 
                 const styleMatch = selectorRaw.match(/style-name=["\'](.*?)["\']/);
                 const styleName = styleMatch ? styleMatch[1] : '';
 
-                const outputParts = outputRaw.split('.');
+                // Strip suffix like :fresh
+                let outputMain = outputRaw;
+                if (outputRaw.includes(':')) {
+                    const colonParts = outputRaw.split(':');
+                    outputMain = colonParts[0];
+                }
+
+                const outputParts = outputMain.split('.');
                 const tag = outputParts[0];
                 const classes = outputParts.slice(1);
 
@@ -4096,7 +4633,11 @@
                         csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
                         pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value,
                         ocrConfig: {
-                            autoTerminateTimeout: parseInt(document.getElementById('cfg_ocrTimeout').value, 10) * 1000
+                            timeout: {
+                                autoTerminate: parseInt(document.getElementById('cfg_ocrAutoTerminate').value, 10) * 1000,
+                                workerLoad: parseInt(document.getElementById('cfg_ocrWorkerLoad').value, 10) * 1000,
+                                recognition: parseInt(document.getElementById('cfg_ocrRecognition').value, 10) * 1000
+                            }
                         },
                         onWarning: (issue) => {
                             console.warn("Parser Warning:", issue);
@@ -4225,14 +4766,51 @@
                         container.appendChild(contentFrame);
                         const doc = contentFrame.contentDocument || contentFrame.contentWindow.document;
                         doc.open();
+
+                        const isModal = container.closest('.preview-modal-body') !== null;
+                        const maxWidth = isModal ? '100%' : '800px';
+
                         // Inject CSS to ensure the preview has margins and padding
-                        const styledHtml = result.value.includes('<body')
-                            ? result.value.replace('<body', '<body style="padding: 3rem; max-width: 800px; margin: 0 auto; font-family: sans-serif; line-height: 1.6;"')
-                            : `<div style="padding: 3rem; max-width: 800px; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${result.value}</div>`;
+                        let styledHtml;
+                        if (result.value.includes('class="spreadsheet-container"')) {
+                            styledHtml = /<body/i.test(result.value)
+                                ? result.value.replace(/<body[^>]*>/i, '<body style="margin: 0; padding: 0; height: 100vh; overflow: hidden; font-family: sans-serif;">')
+                                : `<div style="width: 100%; height: 100vh; margin: 0; padding: 0; overflow: hidden; font-family: sans-serif; display: flex; flex-direction: column;">${result.value}</div>`;
+                        } else {
+                            styledHtml = /<body/i.test(result.value)
+                                ? result.value.replace(/<body[^>]*>/i, `<body style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
+                                : `<div style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${result.value}</div>`;
+                        }
                         doc.write(styledHtml);
                         doc.close();
+
                         contentFrame.style.height = '100%';
                         contentFrame.style.display = 'block';
+
+                        // Setup scroll forwarding if not in a spreadsheet (spreadsheet handles its own grid scrolling)
+                        if (!result.value.includes('class="spreadsheet-container"')) {
+                            setupIframeScrollForwarding(contentFrame, container);
+
+                            // Dynamically resize iframe to content height using ResizeObserver to allow native container scrollbar
+                            if (!isModal) {
+                                setTimeout(() => {
+                                    try {
+                                        const win = contentFrame.contentWindow;
+                                        const doc = win.document;
+                                        if (win && doc && doc.body) {
+                                            const observer = new win.ResizeObserver(() => {
+                                                const height = doc.body.scrollHeight || doc.documentElement.scrollHeight;
+                                                contentFrame.style.height = (height + 40) + 'px';
+                                                container.style.overflow = 'auto';
+                                            });
+                                            observer.observe(doc.body);
+                                        }
+                                    } catch (e) {
+                                        console.error('Failed to setup ResizeObserver:', e);
+                                    }
+                                }, 50);
+                            }
+                        }
                     } else {
                         renderRawCode(result.value, 'language-html', container);
                     }
@@ -4302,14 +4880,40 @@
                             container.appendChild(contentFrame);
                             const doc = contentFrame.contentDocument || contentFrame.contentWindow.document;
                             doc.open();
-                            // Inject CSS to ensure the preview has margins and padding
-                            const styledHtml = htmlResult.value.includes('<body')
-                                ? htmlResult.value.replace('<body', '<body style="padding: 3rem; max-width: 800px; margin: 0 auto; font-family: sans-serif; line-height: 1.6;"')
-                                : `<div style="padding: 3rem; max-width: 800px; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${htmlResult.value}</div>`;
+
+                            const isModal = container.closest('.preview-modal-body') !== null;
+                            const maxWidth = isModal ? '100%' : '800px';
+
+                            const styledHtml = /<body/i.test(htmlResult.value)
+                                ? htmlResult.value.replace(/<body[^>]*>/i, `<body style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
+                                : `<div style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${htmlResult.value}</div>`;
                             doc.write(styledHtml);
                             doc.close();
+
                             contentFrame.style.height = '100%';
                             contentFrame.style.display = 'block';
+
+                            setupIframeScrollForwarding(contentFrame, container);
+
+                            // Dynamically resize iframe to content height using ResizeObserver to allow native container scrollbar
+                            if (!isModal) {
+                                setTimeout(() => {
+                                    try {
+                                        const win = contentFrame.contentWindow;
+                                        const doc = win.document;
+                                        if (win && doc && doc.body) {
+                                            const observer = new win.ResizeObserver(() => {
+                                                const height = doc.body.scrollHeight || doc.documentElement.scrollHeight;
+                                                contentFrame.style.height = (height + 40) + 'px';
+                                                container.style.overflow = 'auto';
+                                            });
+                                            observer.observe(doc.body);
+                                        }
+                                    } catch (e) {
+                                        console.error('Failed to setup ResizeObserver:', e);
+                                    }
+                                }, 50);
+                            }
                         } catch (e) {
                             container.innerHTML = `<div style="color: #ef4444; padding: 2rem;">Error generating RTF preview: ${e.message}</div>`;
                         }
@@ -4703,6 +5307,91 @@
             const initialFormats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
             initialFormats.forEach(f => {
                 document.getElementById(`visual-${f}`).innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">Waiting for file upload...</div>';
+            });
+
+            // --- Fullscreen Preview Modal Logic ---
+            window.openFullscreenPreview = function (format) {
+                const modal = document.getElementById('preview-modal');
+                if (!modal) return;
+                const titleEl = document.getElementById('modal-format-title');
+                const filenameEl = document.getElementById('modal-filename');
+                const bodyContent = document.getElementById('modal-body-content');
+
+                if (titleEl) titleEl.textContent = format.toUpperCase() + (format === 'ast' ? ' (JSON)' : ' PREVIEW');
+                if (filenameEl) filenameEl.textContent = lastFileName || 'No file selected';
+
+                if (bodyContent) {
+                    bodyContent.innerHTML = '';
+
+                    const tempContainer = document.createElement('div');
+                    tempContainer.id = `visual-${format}-modal-temp`;
+                    tempContainer.style.width = '100%';
+                    tempContainer.style.height = '100%';
+                    bodyContent.appendChild(tempContainer);
+
+                    // Temporary swap ID so renderFormatWindow target writes to modal container
+                    const origContainer = document.getElementById(`visual-${format}`);
+                    if (origContainer) {
+                        origContainer.id = `visual-${format}-orig-hidden`;
+                        tempContainer.id = `visual-${format}`;
+
+                        window.renderFormatWindow(format).then(() => {
+                            const hiddenContainer = document.getElementById(`visual-${format}-orig-hidden`);
+                            if (hiddenContainer) hiddenContainer.id = `visual-${format}`;
+                            tempContainer.id = `visual-${format}-modal-rendered`;
+
+                            const iframe = tempContainer.querySelector('iframe');
+                            if (iframe) {
+                                iframe.style.height = '100%';
+                                iframe.style.width = '100%';
+                            }
+                        });
+                    }
+                }
+
+                // Forward Copy and Download buttons click behavior
+                const origCopyBtn = document.getElementById(`copy-${format}-btn`);
+                const origDownloadBtn = document.getElementById(`download-${format}-btn`);
+
+                const modalCopyBtn = document.getElementById('modal-copy-btn');
+                const modalDownloadBtn = document.getElementById('modal-download-btn');
+
+                if (modalCopyBtn && modalDownloadBtn) {
+                    const newCopyBtn = modalCopyBtn.cloneNode(true);
+                    const newDownloadBtn = modalDownloadBtn.cloneNode(true);
+
+                    modalCopyBtn.parentNode.replaceChild(newCopyBtn, modalCopyBtn);
+                    modalDownloadBtn.parentNode.replaceChild(newDownloadBtn, modalDownloadBtn);
+
+                    newCopyBtn.addEventListener('click', () => {
+                        if (origCopyBtn) origCopyBtn.click();
+                    });
+                    newDownloadBtn.addEventListener('click', () => {
+                        if (origDownloadBtn) origDownloadBtn.click();
+                    });
+                }
+
+                modal.classList.add('active');
+                document.body.style.overflow = 'hidden';
+            };
+
+            window.closeFullscreenPreview = function () {
+                const modal = document.getElementById('preview-modal');
+                if (modal) modal.classList.remove('active');
+                const bodyContent = document.getElementById('modal-body-content');
+                if (bodyContent) bodyContent.innerHTML = '';
+                document.body.style.overflow = '';
+            };
+
+            const closeBtn = document.getElementById('modal-close-btn');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', window.closeFullscreenPreview);
+            }
+
+            window.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    window.closeFullscreenPreview();
+                }
             });
 
             updateOcrCleanupState();

@@ -242,6 +242,12 @@ export class OfficeParser {
             return result;
 
         } catch (error: any) {
+            // AbortError must pass through untouched so callers can distinguish a
+            // deliberate cancellation (err.name === 'AbortError') from a real parse failure.
+            // getWrappedError always creates a plain new Error(), which would strip the
+            // AbortError identity and break any instanceof / name checks on the caller side.
+            if (error?.name === 'AbortError') throw error;
+
             const wrappedError = getWrappedError(error, internalConfig, filePath);
             if (callback) callback(undefined as any, wrappedError);
             throw wrappedError;

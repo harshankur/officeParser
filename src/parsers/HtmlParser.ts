@@ -1,5 +1,6 @@
 import { CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
+import { checkAbortSignal } from '../utils/errorUtils.js';
 
 interface HtmlNode {
     type: 'element' | 'text';
@@ -115,6 +116,11 @@ const parseHtmlTree = (html: string): HtmlNode => {
 };
 
 export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
+    // Honour cancellation requests before the HTML tree is built and traversed.
+    // The custom recursive HTML parser can be expensive for large documents;
+    // rejecting early here prevents both the parsing and the subsequent AST construction.
+    checkAbortSignal(config.abortSignal);
+
     const textStr = buffer.toString('utf-8');
     const root = parseHtmlTree(textStr);
 

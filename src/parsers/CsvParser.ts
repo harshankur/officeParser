@@ -1,5 +1,6 @@
 import { CellMetadata, FullOfficeParserConfig, OfficeContentNode, OfficeParserAST, SheetMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
+import { checkAbortSignal } from '../utils/errorUtils.js';
 
 /**
  * Parses a CSV file and extracts a single sheet with rows and cells.
@@ -9,6 +10,11 @@ import { createAST } from '../utils/astUtils.js';
  * @returns A promise resolving to the parsed AST
  */
 export const parseCsv = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
+    // Honour cancellation requests before the character-by-character parsing loop starts.
+    // CSV has no OCR or async I/O, but very large files can still occupy the thread for a
+    // noticeable duration, so short-circuiting on an aborted signal is still worthwhile.
+    checkAbortSignal(config.abortSignal);
+
     const textStr = buffer.toString('utf-8');
     const delimiter = config.csvDelimiter;
 

@@ -26,6 +26,12 @@
                     Allows the parser to continue while you capture diagnostic info.</td>
             </tr>
             <tr>
+                <td><code>abortSignal</code></td>
+                <td><code>AbortSignal | null</code></td>
+                <td><code>null</code></td>
+                <td><strong>Cancellation</strong>: An optional signal to abort the parsing operation. Interrupts heavy loops, PDF page parsing, zip decompression, and active OCR processes cleanly. Rejects with an <code>AbortError</code>.</td>
+            </tr>
+            <tr>
                 <td><code>outputErrorToConsole</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
@@ -126,8 +132,37 @@
                 <td><code>ocrConfig.autoTerminateTimeout</code></td>
                 <td><code>number</code></td>
                 <td><code>10000</code></td>
-                <td><strong>Lifecycle Safety</strong>: Inactivity timeout in ms before workers are killed. Set to `0` to
-                    disable.</td>
+                <td><strong>Deprecated</strong>: Use <code>ocrConfig.timeout.autoTerminate</code> instead. Inactivity timeout in ms before workers are killed. Set to `0` to disable.</td>
+            </tr>
+            <tr>
+                <td><code>ocrConfig.timeout</code></td>
+                <td><code>object</code></td>
+                <td><code>{}</code></td>
+                <td><strong>OCR Timeouts</strong>: Consolidated timeout configurations. If both this and flat fields are provided, properties in this object take priority.</td>
+            </tr>
+            <tr>
+                <td><code>ocrConfig.timeout.autoTerminate</code></td>
+                <td><code>number</code></td>
+                <td><code>10000</code></td>
+                <td><strong>Lifecycle Safety</strong>: Inactivity timeout in ms of inactivity before the OCR worker pool is terminated and freed. Set to 0 to disable.</td>
+            </tr>
+            <tr>
+                <td><code>ocrConfig.timeout.workerLoad</code></td>
+                <td><code>number</code></td>
+                <td><code>60000</code></td>
+                <td><strong>Load Protection</strong>: Timeout in ms for initializing/loading a Tesseract worker or downloading <code>.traineddata</code> files. Exceeding this evicts/terminates the worker process and logs a warning. Set to 0 to wait indefinitely.</td>
+            </tr>
+            <tr>
+                <td><code>ocrConfig.timeout.recognition</code></td>
+                <td><code>number</code></td>
+                <td><code>30000</code></td>
+                <td><strong>Recognition Guard</strong>: Timeout in ms for the actual text-recognition call. Exceeding this evicts/terminates the worker process and logs a warning. Set to 0 to wait indefinitely.</td>
+            </tr>
+            <tr>
+                <td><code>ocrConfig.abortSignal</code></td>
+                <td><code>AbortSignal | null</code></td>
+                <td><code>null</code></td>
+                <td><strong>OCR Cancellation</strong>: Automatically propagated from the top-level <code>abortSignal</code>. Used to interrupt queued or executing OCR tasks.</td>
             </tr>
             <tr>
                 <td><code>ocrConfig.workerPath</code> / <code>corePath</code> / <code>langPath</code></td>

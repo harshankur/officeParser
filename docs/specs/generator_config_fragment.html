@@ -85,6 +85,13 @@
                 <td><strong>Diagnostics</strong>: Callback for non-fatal issues encountered during generation (e.g.
                     unsupported drawing, skipped node). Receives an <code>OfficeIssue</code> object.</td>
             </tr>
+            <tr>
+                <td><code>abortSignal</code></td>
+                <td><code>AbortSignal | null</code></td>
+                <td><code>null</code></td>
+                <td><strong>Cancellation</strong>: An optional signal to abort the generation operation.
+                    Supported by <code>PdfGenerator</code> and <code>ChunkingGenerator</code>. Rejects with an <code>AbortError</code>.</td>
+            </tr>
         </tbody>
     </table>
 
@@ -201,6 +208,12 @@
                 <td>headless defaults</td>
                 <td>Puppeteer launch options (e.g. <code>executablePath</code>, <code>args</code>). Useful for CI/CD
                     environments.</td>
+            </tr>
+            <tr>
+                <td><code>timeout</code></td>
+                <td><code>number</code></td>
+                <td><code>30000</code></td>
+                <td><strong>Timeout</strong>: The PDF rendering timeout in milliseconds. Set to <code>0</code> to disable.</td>
             </tr>
         </tbody>
     </table>
@@ -458,6 +471,12 @@
                 <td><code>number</code></td>
                 <td><code>50</code></td>
                 <td>Sentences per embedding API batch call.</td>
+            </tr>
+            <tr>
+                <td><code>timeout</code></td>
+                <td><code>number</code></td>
+                <td><code>10000</code></td>
+                <td><strong>Timeout</strong>: Timeout in milliseconds for individual embedding API calls. Set to <code>0</code> to disable.</td>
             </tr>
         </tbody>
     </table>

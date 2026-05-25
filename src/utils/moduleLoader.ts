@@ -13,7 +13,7 @@ import type * as FileTypeModule from 'file-type' with { 'resolution-mode': 'impo
 
 async function loadNodeEsmModule<T>(specifier: string): Promise<T> {
     // In Node.js, we resolve the specifier to an absolute file URL.
-    // This ensures that the dynamic import() call (executed via new Function)
+    // This ensures that the dynamic import() call
     // always finds the correct module regardless of the caller's context.
     // This is especially important in Node 18 for sub-paths of packages.
     try {
@@ -21,10 +21,10 @@ async function loadNodeEsmModule<T>(specifier: string): Promise<T> {
         // @ts-ignore - require.resolve is available in Node.js
         const absolutePath = require.resolve(specifier);
         const fileUrl = pathToFileURL(absolutePath).href;
-        return new Function('s', 'return import(s)')(fileUrl);
+        return import(fileUrl);
     } catch (e) {
         // Fallback for cases where require.resolve might fail (e.g. non-file specifiers)
-        return new Function('s', 'return import(s)')(specifier);
+        return import(specifier);
     }
 }
 

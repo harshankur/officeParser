@@ -73,12 +73,26 @@ export function resolveParserConfig(
     Object.assign(config, rest);
 
     if (ocrConfig) {
-        config.ocrConfig = { ...config.ocrConfig, ...ocrConfig };
+        const { timeout, ...ocrRest } = ocrConfig;
+        config.ocrConfig = {
+            ...config.ocrConfig,
+            ...ocrRest,
+            timeout: {
+                autoTerminate: timeout?.autoTerminate !== undefined ? timeout.autoTerminate : config.ocrConfig.timeout.autoTerminate,
+                workerLoad: timeout?.workerLoad !== undefined ? timeout.workerLoad : config.ocrConfig.timeout.workerLoad,
+                recognition: timeout?.recognition !== undefined ? timeout.recognition : config.ocrConfig.timeout.recognition,
+            }
+        };
     }
 
     // 3. Handle legacy ocrLanguage mapping if not explicitly set in ocrConfig
     if (userConfig.ocrLanguage && !userConfig.ocrConfig?.language) {
         config.ocrConfig.language = userConfig.ocrLanguage;
+    }
+
+    // 4. Propagate the top-level abortSignal to ocrConfig so the OCR subsystem is aware of it
+    if (config.abortSignal) {
+        config.ocrConfig.abortSignal = config.abortSignal;
     }
 
     return config;

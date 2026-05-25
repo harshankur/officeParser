@@ -178,6 +178,60 @@ const ast = await officeParser.parseOffice(buffer);
 > const ast = await officeParser.parseOffice(markdownBuffer, { fileType: 'md' });
 > ```
 
+### Cancellation with AbortSignal
+
+You can pass a standard `AbortSignal` (e.g. from an `AbortController`) to cancel an active parse operation. This is especially useful for setting request-level timeouts or canceling long-running parses (like large PDFs with OCR).
+
+```js
+const controller = new AbortController();
+
+// Cancel parsing if it takes longer than 5 seconds
+setTimeout(() => controller.abort(), 5000);
+
+try {
+    const ast = await officeParser.parseOffice('large_scanned_file.pdf', {
+        abortSignal: controller.signal,
+        ocr: true
+    });
+} catch (err) {
+    if (err.name === 'AbortError') {
+        console.log('Parsing was cancelled.');
+    } else {
+        console.error('Parsing failed:', err);
+    }
+}
+```
+
+> [!IMPORTANT]
+> **AbortError Propagation**
+> When parsing is cancelled via `AbortSignal`, the parser rejects with a standard `AbortError` (a `DOMException` or an Error with `name: 'AbortError'`).
+> This error is *not* wrapped in standard OfficeParser error types so that you can reliably detect cancellation using `error.name === 'AbortError'`.
+
+> [!NOTE]
+> **Worker Cleanup on Abort**
+> If an OCR job is actively running in the background when the signal is aborted, `officeParser` automatically terminates the Tesseract worker process immediately and removes it from the pool to prevent thread/memory leaks.
+
+### Custom OCR Timeouts
+
+To prevent the parser from hanging indefinitely due to slow network connections (when downloading Tesseract language datasets) or complex image processing, you can configure granular timeouts under `ocrConfig.timeout`.
+
+```js
+const ast = await officeParser.parseOffice('scanned_document.pdf', {
+    ocr: true,
+    ocrConfig: {
+        timeout: {
+            workerLoad: 30000,    // 30s max to load worker & download language training files
+            recognition: 15000,   // 15s max per image text recognition
+            autoTerminate: 10000  // 10s of inactivity before terminating idle workers
+        }
+    }
+});
+```
+
+> [!TIP]
+> **Non-Fatal Timeout Recovery**
+> If `workerLoad` or `recognition` timeouts are exceeded, the parser will log a warning in `ast.warnings` and **continue parsing the rest of the document**. The overall promise resolves successfully with the text extracted from the document layers (rather than failing the entire parse).
+
 ### `ast.to()` — Generate from AST
 
 The preferred way to convert a parsed AST to another format. Returns a `ConversionResult`.
@@ -610,6 +664,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
 | `pdfWorkerSrc` | `string` | CDN (jsDelivr) | Path/URL to `pdf.worker.min.mjs` (required in browser) |
 | `onWarning` | `(issue: OfficeIssue) => void` | — | Callback for non-fatal parsing issues |
+| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel parsing (rejects with AbortError) |
 | `outputErrorToConsole` | `boolean` | `false` | **Deprecated.** Use `onWarning` instead |
 
 ---
@@ -630,6 +685,7 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 | `styleMap` | `string[] \| StructuredStyleMapping[]` | `[]` | Custom semantic style mappings |
 | `onNode` | `(node) => string \| false \| void` | — | Per-node callback for filtering, overriding, or mutating |
 | `onWarning` | `(issue: OfficeIssue) => void` | — | Callback for non-fatal generation issues |
+| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel the generation operation (rejects with AbortError) |
 
 ---
 
@@ -732,6 +788,7 @@ Pass as `pdfConfig` inside `GeneratorConfig`. Requires the optional `puppeteer` 
 | `footerTemplate` | `string` | `''` | HTML template for the print footer |
 | `scale` | `number` | `1` | Rendering scale factor |
 | `launchOptions` | `object` | headless defaults | Puppeteer launch options (e.g., `executablePath`) |
+| `timeout` | `number` | `30000` | PDF rendering timeout in milliseconds. Set to `0` to disable. |
 
 ### CsvGeneratorConfig
 
@@ -807,6 +864,7 @@ Configuration for `OfficeConverter.convert(file, format, config)`.
 | `maxChunkSize` | `number` | `2000` | Max characters even if similarity stays high |
 | `bufferSize` | `number` | `1` | Surrounding sentences used when computing similarity |
 | `embeddingBatchSize` | `number` | `50` | Sentences per embedding API batch |
+| `timeout` | `number` | `10000` | Timeout in milliseconds for individual embedding API calls. Set to `0` to disable. |
 
 ---
 
@@ -826,7 +884,8 @@ When `ocr: true` is set, `officeParser` maintains an intelligent **Smart Worker 
 | `workerPath` | `string` | `''` | Custom path to Tesseract worker script |
 | `corePath` | `string` | `''` | Custom path to Tesseract core script |
 | `langPath` | `string` | `''` | Custom path for language data files |
-| `autoTerminateTimeout` | `number` | `10000` | Inactivity timeout in ms before auto-teardown (0 = disabled) |
+| `timeout` | `OcrTimeoutConfig` | `{}` | Consolidated timeouts: `autoTerminate`, `workerLoad`, `recognition` |
+| `autoTerminateTimeout` | `number` | `10000` | **Deprecated.** Use `timeout.autoTerminate` instead |
 
 See all language codes at [tesseract-ocr.github.io](https://tesseract-ocr.github.io/tessdoc/Data-Files).
 

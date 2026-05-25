@@ -25,7 +25,7 @@
 import { ChartMetadata, FullOfficeParserConfig, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, SlideMetadata, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
-import { logWarning } from '../utils/errorUtils.js';
+import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
 import { getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
@@ -39,6 +39,11 @@ import { extractFiles } from '../utils/zipUtils.js';
  * @returns A promise resolving to the parsed AST
  */
 export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
+    // Honour cancellation requests immediately — before extracting the ZIP archive.
+    // PPTX presentations can have many slides with media/charts and optional OCR per image,
+    // so an early abort prevents decompressing and traversing data that will be discarded.
+    checkAbortSignal(config.abortSignal);
+
     const allFilesRegex = /ppt\/(notesSlides|slides)\/(notesSlide|slide)\d+.xml/g;
     const slidesRegex = /ppt\/slides\/slide\d+.xml/g;
     const slideRelsRegex = /ppt\/slides\/_rels\/slide\d+\.xml\.rels/;

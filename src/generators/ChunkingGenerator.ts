@@ -20,7 +20,7 @@ import {
     SheetMetadata,
     SlideMetadata
 } from '../types.js';
-import { getOfficeError } from '../utils/errorUtils.js';
+import { getOfficeError, checkAbortSignal } from '../utils/errorUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -60,6 +60,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
      * Note: ConversionResult.value is a JSON string of OfficeChunk[] for the 'chunks' destination.
      */
     async generate(): Promise<ConversionResult<'chunks'>> {
+        checkAbortSignal(this.config.abortSignal);
         let chunks: OfficeChunk[];
 
         switch (this.chunkConfig.strategy) {
@@ -238,6 +239,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         chunks: OfficeChunk[],
         contextStack: { heading?: string; slideNumber?: number; pageNumber?: number; sheetName?: string }
     ): Promise<void> {
+        checkAbortSignal(this.config.abortSignal);
         // Check for node override or skip
         const override = await this.handleOnNode(node);
         if (override === false) return;
@@ -383,7 +385,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 headerRows.push(firstRow); // We still add the node to get metadata later if needed, but renderRowsAsText will handle it?
                 // Actually renderRowsAsText needs to be updated too.
             }
-            
+
             for (let i = 1; i < rows.length; i++) {
                 dataRows.push(rows[i]);
             }
@@ -487,7 +489,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         if (sentences.length === 0) return [];
 
         // Embed all sentences in batches to avoid rate limiting
-        const embeddings = await this.batchEmbeddings(sentences, config.embeddingFunction, batchSize);
+        const embeddings = await this.batchEmbeddings(sentences, config.embeddingFunction, batchSize, config.timeout);
 
         // Calculate cosine similarity between adjacent sentence windows
         const chunks: OfficeChunk[] = [];
@@ -577,6 +579,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         let currentSheet: string | undefined;
 
         const walk = async (node: OfficeContentNode) => {
+            checkAbortSignal(this.config.abortSignal);
             const override = await this.handleOnNode(node);
             if (override === false) return;
 
@@ -634,6 +637,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         let currentSheet: string | undefined;
 
         const walk = async (node: OfficeContentNode) => {
+            checkAbortSignal(this.config.abortSignal);
             const override = await this.handleOnNode(node);
             if (override === false) return;
 
@@ -710,12 +714,29 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
     private async batchEmbeddings(
         sentences: { text: string }[],
         embedFn: (text: string) => Promise<number[]>,
-        batchSize: number = 50
+        batchSize: number = 50,
+        timeoutMs?: number
     ): Promise<number[][]> {
         const results: number[][] = [];
         for (let i = 0; i < sentences.length; i += batchSize) {
+            checkAbortSignal(this.config.abortSignal);
             const batch = sentences.slice(i, i + batchSize);
-            const batchResults = await Promise.all(batch.map(s => embedFn(s.text)));
+            const batchPromises = batch.map(s => {
+                const call = embedFn(s.text);
+                if (timeoutMs !== undefined && timeoutMs > 0) {
+                    let timerId: any;
+                    const timeoutPromise = new Promise<never>((_, reject) => {
+                        timerId = setTimeout(() => {
+                            reject(new Error(`Embedding call timed out after ${timeoutMs}ms`));
+                        }, timeoutMs);
+                    });
+                    return Promise.race([call, timeoutPromise]).finally(() => {
+                        clearTimeout(timerId);
+                    });
+                }
+                return call;
+            });
+            const batchResults = await Promise.all(batchPromises);
             results.push(...batchResults);
         }
         return results;

@@ -24,7 +24,7 @@
 import { CellMetadata, ChartData, ChartMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
-import { logWarning } from '../utils/errorUtils.js';
+import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
 import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
@@ -38,6 +38,11 @@ import { extractFiles } from '../utils/zipUtils.js';
  * @returns A promise resolving to the parsed AST
  */
 export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
+    // Honour cancellation requests immediately — before extracting the ZIP archive.
+    // ODF containers (ODT/ODS/ODP) bundle content.xml, styles.xml, and media files;
+    // aborting early avoids needlessly inflating and parsing all of those resources.
+    checkAbortSignal(config.abortSignal);
+
     const contentFileRegex = /content\.xml/;
     const objectContentFileRegex = /Object \d+\/content\.xml/;
     const mediaFileRegex = /(Pictures|media)\/.*/;

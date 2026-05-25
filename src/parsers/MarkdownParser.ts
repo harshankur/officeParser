@@ -1,7 +1,13 @@
 import { CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
+import { checkAbortSignal } from '../utils/errorUtils.js';
 
 export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
+    // Honour cancellation requests before the line-by-line Markdown scanning loop begins.
+    // Markdown parsing is entirely synchronous and CPU-bound, so failing fast avoids
+    // processing content whose result will be discarded anyway.
+    checkAbortSignal(config.abortSignal);
+
     let textStr = buffer.toString('utf-8');
     textStr = textStr.replace(/\r\n/g, '\n');
 

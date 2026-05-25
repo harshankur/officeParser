@@ -28,7 +28,9 @@ export enum OfficeErrorType {
     /** Output mapping in style mapping is invalid */
     INVALID_OUTPUT_MAPPING = 'INVALID_OUTPUT_MAPPING',
     /** Semantic chunking strategy is selected but no embedding function is provided */
-    MISSING_EMBEDDING_FUNCTION = 'MISSING_EMBEDDING_FUNCTION'
+    MISSING_EMBEDDING_FUNCTION = 'MISSING_EMBEDDING_FUNCTION',
+    /** The operation was aborted */
+    OPERATION_ABORTED = 'OPERATION_ABORTED'
 }
 
 /**
@@ -71,6 +73,69 @@ export enum OfficeWarningType {
 }
 
 /**
+ * Consolidated timeout settings for OCR operations.
+ * Preferred over the individual flat timeout properties on {@link OcrConfig},
+ * which are now deprecated.
+ * 
+ * If a key is present here, it takes priority over the corresponding deprecated
+ * flat property (e.g. `timeout.autoTerminate` wins over `autoTerminateTimeout`).
+ * Set any value to `0` to disable that specific timeout.
+ */
+export interface OcrTimeoutConfig {
+    /**
+     * Timeout in milliseconds of inactivity before the OCR worker pool is
+     * automatically terminated and freed.
+     * 
+     * The timer resets every time a new OCR job is enqueued.  When the last
+     * job completes and this duration passes without a new one, the entire
+     * worker pool is torn down so that no background threads keep the Node.js
+     * process alive unnecessarily.
+     * 
+     * Set to `0` to keep workers alive indefinitely (useful when you want to
+     * call {@link terminateOcr} manually at shutdown time).
+     * Default is 10,000 ms (10 seconds).
+     */
+    autoTerminate?: number;
+    /**
+     * Timeout in milliseconds for initializing a Tesseract worker
+     * (loading the JS runtime, downloading or loading the `.traineddata`
+     * language file) or for re-initializing an existing worker with a
+     * different language.
+     * 
+     * Multi-language combinations (e.g. `'por+eng+spa'`) must download a
+     * separate `.traineddata` file for each language and are therefore
+     * particularly susceptible to slow networks.  Tune this value upward if
+     * your OCR environment has high network latency or if you are loading
+     * languages from disk in a large container image.
+     * 
+     * When the timeout fires, the failed job is rejected with a non-fatal
+     * {@link OfficeWarningType.OCR_FAILED} warning and parsing continues
+     * without OCR output for that image.  The stalled worker is terminated
+     * and removed from the pool to prevent thread leaks.
+     * 
+     * Set to `0` to wait indefinitely (not recommended for production; a hung
+     * network request will block the entire OCR queue for that language).
+     * Default is 60,000 ms (60 seconds).
+     */
+    workerLoad?: number;
+    /**
+     * Timeout in milliseconds for the actual OCR text-recognition call
+     * (`worker.recognize(image)`) on an already-initialized Tesseract worker.
+     * 
+     * Recognition time scales with image resolution and the number of active
+     * languages.  Very high-resolution scans or unusual character sets can
+     * exceed the default.  If this timeout fires, the job is rejected with a
+     * non-fatal {@link OfficeWarningType.OCR_FAILED} warning; the worker is
+     * terminated and evicted from the pool because its internal state after a
+     * mid-recognition timeout is undefined.
+     * 
+     * Set to `0` to wait indefinitely.
+     * Default is 30,000 ms (30 seconds).
+     */
+    recognition?: number;
+}
+
+/**
  * Configuration options for OCR.
  */
 export interface OcrConfig {
@@ -104,11 +169,33 @@ export interface OcrConfig {
      */
     langPath?: string;
     /**
+     * Consolidated timeout settings for all OCR operations.
+     * 
+     * Prefer this over the deprecated flat timeout properties.
+     * If `timeout.autoTerminate` is set, it takes priority over the deprecated `autoTerminateTimeout`.
+     */
+    timeout?: OcrTimeoutConfig;
+    /**
+     * @deprecated Use `timeout.autoTerminate` instead.
+     * 
      * Timeout in milliseconds of inactivity before the OCR worker pool is automatically terminated.
      * Set to 0 to disable auto-termination.
      * Default is 10,000 (10 seconds).
+     * 
+     * If `timeout.autoTerminate` is also set, that value takes priority over this one.
      */
     autoTerminateTimeout?: number;
+    /**
+     * An optional AbortSignal propagated from the main parser configuration to abort active OCR jobs.
+     * If the signal is aborted:
+     * 1. Any pending OCR jobs in the scheduler queue are rejected immediately.
+     * 2. Any active OCR job running on a Tesseract worker will reject, the worker will be
+     *    terminated, and it will be removed from the pool to avoid hanging worker threads.
+     * 
+     * Developers should prefer passing this at the top level of `parseOffice` (as `config.abortSignal`),
+     * which automatically propagates here.
+     */
+    abortSignal?: AbortSignal | null;
 }
 
 /**
@@ -176,6 +263,20 @@ export interface OfficeParserConfig {
      * If provided, `ocrLanguage` will be ignored in favor of `ocrConfig.language`.
      */
     ocrConfig?: OcrConfig;
+    /**
+     * An optional AbortSignal to cancel the parsing operation.
+     * When aborted, the parser immediately rejects with a standard AbortError (DOMException).
+     * 
+     * ### Format-Specific Abort Behavior:
+     * - **PDF**: Checked between page loads and before individual image OCR operations.
+     * - **RTF**: Checked before parsing/traversal and before running OCR on image attachments.
+     * - **DOCX/XLSX/PPTX/ODF**: Checked during zip decompression before loading and parsing XML files.
+     * - **CSV/MD/HTML**: Checked at the start of the parsing phase.
+     * 
+     * Note: If an OCR operation is currently running on a Tesseract worker when aborted,
+     * the worker will be terminated and removed from the worker pool automatically to prevent leaks.
+     */
+    abortSignal?: AbortSignal | null;
 
     /**
      * Flag to serialize raw content (XML) as clean, formatted strings.
@@ -380,6 +481,12 @@ export interface CommonGeneratorConfig {
      * Defaults to false.
      */
     ignoreInternalLinks?: boolean;
+    /**
+     * An optional AbortSignal to cancel the generation operation.
+     * When aborted, the generator immediately rejects with a standard AbortError.
+     * Currently supported by PdfGenerator and ChunkingGenerator.
+     */
+    abortSignal?: AbortSignal | null;
 }
 
 /**
@@ -523,6 +630,12 @@ export interface PdfGeneratorConfig {
      * Useful for setting custom executable paths or args in CI/CD.
      */
     launchOptions?: any;
+    /**
+     * Timeout in milliseconds for PDF generation.
+     * Limits the time spent waiting for Puppeteer to launch, load content, and render PDF.
+     * Defaults to 30000 ms (30 seconds). Set to 0 to disable.
+     */
+    timeout?: number;
 }
 
 /**
@@ -853,6 +966,11 @@ export interface SemanticChunkingConfig extends BaseChunkingConfig {
      * Default is 50.
      */
     embeddingBatchSize?: number;
+    /**
+     * Timeout in milliseconds for individual embedding API calls.
+     * Defaults to 10000 ms (10 seconds). Set to 0 to disable.
+     */
+    timeout?: number;
 }
 
 /**

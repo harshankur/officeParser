@@ -369,3 +369,35 @@ export const parseOOXMLCustomProperties = (xmlContent: string): Record<string, s
 
     return result;
 };
+
+/**
+ * Decodes XML entities (standard named entities, decimal, and hexadecimal entities) in a string.
+ * Useful when parsing content with regular expressions instead of a full DOM parser.
+ * 
+ * @param text - The XML-encoded string
+ * @returns The decoded string
+ */
+export const decodeXmlEntities = (text: string): string => {
+    return text.replace(/&([^;]+);/g, (match, entity) => {
+        if (entity.startsWith('#')) {
+            if (entity[1] === 'x' || entity[1] === 'X') {
+                const hex = entity.slice(2);
+                const code = parseInt(hex, 16);
+                return !isNaN(code) ? String.fromCodePoint(code) : match;
+            } else {
+                const dec = entity.slice(1);
+                const code = parseInt(dec, 10);
+                return !isNaN(code) ? String.fromCodePoint(code) : match;
+            }
+        }
+        switch (entity) {
+            case 'amp': return '&';
+            case 'lt': return '<';
+            case 'gt': return '>';
+            case 'quot': return '"';
+            case 'apos': return "'";
+            default: return match;
+        }
+    });
+};
+

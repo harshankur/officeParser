@@ -18,7 +18,22 @@ export default [
         },
         rules: {
             // Enforce centralized error reporting by banning direct console usage in the core library
-            "no-console": "error"
+            "no-console": "error",
+            "no-restricted-syntax": [
+                "error",
+                {
+                    selector: "CatchClause:not(:has(IfStatement BinaryExpression[operator='==='] Literal[value='AbortError'])) CallExpression[callee.name='getWrappedError']",
+                    message: "AbortError must not be passed to getWrappedError. Check for it first in the catch block (e.g., if (error?.name === 'AbortError') throw error;)"
+                },
+                {
+                    selector: "NewExpression[callee.name='Error'][arguments.0.type='Literal']",
+                    message: "Do not instantiate Error with a direct string literal. Use OfficeErrorType enums and the ERROR_MESSAGES dictionary to support future localization/consistency."
+                },
+                {
+                    selector: "NewExpression[callee.name='DOMException'][arguments.0.type='Literal']",
+                    message: "Do not instantiate DOMException with a direct string literal. Use OfficeErrorType enums and the ERROR_MESSAGES dictionary to support future localization/consistency."
+                }
+            ]
         }
     },
     {
@@ -31,7 +46,8 @@ export default [
             "build_browser.js"
         ],
         rules: {
-            "no-console": "off"
+            "no-console": "off",
+            "no-restricted-syntax": "off"
         }
     }
 ];

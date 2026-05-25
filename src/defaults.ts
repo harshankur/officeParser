@@ -1,4 +1,4 @@
-import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, MdGeneratorConfig, OcrConfig, OfficeParserConfig, PdfGeneratorConfig, SemanticChunkingConfig, TextGeneratorConfig } from './types.js';
+import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OfficeParserConfig, PdfGeneratorConfig, SemanticChunkingConfig, TextGeneratorConfig } from './types.js';
 
 const PDFJS_VERSION = '5.6.205';
 const DEFAULT_PDF_WORKER_SRC = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
@@ -15,6 +15,13 @@ export const DEFAULT_SENTENCE_BOUNDARY_REGEX = /[.!?。！？]/;
  */
 export const DEFAULT_ABBREVIATIONS = ['Mr', 'Dr', 'Ms', 'Inc', 'Ltd', 'Prof', 'Sr', 'Jr', 'vs', 'etc'];
 
+/** Default timeout values for OCR */
+const DEFAULT_OCR_TIMEOUT: Required<OcrTimeoutConfig> = {
+    autoTerminate: 10000,
+    workerLoad: 60000,
+    recognition: 30000,
+}
+
 /**
  * Default configuration for OCR.
  */
@@ -23,7 +30,12 @@ const DEFAULT_OCR_CONFIG: DeepRequired<OcrConfig> = {
     workerPath: '',
     corePath: '',
     langPath: '',
-    autoTerminateTimeout: 10000,
+    // Preferred: consolidated timeout object.  New code should always read from here.
+    timeout: DEFAULT_OCR_TIMEOUT,
+    // Kept for backward compatibility.  When timeout.autoTerminate is set (as above),
+    // the ocrUtils resolution logic will prefer timeout.autoTerminate over this flat field.
+    autoTerminateTimeout: DEFAULT_OCR_TIMEOUT.autoTerminate,
+    abortSignal: null,
 };
 
 /**
@@ -40,6 +52,7 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     ocr: false,
     ocrLanguage: 'eng',
     ocrConfig: DEFAULT_OCR_CONFIG,
+    abortSignal: null,
     serializeRawContent: true,
     preserveXmlWhitespace: false,
     pdfWorkerSrc: DEFAULT_PDF_WORKER_SRC,
@@ -80,6 +93,7 @@ const DEFAULT_PDF_GENERATOR_CONFIG: DeepRequired<PdfGeneratorConfig> = {
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox']
     },
+    timeout: 30000,
 };
 
 /**
@@ -154,6 +168,7 @@ export const DEFAULT_SEMANTIC_CHUNKING_CONFIG: Required<Omit<SemanticChunkingCon
     lengthFunction: (text: string) => text.length,
     sentenceBoundaryRegex: DEFAULT_SENTENCE_BOUNDARY_REGEX,
     abbreviations: DEFAULT_ABBREVIATIONS,
+    timeout: 10000,
 };
 
 /**
@@ -175,6 +190,7 @@ export const DEFAULT_GENERATOR_CONFIG: FullGeneratorConfig = {
     includeImages: true,
     includeCharts: true,
     ignoreInternalLinks: false,
+    abortSignal: null,
     htmlConfig: DEFAULT_HTML_GENERATOR_CONFIG,
     mdConfig: DEFAULT_MD_GENERATOR_CONFIG,
     pdfConfig: DEFAULT_PDF_GENERATOR_CONFIG,

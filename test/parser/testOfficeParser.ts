@@ -11,7 +11,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { OfficeParser } from '../../src/OfficeParser';
-import { DeepRequired, OfficeContentNode, OfficeParserAST, OfficeParserConfig } from '../../src/types';
+import { DeepRequired, OfficeContentNode, OfficeIssue, OfficeParserAST, OfficeParserConfig } from '../../src/types';
 
 // ============================================================================
 // CONSTANTS & CONFIGURATION
@@ -49,7 +49,18 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
         workerPath: '',
         corePath: '',
         langPath: '',
-        autoTerminateTimeout: 10000
+        // New consolidated timeout object — preferred over the deprecated flat fields below.
+        // Generous (0 = unlimited) for workerLoad/recognition so the real-file tests are never
+        // killed by the timeout machinery.  C8/C9 permutation tests override these to 1 ms.
+        timeout: {
+            autoTerminate: 10000,
+            workerLoad: 0,
+            recognition: 0
+        },
+        // Kept for backward-compatibility coverage — the resolution logic in ocrUtils.ts
+        // will prefer timeout.autoTerminate over this deprecated flat key.
+        autoTerminateTimeout: 10000,
+        abortSignal: null
     },
     includeRawContent: true,
     ignoreNotes: false,
@@ -62,8 +73,11 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
     includeBreakNodes: true,
     ignoreInternalLinks: false,
     csvDelimiter: ',',
-    onWarning: (message: string, details?: any) => { },
-    fileType: null
+    onWarning: (issue: OfficeIssue) => { },
+    fileType: null,
+    // An abortSignal at the top level propagates into ocrConfig automatically.
+    // Setting null here means no cancellation; individual tests override this.
+    abortSignal: null
 };
 
 /** Config permutations to test */
@@ -126,6 +140,47 @@ const CONFIG_TESTS = [
         name: 'Notes at Last',
         config: {
             putNotesAtLast: true
+        }
+    },
+    {
+        id: 'C8',
+        name: 'OCR Load Timeout',
+        // Set timeout.workerLoad to 1 ms — far shorter than the time needed to download
+        // or load a Tesseract worker.  When OCR is enabled, this should cause the OCR
+        // step to be treated as a non-fatal failure (logged via onWarning) while still
+        // returning a valid AST with whatever text was extractable without OCR.
+        // Formats without image attachments (CSV, HTML, MD, RTF plain) will pass
+        // trivially because no OCR is attempted at all.
+        config: {
+            ocr: true,
+            extractAttachments: true,
+            ocrConfig: {
+                timeout: {
+                    workerLoad: 1,
+                    // Disable recognition timeout so only the load timeout fires
+                    recognition: 0
+                }
+            }
+        }
+    },
+    {
+        id: 'C9',
+        name: 'OCR Recognition Timeout',
+        // Set timeout.recognition to 1 ms — OCR workers initialise normally, but the
+        // actual recognition call (worker.recognize) will race against a 1 ms timer and
+        // lose.  Like C8, the parse should complete with a non-fatal OCR warning rather
+        // than throwing or hanging.  The difference from C8 is that the worker pool IS
+        // initialised successfully here; only per-image recognition calls time out.
+        config: {
+            ocr: true,
+            extractAttachments: true,
+            ocrConfig: {
+                timeout: {
+                    // Allow the worker to load fully so we exercise the recognize() timeout
+                    workerLoad: 0,
+                    recognition: 1
+                }
+            }
         }
     }
 ];
@@ -1379,6 +1434,110 @@ function compareTextBaseline(
     return results;
 }
 
+async function testXlsxInlineStrings(): Promise<FeatureTest[]> {
+    const results: FeatureTest[] = [];
+    const createResult = (
+        feature: string,
+        expected: any,
+        actual: any,
+        condition: boolean,
+        details: string
+    ): FeatureTest => ({
+        category: 'Excel Inline String Decoding',
+        feature,
+        fileType: 'xlsx',
+        result: {
+            status: condition ? 'PASS' : 'FAIL',
+            expected,
+            actual,
+            details
+        }
+    });
+
+    const fflate = require('fflate');
+    const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+    <sheets>
+        <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    </sheets>
+</workbook>`;
+
+    const workbookRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>`;
+
+    const sheet1Xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <sheetData>
+        <row r="1">
+            <c r="A1" t="inlineStr">
+                <is>
+                    <t>&#22995;&#21517;</t>
+                </is>
+            </c>
+            <c r="B1" t="inlineStr">
+                <is>
+                    <t xml:space="preserve"> &amp; &lt; &gt; &quot; &apos; </t>
+                </is>
+            </c>
+            <c r="C1" t="inlineStr">
+                <is>
+                    <t>&#x4e2d;&#x6587;</t>
+                </is>
+            </c>
+        </row>
+    </sheetData>
+</worksheet>`;
+
+    const files = {
+        'xl/workbook.xml': fflate.strToU8(workbookXml),
+        'xl/_rels/workbook.xml.rels': fflate.strToU8(workbookRelsXml),
+        'xl/worksheets/sheet1.xml': fflate.strToU8(sheet1Xml)
+    };
+
+    const zipBuffer = Buffer.from(fflate.zipSync(files));
+
+    try {
+        const ast = await OfficeParser.parseOffice(zipBuffer, { fileType: 'xlsx' });
+        const text = ast.toText();
+
+        results.push(createResult(
+            'Decode Decimal Entities',
+            '姓名',
+            text.includes('姓名') ? '姓名' : text,
+            text.includes('姓名'),
+            text.includes('姓名') ? 'Decimal entities decoded correctly' : 'Failed to decode decimal entities'
+        ));
+
+        results.push(createResult(
+            'Decode XML Entities',
+            '& < > " \'',
+            text.includes('& < > " \'') ? '& < > " \'' : text,
+            text.includes('& < > " \''),
+            text.includes('& < > " \'') ? 'XML entities decoded correctly' : 'Failed to decode XML entities'
+        ));
+
+        results.push(createResult(
+            'Decode Hexadecimal Entities',
+            '中文',
+            text.includes('中文') ? '中文' : text,
+            text.includes('中文'),
+            text.includes('中文') ? 'Hexadecimal entities decoded correctly' : 'Failed to decode hexadecimal entities'
+        ));
+    } catch (e: any) {
+        results.push(createResult(
+            'Parsing Success',
+            'Success',
+            e.message || e,
+            false,
+            `Failed to parse mock inline string XLSX: ${e.message || e}`
+        ));
+    }
+
+    return results;
+}
+
 // ============================================================================
 // TEST RUNNERS
 // ============================================================================
@@ -1412,6 +1571,9 @@ async function testFile(ext: string): Promise<FeatureTest[]> {
 
         // Add text extraction validation
         results.push(...validateTextExtraction('Text Extraction', ext, ast, metrics));
+        if (ext === 'xlsx') {
+            results.push(...await testXlsxInlineStrings());
+        }
 
         // Load baseline if available
         const baseline = loadBaseline(ext);
@@ -1733,6 +1895,136 @@ async function testConfigs(ext: string): Promise<FeatureTest[]> {
 }
 
 // ============================================================================
+// ABORT SIGNAL CANCELLATION TEST
+// ============================================================================
+
+/**
+ * Verifies that passing an already-aborted AbortSignal to parseOffice causes the
+ * returned Promise to reject immediately with a standard AbortError (a DOMException
+ * named 'AbortError'), rather than hanging indefinitely or returning parsed content.
+ *
+ * This is a unit-style test that does NOT require a specific file on disk: it uses
+ * the DOCX test file as a convenient real input so the parser has something to open,
+ * but the rejection should happen before any significant work is done (the very first
+ * checkAbortSignal() call at the top of each parser function catches the pre-aborted
+ * signal synchronously).
+ *
+ * Why this matters:
+ *  - Users pass AbortSignal to integrate with per-request timeouts (e.g. AbortController
+ *    + setTimeout) or to cancel parsing when a network request is cancelled.
+ *  - Without this feature, a slow or hung parse (especially with multi-language OCR)
+ *    would block the caller's event loop indefinitely.
+ */
+async function testAbortSignal(): Promise<FeatureTest[]> {
+    const results: FeatureTest[] = [];
+    const filePath = getFilePath('docx');
+
+    // ── Test 1: Pre-aborted signal ──────────────────────────────────────────
+    // Create an AbortController and abort it immediately before calling parseOffice.
+    // The parser should detect the already-aborted signal at its very first checkpoint
+    // and reject without opening the ZIP archive.
+    {
+        const startTime = Date.now();
+        const controller = new AbortController();
+        controller.abort(); // abort BEFORE calling parseOffice
+
+        try {
+            await OfficeParser.parseOffice(filePath, { abortSignal: controller.signal });
+
+            // If we reach here, the parser did NOT honour the abort signal \u2014 that's a failure.
+            results.push({
+                category: 'Cancellation',
+                feature: 'Pre-aborted signal rejects immediately',
+                fileType: 'docx',
+                result: {
+                    status: 'FAIL',
+                    expected: 'AbortError rejection',
+                    actual: 'Resolved successfully (abort was ignored)',
+                    details: 'parseOffice should have rejected with AbortError but resolved instead',
+                    duration: Date.now() - startTime
+                }
+            });
+        } catch (err: any) {
+            // AbortError is a DOMException with name === 'AbortError' in browser and modern Node,
+            // or a plain Error with err.name === 'AbortError' in older Node builds (our fallback).
+            const isAbortError = err.name === 'AbortError';
+            results.push({
+                category: 'Cancellation',
+                feature: 'Pre-aborted signal rejects immediately',
+                fileType: 'docx',
+                result: {
+                    status: isAbortError ? 'PASS' : 'FAIL',
+                    expected: 'AbortError (err.name === "AbortError")',
+                    actual: `${err.name}: ${err.message}`,
+                    details: isAbortError
+                        ? 'parseOffice correctly rejected with AbortError'
+                        : `Expected AbortError but got ${err.name} \u2014 check checkAbortSignal() in errorUtils.ts`,
+                    duration: Date.now() - startTime
+                }
+            });
+        }
+    }
+
+    // ── Test 2: Signal aborted mid-flight ────────────────────────────────────
+    // Start parseOffice normally and then abort the controller after a short delay.
+    // This exercises the mid-parse abort checkpoints (inside loops, before OCR, etc.).
+    // We can only verify that the Promise eventually rejects; we cannot guarantee it
+    // was caught at a specific checkpoint.
+    {
+        const startTime = Date.now();
+        const controller = new AbortController();
+
+        // Abort after a brief delay so the parser has started but (hopefully) not finished.
+        // 50 ms is generous \u2014 adjust if CI machines are too slow to enter the parser in time.
+        const abortTimer = setTimeout(() => controller.abort(), 50);
+
+        try {
+            // Use OCR + attachments so there are more async checkpoints to hit.
+            await OfficeParser.parseOffice(filePath, {
+                abortSignal: controller.signal,
+                ocr: true,
+                ocrConfig: { timeout: { workerLoad: 0, recognition: 0 } }
+            });
+
+            // If the parse resolved before the abort fired, that's acceptable \u2014 the file
+            // may be tiny enough to finish in < 50 ms.  Mark as WARN (not FAIL) so CI is green.
+            clearTimeout(abortTimer);
+            results.push({
+                category: 'Cancellation',
+                feature: 'In-flight signal aborts cleanly',
+                fileType: 'docx',
+                result: {
+                    status: 'WARN',
+                    expected: 'AbortError rejection',
+                    actual: 'Resolved before abort timer fired',
+                    details: 'Parse completed before the 50 ms abort delay \u2014 try a larger file to test mid-flight cancellation',
+                    duration: Date.now() - startTime
+                }
+            });
+        } catch (err: any) {
+            clearTimeout(abortTimer);
+            const isAbortError = err.name === 'AbortError';
+            results.push({
+                category: 'Cancellation',
+                feature: 'In-flight signal aborts cleanly',
+                fileType: 'docx',
+                result: {
+                    status: isAbortError ? 'PASS' : 'FAIL',
+                    expected: 'AbortError (err.name === "AbortError")',
+                    actual: `${err.name}: ${err.message}`,
+                    details: isAbortError
+                        ? 'In-flight abort correctly rejected with AbortError'
+                        : `Expected AbortError but got ${err.name}`,
+                    duration: Date.now() - startTime
+                }
+            });
+        }
+    }
+
+    return results;
+}
+
+// ============================================================================
 // DUAL LOGGER (Console + Markdown)
 // ============================================================================
 
@@ -1942,6 +2234,9 @@ async function runSingleFileTest(ext: string) {
     logger.log('');
 
     const textValidation = validateTextExtraction('Text Extraction', ext, ast, metrics);
+    if (ext === 'xlsx') {
+        textValidation.push(...await testXlsxInlineStrings());
+    }
     const textPassed = textValidation.filter(t => t.result.status === 'PASS').length;
     const textFailed = textValidation.filter(t => t.result.status === 'FAIL').length;
 
@@ -2092,7 +2387,15 @@ async function runAllTests() {
         allResults.push(...results);
     }
 
-    // 4. Generate report
+    // 4. AbortSignal cancellation tests
+    // Runs two targeted scenarios: (a) pre-aborted signal — parseOffice should reject
+    // immediately without touching the ZIP or running any parsing; (b) in-flight abort —
+    // a controller aborted 50 ms into the parse should cause an AbortError rejection via
+    // the checkAbortSignal() checkpoints embedded in each parser.
+    console.log('Running AbortSignal cancellation tests...');
+    allResults.push(...await testAbortSignal());
+
+    // 5. Generate report
     console.log('\n');
     const logger = new DualLogger();
     const failedCount = generateReport(allResults, logger);

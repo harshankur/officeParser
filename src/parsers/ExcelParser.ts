@@ -25,10 +25,10 @@
 import { ChartMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
-import { logWarning } from '../utils/errorUtils.js';
+import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
-import { getElementsByTagName, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
+import { decodeXmlEntities, getElementsByTagName, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 
 /**
@@ -39,6 +39,11 @@ import { extractFiles } from '../utils/zipUtils.js';
  * @returns A promise resolving to the parsed AST
  */
 export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
+    // Honour cancellation requests immediately — before extracting the ZIP archive.
+    // XLSX parsing involves decompressing multiple XML sheets and potentially running OCR
+    // on embedded chart images, so short-circuiting here saves significant work.
+    checkAbortSignal(config.abortSignal);
+
     const sheetsRegex = /xl\/worksheets\/sheet\d+.xml/g;
     const drawingsRegex = /xl\/drawings\/drawing\d+.xml/g;
     const chartsRegex = /xl\/charts\/chart\d+.xml/g;
@@ -485,7 +490,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     const type = typeMatch ? typeMatch[1] : 'n'; // n = number (default)
 
                     const vMatch = cContent.match(/<v>([\s\S]*?)<\/v>/);
-                    const tMatch = cContent.match(/<t>([\s\S]*?)<\/t>/);
+                    const tMatch = cContent.match(/<t\b[^>]*>([\s\S]*?)<\/t>/);
 
                     let text = '';
                     let cellNodes: OfficeContentNode[] = [];
@@ -502,7 +507,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             text = content || '';
                         }
                     } else if (type === 'inlineStr' && tMatch) {
-                        text = tMatch[1].trim();
+                        text = decodeXmlEntities(tMatch[1].trim());
                     } else if (vMatch) {
                         text = vMatch[1].trim();
                     }

@@ -8,7 +8,13 @@
       "workerPath": "",
       "corePath": "",
       "langPath": "",
-      "autoTerminateTimeout": 10000
+      "timeout": {
+        "autoTerminate": 10000,
+        "workerLoad": 0,
+        "recognition": 0
+      },
+      "autoTerminateTimeout": 10000,
+      "abortSignal": null
     },
     "includeRawContent": true,
     "ignoreNotes": false,
@@ -21,7 +27,8 @@
     "includeBreakNodes": true,
     "ignoreInternalLinks": false,
     "csvDelimiter": ",",
-    "fileType": null
+    "fileType": null,
+    "abortSignal": null
   },
   "type": "pptx",
   "metadata": {

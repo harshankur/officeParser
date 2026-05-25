@@ -1,5 +1,6 @@
 import { ConversionResult, GeneratorConfig, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { isBrowser } from '../utils/envUtils.js';
+import { getAbortError } from '../utils/errorUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { HtmlGenerator } from './HtmlGenerator.js';
 
@@ -47,6 +48,26 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
      * Uses dynamic import to avoid bundling puppeteer into the library core.
      */
     private async generateInNode(html: string): Promise<ConversionResult> {
+        const signal = this.config.abortSignal;
+        if (signal?.aborted) {
+            throw getAbortError();
+        }
+
+        let browser: any;
+        const onAbort = async () => {
+            if (browser) {
+                try {
+                    await browser.close();
+                } catch (e) {
+                    // ignore
+                }
+            }
+        };
+
+        if (signal) {
+            signal.addEventListener('abort', onAbort);
+        }
+
         try {
             // Dynamic import for peer dependency
             // @ts-ignore
@@ -78,13 +99,18 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             // would require force-downloading a ~300MB arm64 browser binary or switching to 
             // a system-installed Chrome, both of which are too intrusive for a library.
 
-            const browser = await puppeteer.launch(launchOptions);
+            browser = await puppeteer.launch(launchOptions);
             const page = await browser.newPage();
+
+            const pdfConfig = this.config.pdfConfig;
+            const timeout = pdfConfig.timeout;
+            if (timeout !== undefined && timeout > 0) {
+                page.setDefaultTimeout(timeout);
+                page.setDefaultNavigationTimeout(timeout);
+            }
 
             // Set content and wait for network/assets to load
             await page.setContent(html, { waitUntil: 'networkidle0' });
-
-            const pdfConfig = this.config.pdfConfig;
 
             const pdfBuffer = await page.pdf({
                 format: pdfConfig.format,
@@ -100,17 +126,37 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             });
 
             await browser.close();
+            browser = null;
 
             return {
                 value: new Uint8Array(pdfBuffer),
                 messages: this.messages
             };
         } catch (err: any) {
-            this.warn(OfficeWarningType.DEPENDENCY_LOAD_FAILED, `puppeteer. Please install it with 'npm install puppeteer'. Error: ${err.message}`);
+            if (browser) {
+                try {
+                    await browser.close();
+                } catch (e) {
+                    // ignore
+                }
+                browser = null;
+            }
+            if (signal?.aborted) {
+                throw getAbortError();
+            }
+            if (err.message && (err.message.includes('timeout') || err.message.includes('Timeout'))) {
+                this.warn(OfficeWarningType.PAGE_LOAD_FAILED, `PDF generation timed out: ${err.message}`);
+            } else {
+                this.warn(OfficeWarningType.DEPENDENCY_LOAD_FAILED, `puppeteer. Please install it with 'npm install puppeteer'. Error: ${err.message}`);
+            }
             return {
-                value: '',
+                value: new Uint8Array(),
                 messages: this.messages
             };
+        } finally {
+            if (signal) {
+                signal.removeEventListener('abort', onAbort);
+            }
         }
     }
 

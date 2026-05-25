@@ -62,7 +62,7 @@ import { FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentN
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { assertNode, isBrowser } from '../utils/envUtils.js';
-import { getOfficeError, logWarning } from '../utils/errorUtils.js';
+import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { loadPdfJs } from '../utils/moduleLoader.js';
 import { performOcr } from '../utils/ocrUtils.js';
@@ -315,6 +315,7 @@ function convertToRgbaBuffer(data: Uint8Array | Uint8ClampedArray, width: number
  * @returns Promise resolving to the parsed AST
  */
 export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
+    checkAbortSignal(config.abortSignal);
     const pdfjs = await loadPdfJs();
 
     // Configure worker
@@ -453,6 +454,7 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     // --- First Pass: Collect all items for font statistics ---
     for (let i = 1; i <= numPages; i++) {
+        checkAbortSignal(config.abortSignal);
         let page: any;
         let textContent;
         const pageItems: PageItem[] = [];
@@ -647,6 +649,7 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     // --- Second Pass: Process pages with font statistics ---
     for (let i = 0; i < allPageItems.length; i++) {
+        checkAbortSignal(config.abortSignal);
         const pageNum = i + 1;
         let page: any;
         try {

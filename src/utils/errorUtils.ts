@@ -29,7 +29,8 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.INVALID_STYLE_MAPPING]: (mapping: string) => `Invalid style mapping string: ${mapping}`,
     [OfficeErrorType.INVALID_SELECTOR]: (selector: string) => `Invalid selector: ${selector}`,
     [OfficeErrorType.INVALID_OUTPUT_MAPPING]: (output: string) => `Invalid output mapping: ${output}`,
-    [OfficeErrorType.MISSING_EMBEDDING_FUNCTION]: `Semantic chunking requires an "embeddingFunction" to be provided in chunksConfig. This function must accept a string and return a Promise resolving to a number array (vector).`
+    [OfficeErrorType.MISSING_EMBEDDING_FUNCTION]: `Semantic chunking requires an "embeddingFunction" to be provided in chunksConfig. This function must accept a string and return a Promise resolving to a number array (vector).`,
+    [OfficeErrorType.OPERATION_ABORTED]: `The operation was aborted.`
 };
 
 /**
@@ -125,6 +126,11 @@ export const getOfficeError = (type: OfficeErrorType, config?: OfficeParserConfi
  * Wraps an existing error with OfficeParser context and performs corruption detection.
  * Optionally logs the error to console.
  * 
+ * **Important**: Do NOT pass AbortErrors to this function. AbortErrors (err.name === 'AbortError')
+ * represent deliberate user cancellation and must be re-thrown as-is from the catch block so that
+ * callers can reliably detect them via `err.name === 'AbortError'` or `err instanceof DOMException`.
+ * This function always returns a plain `new Error(...)`, which would strip the AbortError identity.
+ * 
  * @param error - The original error object
  * @param config - Parser configuration
  * @param filePath - Optional file path for context
@@ -189,3 +195,33 @@ export const logWarning = (type: OfficeWarningType, config?: OfficeParserConfig,
 
     reportIssue(issue, config);
 };
+
+/**
+ * Creates and returns a standard AbortError (DOMException if available).
+ * Used when the user signals cancellation of the parser operation.
+ * 
+ * @returns Error object representing the abort action
+ */
+export const getAbortError = (): Error => {
+    const message = ERROR_MESSAGES[OfficeErrorType.OPERATION_ABORTED] as string;
+    if (typeof DOMException !== 'undefined') {
+        return new DOMException(message, 'AbortError');
+    }
+    const err = new Error(message);
+    err.name = 'AbortError';
+    return err;
+};
+
+/**
+ * Checks the provided AbortSignal and throws an AbortError if it was aborted.
+ * Helps cleanly interrupt loops and asynchronous phases of parsing.
+ * 
+ * @param signal - Optional AbortSignal to inspect
+ * @throws {DOMException} If the signal has been aborted
+ */
+export const checkAbortSignal = (signal?: AbortSignal | null): void => {
+    if (signal?.aborted) {
+        throw getAbortError();
+    }
+};
+

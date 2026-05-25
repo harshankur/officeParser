@@ -62,7 +62,7 @@
 
 import { BreakMetadata, CellMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, TextFormatting, TextMetadata, OfficeWarningType } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
-import { logWarning } from '../utils/errorUtils.js';
+import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
 import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
@@ -85,6 +85,11 @@ import { extractFiles } from '../utils/zipUtils.js';
  * @returns A promise resolving to the parsed AST
  */
 export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
+    // Honour cancellation requests immediately — before opening the ZIP archive, loading XML
+    // files, or kicking off any OCR work.  DOCX files can be large and the inflate + XML-parse
+    // steps are synchronous-heavy, so failing fast here avoids wasted CPU time.
+    checkAbortSignal(config.abortSignal);
+
     const documentFileRegex = /word\/document[\d+]?.xml/;
     const footnotesFileRegex = /word\/footnotes[\d+]?.xml/;
     const endnotesFileRegex = /word\/endnotes[\d+]?.xml/;
