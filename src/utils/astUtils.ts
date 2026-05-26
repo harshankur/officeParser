@@ -35,8 +35,8 @@ export function createAST(
             this: T,
             destination: D,
             genConfig?: GeneratorConfig<D>
-        ): Promise<ConversionResult> {
-            return OfficeGenerator.generate(this as any, destination, genConfig) as Promise<ConversionResult>;
+        ): Promise<ConversionResult<D>> {
+            return OfficeGenerator.generate(this as any, destination, genConfig) as Promise<ConversionResult<D>>;
         }
     };
 }
