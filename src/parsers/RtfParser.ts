@@ -1278,11 +1278,15 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
             // Handle footnote: switch target to notes
             const previousTarget = currentTarget;
+            let savedParagraphTextChunks: string[] | undefined;
+            let savedParagraphChildren: OfficeContentNode[] | undefined;
+            let savedParagraphRawChunks: string[] | undefined;
+
             if (isFootnote) {
                 if (config.ignoreNotes) {
                     return; // Skip footnote content entirely
                 }
-                flushParagraph();
+                flushRun();
                 currentFootnoteId++;
 
                 // Determine note type based on \fet value
@@ -1309,8 +1313,27 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                         noteType: noteType
                     } as NoteMetadata
                 };
-                notes.push(noteNode);
+                
+                if (currentParagraphChildren.length > 0) {
+                    const precedingNode = currentParagraphChildren[currentParagraphChildren.length - 1];
+                    if (!precedingNode.notes) precedingNode.notes = [];
+                    precedingNode.notes.push(noteNode);
+                } else {
+                    const emptyTextNode: OfficeContentNode = { type: 'text', text: '' };
+                    emptyTextNode.notes = [noteNode];
+                    currentParagraphChildren.push(emptyTextNode);
+                }
+                
                 currentTarget = noteNode.children!;
+                
+                // Save current paragraph state so we don't mix footnote paragraphs with main text
+                savedParagraphTextChunks = [...currentParagraphTextChunks];
+                savedParagraphChildren = [...currentParagraphChildren];
+                savedParagraphRawChunks = [...currentParagraphRawChunks];
+                
+                currentParagraphTextChunks = [];
+                currentParagraphChildren = [];
+                currentParagraphRawChunks = [];
             }
 
             // Create a new formatting context for the group
@@ -1368,6 +1391,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             if (isFootnote) {
                 flushParagraph();
                 currentTarget = previousTarget;
+                
+                // Restore the saved paragraph state
+                currentParagraphTextChunks = savedParagraphTextChunks!;
+                currentParagraphChildren = savedParagraphChildren!;
+                currentParagraphRawChunks = savedParagraphRawChunks!;
             }
 
             // Clear link URL after processing the field group
@@ -1802,19 +1830,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     flushParagraph();
 
-    // Notes handling:
-    // - If putNotesAtLast is false, notes should be added inline during traversal
-    //   (currently they go to 'notes' array, then we append them here - this is wrong)
-    // - If putNotesAtLast is true, notes are appended at the very end (see below)
-    // 
-    // For now, when putNotesAtLast is false, we append notes immediately after content
-    // This isn't truly "inline" but it's better than at the end
-    // TODO: Implement true inline placement during traversal
-    if (!config.putNotesAtLast && notes.length > 0) {
-        content.push(...notes);
-        notes.length = 0; // Clear so they don't get appended again
-    }
-
     // Perform OCR if enabled
     if (config.ocr && config.extractAttachments) {
         for (const attachment of attachments) {
@@ -1877,11 +1892,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     populateNoteText(notes);
 
     const toTextSync = () => {
-        let text = content.map(c => c.text).join(config.newlineDelimiter);
-        if (config.putNotesAtLast && notes.length > 0) {
-            text += config.newlineDelimiter + notes.map(c => c.text).join(config.newlineDelimiter);
-        }
-        return text;
+        return content.map(c => c.text).join(config.newlineDelimiter);
     };
 
     const result = createAST(
@@ -1892,13 +1903,9 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         content,
         attachments, // PNG and JPEG images extracted from \\pict groups
         config,
+        undefined,
         toTextSync
     );
-
-    // If putNotesAtLast is true, append notes to the end of the content array
-    if (config.putNotesAtLast && notes.length > 0) {
-        content.push(...notes);
-    }
 
     return result;
 };

@@ -28,7 +28,10 @@
     "ignoreInternalLinks": false,
     "csvDelimiter": ",",
     "fileType": null,
-    "abortSignal": null
+    "abortSignal": null,
+    "ignoreComments": false,
+    "ignoreHeadersAndFooters": false,
+    "ignoreSlideMasters": false
   },
   "type": "md",
   "metadata": {
@@ -38,6 +41,16 @@
     "modified": "2025-11-25T20:13:45.823Z",
     "description": "Demonstration of DOCX support in calibre",
     "customProperties": {
+      "TestString": "Hello from custom props",
+      "TestNumber": 42,
+      "TestBool": true
+    },
+    "nativeProperties": {
+      "title": "DOCX Demo",
+      "author": "Kovid Goyal",
+      "created": "2013-06-05T07:56:00.000Z",
+      "modified": "2025-11-25T20:13:45.823Z",
+      "description": "Demonstration of DOCX support in calibre",
       "TestString": "Hello from custom props",
       "TestNumber": 42,
       "TestBool": true

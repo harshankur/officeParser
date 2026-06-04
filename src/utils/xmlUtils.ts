@@ -226,6 +226,14 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
     // Check for OOXML Core Properties
     const coreProperties = getElementsByTagName(xml, "cp:coreProperties")[0];
     if (coreProperties) {
+        metadata.nativeProperties = {};
+        for (let i = 0; i < coreProperties.childNodes.length; i++) {
+            const child = coreProperties.childNodes[i];
+            if (isElement(child)) {
+                metadata.nativeProperties[child.tagName] = child.textContent;
+            }
+        }
+
         // Step 3: Extract title (Dublin Core element)
         const title = getElementsByTagName(coreProperties, "dc:title")[0];
         if (title && title.textContent) metadata.title = title.textContent;
@@ -253,12 +261,23 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
         const subject = getElementsByTagName(coreProperties, "dc:subject")[0];
         if (subject && subject.textContent) metadata.subject = subject.textContent;
 
+        const keywords = getElementsByTagName(coreProperties, "cp:keywords")[0];
+        if (keywords && keywords.textContent) metadata.keywords = keywords.textContent;
+
         return metadata;
     }
 
     // Check for ODF Meta
     const officeMeta = getElementsByTagName(xml, "office:meta")[0];
     if (officeMeta) {
+        metadata.nativeProperties = {};
+        for (let i = 0; i < officeMeta.childNodes.length; i++) {
+            const child = officeMeta.childNodes[i];
+            if (isElement(child)) {
+                metadata.nativeProperties[child.tagName] = child.textContent;
+            }
+        }
+
         const title = getElementsByTagName(officeMeta, "dc:title")[0];
         if (title && title.textContent) metadata.title = title.textContent;
 
@@ -270,6 +289,11 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
 
         const subject = getElementsByTagName(officeMeta, "dc:subject")[0];
         if (subject && subject.textContent) metadata.subject = subject.textContent;
+
+        const keywordElements = getElementsByTagName(officeMeta, "meta:keyword");
+        if (keywordElements.length > 0) {
+            metadata.keywords = keywordElements.map(k => k.textContent).filter(Boolean).join(', ');
+        }
 
         const created = getElementsByTagName(officeMeta, "meta:creation-date")[0];
         if (created && created.textContent) metadata.created = parseOfficeDate(created.textContent);
@@ -367,6 +391,34 @@ export const parseOOXMLCustomProperties = (xmlContent: string): Record<string, s
         }
     }
 
+    return result;
+};
+
+/**
+ * Parses OOXML application properties from `docProps/app.xml`.
+ * 
+ * Application properties contain document statistics and application settings.
+ * 
+ * @param xmlContent - Raw XML string from `docProps/app.xml`
+ * @returns A record of property name -> typed value
+ */
+export const parseOOXMLAppProperties = (xmlContent: string): Record<string, string | number | boolean> => {
+    const xml = parseXmlString(xmlContent);
+    const result: Record<string, string | number | boolean> = {};
+
+    const appProperties = getElementsByTagName(xml, "Properties")[0];
+    if (appProperties) {
+        for (let i = 0; i < appProperties.childNodes.length; i++) {
+            const child = appProperties.childNodes[i];
+            if (isElement(child)) {
+                const text = child.textContent || '';
+                if (text.toLowerCase() === 'true') result[child.tagName] = true;
+                else if (text.toLowerCase() === 'false') result[child.tagName] = false;
+                else if (!isNaN(Number(text)) && text.trim() !== '') result[child.tagName] = Number(text);
+                else result[child.tagName] = text;
+            }
+        }
+    }
     return result;
 };
 

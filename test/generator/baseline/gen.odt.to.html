@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DOCX Demo</title>
@@ -22,6 +23,7 @@
                 --border-color: #e9ecef;
                 --accent-color: #3498db;
                 --shadow: 0 10px 25px rgba(0,0,0,0.05);
+                --container-width: 900px;
             }
             * {
                 box-sizing: border-box;
@@ -35,7 +37,7 @@
                 padding: 50px 20px;
             }
             .container {
-                max-width: 850px;
+                max-width: var(--container-width);
                 margin: 0 auto;
                 background: var(--container-bg);
                 padding: 60px 80px;
@@ -43,7 +45,7 @@
                 box-shadow: var(--shadow);
             }
             .presentation-container, .pdf-container {
-                max-width: 1200px;
+                max-width: var(--container-width);
                 margin: 0 auto;
             }
             .presentation-container .metadata-summary, .pdf-container .metadata-summary {
@@ -91,33 +93,50 @@
             h3 { font-size: 1.5em; }
             
             p { margin-bottom: 1.3em; }
+            p.empty-paragraph { margin: 0; min-height: 1em; }
             
-            ul, ol { margin: 1.5em 0; padding-left: 2em; }
-            li { margin-bottom: 0.6em; }
+            ul, ol { margin: 1em 0; padding-left: 2em; }
+            li { margin-bottom: 0.25em; }
+            li > p { margin-bottom: 0.25em; }
             
             .table-container {
-                width: 100%;
+                width: fit-content;
+                max-width: 100%;
                 overflow-x: auto;
                 -webkit-overflow-scrolling: touch;
-                margin: 25px 0;
+                margin: 25px auto;
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                background: white;
             }
             table {
                 width: auto;
                 max-width: 100%;
                 min-width: 300px;
-                border-collapse: collapse;
-                margin: 0 auto;
-                border: 1px solid var(--border-color);
-                border-radius: 8px;
-                overflow: hidden;
+                border-collapse: separate;
+                border-spacing: 0;
+                margin: 0;
+                border: none;
             }
             th, td {
-                padding: 12px 16px;
+                padding: 8px 12px;
                 border-bottom: 1px solid var(--border-color);
                 border-right: 1px solid var(--border-color);
                 text-align: left;
                 vertical-align: top;
                 overflow-wrap: break-word;
+            }
+            th:last-child, td:last-child {
+                border-right: none;
+            }
+            tr:last-child th, tr:last-child td {
+                border-bottom: none;
+            }
+            th, td > p {
+                margin: 0;
+            }
+            td > *:last-child, th > *:last-child {
+                margin-bottom: 0;
             }
             th {
                 background-color: #f8f9fa;
@@ -130,7 +149,6 @@
                 top: 0;
                 z-index: 10;
             }
-            tr:last-child td { border-bottom: none; }
             tr:nth-child(even) { background-color: #fdfdfd; }
             tr:hover { background-color: #f1f4f9; }
             
@@ -148,7 +166,98 @@
                 padding: 8px 12px;
                 font-size: 13px;
                 white-space: nowrap;
+            }
+            /* Spreadsheet Grid styling */
+            .excel-grid {
+                border-collapse: collapse;
+                border-spacing: 0;
+                background: var(--container-bg);
+                border: 1px solid var(--border-color);
+                width: max-content;
+                max-width: none;
+                min-width: 0;
+            }
+            .excel-grid th, .excel-grid td {
+                border: 1px solid var(--border-color);
+                padding: 4px 8px;
+                font-size: 13px;
+                line-height: 1.2;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .excel-col-header {
+                background: #f8f9fa;
+                color: #5f6368;
+                font-weight: 500;
+                text-align: center;
+                user-select: none;
+                border-bottom: 2px solid var(--border-color);
+                position: sticky;
+                top: 0;
+                z-index: 10;
                 min-width: 100px;
+            }
+            .col-resizer {
+                position: absolute;
+                top: 0;
+                right: 0;
+                width: 4px;
+                height: 100%;
+                cursor: col-resize;
+                user-select: none;
+                z-index: 20;
+            }
+            .col-resizer:hover, .col-resizer.resizing {
+                background: var(--accent-color, #3498db);
+            }
+            .excel-row-num {
+                background: #f8f9fa;
+                color: #5f6368;
+                text-align: center;
+                font-weight: 500;
+                width: 45px;
+                min-width: 45px !important;
+                max-width: 45px;
+                user-select: none;
+                border-right: 2px solid var(--border-color);
+                position: sticky;
+                left: 0;
+                z-index: 5;
+            }
+            .row-resizer {
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                width: 100%;
+                height: 4px;
+                cursor: row-resize;
+                user-select: none;
+                z-index: 20;
+            }
+            .row-resizer:hover, .row-resizer.resizing {
+                background: var(--accent-color, #3498db);
+            }
+            .excel-row-num-header {
+                background: #f1f3f4;
+                width: 45px;
+                min-width: 45px !important;
+                max-width: 45px;
+                position: sticky;
+                top: 0;
+                left: 0;
+                z-index: 15;
+                border-right: 2px solid var(--border-color);
+                border-bottom: 2px solid var(--border-color);
+            }
+            .excel-cell-empty {
+                background: var(--container-bg);
+            }
+            .excel-grid tr:hover td {
+                background-color: #f1f4f9;
+            }
+            .excel-grid tr:hover td.excel-row-num {
+                background-color: #f8f9fa; /* Keep header color */
             }
 
             /* Tab Bar */
@@ -183,9 +292,9 @@
             /* Slide & Page Separation */
             .slide {
                 background: white;
-                min-height: 600px;
+                aspect-ratio: 297 / 210;
                 margin: 0 auto 40px auto;
-                padding: 60px 80px;
+                padding: 4% 6%;
                 border-radius: 12px;
                 box-shadow: 0 10px 30px rgba(0,0,0,0.1);
                 position: relative;
@@ -195,21 +304,74 @@
                 border: 1px solid var(--border-color);
                 box-sizing: border-box;
                 width: 100%;
+                overflow: hidden;
+                overflow-y: auto;
                 overflow-wrap: break-word;
                 page-break-after: always;
             }
+            .slide:has(+ .slide-note) {
+                margin-bottom: 0;
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
+                border-bottom: none;
+            }
+            .slide table {
+                width: auto;
+                max-width: 100%;
+                font-size: 0.85em;
+                margin: 10px 0;
+            }
+            .slide th, .slide td {
+                padding: 6px 10px;
+            }
+            .slide > * {
+                flex-shrink: 0;
+            }
+            .slide > .table-container {
+                flex-shrink: 1;
+                min-height: 0;
+            }
+            .slide .table-container {
+                margin: 10px auto;
+                overflow-y: auto;
+            }
+            .slide .chart-container {
+                margin: 15px auto;
+                max-width: 100%;
+                padding: 10px;
+                height: 240px;
+                box-shadow: none;
+                border-radius: 8px;
+            }
+            .slide img {
+                max-height: 200px;
+                width: auto;
+                margin: 10px auto;
+                box-shadow: none;
+            }
+            .slide .image-container {
+                margin: 15px 0;
+            }
+            .slide h1 { font-size: 1.8em; margin-top: 0.4em; margin-bottom: 0.3em; padding-bottom: 5px; }
+            .slide h2 { font-size: 1.4em; margin-top: 0.4em; }
+            .slide h3 { font-size: 1.25em; }
+            .slide p { margin-bottom: 0.6em; font-size: 0.95em; }
+            .slide li > p { margin-bottom: 0.25em; }
+            .slide ul, .slide ol { margin: 0.6em 0; }
+            .slide li { margin-bottom: 0.25em; }
             .slide-note {
                 background: #fdfdfd;
                 border: 1px solid var(--border-color);
-                border-left: 4px solid var(--accent-color);
-                border-radius: 12px;
+                border-top: 1px dashed var(--border-color);
+                border-radius: 0 0 12px 12px;
                 padding: 30px 50px;
-                margin: 20px auto 60px auto;
-                max-width: 1000px;
+                margin: 0 auto 40px auto;
+                width: 100%;
+                box-sizing: border-box;
                 font-size: 0.95em;
                 color: var(--text-color);
                 position: relative;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+                box-shadow: 0 10px 30px rgba(0,0,0,0.1);
             }
             .note-footnote, .note-endnote {
                 margin: 30px auto;
@@ -239,9 +401,9 @@
             }
             .page {
                 background: white;
-                min-height: 1000px;
+                aspect-ratio: 1 / 1.4142;
                 margin: 0 auto 40px auto;
-                padding: 70px 90px;
+                padding: 8% 10%;
                 box-shadow: 0 5px 20px rgba(0,0,0,0.08);
                 position: relative;
                 border: 1px solid var(--border-color);
@@ -261,8 +423,8 @@
             
             /* High Fidelity Presentation Mode */
             @media screen and (max-width: 800px) {
-                .slide { min-height: auto; padding: 40px 30px; }
-                .page { padding: 40px; }
+                .slide { min-height: auto; aspect-ratio: auto; padding: 40px 30px; }
+                .page { aspect-ratio: auto; padding: 40px; }
             }
             
             /* Nested Table Styles */
@@ -271,6 +433,8 @@
                 border-radius: 6px;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.03);
                 background-color: #ffffff;
+                border: 1px solid var(--border-color);
+                overflow: hidden;
             }
             td td {
                 padding: 10px 14px;
@@ -390,10 +554,15 @@
                     height: auto !important;
                 }
             }
+
+            /* --- Custom User CSS --- */
+            
         
     </style>
+    
 </head>
 <body>
+    
     <div class="container">
         <article>
             
@@ -447,7 +616,7 @@ Set the output format in the top right corner of the conversion dialog to EPUB o
 
 </p>
 
-<p></p>
+<p class="empty-paragraph"><br></p>
 
 <a id="text-formatting" name="text-formatting"></a><h1 id="_Toc2054249818" style="text-align: center">Text Formatting
 
@@ -623,11 +792,11 @@ too narrow to display it as a single line. Not only does this paragraph have a h
 
 </h1>
 
-<div class="table-container"><table><tr><td><p>ITEM
+<div class="table-container"><table><tr><td style="background-color: #9BBB59"><p>ITEM
 
 </p>
 
-</td><td><p>NEEDED
+</td><td style="background-color: #9BBB59"><p>NEEDED
 
 </p>
 
@@ -711,51 +880,51 @@ To the left of this paragraph is a floating two column table with a nice green b
 
 </p>
 
-<div class="table-container"><table><tr><td><p>City or Town
+<div class="table-container"><table><tr><td style="background-color: #FFFFFF"><p>City or Town
 
 </p>
 
-</td><td><p style="text-align: center">Point A
+</td><td style="background-color: #FFFFFF"><p style="text-align: center">Point A
 
 </p>
 
-</td><td><p style="text-align: center">Point B
+</td><td style="background-color: #FFFFFF"><p style="text-align: center">Point B
 
 </p>
 
-</td><td><p style="text-align: center">Point C
+</td><td style="background-color: #FFFFFF"><p style="text-align: center">Point C
 
 </p>
 
-</td><td><p style="text-align: center">Point D
+</td><td style="background-color: #FFFFFF"><p style="text-align: center">Point D
 
 </p>
 
-</td><td><p style="text-align: center">Point E
+</td><td style="background-color: #FFFFFF"><p style="text-align: center">Point E
 
 </p>
 
 </td></tr>
 
-<tr><td><p>Point A
+<tr><td style="background-color: #FFFFFF"><p>Point A
 
 </p>
 
-</td><td><p style="text-align: center">—
+</td><td style="background-color: #D3DFEE"><p style="text-align: center">—
 
 </p>
 
-</td><td><p style="text-align: center"></p>
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph" style="text-align: center"><br></p>
 
-</td><td><p style="text-align: center"></p>
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph" style="text-align: center"><br></p>
 
-</td><td><p style="text-align: center"></p>
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph" style="text-align: center"><br></p>
 
-</td><td><p style="text-align: center"></p>
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph" style="text-align: center"><br></p>
 
 </td></tr>
 
-<tr><td><p>Point B
+<tr><td style="background-color: #FFFFFF"><p>Point B
 
 </p>
 
@@ -767,37 +936,37 @@ To the left of this paragraph is a floating two column table with a nice green b
 
 </p>
 
-</td><td><p style="text-align: center"></p>
+</td><td><p class="empty-paragraph" style="text-align: center"><br></p>
 
-</td><td><p style="text-align: center"></p>
+</td><td><p class="empty-paragraph" style="text-align: center"><br></p>
 
-</td><td><p style="text-align: center"></p>
-
-</td></tr>
-
-<tr><td><p>Point C
-
-</p>
-
-</td><td><p style="text-align: center">64
-
-</p>
-
-</td><td><p style="text-align: center">56
-
-</p>
-
-</td><td><p style="text-align: center">—
-
-</p>
-
-</td><td><p style="text-align: center"></p>
-
-</td><td><p style="text-align: center"></p>
+</td><td><p class="empty-paragraph" style="text-align: center"><br></p>
 
 </td></tr>
 
-<tr><td><p>Point D
+<tr><td style="background-color: #FFFFFF"><p>Point C
+
+</p>
+
+</td><td style="background-color: #D3DFEE"><p style="text-align: center">64
+
+</p>
+
+</td><td style="background-color: #D3DFEE"><p style="text-align: center">56
+
+</p>
+
+</td><td style="background-color: #D3DFEE"><p style="text-align: center">—
+
+</p>
+
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph" style="text-align: center"><br></p>
+
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph" style="text-align: center"><br></p>
+
+</td></tr>
+
+<tr><td style="background-color: #FFFFFF"><p>Point D
 
 </p>
 
@@ -817,31 +986,31 @@ To the left of this paragraph is a floating two column table with a nice green b
 
 </p>
 
-</td><td><p style="text-align: center"></p>
+</td><td><p class="empty-paragraph" style="text-align: center"><br></p>
 
 </td></tr>
 
-<tr><td><p>Point E
+<tr><td style="background-color: #FFFFFF"><p>Point E
 
 </p>
 
-</td><td><p style="text-align: center">93
+</td><td style="background-color: #D3DFEE"><p style="text-align: center">93
 
 </p>
 
-</td><td><p style="text-align: center">35
+</td><td style="background-color: #D3DFEE"><p style="text-align: center">35
 
 </p>
 
-</td><td><p style="text-align: center">54
+</td><td style="background-color: #D3DFEE"><p style="text-align: center">54
 
 </p>
 
-</td><td><p style="text-align: center">43
+</td><td style="background-color: #D3DFEE"><p style="text-align: center">43
 
 </p>
 
-</td><td><p style="text-align: center">—
+</td><td style="background-color: #D3DFEE"><p style="text-align: center">—
 
 </p>
 
@@ -849,39 +1018,39 @@ To the left of this paragraph is a floating two column table with a nice green b
 
 </table></div>
 
-<p></p>
+<p class="empty-paragraph"><br></p>
 
 <p>Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.
 
 </p>
 
-<div class="table-container"><table><tr><td><p>College
+<div class="table-container"><table><tr><td style="background-color: #4BACC6"><p>College
 
 </p>
 
-</td><td><p>New students
+</td><td style="background-color: #4BACC6"><p>New students
 
 </p>
 
-</td><td><p>Graduating students
+</td><td style="background-color: #4BACC6"><p>Graduating students
 
 </p>
 
-</td><td><p>Change
+</td><td style="background-color: #4BACC6"><p>Change
 
 </p>
 
 </td></tr>
 
-<tr><td><p></p>
+<tr><td><p class="empty-paragraph"><br></p>
 
 </td><td><p>Undergraduate
 
 </p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -921,15 +1090,15 @@ To the left of this paragraph is a floating two column table with a nice green b
 
 </td></tr>
 
-<tr><td><p></p>
+<tr><td><p class="empty-paragraph"><br></p>
 
 </td><td><p>Graduate
 
 </p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -969,19 +1138,19 @@ To the left of this paragraph is a floating two column table with a nice green b
 
 </td></tr>
 
-<tr><td><p>Total
+<tr><td style="background-color: #FFFFFF"><p>Total
 
 </p>
 
-</td><td><p>998
+</td><td style="background-color: #FFFFFF"><p>998
 
 </p>
 
-</td><td><p>908
+</td><td style="background-color: #FFFFFF"><p>908
 
 </p>
 
-</td><td><p>90
+</td><td style="background-color: #FFFFFF"><p>90
 
 </p>
 
@@ -1027,7 +1196,7 @@ The table is displayed horizontally centered.
 
 </table>
 
-<p></p>
+<p class="empty-paragraph"><br></p>
 
 </td><td><p>To the left is a table inside a table, with some cells merged.
 
@@ -1037,7 +1206,7 @@ The table is displayed horizontally centered.
 
 </table></div>
 
-<p></p>
+<p class="empty-paragraph"><br></p>
 
 <p>We end with a
 
@@ -1063,7 +1232,7 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1071,37 +1240,37 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">Mon
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">Tue
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">Wed
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">Thu
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">Fri
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right">Sat
 
@@ -1109,29 +1278,29 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </td></tr>
 
-<tr><td><p style="text-align: right"></p>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right">1
 
@@ -1139,31 +1308,31 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </td></tr>
 
-<tr><td><p style="text-align: right"></p>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td colspan="2"><p style="text-align: right"></p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1171,37 +1340,37 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">3
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">4
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">5
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">6
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">7
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right">8
 
@@ -1209,31 +1378,31 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </td></tr>
 
-<tr><td><p style="text-align: right"></p>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td colspan="2"><p style="text-align: right"></p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1241,37 +1410,37 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">10
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">11
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">12
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">13
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">14
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right">15
 
@@ -1279,31 +1448,31 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </td></tr>
 
-<tr><td><p style="text-align: right"></p>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td colspan="2"><p style="text-align: right"></p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1311,37 +1480,37 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">17
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">18
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">19
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">20
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">21
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right">22
 
@@ -1349,31 +1518,31 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </td></tr>
 
-<tr><td><p style="text-align: right"></p>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td colspan="2"><p style="text-align: right"></p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1381,37 +1550,37 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">24
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">25
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">26
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">27
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">28
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right">29
 
@@ -1419,31 +1588,31 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </td></tr>
 
-<tr><td><p style="text-align: right"></p>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td colspan="2"><p style="text-align: right"></p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1451,31 +1620,31 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right">31
 
 </p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"></p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td colspan="2"><p style="text-align: right"></p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1497,25 +1666,13 @@ Note that this table will only display correctly on relatively wide screens. In 
 
 <p>Footnotes
 
-<div class="slide-note note-footnote"><p> 
 
-In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.
-
-</p>
-
-</div>
 
  
 
 and endnotes
 
-<div class="slide-note note-endnote"><p> 
 
-Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.
-
-</p>
-
-</div>
 
  
 
@@ -1727,11 +1884,11 @@ by clicking the Table of Contents button in whatever viewer you are using to vie
 
 </p>
 
-<p></p>
+<p class="empty-paragraph"><br></p>
 
-<p></p>
+<p class="empty-paragraph"><br></p>
 
-<p></p>
+<p class="empty-paragraph"><br></p>
 
 <a id="images" name="images"></a><h1 id="_Toc484565143" style="text-align: center">Images
 
@@ -1747,7 +1904,7 @@ by clicking the Table of Contents button in whatever viewer you are using to vie
 
 </p>
 
-<p></p>
+<p class="empty-paragraph"><br></p>
 
 <p>There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was
 
@@ -1866,6 +2023,7 @@ by clicking the Table of Contents button in whatever viewer you are using to vie
         </article>
         
     </div>
+    
     
 </body>
 </html>

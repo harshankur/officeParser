@@ -160,9 +160,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     if (textPosition.startsWith("sub")) formatting.subscript = true;
                     if (textPosition.startsWith("super")) formatting.superscript = true;
                 }
-
-                if (Object.keys(formatting).length > 0) styleMap[name] = formatting;
             }
+
+            if (Object.keys(formatting).length > 0) styleMap[name] = formatting;
         }
     };
 
@@ -327,10 +327,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             }
                         };
 
-                        if (config.putNotesAtLast) {
-                            notes.push(noteNode);
+                        if (children.length > 0 && children[children.length - 1].type === 'text') {
+                            const precedingNode = children[children.length - 1];
+                            if (!precedingNode.notes) {
+                                precedingNode.notes = [];
+                            }
+                            precedingNode.notes.push(noteNode);
                         } else {
-                            children.push(noteNode);
+                            const emptyTextNode: OfficeContentNode = { type: 'text', text: '' };
+                            emptyTextNode.notes = [noteNode];
+                            children.push(emptyTextNode);
                         }
                     }
                 } else if (tagName === 'draw:frame') {
@@ -535,22 +541,33 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                             if (element.tagName === "text:p" || element.tagName === "text:h") {
                                 const pContent = parseParagraphContent(element, paraStyleMap, styleMap, config, sourceXml);
-                                const pNode: OfficeContentNode = {
-                                    type: element.tagName === "text:h" ? 'heading' : 'paragraph',
-                                    text: pContent.text,
-                                    children: pContent.children,
-                                    metadata: {
-                                        ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
-                                        ...(pContent.style ? { style: pContent.style } : {})
-                                    }
-                                };
+                                let pNode: OfficeContentNode;
+                                if (element.tagName === "text:h") {
+                                    pNode = {
+                                        type: 'heading',
+                                        text: pContent.text,
+                                        children: pContent.children,
+                                        metadata: {
+                                            level: parseInt(element.getAttribute("text:outline-level") || "1"),
+                                            ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
+                                            ...(pContent.style ? { style: pContent.style } : {})
+                                        }
+                                    };
+                                } else {
+                                    pNode = {
+                                        type: 'paragraph',
+                                        text: pContent.text,
+                                        children: pContent.children,
+                                        metadata: {
+                                            ...(pContent.alignment ? { alignment: pContent.alignment } : {}),
+                                            ...(pContent.style ? { style: pContent.style } : {})
+                                        }
+                                    };
+                                }
 
                                 // Clean up metadata if empty
-                                if (Object.keys(pNode.metadata || {}).length === 0) delete pNode.metadata;
-
-                                if (element.tagName === "text:h") {
-                                    if (!pNode.metadata) pNode.metadata = {};
-                                    (pNode.metadata as HeadingMetadata).level = parseInt(element.getAttribute("text:outline-level") || "1");
+                                if (pNode.type === 'paragraph' && Object.keys(pNode.metadata || {}).length === 0) {
+                                    delete pNode.metadata;
                                 }
 
                                 if (config.includeRawContent) {
@@ -585,11 +602,19 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                 // Add cell(s) for repeated columns
                 for (let k = 0; k < colsRepeated; k++) {
+                    // Apply cell background color if defined in styleMap
+                    const cellStyleName = cell.getAttribute("table:style-name");
+                    const cellBgColor = cellStyleName && styleMap[cellStyleName]?.backgroundColor;
+
                     const cellNode: OfficeContentNode = {
                         type: 'cell',
                         text: cellText,
                         children: cellChildren.length > 0 ? (k === 0 ? cellChildren : JSON.parse(JSON.stringify(cellChildren))) : [],
-                        metadata: { row: rowIndex, col: colIndex } as CellMetadata
+                        metadata: {
+                            row: rowIndex,
+                            col: colIndex,
+                            ...(cellBgColor ? { backgroundColor: cellBgColor } : {})
+                        } as CellMetadata
                     };
 
                     const cellMetadata = cellNode.metadata as CellMetadata;
@@ -677,9 +702,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     paragraphStyleMap[name] = styleInfo;
                 }
 
+                const cellProps = getFirstElementByTagName(style, "style:table-cell-properties");
+                const formatting: TextFormatting = {};
+
+                if (cellProps) {
+                    const bgColor = cellProps.getAttribute("fo:background-color");
+                    if (bgColor && bgColor !== 'transparent') formatting.backgroundColor = bgColor;
+                }
+
                 const textProps = getFirstElementByTagName(style, "style:text-properties");
                 if (textProps) {
-                    const formatting: TextFormatting = {};
                     if (textProps.getAttribute("fo:font-weight") === "bold" || textProps.getAttribute("style:font-weight-asian") === "bold") formatting.bold = true;
                     if (textProps.getAttribute("fo:font-style") === "italic" || textProps.getAttribute("style:font-style-asian") === "italic") formatting.italic = true;
                     if (textProps.getAttribute("style:text-underline-style") === "solid") formatting.underline = true;
@@ -703,9 +735,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         if (textPosition.startsWith("sub")) formatting.subscript = true;
                         if (textPosition.startsWith("super")) formatting.superscript = true;
                     }
-
-                    if (Object.keys(formatting).length > 0) styleMap[name] = formatting;
                 }
+
+                if (Object.keys(formatting).length > 0) styleMap[name] = formatting;
             }
         }
 
@@ -1351,11 +1383,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     content.push(slideNode);
 
                     if (noteNode && noteNode.children && noteNode.children.length > 0) {
-                        if (config.putNotesAtLast) {
-                            odpNotes.push(noteNode);
-                        } else {
-                            content.push(noteNode);
-                        }
+                        if (!slideNode.notes) slideNode.notes = [];
+                        slideNode.notes.push(noteNode);
                     }
                 }
 
@@ -1598,10 +1627,6 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         }
     }
 
-    // Append notes to content if configured
-    if (config.putNotesAtLast && notes.length > 0) {
-        content.push(...notes);
-    }
 
     const toTextSync = () => content.map(c => {
         const getText = (node: OfficeContentNode): string => {
@@ -1631,6 +1656,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         content,
         attachments,
         config,
+        undefined,
         toTextSync
     );
 };

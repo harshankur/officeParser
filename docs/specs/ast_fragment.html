@@ -37,12 +37,20 @@
                 <td>Unified array of binary resources (images, charts, objects) referenced in the content.</td>
             </tr>
             <tr>
+                <td><code>auxiliary</code></td>
+                <td><code>OfficeAuxiliaryContent</code> | <code>undefined</code></td>
+                <td>Out-of-band layout / template elements that are <em>not</em> part of the main content flow.
+                    Contains <code>headers</code>, <code>footers</code> (from DOCX), and <code>slideMasters</code> (from PPTX).
+                    Only populated when the respective <code>ignoreHeadersAndFooters</code> / <code>ignoreSlideMasters</code> flags are <code>false</code>.
+                </td>
+            </tr>
+            <tr>
                 <td><code>warnings</code></td>
                 <td><code>OfficeIssue[]</code></td>
                 <td>Non-fatal issues encountered during the parsing phase (e.g. OCR failures, skipped nodes). Always check this after parsing if you use <code>onWarning</code>.</td>
             </tr>
             <tr>
-                <td><code>toText()</code></td>
+                <td><del><code>toText()</code></del></td>
                 <td><code>function</code></td>
                 <td><strong>Deprecated</strong>: Synchronous utility to flatten the AST into plain text. Use the async <code>.to('text')</code> instead.</td>
             </tr>
@@ -57,6 +65,12 @@
     <h2 id="interpretation">Node Interpretation Guide</h2>
     <p>Every node in the <code>content</code> tree follows a consistent recursive structure. Children are stored in the
         <code>children</code> array, and visuals are defined in <code>formatting</code>.</p>
+    <blockquote>
+        [!NOTE]
+        <strong>Discriminated Union</strong>: <code>OfficeContentNode</code> is now a discriminated union type.
+        Narrowing on <code>node.type</code> (e.g., <code>if (node.type === 'heading')</code>) gives precise
+        <code>metadata</code> inference — no type-casting needed.
+    </blockquote>
 
     <h3>OfficeContentNode</h3>
     <table>
@@ -72,7 +86,7 @@
                 <td><code>type</code></td>
                 <td><code>OfficeContentNodeType</code></td>
                 <td>The functional role of the node (e.g., <code>paragraph</code>, <code>table</code>,
-                    <code>list</code>).</td>
+                    <code>list</code>). Discriminant for type narrowing.</td>
             </tr>
             <tr>
                 <td><code>text</code></td>
@@ -86,9 +100,24 @@
                 <td>Recursive child nodes. Use these for high-fidelity rendering.</td>
             </tr>
             <tr>
+                <td><code>comments</code></td>
+                <td><code>OfficeContentNode[]</code> | <code>undefined</code></td>
+                <td>Comments/annotations attached to this node. Each entry is a <code>comment</code> node with
+                    <code>CommentMetadata</code> (author, date, commentId). Populated only when
+                    <code>ignoreComments: false</code> (default).</td>
+            </tr>
+            <tr>
+                <td><code>notes</code></td>
+                <td><code>OfficeContentNode[]</code> | <code>undefined</code></td>
+                <td>Footnotes, endnotes, or slide speaker notes attached to this node. Each entry is a
+                    <code>note</code> node. Populated only when <code>ignoreNotes: false</code> (default).</td>
+            </tr>
+            <tr>
                 <td><code>metadata</code></td>
                 <td><code>ContentMetadata</code></td>
-                <td>Type-specific configuration (alignment, indentation, slide numbers, etc.).</td>
+                <td>Type-specific configuration. The exact type is inferred from <code>node.type</code> when the
+                    discriminated union is narrowed (e.g., <code>HeadingMetadata</code> for
+                    <code>type === 'heading'</code>).</td>
             </tr>
             <tr>
                 <td><code>formatting</code></td>
@@ -125,21 +154,43 @@
 
     <h3>2. Tables</h3>
     <ul>
-        <li><strong><code>table</code></strong>: The container.</li>
+        <li><strong><code>table</code></strong>: The container. Carries <code>TableMetadata</code> with optional <code>anchorIds</code>.</li>
         <li><strong><code>row</code></strong>: A horizontal group of cells.</li>
         <li><strong><code>cell</code></strong>: A container for other content (paragraphs, images, or even nested
-            tables). Use <code>metadata</code> for <code>rowSpan</code> and <code>colSpan</code>.</li>
+            tables). Use <code>metadata</code> for <code>rowSpan</code>, <code>colSpan</code>, and
+            <code>backgroundColor</code> (populated from DOCX <code>w:shd</code> fills).</li>
     </ul>
 
     <h3>3. Structural Containers</h3>
     <p>These nodes represent large-scale document sections:</p>
     <ul>
         <li><strong><code>slide</code></strong>: Container for PPTX/ODP slides. <code>metadata.slideNumber</code>
-            provides the position.</li>
+            provides the position. Slide speaker notes are now attached via <code>slideNode.notes[]</code> instead of
+            being inserted as top-level <code>note</code> nodes.</li>
         <li><strong><code>page</code></strong>: Container for PDF pages. <code>metadata.pageNumber</code> provides the
             position.</li>
         <li><strong><code>sheet</code></strong>: Container for XLSX/ODS spreadsheets. <code>metadata.sheetName</code>
             provides the label.</li>
+    </ul>
+
+    <h3>4a. Layout &amp; Template Nodes (Auxiliary)</h3>
+    <p>These nodes are <em>not</em> part of the main <code>content</code> tree. They live under
+        <code>ast.auxiliary</code>:</p>
+    <ul>
+        <li><strong><code>header</code></strong>: A header element from a DOCX file. Carries
+            <code>HeaderFooterMetadata.type</code> (<code>'default'</code>, <code>'first'</code>, <code>'even'</code>).
+            Found in <code>ast.auxiliary.headers[]</code>.</li>
+        <li><strong><code>footer</code></strong>: A footer element from a DOCX file. Same metadata. Found in
+            <code>ast.auxiliary.footers[]</code>.</li>
+        <li><strong><code>slideMaster</code></strong>: A PPTX slide master. Carries <code>SlideMetadata</code>. Found
+            in <code>ast.auxiliary.slideMasters[]</code>.</li>
+    </ul>
+
+    <h3>4b. Annotation Nodes</h3>
+    <ul>
+        <li><strong><code>comment</code></strong>: An inline comment or annotation attached to a document node via
+            <code>node.comments[]</code>. Carries <code>CommentMetadata</code>: <code>author</code>,
+            <code>initials</code>, <code>date</code>, <code>commentId</code>.</li>
     </ul>
 
     <h3>4. Rich Content</h3>
@@ -193,8 +244,24 @@
     backgroundColor?: string; // Hex (#RRGGBB)
     size?: string;            // e.g., "12pt" or "14"
     font?: string;            // e.g., "Arial"
-    alignment?: 'left' | 'center' | 'right' | 'justify';
+    alignment?: TextAlignment; // 'left' | 'center' | 'right' | 'justify'
 }</code></pre>
+
+    <h2>OfficeMetadata Extensions</h2>
+    <p>Two new fields added to the root <code>ast.metadata</code> object:</p>
+    <ul>
+        <li><strong><code>keywords</code></strong> (<code>string</code>): Keywords associated with the document, extracted from document properties.</li>
+        <li><strong><code>nativeProperties</code></strong> (<code>Record&lt;string, any&gt;</code>): All format-specific
+            metadata extracted verbatim. Examples:
+            <ul>
+                <li><strong>HTML</strong>: All <code>&lt;meta&gt;</code> tag values indexed by <code>name</code> / <code>property</code></li>
+                <li><strong>DOCX</strong>: <code>docProps/app.xml</code> entries (e.g., <code>Pages</code>, <code>Application</code>)</li>
+                <li><strong>XLSX</strong>: <code>docProps/app.xml</code> entries</li>
+                <li><strong>PDF</strong>: Raw <code>pdfjs</code> document info dict and XMP metadata object</li>
+                <li><strong>Markdown</strong>: YAML frontmatter key-value pairs</li>
+            </ul>
+        </li>
+    </ul>
 
     <h2>Programmatic Traversal Best Practices</h2>
     <ol>
@@ -205,5 +272,14 @@
         <li><strong>Map Attachments First</strong>: Before rendering, create a <code>Map</code> from the
             <code>attachments</code> array using the <code>name</code> property for O(1) lookups when encountering
             <code>image</code> nodes.</li>
+        <li><strong>Traverse <code>node.notes</code> and <code>node.comments</code></strong>: These arrays are
+            <em>separate</em> from <code>children</code> and will not appear during a standard DFS of
+            <code>children</code>. Iterate them explicitly if you need footnotes, endnotes, or comments.</li>
+        <li><strong>Access Auxiliary Content via <code>ast.auxiliary</code></strong>: Headers, footers, and slide
+            masters are not in <code>ast.content</code>. Access them via <code>ast.auxiliary?.headers</code>,
+            <code>ast.auxiliary?.footers</code>, or <code>ast.auxiliary?.slideMasters</code>.</li>
+        <li><strong>Type Narrowing</strong>: Narrow on <code>node.type</code> before accessing
+            <code>node.metadata</code> to benefit from precise TypeScript inference (e.g.,
+            <code>node.type === 'cell' &amp;&amp; node.metadata?.backgroundColor</code>).</li>
     </ol>
 </div>

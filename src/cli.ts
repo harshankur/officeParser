@@ -15,6 +15,10 @@
  *   --ocrLanguage=eng         OCR language (default: eng)
  *   --extractAttachments=true Extract embedded attachments
  *   --ignoreNotes=true        Ignore footnotes/endnotes
+ *   --ignoreComments=true     Ignore inline comments
+ *   --ignoreHeadersAndFooters=true Ignore headers and footers
+ *   --ignoreSlideMasters=true Ignore slide masters
+ *   --ignoreInternalLinks=true Ignore internal links
  *   --putNotesAtLast=true     Move notes to end of document
  *   --includeRawContent=true  Include raw content in AST
  *   --outputErrorToConsole=true  Log errors to console
@@ -55,9 +59,10 @@ if (fileArg) {
         const boolValue = lowerValue === 'true' ? true : (lowerValue === 'false' ? false : undefined);
 
         const knownBooleans = new Set([
-            'toText', 'ocr', 'extractAttachments', 'ignoreNotes', 'putNotesAtLast', 
-            'includeRawContent', 'outputErrorToConsole', 'serializeRawContent', 
-            'preserveXmlWhitespace', 'includeBreakNodes', 'verbose'
+            'toText', 'ocr', 'extractAttachments', 'ignoreNotes', 'ignoreComments',
+            'ignoreHeadersAndFooters', 'ignoreSlideMasters', 'ignoreInternalLinks',
+            'putNotesAtLast', 'includeRawContent', 'outputErrorToConsole',
+            'serializeRawContent', 'preserveXmlWhitespace', 'includeBreakNodes', 'verbose'
         ]);
 
         if (cleanKey === 'format') {
@@ -146,6 +151,10 @@ if (fileArg) {
     console.log('  --ocrLanguage=eng            OCR language (default: eng)');
     console.log('  --extractAttachments=true    Extract embedded attachments');
     console.log('  --ignoreNotes=true           Ignore footnotes/endnotes');
+    console.log('  --ignoreComments=true        Ignore inline comments');
+    console.log('  --ignoreHeadersAndFooters=true Ignore headers and footers');
+    console.log('  --ignoreSlideMasters=true    Ignore slide masters');
+    console.log('  --ignoreInternalLinks=true   Ignore internal links');
     console.log('  --putNotesAtLast=true        Move notes to end of document');
     console.log('  --includeRawContent=true     Include raw content in AST');
     console.log('  --serializeRawContent=true   Serialize raw XML content (default: true)');

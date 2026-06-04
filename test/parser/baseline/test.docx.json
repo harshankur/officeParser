@@ -28,16 +28,30 @@
     "ignoreInternalLinks": false,
     "csvDelimiter": ",",
     "fileType": null,
-    "abortSignal": null
+    "abortSignal": null,
+    "ignoreComments": false,
+    "ignoreHeadersAndFooters": false,
+    "ignoreSlideMasters": false
   },
   "type": "docx",
   "metadata": {
+    "nativeProperties": {
+      "dc:title": "DOCX Demo",
+      "dc:creator": "Kovid Goyal",
+      "keywords": "calibre, docs, ebook, conversion",
+      "dc:description": "Demonstration of DOCX support in calibre",
+      "lastModifiedBy": "Harsh Ankur",
+      "revision": "80",
+      "dcterms:created": "2013-06-05T07:56:00.0000000Z",
+      "dcterms:modified": "2025-11-25T20:13:45.8230222Z"
+    },
     "title": "DOCX Demo",
     "author": "Kovid Goyal",
     "lastModifiedBy": "Harsh Ankur",
     "created": "2013-06-05T07:56:00.000Z",
     "modified": "2025-11-25T20:13:45.823Z",
     "description": "Demonstration of DOCX support in calibre",
+    "keywords": "calibre, docs, ebook, conversion",
     "customProperties": {
       "TestString": "Hello from custom props",
       "TestNumber": 42,
@@ -7184,41 +7198,43 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Footnotes</w:t>",
           "metadata": {
             "style": "Normal"
-          }
-        },
-        {
-          "type": "note",
-          "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
-          "children": [
+          },
+          "notes": [
             {
-              "type": "paragraph",
+              "type": "note",
               "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
               "children": [
                 {
-                  "type": "text",
+                  "type": "paragraph",
                   "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
-                  "formatting": {
-                    "size": "10pt"
-                  },
-                  "rawContent": "<w:t xml:space=\"preserve\" xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"> In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.</w:t>",
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
+                      "formatting": {
+                        "size": "10pt"
+                      },
+                      "rawContent": "<w:t xml:space=\"preserve\" xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"> In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.</w:t>",
+                      "metadata": {
+                        "style": "FootnoteText"
+                      }
+                    }
+                  ],
                   "metadata": {
+                    "paragraphIndentation": {
+                      "firstLine": 0
+                    },
                     "style": "FootnoteText"
-                  }
+                  },
+                  "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00E7307D\" w:rsidRDefault=\"00E7307D\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"7AC0B5F5\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"FootnoteText\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"FootnoteReference\"/></w:rPr><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.</w:t></w:r></w:p>"
                 }
               ],
               "metadata": {
-                "paragraphIndentation": {
-                  "firstLine": 0
-                },
-                "style": "FootnoteText"
-              },
-              "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00E7307D\" w:rsidRDefault=\"00E7307D\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"7AC0B5F5\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"FootnoteText\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"FootnoteReference\"/></w:rPr><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.</w:t></w:r></w:p>"
+                "noteType": "footnote",
+                "noteId": "2"
+              }
             }
-          ],
-          "metadata": {
-            "noteType": "footnote",
-            "noteId": "2"
-          }
+          ]
         },
         {
           "type": "text",
@@ -7227,38 +7243,40 @@
           "rawContent": "<w:t xml:space=\"preserve\" xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"> and endnotes</w:t>",
           "metadata": {
             "style": "Normal"
-          }
-        },
-        {
-          "type": "note",
-          "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
-          "children": [
+          },
+          "notes": [
             {
-              "type": "paragraph",
+              "type": "note",
               "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
               "children": [
                 {
-                  "type": "text",
+                  "type": "paragraph",
                   "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
-                  "formatting": {
-                    "size": "10pt"
-                  },
-                  "rawContent": "<w:t xml:space=\"preserve\" xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"> Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.</w:t>",
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
+                      "formatting": {
+                        "size": "10pt"
+                      },
+                      "rawContent": "<w:t xml:space=\"preserve\" xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"> Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.</w:t>",
+                      "metadata": {
+                        "style": "EndnoteText"
+                      }
+                    }
+                  ],
                   "metadata": {
                     "style": "EndnoteText"
-                  }
+                  },
+                  "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00E7307D\" w:rsidRDefault=\"00E7307D\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"01DDAB26\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"EndnoteText\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"EndnoteReference\"/></w:rPr><w:endnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.</w:t></w:r></w:p>"
                 }
               ],
               "metadata": {
-                "style": "EndnoteText"
-              },
-              "rawContent": "<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:rsidR=\"00E7307D\" w:rsidRDefault=\"00E7307D\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"01DDAB26\" wp14:textId=\"77777777\" xmlns:wp14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:pPr><w:pStyle w:val=\"EndnoteText\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"EndnoteReference\"/></w:rPr><w:endnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.</w:t></w:r></w:p>"
+                "noteType": "endnote",
+                "noteId": "2"
+              }
             }
-          ],
-          "metadata": {
-            "noteType": "endnote",
-            "noteId": "2"
-          }
+          ]
         },
         {
           "type": "text",

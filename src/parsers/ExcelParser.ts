@@ -28,7 +28,7 @@ import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
-import { decodeXmlEntities, getElementsByTagName, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
+import { decodeXmlEntities, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 
 /**
@@ -51,21 +51,26 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const mediaFileRegex = /xl\/media\/.*/;
     const corePropsFileRegex = /docProps\/core\.xml/;
     const customPropsFileRegex = /docProps\/custom\.xml/;
+    const appPropsFileRegex = /docProps\/app\.xml/;
 
     const relsRegex = /xl\/worksheets\/_rels\/sheet\d+\.xml\.rels/g;
     const drawingRelsRegex = /xl\/drawings\/_rels\/drawing\d+\.xml\.rels/g;
+    const commentsRegex = /xl\/comments\d+\.xml/g;
 
     const files = await extractFiles(buffer, (x: string) =>
         !!x.match(sheetsRegex) ||
         !!x.match(drawingsRegex) ||
         !!x.match(chartsRegex) ||
+        (!config.ignoreComments && !!x.match(commentsRegex)) ||
         x === stringsFilePath ||
         x === 'xl/styles.xml' ||
         x === 'xl/workbook.xml' ||
         x === 'xl/_rels/workbook.xml.rels' ||
         !!x.match(corePropsFileRegex) ||
         !!x.match(customPropsFileRegex) ||
-        (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(relsRegex) || !!x.match(drawingRelsRegex)))
+        !!x.match(appPropsFileRegex) ||
+        (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(drawingRelsRegex))) ||
+        ((!!config.extractAttachments || !config.ignoreComments) && !!x.match(relsRegex))
     );
 
     const sharedStringsFile = files.find(f => f.path === stringsFilePath);
@@ -436,6 +441,57 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 rawContents.push(file.content.toString());
             }
 
+            const sheetFilename = file.path.split('/').pop() || '';
+            const relsFilename = `xl/worksheets/_rels/${sheetFilename}.rels`;
+            const relsFile = files.find(f => f.path === relsFilename);
+
+            const drawingMap: Record<string, string> = {}; // rId -> drawingPath
+            const sheetCommentsMap: Record<string, OfficeContentNode[]> = {};
+
+            if (relsFile) {
+                const relsXml = parseXmlString(relsFile.content.toString());
+                const relationships = getElementsByTagName(relsXml, "Relationship");
+                for (const rel of relationships) {
+                    const id = rel.getAttribute("Id");
+                    const target = rel.getAttribute("Target");
+                    const type = rel.getAttribute("Type");
+                    
+                    if (id && target && type) {
+                        if (config.extractAttachments && type.includes('drawing')) {
+                            drawingMap[id] = 'xl/drawings/' + target.replace('../drawings/', '');
+                        } else if (!config.ignoreComments && type.includes('comments')) {
+                            const commentsPath = 'xl/' + target.replace('../', '');
+                            const cFile = files.find(f => f.path === commentsPath);
+                            if (cFile) {
+                                const cXml = parseXmlString(cFile.content.toString());
+                                const commentNodes = getElementsByTagName(cXml, "comment");
+                                const authorsList = getElementsByTagName(cXml, "author");
+                                const authors = authorsList.map(a => a.textContent || '');
+                                
+                                for (const cNode of commentNodes) {
+                                    const ref = cNode.getAttribute("ref");
+                                    const authorId = cNode.getAttribute("authorId");
+                                    const author = authorId !== null ? authors[parseInt(authorId)] : undefined;
+                                    
+                                    const tNodes = getElementsByTagName(cNode, "t");
+                                    const text = tNodes.map(t => t.textContent || '').join('');
+                                    
+                                    if (ref && text) {
+                                        if (!sheetCommentsMap[ref]) sheetCommentsMap[ref] = [];
+                                        sheetCommentsMap[ref].push({
+                                            type: 'comment',
+                                            text: text,
+                                            children: [{ type: 'text', text: text, formatting: {} }],
+                                            metadata: author ? { author } : undefined
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             const rows: OfficeContentNode[] = [];
             const sheetXml = file.content.toString();
             // regex to match <row> elements, capturing:
@@ -515,7 +571,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     // Parse cell coordinate
                     const coordMatch = cAttrs.match(/r="([A-Z]+)(\d+)"/);
                     let colIndex: number;
+                    let ref: string | undefined;
                     if (coordMatch) {
+                        ref = coordMatch[1] + coordMatch[2];
                         colIndex = colToNumber(coordMatch[1]);
                         // If row index is missing in cell coord (unlikely but possible), use rowIndex
                     } else {
@@ -552,10 +610,13 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             });
                         }
 
+                        const commentsNodeList = (ref && sheetCommentsMap[ref]) ? sheetCommentsMap[ref] : undefined;
+
                         const cellNode: OfficeContentNode = {
                             type: 'cell',
                             text: text,
                             children: cellNodes,
+                            comments: commentsNodeList,
                             metadata: { row: rowIndex, col: colIndex }
                         };
                         if (config.includeRawContent) {
@@ -580,26 +641,6 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             // Handle Drawings in Sheet (images and charts)
             if (config.extractAttachments) {
-                // Parse Sheet Rels to map drawing rIds
-                const sheetFilename = file.path.split('/').pop() || '';
-                const relsFilename = `xl/worksheets/_rels/${sheetFilename}.rels`;
-                const relsFile = files.find(f => f.path === relsFilename);
-
-                const drawingMap: Record<string, string> = {}; // rId -> drawingPath
-
-                if (relsFile) {
-                    const relsXml = parseXmlString(relsFile.content.toString());
-                    const relationships = getElementsByTagName(relsXml, "Relationship");
-                    for (const rel of relationships) {
-                        const id = rel.getAttribute("Id");
-                        const target = rel.getAttribute("Target");
-                        const type = rel.getAttribute("Type");
-                        if (id && target && type && type.includes('drawing')) {
-                            drawingMap[id] = 'xl/drawings/' + target.replace('../drawings/', '');
-                        }
-                    }
-                }
-
                 const drawingMatches = file.content.toString().match(/<drawing r:id="(.*?)"/g);
                 if (drawingMatches) {
                     for (const match of drawingMatches) {
@@ -674,6 +715,11 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString());
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
     }
+    const appPropsFile = files.find(f => f.path.match(appPropsFileRegex));
+    if (appPropsFile) {
+        const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString());
+        if (Object.keys(appProperties).length > 0) metadata.nativeProperties = appProperties;
+    }
 
     // Link OCR text and chart data to content nodes (like PPTX parser)
     const assignAttachmentData = (nodes: OfficeContentNode[]) => {
@@ -727,6 +773,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         content,
         attachments,
         config,
+        undefined,
         toTextSync
     );
 };

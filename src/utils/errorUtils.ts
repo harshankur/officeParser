@@ -52,7 +52,8 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.BUFFER_TYPE_MISMATCH]: (info: { detected: string, expected: string }) => `File content type mismatch: Detected '${info.detected}' but expected/provided '${info.expected}'. Parsing will proceed with '${info.expected}' as requested.`,
     [OfficeWarningType.FILE_TYPE_DETECTION_FAILED]: `Auto-detection of file type failed. This can happen on older Node.js versions with modern file-type versions. Please provide the 'fileType' hint in the configuration if parsing fails.`,
     [OfficeWarningType.EMPTY_CHUNK_GENERATED]: (strategy: string) => `No chunks generated for document. Check if the document content is compatible with the '${strategy}' strategy.`,
-    [OfficeWarningType.WHITESPACE_NODE_SKIPPED]: (nodeType: string) => `Skipped whitespace-only node of type: ${nodeType}`
+    [OfficeWarningType.WHITESPACE_NODE_SKIPPED]: (nodeType: string) => `Skipped whitespace-only node of type: ${nodeType}`,
+    [OfficeWarningType.INVALID_CONTAINER_WIDTH]: (val: any) => `Invalid HTML containerWidth: ${JSON.stringify(val)}. Falling back to "auto". Width must be a positive number, a valid CSS length string (e.g., "900px", "100%", "50vw"), or "auto".`
 };
 
 /**

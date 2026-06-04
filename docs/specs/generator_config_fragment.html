@@ -121,6 +121,36 @@
                 <td>(CDN)</td>
                 <td>URL for the Chart.js script.</td>
             </tr>
+            <tr>
+                <td><code>containerWidth</code></td>
+                <td><code>string | number</code></td>
+                <td><code>'auto'</code></td>
+                <td>Controls the maximum width of the rendered content container. Accepts a positive number (treated
+                    as pixels), a CSS length string (<code>'900px'</code>, <code>'100%'</code>, <code>'60vw'</code>),
+                    or <code>'auto'</code> (browser default). Invalid values fall back to <code>'auto'</code> and
+                    emit an <code>INVALID_CONTAINER_WIDTH</code> warning.</td>
+            </tr>
+            <tr>
+                <td><code>customCss</code></td>
+                <td><code>string</code></td>
+                <td><code>''</code></td>
+                <td>Raw CSS string injected into the generated <code>&lt;style&gt;</code> block. Use this to override
+                    built-in styles or add document-specific rules without modifying the core generator.</td>
+            </tr>
+            <tr>
+                <td><code>injections</code></td>
+                <td><code>HtmlInjectionConfig</code></td>
+                <td><code>{}</code></td>
+                <td>Granular raw HTML injection points for the standalone output:
+                    <ul>
+                        <li><code>headStart</code>: Injected immediately after <code>&lt;head&gt;</code></li>
+                        <li><code>headEnd</code>: Injected immediately before <code>&lt;/head&gt;</code></li>
+                        <li><code>bodyStart</code>: Injected immediately after <code>&lt;body&gt;</code></li>
+                        <li><code>bodyEnd</code>: Injected immediately before <code>&lt;/body&gt;</code></li>
+                    </ul>
+                    Useful for inserting analytics scripts, custom fonts, or wrapper elements.
+                </td>
+            </tr>
         </tbody>
     </table>
 
@@ -165,6 +195,18 @@
                 <td><code>'A4'</code></td>
                 <td>Paper format (<code>'A4'</code>, <code>'Letter'</code>, <code>'Legal'</code>, <code>'A3'</code>,
                     etc.).</td>
+            </tr>
+            <tr>
+                <td><code>width</code></td>
+                <td><code>string | number</code></td>
+                <td><code>''</code></td>
+                <td>Paper width, accepts values labeled with units (e.g., '5in', '3cm') or numbers (in pixels).</td>
+            </tr>
+            <tr>
+                <td><code>height</code></td>
+                <td><code>string | number</code></td>
+                <td><code>''</code></td>
+                <td>Paper height, accepts values labeled with units (e.g., '5in', '3cm') or numbers (in pixels).</td>
             </tr>
             <tr>
                 <td><code>landscape</code></td>

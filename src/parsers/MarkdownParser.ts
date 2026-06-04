@@ -24,6 +24,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
             const lines = frontMatter.split('\n');
             const customProps: Record<string, any> = {};
+            const nativeProps: Record<string, any> = {};
 
             for (const line of lines) {
                 const match = line.match(/^([^:]+):\s*(.*)$/);
@@ -31,21 +32,25 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     const key = match[1].trim();
                     let val = match[2].trim().replace(/^"(.*)"$/, '$1');
 
+                    let parsedVal: any = val;
+                    if (val === 'true') parsedVal = true;
+                    else if (val === 'false') parsedVal = false;
+                    else if (!isNaN(Number(val)) && val !== '') parsedVal = Number(val);
+
+                    nativeProps[key] = parsedVal;
+
                     if (key === 'title') metadata.title = val;
                     else if (key === 'author') metadata.author = val;
                     else if (key === 'created') metadata.created = new Date(val);
                     else if (key === 'modified') metadata.modified = new Date(val);
                     else if (key === 'description') metadata.description = val;
                     else {
-                        // Try to infer type for custom props
-                        if (val === 'true') customProps[key] = true;
-                        else if (val === 'false') customProps[key] = false;
-                        else if (!isNaN(Number(val)) && val !== '') customProps[key] = Number(val);
-                        else customProps[key] = val;
+                        customProps[key] = parsedVal;
                     }
                 }
             }
             if (Object.keys(customProps).length > 0) metadata.customProperties = customProps;
+            if (Object.keys(nativeProps).length > 0) metadata.nativeProperties = nativeProps;
         }
     }
 
@@ -306,7 +311,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                         const contentStr = tdMatch[2].trim();
                         const colSpanMatch = attrs.match(/colspan=["']?(\d+)["']?/i);
                         const rowSpanMatch = attrs.match(/rowspan=["']?(\d+)["']?/i);
-                        
+
                         cells.push({
                             type: 'cell',
                             metadata: {
@@ -368,5 +373,5 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     }).join(config.newlineDelimiter)
         .replace(/\n{3,}/g, '\n\n'); // Normalize excessive whitespace
 
-    return createAST('md', metadata, content, attachments, config, toTextSync);
+    return createAST('md', metadata, content, attachments, config, undefined, toTextSync);
 };

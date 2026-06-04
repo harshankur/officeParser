@@ -464,7 +464,13 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 continue;
             }
 
-            const cells = row.children.map(cell => (cell.text ?? '').replace(/\n/g, ' ').trim());
+            const getCellText = (cell: OfficeContentNode): string => {
+                if (cell.text) return cell.text;
+                if (!cell.children || cell.children.length === 0) return '';
+                return cell.children.map(c => getCellText(c)).join(' ');
+            };
+
+            const cells = row.children.map(cell => getCellText(cell).replace(/\n/g, ' ').trim());
             renderedRows.push(`| ${cells.join(' | ')} |`);
         }
         return renderedRows.join('\n');

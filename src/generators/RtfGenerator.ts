@@ -12,13 +12,13 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         super('rtf', ast, config);
     }
 
-    async generate(): Promise<ConversionResult> {
+    async generate(): Promise<ConversionResult<'rtf'>> {
         this.colorTable = [];
 
         // We first process all nodes to collect colors and analyze structure
         const bodyContent = await this.renderBody(this.ast);
 
-        let output = '{\\rtf1\\ansi\\deff0\n';
+        let output = '{\\rtf1\\ansi\\uc1\\deff0\n';
 
         // 1. Info Group (Metadata)
         if (this.config.renderMetadata && this.ast.metadata) {
@@ -99,16 +99,30 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         if (f.strikethrough) { prefix += '\\strike '; suffix = '\\strike0 ' + suffix; }
 
                         if (f.color) {
-                            const idx = this.getColorIndex(f.color);
-                            prefix += `\\cf${idx + 1} `;
+                            // RTF default background is white. Ensure light text without a dark background remains readable.
+                            const isTextLight = this.isLightColor(f.color);
+                            const isBgLight = !f.backgroundColor || this.isLightColor(f.backgroundColor);
+                            
+                            if (!(isTextLight && isBgLight)) {
+                                const idx = this.getColorIndex(f.color);
+                                prefix += `\\cf${idx + 1} `;
+                            }
                         }
                         if (f.backgroundColor) {
                             const idx = this.getColorIndex(f.backgroundColor);
                             prefix += `\\highlight${idx + 1} `;
                         }
                         if (f.size) {
-                            const pt = parseInt(f.size);
-                            prefix += `\\fs${pt * 2} `;
+                            let pt = 12; // default
+                            const val = parseFloat(f.size);
+                            if (!isNaN(val)) {
+                                if (f.size.includes('in')) pt = val * 72;
+                                else if (f.size.includes('cm')) pt = val * 28.3465;
+                                else if (f.size.includes('mm')) pt = val * 2.83465;
+                                else if (f.size.includes('px')) pt = val * 0.75;
+                                else pt = val;
+                            }
+                            prefix += `\\fs${Math.round(pt * 2)} `;
                         }
 
                         text = `{\\f0 ${prefix}${text}${suffix}}`;
@@ -225,13 +239,32 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         return idx;
     }
 
+    private isLightColor(hex: string): boolean {
+        if (!hex || hex.length !== 7 || !hex.startsWith('#')) return false;
+        const r = parseInt(hex.substring(1, 3), 16);
+        const g = parseInt(hex.substring(3, 5), 16);
+        const b = parseInt(hex.substring(5, 7), 16);
+        if (isNaN(r) || isNaN(g) || isNaN(b)) return false;
+        
+        // Simple luminance calculation
+        const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+        return luminance > 0.8;
+    }
+
     private escapeRtf(text: string): string {
         return text
             .replace(/\\/g, '\\\\')
             .replace(/{/g, '\\{')
             .replace(/}/g, '\\}')
             .replace(/[^\x00-\x7F]/g, (match) => {
-                return `\\u${match.charCodeAt(0)}?`;
+                let code = match.charCodeAt(0);
+                if (code < 256) {
+                    return `\\'${code.toString(16).padStart(2, '0')}`;
+                }
+                if (code > 32767) {
+                    code -= 65536;
+                }
+                return `{\\uc0\\u${code}}`;
             });
     }
 }

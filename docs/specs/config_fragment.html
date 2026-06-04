@@ -32,7 +32,7 @@
                 <td><strong>Cancellation</strong>: An optional signal to abort the parsing operation. Interrupts heavy loops, PDF page parsing, zip decompression, and active OCR processes cleanly. Rejects with an <code>AbortError</code>.</td>
             </tr>
             <tr>
-                <td><code>outputErrorToConsole</code></td>
+                <td><del><code>outputErrorToConsole</code></del></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Deprecated</strong>: Use <code>onWarning</code> instead. When enabled, dumps internal trace
@@ -51,18 +51,42 @@
                 <td><code>ignoreNotes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Note Filtering</strong>: Specifically targets PowerPoint (PPTX/ODP) speaker notes. If
-                    <code>true</code>, notes are entirely omitted from both the structure and text output.
+                <td><strong>Note Filtering</strong>: Specifically targets PowerPoint (PPTX/ODP) speaker notes and
+                    document footnotes/endnotes (DOCX, RTF). If <code>true</code>, notes are entirely omitted from the
+                    AST output.
                 </td>
             </tr>
             <tr>
-                <td><code>putNotesAtLast</code></td>
+                <td><code>ignoreComments</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Note Reordering</strong>: By default, notes are interleaved after each slide. If
-                    <code>true</code>,
-                    all notes are collected and appended as a final section at the end of the <code>content</code> tree.
-                </td>
+                <td><strong>Comment Filtering</strong>: When <code>true</code>, inline comments and annotations are
+                    excluded from parsing. Affects DOCX, XLSX, and PPTX. By default comments are attached to their
+                    target node via <code>node.comments[]</code>.</td>
+            </tr>
+            <tr>
+                <td><code>ignoreHeadersAndFooters</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Layout Element Filtering</strong>: When <code>true</code>, DOCX headers and footers are
+                    not parsed. When <code>false</code> (default), they are extracted into
+                    <code>ast.auxiliary.headers</code> and <code>ast.auxiliary.footers</code>.</td>
+            </tr>
+            <tr>
+                <td><code>ignoreSlideMasters</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Template Filtering</strong>: When <code>true</code>, PPTX slide masters are not parsed.
+                    When <code>false</code> (default), they are extracted into
+                    <code>ast.auxiliary.slideMasters</code>.</td>
+            </tr>
+            <tr>
+                <td><del><code>putNotesAtLast</code></del></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Deprecated</strong>: Notes are now structurally attached to their parent node via
+                    <code>node.notes[]</code>. This flag no longer has any effect and will be removed in a future
+                    major version. Access notes via <code>node.notes</code> instead.</td>
             </tr>
             <tr>
                 <td><code>extractAttachments</code></td>
@@ -103,7 +127,7 @@
                     non-selectable PDF layers. <em>Requires Tesseract.js.</em></td>
             </tr>
             <tr>
-                <td><code>ocrLanguage</code></td>
+                <td><del><code>ocrLanguage</code></del></td>
                 <td><code>string</code></td>
                 <td><code>eng</code></td>
                 <td><strong>Deprecated</strong>: Use <code>ocrConfig.language</code>. Specifies which Tesseract data
@@ -129,7 +153,7 @@
                 <td><strong>Language Training</strong>: Specifies Tesseract languages (e.g., 'eng+fra').</td>
             </tr>
             <tr>
-                <td><code>ocrConfig.autoTerminateTimeout</code></td>
+                <td><del><code>ocrConfig.autoTerminateTimeout</code></del></td>
                 <td><code>number</code></td>
                 <td><code>10000</code></td>
                 <td><strong>Deprecated</strong>: Use <code>ocrConfig.timeout.autoTerminate</code> instead. Inactivity timeout in ms before workers are killed. Set to `0` to disable.</td>
@@ -233,12 +257,8 @@
     <pre><code>const config = {
     extractAttachments: true,
     includeRawContent: true,   // For deep attribute analysis
-    putNotesAtLast: false      // Keep slides and notes together
+    ignoreComments: false,     // Attach comments via node.comments[]
+    ignoreHeadersAndFooters: false  // Populate ast.auxiliary.headers / .footers
 };</code></pre>
 
-    <blockquote>
-        [!IMPORTANT]
-        <strong>RTF Notes</strong>: <code>putNotesAtLast</code> is currently forced to <code>true</code> for RTF files
-        due to the nature of the format's group stacking for footnotes/endnotes.
-    </blockquote>
 </div>

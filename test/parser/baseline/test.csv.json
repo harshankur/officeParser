@@ -28,7 +28,10 @@
     "ignoreInternalLinks": false,
     "csvDelimiter": ",",
     "fileType": null,
-    "abortSignal": null
+    "abortSignal": null,
+    "ignoreComments": false,
+    "ignoreHeadersAndFooters": false,
+    "ignoreSlideMasters": false
   },
   "type": "csv",
   "metadata": {

@@ -60,12 +60,12 @@
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/ [MS-DOCX] Specification
  */
 
-import { BreakMetadata, CellMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, TextFormatting, TextMetadata, OfficeWarningType } from '../types.js';
+import { BreakMetadata, CellMetadata, CommentMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
-import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
+import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 
 /**
@@ -93,10 +93,14 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     const documentFileRegex = /word\/document[\d+]?.xml/;
     const footnotesFileRegex = /word\/footnotes[\d+]?.xml/;
     const endnotesFileRegex = /word\/endnotes[\d+]?.xml/;
+    const commentsFileRegex = /word\/comments[\d+]?.xml/;
+    const headerFileRegex = /word\/header[\d+]?.xml/;
+    const footerFileRegex = /word\/footer[\d+]?.xml/;
     const numberingFileRegex = /word\/numbering[\d+]?.xml/;
     const mediaFileRegex = /(word\/)?media\/.*/;
     const corePropsFileRegex = /docProps\/core[\d+]?.xml/;
     const customPropsFileRegex = /docProps\/custom\.xml/;
+    const appPropsFileRegex = /docProps\/app[\d+]?.xml/;
     const relsFileRegex = /word\/_rels\/document[\d+]?.xml\.rels/;
     const stylesFileRegex = /word\/styles[\d+]?.xml/;
 
@@ -245,6 +249,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         !!x.match(numberingFileRegex) ||
         !!x.match(corePropsFileRegex) ||
         !!x.match(customPropsFileRegex) ||
+        !!x.match(appPropsFileRegex) ||
         !!x.match(relsFileRegex) ||
         !!x.match(stylesFileRegex) ||
         (!!config.extractAttachments && !!x.match(mediaFileRegex))
@@ -258,10 +263,21 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString());
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
     }
+    const appPropsFile = files.find(f => f.path.match(appPropsFileRegex));
+    if (appPropsFile) {
+        const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString());
+        if (Object.keys(appProperties).length > 0) {
+            metadata.nativeProperties = appProperties;
+            if (appProperties['Pages'] && typeof appProperties['Pages'] === 'number') {
+                metadata.pages = appProperties['Pages'];
+            }
+        }
+    }
 
     const footnoteMap = new Map<string, OfficeContentNode[]>();
     const endnoteMap = new Map<string, OfficeContentNode[]>();
-    const collectedNotes: OfficeContentNode[] = [];
+    const commentMap = new Map<string, OfficeContentNode[]>();
+    const commentMetadataMap = new Map<string, CommentMetadata>();
     const attachments: OfficeAttachment[] = [];
     const mediaFiles = files.filter(f => f.path.match(mediaFileRegex));
 
@@ -493,6 +509,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         // Extract text and children
         let text = '';
         const children: OfficeContentNode[] = [];
+        const notes: OfficeContentNode[] = [];
+        const comments: OfficeContentNode[] = [];
 
         // Traverse children of paragraph (runs, hyperlinks, etc.)
         const processChildNode = (node: Node) => {
@@ -677,11 +695,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                                 children: noteNodes,
                                 metadata: { noteType: 'footnote', noteId: id }
                             } as any;
-
-                            if (config.putNotesAtLast) {
-                                collectedNotes.push(noteNode);
+                            if (children.length > 0) {
+                                const target = children[children.length - 1];
+                                if (!target.notes) target.notes = [];
+                                target.notes.push(noteNode);
                             } else {
-                                children.push(noteNode);
+                                notes.push(noteNode);
                             }
                         }
                     }
@@ -697,11 +716,37 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                                 children: noteNodes,
                                 metadata: { noteType: 'endnote', noteId: id }
                             } as any;
-
-                            if (config.putNotesAtLast) {
-                                collectedNotes.push(noteNode);
+                            if (children.length > 0) {
+                                const target = children[children.length - 1];
+                                if (!target.notes) target.notes = [];
+                                target.notes.push(noteNode);
                             } else {
-                                children.push(noteNode);
+                                notes.push(noteNode);
+                            }
+                        }
+                    }
+                }
+
+                // Comments inside runs
+                if (!config.ignoreComments) {
+                    const commentRef = getFirstElementByTagName(runNode, "w:commentReference");
+                    if (commentRef) {
+                        const id = commentRef.getAttribute("w:id");
+                        if (id && commentMap.has(id)) {
+                            const commentNodes = commentMap.get(id)!;
+                            const commentInfo = commentMetadataMap.get(id);
+                            const commentNode: OfficeContentNode = {
+                                type: 'comment',
+                                text: commentNodes.map((n: OfficeContentNode) => n.text).join(' '),
+                                children: commentNodes,
+                                metadata: commentInfo || { commentId: id }
+                            } as any;
+                            if (children.length > 0) {
+                                const target = children[children.length - 1];
+                                if (!target.comments) target.comments = [];
+                                target.comments.push(commentNode);
+                            } else {
+                                comments.push(commentNode);
                             }
                         }
                     }
@@ -801,6 +846,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 type: 'list',
                 text: text,
                 children: children,
+                ...(notes.length > 0 ? { notes } : {}),
+                ...(comments.length > 0 ? { comments } : {}),
                 metadata: {
                     listType,
                     indentation: ilvl,
@@ -822,6 +869,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 type: 'heading',
                 text: text,
                 children: children,
+                ...(notes.length > 0 ? { notes } : {}),
+                ...(comments.length > 0 ? { comments } : {}),
                 metadata: { level, alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined, ...commonMetadata }
             };
             if (config.includeRawContent) headingNode.rawContent = getRawContent(pNode, documentContent, config);
@@ -831,6 +880,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 type: 'paragraph',
                 text: text,
                 children: children,
+                ...(notes.length > 0 ? { notes } : {}),
+                ...(comments.length > 0 ? { comments } : {}),
                 metadata: { alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined, ...commonMetadata }
             };
             if (config.includeRawContent) paraNode.rawContent = getRawContent(pNode, documentContent, config);
@@ -904,6 +955,16 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
 
                 if (colSpan > 1) (cellNode.metadata as CellMetadata).colSpan = colSpan;
 
+                if (tcPr) {
+                    const shd = getFirstElementByTagName(tcPr, "w:shd");
+                    if (shd) {
+                        const fill = shd.getAttribute("w:fill");
+                        if (fill && fill !== "auto") {
+                            (cellNode.metadata as CellMetadata).backgroundColor = "#" + fill;
+                        }
+                    }
+                }
+
                 if (isVMerge) {
                     if (vMergeRestart) {
                         vMergeMap.set(visualCol, { node: cellNode, span: 1 });
@@ -974,6 +1035,72 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         }
     }
 
+    // Pre-process comments
+    if (!config.ignoreComments) {
+        const commentsFile = files.find(f => f.path.match(commentsFileRegex));
+        if (commentsFile) {
+            const commentsDoc = parseXmlString(commentsFile.content.toString());
+            const commentsXml = commentsFile.content.toString();
+            const commentNodes = getElementsByTagName(commentsDoc, "w:comment");
+            for (const node of commentNodes) {
+                const id = node.getAttribute("w:id");
+                if (!id) continue;
+                const author = node.getAttribute("w:author") || undefined;
+                const date = node.getAttribute("w:date") || undefined;
+                const initials = node.getAttribute("w:initials") || undefined;
+
+                commentMetadataMap.set(id, { commentId: id, author, date, initials });
+                const pNodes = getElementsByTagName(node, "w:p");
+                commentMap.set(id, pNodes.map(p => parseParagraph(p, commentsXml)));
+            }
+        }
+    }
+
+    // Pre-process headers and footers
+    const headers: OfficeContentNode[] = [];
+    const footers: OfficeContentNode[] = [];
+    if (!config.ignoreHeadersAndFooters) {
+        const headerFiles = files.filter(f => f.path.match(headerFileRegex));
+        for (const hFile of headerFiles) {
+            const hDoc = parseXmlString(hFile.content.toString());
+            const hXml = hFile.content.toString();
+            const hNodes = Array.from(hDoc.documentElement.childNodes).filter(isElement);
+            for (const child of hNodes) {
+                if (child.nodeName === 'w:p') headers.push(parseParagraph(child, hXml));
+                else if (child.nodeName === 'w:tbl') headers.push(parseTable(child, hXml));
+                else if (child.nodeName === 'w:sdt') {
+                    const contentNode = getFirstElementByTagName(child, "w:sdtContent");
+                    if (contentNode) {
+                        for (const sdtChild of Array.from(contentNode.childNodes).filter(isElement)) {
+                            if (sdtChild.nodeName === 'w:p') headers.push(parseParagraph(sdtChild, hXml));
+                            else if (sdtChild.nodeName === 'w:tbl') headers.push(parseTable(sdtChild, hXml));
+                        }
+                    }
+                }
+            }
+        }
+
+        const footerFiles = files.filter(f => f.path.match(footerFileRegex));
+        for (const fFile of footerFiles) {
+            const fDoc = parseXmlString(fFile.content.toString());
+            const fXml = fFile.content.toString();
+            const fNodes = Array.from(fDoc.documentElement.childNodes).filter(isElement);
+            for (const child of fNodes) {
+                if (child.nodeName === 'w:p') footers.push(parseParagraph(child, fXml));
+                else if (child.nodeName === 'w:tbl') footers.push(parseTable(child, fXml));
+                else if (child.nodeName === 'w:sdt') {
+                    const contentNode = getFirstElementByTagName(child, "w:sdtContent");
+                    if (contentNode) {
+                        for (const sdtChild of Array.from(contentNode.childNodes).filter(isElement)) {
+                            if (sdtChild.nodeName === 'w:p') footers.push(parseParagraph(sdtChild, fXml));
+                            else if (sdtChild.nodeName === 'w:tbl') footers.push(parseTable(sdtChild, fXml));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for (const file of files) {
         if (file.path.match(mediaFileRegex)) continue;
         if (file.path.match(numberingFileRegex)) continue;
@@ -981,6 +1108,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         if (file.path.match(stylesFileRegex)) continue;
         if (file.path.match(footnotesFileRegex)) continue;
         if (file.path.match(endnotesFileRegex)) continue;
+        if (file.path.match(commentsFileRegex)) continue;
+        if (file.path.match(headerFileRegex)) continue;
+        if (file.path.match(footerFileRegex)) continue;
 
         const documentContent = file.content.toString();
         if (config.includeRawContent) {
@@ -1051,10 +1181,6 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         }
     }
 
-    if (config.putNotesAtLast && collectedNotes.length > 0) {
-        content.push(...collectedNotes);
-    }
-
     const toTextSync = () => content.map(c => {
         // Recursive text extraction
         const getText = (node: OfficeContentNode): string => {
@@ -1072,14 +1198,18 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         return getText(c);
     }).filter(t => t != '').join(config.newlineDelimiter);
 
+    const auxiliaryContent = (headers.length > 0 || footers.length > 0) ? {
+        ...(headers.length > 0 ? { headers } : {}),
+        ...(footers.length > 0 ? { footers } : {})
+    } : undefined;
+
     return createAST(
         'docx',
         { ...metadata, formatting: docDefaults, styleMap: styleMap },
         content,
         attachments,
         config,
+        auxiliaryContent,
         toTextSync
     );
 };
-
-

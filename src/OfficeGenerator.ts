@@ -1,3 +1,4 @@
+import { BaseGenerator } from './generators/BaseGenerator.js';
 import { ChunkingGenerator } from './generators/ChunkingGenerator.js';
 import { CsvGenerator } from './generators/CsvGenerator.js';
 import { HtmlGenerator } from './generators/HtmlGenerator.js';
@@ -26,25 +27,35 @@ export class OfficeGenerator {
         ast: OfficeParserAST & { type: T },
         destination: D,
         config?: GeneratorConfig<D>
-    ): Promise<ConversionResult> {
+    ): Promise<ConversionResult<D>> {
+        let generator: BaseGenerator<any>;
+
         switch (destination.toLowerCase() as SupportedDestination<T>) {
             case 'text':
-                return new TextGenerator(ast, config as GeneratorConfig<'text'>).generate();
+                generator = new TextGenerator(ast, config as GeneratorConfig<'text'>);
+                break;
             case 'md':
-                return new MarkdownGenerator(ast, config as GeneratorConfig<'md'>).generate();
+                generator = new MarkdownGenerator(ast, config as GeneratorConfig<'md'>);
+                break;
             case 'html':
-                return new HtmlGenerator(ast, config as GeneratorConfig<'html'>).generate();
+                generator = new HtmlGenerator(ast, config as GeneratorConfig<'html'>);
+                break;
             case 'pdf':
-                return new PdfGenerator(ast, config as GeneratorConfig<'pdf'>).generate();
+                generator = new PdfGenerator(ast, config as GeneratorConfig<'pdf'>);
+                break;
             case 'csv':
-                return new CsvGenerator(ast, config as GeneratorConfig<'csv'>).generate();
+                generator = new CsvGenerator(ast, config as GeneratorConfig<'csv'>);
+                break;
             case 'rtf':
-                return new RtfGenerator(ast, config as GeneratorConfig<'rtf'>).generate();
+                generator = new RtfGenerator(ast, config as GeneratorConfig<'rtf'>);
+                break;
             case 'chunks':
-                return new ChunkingGenerator(ast, config as GeneratorConfig<'chunks'>).generate();
-
+                generator = new ChunkingGenerator(ast, config as GeneratorConfig<'chunks'>);
+                break;
             default:
                 throw getOfficeError(OfficeErrorType.EXTENSION_UNSUPPORTED, undefined, destination);
         }
+
+        return generator.generate() as Promise<ConversionResult<D>>;
     }
 }

@@ -69,7 +69,9 @@ export enum OfficeWarningType {
     /** No chunks were generated for the document given the current strategy */
     EMPTY_CHUNK_GENERATED = 'EMPTY_CHUNK_GENERATED',
     /** A node was skipped because it only contained whitespace */
-    WHITESPACE_NODE_SKIPPED = 'WHITESPACE_NODE_SKIPPED'
+    WHITESPACE_NODE_SKIPPED = 'WHITESPACE_NODE_SKIPPED',
+    /** The HTML generator containerWidth option is invalid */
+    INVALID_CONTAINER_WIDTH = 'INVALID_CONTAINER_WIDTH'
 }
 
 /**
@@ -225,10 +227,23 @@ export interface OfficeParserConfig {
      */
     ignoreNotes?: boolean;
     /**
-     * Flag, if set to true, will collectively put all the parsed text from notes at last in files like powerpoint.
-     * Default is false. It puts each notes right after its main slide content.
-     * If ignoreNotes is set to true, this flag is also ignored.
-     * @note This flag currently does not affect RTF files; RTF footnotes/endnotes are always collected and appended at the end of the content.
+     * Flag to ignore comments from parsing.
+     * Default is false.
+     */
+    ignoreComments?: boolean;
+    /**
+     * Flag to ignore headers and footers from parsing.
+     * Default is false.
+     */
+    ignoreHeadersAndFooters?: boolean;
+    /**
+     * Flag to ignore slide masters from parsing in PowerPoint.
+     * Default is false.
+     */
+    ignoreSlideMasters?: boolean;
+    /**
+     * @deprecated Notes are now structurally attached to the specific nodes they belong to via `node.notes`.
+     * This option is now completely ignored by all parsers.
      */
     putNotesAtLast?: boolean;
     /**
@@ -363,12 +378,15 @@ export interface OfficeIssue {
 /**
  * The result of a document conversion operation.
  */
-export interface ConversionResult<D extends string = UniversalGeneratorFormat> {
-    /** The actual generated content (HTML, Markdown, Text, OfficeChunk[], etc.). */
-    value: D extends 'pdf' ? Uint8Array :
+type ConversionValue<D extends UniversalGeneratorFormat> = 
+    D extends 'pdf' ? Uint8Array | string :
     D extends 'chunks' ? OfficeChunk[] :
     D extends 'csv' ? string | Uint8Array :
-    D extends UniversalGeneratorFormat ? string : never;
+    string;
+
+export interface ConversionResult<D extends UniversalGeneratorFormat> {
+    /** The actual generated content (HTML, Markdown, Text, OfficeChunk[], etc.). */
+    value: ConversionValue<D>;
     /** A collection of issues (warnings/infos) generated during the process. */
     messages: OfficeIssue[];
 }
@@ -494,17 +512,25 @@ export interface CommonGeneratorConfig {
  * Restricts format-specific configurations to their respective destinations.
  */
 /**
- * Mapping of destination formats to their specific configuration interfaces.
+ * Maps a destination format string to its corresponding specific configuration object type.
  */
-export interface GeneratorSubConfigMap {
-    html: HtmlGeneratorConfig;
-    md: MdGeneratorConfig;
-    pdf: PdfGeneratorConfig;
-    csv: CsvGeneratorConfig;
-    text: TextGeneratorConfig;
-    rtf: RtfGeneratorConfig;
-    chunks: ChunkingConfig;
-}
+type GeneratorSpecificConfig<D extends string> = 
+    D extends 'html' ? { htmlConfig?: HtmlGeneratorConfig } :
+    D extends 'md' ? { mdConfig?: MdGeneratorConfig } :
+    D extends 'pdf' ? { pdfConfig?: PdfGeneratorConfig } :
+    D extends 'csv' ? { csvConfig?: CsvGeneratorConfig } :
+    D extends 'text' ? { textConfig?: TextGeneratorConfig } :
+    D extends 'rtf' ? { rtfConfig?: RtfGeneratorConfig } :
+    D extends 'chunks' ? { chunksConfig?: ChunkingConfig } :
+    Partial<{
+        htmlConfig: HtmlGeneratorConfig;
+        mdConfig: MdGeneratorConfig;
+        pdfConfig: PdfGeneratorConfig;
+        csvConfig: CsvGeneratorConfig;
+        textConfig: TextGeneratorConfig;
+        rtfConfig: RtfGeneratorConfig;
+        chunksConfig: ChunkingConfig;
+    }>;
 
 /**
  * Configuration options for document generators.
@@ -516,11 +542,7 @@ export interface GeneratorSubConfigMap {
  * 
  * @template D The destination format string. Defaults to `string` for a general configuration.
  */
-export type GeneratorConfig<D extends string = string> = CommonGeneratorConfig & {
-    [K in keyof GeneratorSubConfigMap as `${K & string}Config`]?: string extends D
-    ? GeneratorSubConfigMap[K]
-    : (D extends K ? GeneratorSubConfigMap[K] : never);
-}
+export type GeneratorConfig<D extends string = string> = CommonGeneratorConfig & GeneratorSpecificConfig<D>;
 
 /**
  * Configuration options for the OfficeConverter.
@@ -572,12 +594,31 @@ export type DeepRequired<T> = T extends Function | Date | Buffer | RegExp
  * it is a discriminated union whose members cannot be uniformly deep-required.
  */
 export type FullGeneratorConfig = DeepRequired<CommonGeneratorConfig & {
-    [K in keyof Omit<GeneratorSubConfigMap, 'chunks'> as `${K}Config`]: GeneratorSubConfigMap[K];
+    htmlConfig: HtmlGeneratorConfig;
+    mdConfig: MdGeneratorConfig;
+    pdfConfig: PdfGeneratorConfig;
+    csvConfig: CsvGeneratorConfig;
+    textConfig: TextGeneratorConfig;
+    rtfConfig: RtfGeneratorConfig;
 }> & {
     chunksConfig: ChunkingConfig;
 };
 
 
+
+/**
+ * Configuration options for granular raw HTML injections.
+ */
+export interface HtmlInjectionConfig {
+    /** Raw HTML injected immediately after the opening <head> tag */
+    headStart?: string;
+    /** Raw HTML injected immediately before the closing </head> tag */
+    headEnd?: string;
+    /** Raw HTML injected immediately after the opening <body> tag */
+    bodyStart?: string;
+    /** Raw HTML injected immediately before the closing </body> tag */
+    bodyEnd?: string;
+}
 
 /**
  * Configuration options for HTML generation.
@@ -593,6 +634,25 @@ export interface HtmlGeneratorConfig {
      * Defaults to 'https://cdn.jsdelivr.net/npm/chart.js'.
      */
     chartJsSrc?: string;
+    /**
+     * Custom container width for the generated HTML.
+     * Can be a number (pixels) or string (e.g., '900px', '100%').
+     * If not specified or set to 'auto', it defaults based on the content type:
+     * - Spreadsheet: '100%'
+     * - Presentation/Slides: '1100px'
+     * - Standard Document (PDF/DOCX/RTF/etc.): '900px'
+     */
+    containerWidth?: string | number;
+    /**
+     * Custom CSS to append to the generated HTML document.
+     * This CSS will be included in the `<style>` block and can be used to style 
+     * custom classes added during AST manipulation or override default styles.
+     */
+    customCss?: string;
+    /**
+     * Granular injection points for custom HTML, scripts, and styles.
+     */
+    injections?: HtmlInjectionConfig;
 }
 
 /**
@@ -670,7 +730,7 @@ export interface StructuredStyleMapping {
          * The structural type of the node (e.g., 'paragraph', 'heading', 'text'). 
          * Most style mappings target 'paragraph' nodes to convert them into headers or blocks.
          */
-        nodeType?: string;
+        nodeType?: OfficeContentNodeType;
         /** 
          * A dictionary of attributes to match on the node.
          * 
@@ -736,7 +796,7 @@ export interface CsvGeneratorConfig {
     /**
      * Whether to merge all selected sheets into a single CSV.
      * If false, returns a ZIP archive containing individual CSV files.
-     * Defaults to false.
+     * Defaults to true.
      */
     mergeSheets?: boolean;
     /**
@@ -1027,7 +1087,7 @@ export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods'
 /**
  * Types of content nodes in the AST.
  */
-export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment';
+export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster';
 
 /**
  * Supported MIME types for attachments.
@@ -1051,6 +1111,12 @@ export type OfficeMimeType =
     | 'text/csv'
     | 'text/markdown'
     | 'text/html';
+
+/**
+ * Text alignment options.
+ * Common in spreadsheet cells, paragraph styles, and text elements.
+ */
+export type TextAlignment = 'left' | 'center' | 'right' | 'justify';
 
 /**
  * Text formatting options available for text content.
@@ -1135,7 +1201,7 @@ export interface TextFormatting {
      * Common in spreadsheet cells or paragraph styles.
      * @example "center", "right"
      */
-    alignment?: 'left' | 'center' | 'right' | 'justify';
+    alignment?: TextAlignment;
 }
 
 /**
@@ -1191,7 +1257,7 @@ export interface HeadingMetadata {
     /** The heading level (e.g., 1 for H1). */
     level: number;
     /** The alignment of the heading. */
-    alignment?: 'left' | 'center' | 'right' | 'justify';
+    alignment?: TextAlignment;
     /** The style of the heading. */
     style?: string;
     /** Detailed indentation information. */
@@ -1205,7 +1271,7 @@ export interface HeadingMetadata {
  */
 export interface ParagraphMetadata {
     /** The alignment of the paragraph. */
-    alignment?: 'left' | 'center' | 'right' | 'justify';
+    alignment?: TextAlignment;
     /** The style of the paragraph. */
     style?: string;
     /** Detailed indentation information. */
@@ -1237,7 +1303,7 @@ export interface ListMetadata {
      * Text alignment of the list item.
      * @example 'left', 'center', 'right', 'justify'
      */
-    alignment: 'left' | 'center' | 'right' | 'justify';
+    alignment: TextAlignment;
 
     /**
      * The list ID from the Word document's numbering definition.
@@ -1289,6 +1355,16 @@ export interface CellMetadata {
     colSpan?: number;
     /** The style of the cell. */
     style?: string;
+    /** Unique anchor IDs for internal linking. */
+    anchorIds?: string[];
+    /** Background color for this cell in hex format (e.g. #FFFFFF). */
+    backgroundColor?: string;
+}
+
+/**
+ * Metadata for a table.
+ */
+export interface TableMetadata {
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
 }
@@ -1390,6 +1466,8 @@ export interface NoteMetadata {
     noteId?: string;
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
+    /** The slide number this note is associated with (used in PowerPoint). */
+    slideNumber?: number;
 }
 
 /**
@@ -1430,9 +1508,26 @@ export interface CodeMetadata {
 }
 
 /**
+ * Metadata for a comment/annotation.
+ */
+export interface CommentMetadata {
+    author?: string;
+    initials?: string;
+    date?: string;
+    commentId?: string;
+}
+
+/**
+ * Metadata for a header or footer.
+ */
+export interface HeaderFooterMetadata {
+    type: 'default' | 'first' | 'even' | string;
+}
+
+/**
  * Union type for content metadata.
  */
-export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | undefined;
+export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | CommentMetadata | HeaderFooterMetadata | TableMetadata | undefined;
 
 
 /**
@@ -1461,14 +1556,10 @@ export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | 
  *   children: [...]
  * }
  */
-export interface OfficeContentNode {
-    /**
-     * The type of the node.
-     * Determines how the node should be interpreted and rendered.
-     * Common types: 'paragraph', 'heading', 'table', 'list', 'text', 'image', etc.
-     */
-    type: OfficeContentNodeType;
-
+/**
+ * Shared properties available on all document content nodes.
+ */
+export interface BaseContentNode {
     /**
      * The complete text content of the node and all its children combined.
      * For container nodes (paragraph, heading), this is the concatenation of all child text.
@@ -1489,23 +1580,24 @@ export interface OfficeContentNode {
     children?: OfficeContentNode[];
 
     /**
+     * Comments attached to this specific node.
+     * Keeps annotations completely separate from the actual content flow.
+     */
+    comments?: OfficeContentNode[];
+
+    /**
+     * Notes (like footnotes or slide notes) attached to this specific node.
+     * Keeps notes separate from the actual structural children.
+     */
+    notes?: OfficeContentNode[];
+
+    /**
      * Text formatting applied to this node.
      * Only applicable to text-containing nodes.
      * For container nodes like paragraphs, formatting typically appears on child text nodes.
      * @example { bold: true, size: "12", font: "Arial" }
      */
     formatting?: TextFormatting;
-
-    /**
-     * Type-specific metadata providing additional context about the node.
-     * The metadata structure depends on the node type:
-     * - Headings: { level: 1 }
-     * - Lists: { listType: 'ordered', indentation: 0 }
-     * - Cells: { row: 0, col: 0 }
-     * - Slides: { slideNumber: 1 }
-     * @example { level: 1 } for a heading
-     */
-    metadata?: ContentMetadata;
 
     /**
      * The raw source content for this node.
@@ -1518,6 +1610,55 @@ export interface OfficeContentNode {
      */
     rawContent?: string;
 }
+
+/**
+ * Represents a node in the document content tree.
+ * This is the core building block of the parsed document structure.
+ * Content nodes can be nested to represent hierarchical document structures
+ * (e.g., paragraphs containing text runs, tables containing rows, rows containing cells).
+ * 
+ * @example
+ * // A simple paragraph with formatted text
+ * {
+ *   type: 'paragraph',
+ *   text: 'Hello world',
+ *   children: [
+ *     { type: 'text', text: 'Hello ', formatting: { bold: true } },
+ *     { type: 'text', text: 'world', formatting: { italic: true } }
+ *   ]
+ * }
+ * 
+ * @example
+ * // A heading with metadata
+ * {
+ *   type: 'heading',
+ *   text: 'Chapter 1',
+ *   metadata: { level: 1 },
+ *   children: [...]
+ * }
+ */
+export type OfficeContentNode = BaseContentNode & (
+    | { type: 'slide'; metadata?: SlideMetadata }
+    | { type: 'sheet'; metadata?: SheetMetadata }
+    | { type: 'heading'; metadata?: HeadingMetadata }
+    | { type: 'list'; metadata?: ListMetadata }
+    | { type: 'cell'; metadata?: CellMetadata }
+    | { type: 'image'; metadata?: ImageMetadata }
+    | { type: 'chart'; metadata?: ChartMetadata }
+    | { type: 'page'; metadata?: PageMetadata }
+    | { type: 'paragraph'; metadata?: ParagraphMetadata }
+    | { type: 'text'; metadata?: TextMetadata }
+    | { type: 'note'; metadata?: NoteMetadata }
+    | { type: 'break'; metadata?: BreakMetadata }
+    | { type: 'code'; metadata?: CodeMetadata }
+    | { type: 'comment'; metadata?: CommentMetadata }
+    | { type: 'header'; metadata?: HeaderFooterMetadata }
+    | { type: 'footer'; metadata?: HeaderFooterMetadata }
+    | { type: 'table'; metadata?: TableMetadata }
+    | { type: 'row'; metadata?: undefined }
+    | { type: 'drawing'; metadata?: undefined }
+    | { type: 'slideMaster'; metadata?: SlideMetadata }
+);
 
 /**
  * Structured information extracted from a chart.
@@ -1672,15 +1813,42 @@ export interface OfficeMetadata {
      * Values are typed as string, number, boolean, or Date where the source format provides type information.
      */
     customProperties?: Record<string, string | number | boolean | Date>;
+    /** Keywords associated with the document. */
+    keywords?: string;
+    /** 
+     * Contains all format-specific metadata fields extracted verbatim.
+     * Consumers can use this to access properties not mapped to the standard OfficeMetadata fields.
+     * Examples: all <meta> tags in HTML, app.xml properties in DOCX, XMP dicts in PDF.
+     */
+    nativeProperties?: Record<string, any>;
 }
 
 /**
- * The Abstract Syntax Tree (AST) returned by the parser.
- * This is the root data structure representing the entire parsed document.
+ * Contains out-of-band layout elements and templates that are not part of the main document flow.
+ */
+export interface OfficeAuxiliaryContent {
+    /** Headers extracted from the document. */
+    headers?: OfficeContentNode[];
+    /** Footers extracted from the document. */
+    footers?: OfficeContentNode[];
+    /** Slide Masters extracted from presentations. */
+    slideMasters?: OfficeContentNode[];
+}
+
+/**
+ * The Root Abstract Syntax Tree (AST) representing a parsed Office Document.
+ * This is the ultimate output of `OfficeParser.parseOffice()`.
  * 
- * The AST provides a format-agnostic representation of the document that can be easily
- * processed, transformed, or converted to other formats. It preserves the document's
- * structure, content, formatting, and metadata while abstracting away format-specific details.
+ * DESIGN PHILOSOPHY:
+ * The AST is designed to be a universal, format-agnostic representation of document content.
+ * Whether the input was a PDF, DOCX, XLSX, Markdown, or HTML file, the resulting AST
+ * uses the same consistent structure (`OfficeContentNode` trees).
+ * 
+ * ### Key Top-Level Properties:
+ * - `metadata`: Document-level properties (author, title, stats).
+ * - `content`: The main sequential flow of the document (paragraphs, tables, slides, sheets).
+ * - `attachments`: Extracted binary assets (images, embedded files).
+ * - `auxiliary`: Out-of-band layout/template elements (headers, footers, slide masters).
  * 
  * @example
  * ```typescript
@@ -1735,6 +1903,13 @@ export interface OfficeParserAST {
     content: OfficeContentNode[];
 
     /**
+     * Out-of-band layout and template elements that are not part of the main text flow.
+     * Extracted only if the respective `ignore...` config flags are false.
+     * Contains elements like `headers`, `footers`, and `slideMasters`.
+     */
+    auxiliary?: OfficeAuxiliaryContent;
+
+    /**
      * Attachments extracted from the document (images, charts, embedded files).
      * Only populated when `config.extractAttachments` is true.
      * Each attachment includes:
@@ -1784,6 +1959,6 @@ export interface OfficeParserAST {
         this: T,
         destination: D,
         config?: GeneratorConfig<D>
-    ): Promise<ConversionResult>;
+    ): Promise<ConversionResult<D>>;
 }
 

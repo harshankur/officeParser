@@ -1,5 +1,5 @@
-import { OfficeParserAST, OfficeContentNode, OfficeMetadata, OfficeAttachment, SupportedFileType, OfficeParserConfig, GeneratorConfig, SupportedDestination, ConversionResult } from '../types.js';
 import { OfficeGenerator } from '../OfficeGenerator.js';
+import { ConversionResult, GeneratorConfig, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeParserConfig, SupportedDestination, SupportedFileType } from '../types.js';
 
 /**
  * Creates a fully-featured OfficeParserAST object with conversion methods.
@@ -21,6 +21,7 @@ export function createAST(
     content: OfficeContentNode[],
     attachments: OfficeAttachment[],
     config: OfficeParserConfig,
+    auxiliary: OfficeAuxiliaryContent | undefined,
     toTextSync: () => string
 ): OfficeParserAST {
     return {
@@ -29,14 +30,15 @@ export function createAST(
         metadata,
         content,
         attachments,
+        auxiliary,
         warnings: [],
         toText: toTextSync,
         async to<T extends OfficeParserAST, D extends SupportedDestination<T['type']>>(
             this: T,
             destination: D,
             genConfig?: GeneratorConfig<D>
-        ): Promise<ConversionResult> {
-            return OfficeGenerator.generate(this as any, destination, genConfig) as Promise<ConversionResult>;
+        ): Promise<ConversionResult<D>> {
+            return OfficeGenerator.generate(this as any, destination, genConfig) as Promise<ConversionResult<D>>;
         }
     };
 }

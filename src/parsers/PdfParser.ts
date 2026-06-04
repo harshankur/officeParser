@@ -408,6 +408,17 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         'IsCollectionPresent', 'IsSignaturesPresent', 'PDFFormatVersion'
     ]);
     if (info) {
+        metadata.nativeProperties = {};
+        for (const [key, val] of Object.entries(info)) {
+            if (key === 'Custom' && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date) && val !== null) {
+                for (const [customKey, customVal] of Object.entries(val)) {
+                    metadata.nativeProperties[customKey] = customVal;
+                }
+            } else {
+                metadata.nativeProperties[key] = val;
+            }
+        }
+
         const customProperties: Record<string, string | number | boolean | Date> = {};
         for (const key of Object.keys(info)) {
             if (standardPdfInfoKeys.has(key)) continue;
@@ -430,6 +441,16 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         }
         if (Object.keys(customProperties).length > 0) {
             metadata.customProperties = customProperties;
+        }
+    }
+
+    if (meta.metadata) {
+        if (!metadata.nativeProperties) metadata.nativeProperties = {};
+        const xmp: any = meta.metadata;
+        if (typeof xmp.getAll === 'function') {
+            metadata.nativeProperties['XMP'] = xmp.getAll();
+        } else {
+            metadata.nativeProperties['XMP'] = xmp;
         }
     }
 
@@ -896,6 +917,7 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         content,
         attachments,
         config,
+        undefined,
         toTextSync
     );
 };

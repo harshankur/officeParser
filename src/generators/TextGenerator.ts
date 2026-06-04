@@ -13,7 +13,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
     /**
      * Generates plain text by concatenating text content from nodes.
      */
-    async generate(): Promise<ConversionResult> {
+    async generate(): Promise<ConversionResult<'text'>> {
         let output = '';
         const newline = this.config.textConfig.newlineDelimiter;
 

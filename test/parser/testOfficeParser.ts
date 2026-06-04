@@ -77,7 +77,10 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
     fileType: null,
     // An abortSignal at the top level propagates into ocrConfig automatically.
     // Setting null here means no cancellation; individual tests override this.
-    abortSignal: null
+    abortSignal: null,
+    ignoreComments: false,
+    ignoreHeadersAndFooters: false,
+    ignoreSlideMasters: false
 };
 
 /** Config permutations to test */
@@ -137,11 +140,13 @@ const CONFIG_TESTS = [
     },
     {
         id: 'C7',
-        name: 'Notes at Last',
+        name: 'Ignore Comments',
         config: {
-            putNotesAtLast: true
+            ignoreComments: true
         }
     },
+
+
     {
         id: 'C8',
         name: 'OCR Load Timeout',
@@ -181,6 +186,27 @@ const CONFIG_TESTS = [
                     recognition: 1
                 }
             }
+        }
+    },
+    {
+        id: 'C10',
+        name: 'Ignore Headers and Footers',
+        config: {
+            ignoreHeadersAndFooters: true
+        }
+    },
+    {
+        id: 'C11',
+        name: 'Ignore Slide Masters',
+        config: {
+            ignoreSlideMasters: true
+        }
+    },
+    {
+        id: 'C12',
+        name: 'Ignore Internal Links',
+        config: {
+            ignoreInternalLinks: true
         }
     }
 ];
@@ -1814,13 +1840,35 @@ async function testConfigs(ext: string): Promise<FeatureTest[]> {
             const hasRaw = ast.content.some(n => (n as any).rawContent);
 
             // Note validation
-            const hasNotes = ast.content.some(node => node.type === 'note' || (node.children && node.children.some(c => c.type === 'note')));
+            const checkHasNotes = (nodes: any[]): boolean => {
+                return nodes.some(node => 
+                    node.type === 'note' || 
+                    (node.notes && node.notes.length > 0) || 
+                    (node.children && checkHasNotes(node.children))
+                );
+            };
+            const hasNotes = checkHasNotes(ast.content);
 
-            // For putNotesAtLast, check if the *last* nodes are notes. 
-            // Caveat: If a file has NO notes, this logic shouldn't fail, but we can't verify order.
-            // We assume test files DO have notes for meaningful verification.
-            // Let's check if we find ANY note at the end.
-            const notesAtEnd = ast.content.length > 0 && ast.content[ast.content.length - 1].type === 'note';
+            const checkHasComments = (nodes: any[]): boolean => {
+                return nodes.some(node => 
+                    (node.comments && node.comments.length > 0) || 
+                    (node.children && checkHasComments(node.children))
+                );
+            };
+            const hasComments = checkHasComments(ast.content);
+
+            const hasHeaders = ast.auxiliary?.headers && ast.auxiliary.headers.length > 0;
+            const hasFooters = ast.auxiliary?.footers && ast.auxiliary.footers.length > 0;
+            const hasHeadersOrFooters = Boolean(hasHeaders || hasFooters);
+            const hasSlideMasters = Boolean(ast.auxiliary?.slideMasters && ast.auxiliary.slideMasters.length > 0);
+
+            const checkHasInternalLinks = (nodes: any[]): boolean => {
+                return nodes.some(node => 
+                    (node.type === 'link' && node.metadata?.internal) || 
+                    (node.children && checkHasInternalLinks(node.children))
+                );
+            };
+            const hasInternalLinks = checkHasInternalLinks(ast.content);
 
             let status: 'PASS' | 'FAIL' | 'WARN' = 'PASS';
             let details = 'Config behavior correct';
@@ -1831,13 +1879,25 @@ async function testConfigs(ext: string): Promise<FeatureTest[]> {
                     status = 'FAIL';
                     details = 'Ignore Notes: Found notes but expected none';
                 }
-            } else if (configTest.id === 'C7') { // Notes at Last
-                if (hasNotes && !notesAtEnd) {
-                    // If we have notes, but they aren't at the end, it's a fail.
-                    // Exception: Maybe there are notes, but the last node is something else?
-                    // If putNotesAtLast is true, valid notes MUST be appended to the end.
+            } else if (configTest.id === 'C7') { // Ignore Comments
+                if (hasComments) {
                     status = 'FAIL';
-                    details = 'Notes at Last: Found notes but last node is not a note';
+                    details = 'Ignore Comments: Found comments but expected none';
+                }
+            } else if (configTest.id === 'C10') { // Ignore Headers and Footers
+                if (hasHeadersOrFooters) {
+                    status = 'FAIL';
+                    details = 'Ignore Headers/Footers: Found auxiliary content but expected none';
+                }
+            } else if (configTest.id === 'C11') { // Ignore Slide Masters
+                if (hasSlideMasters) {
+                    status = 'FAIL';
+                    details = 'Ignore Slide Masters: Found slide masters but expected none';
+                }
+            } else if (configTest.id === 'C12') { // Ignore Internal Links
+                if (hasInternalLinks) {
+                    status = 'FAIL';
+                    details = 'Ignore Internal Links: Found internal links but expected none';
                 }
             }
 
@@ -1866,7 +1926,7 @@ async function testConfigs(ext: string): Promise<FeatureTest[]> {
                 result: {
                     status: status,
                     expected: configTest.config,
-                    actual: { hasAttachments, hasOCR, hasRaw, hasNotes, notesAtEnd },
+                    actual: { hasAttachments, hasOCR, hasRaw, hasNotes, hasComments, hasHeadersOrFooters, hasSlideMasters, hasInternalLinks },
                     details: details
                 }
             });

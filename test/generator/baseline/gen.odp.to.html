@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Document</title>
@@ -20,6 +21,7 @@
                 --border-color: #e9ecef;
                 --accent-color: #3498db;
                 --shadow: 0 10px 25px rgba(0,0,0,0.05);
+                --container-width: 297mm;
             }
             * {
                 box-sizing: border-box;
@@ -33,7 +35,7 @@
                 padding: 50px 20px;
             }
             .container {
-                max-width: 850px;
+                max-width: var(--container-width);
                 margin: 0 auto;
                 background: var(--container-bg);
                 padding: 60px 80px;
@@ -41,7 +43,7 @@
                 box-shadow: var(--shadow);
             }
             .presentation-container, .pdf-container {
-                max-width: 1200px;
+                max-width: var(--container-width);
                 margin: 0 auto;
             }
             .presentation-container .metadata-summary, .pdf-container .metadata-summary {
@@ -89,33 +91,50 @@
             h3 { font-size: 1.5em; }
             
             p { margin-bottom: 1.3em; }
+            p.empty-paragraph { margin: 0; min-height: 1em; }
             
-            ul, ol { margin: 1.5em 0; padding-left: 2em; }
-            li { margin-bottom: 0.6em; }
+            ul, ol { margin: 1em 0; padding-left: 2em; }
+            li { margin-bottom: 0.25em; }
+            li > p { margin-bottom: 0.25em; }
             
             .table-container {
-                width: 100%;
+                width: fit-content;
+                max-width: 100%;
                 overflow-x: auto;
                 -webkit-overflow-scrolling: touch;
-                margin: 25px 0;
+                margin: 25px auto;
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                background: white;
             }
             table {
                 width: auto;
                 max-width: 100%;
                 min-width: 300px;
-                border-collapse: collapse;
-                margin: 0 auto;
-                border: 1px solid var(--border-color);
-                border-radius: 8px;
-                overflow: hidden;
+                border-collapse: separate;
+                border-spacing: 0;
+                margin: 0;
+                border: none;
             }
             th, td {
-                padding: 12px 16px;
+                padding: 8px 12px;
                 border-bottom: 1px solid var(--border-color);
                 border-right: 1px solid var(--border-color);
                 text-align: left;
                 vertical-align: top;
                 overflow-wrap: break-word;
+            }
+            th:last-child, td:last-child {
+                border-right: none;
+            }
+            tr:last-child th, tr:last-child td {
+                border-bottom: none;
+            }
+            th, td > p {
+                margin: 0;
+            }
+            td > *:last-child, th > *:last-child {
+                margin-bottom: 0;
             }
             th {
                 background-color: #f8f9fa;
@@ -128,7 +147,6 @@
                 top: 0;
                 z-index: 10;
             }
-            tr:last-child td { border-bottom: none; }
             tr:nth-child(even) { background-color: #fdfdfd; }
             tr:hover { background-color: #f1f4f9; }
             
@@ -146,7 +164,98 @@
                 padding: 8px 12px;
                 font-size: 13px;
                 white-space: nowrap;
+            }
+            /* Spreadsheet Grid styling */
+            .excel-grid {
+                border-collapse: collapse;
+                border-spacing: 0;
+                background: var(--container-bg);
+                border: 1px solid var(--border-color);
+                width: max-content;
+                max-width: none;
+                min-width: 0;
+            }
+            .excel-grid th, .excel-grid td {
+                border: 1px solid var(--border-color);
+                padding: 4px 8px;
+                font-size: 13px;
+                line-height: 1.2;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .excel-col-header {
+                background: #f8f9fa;
+                color: #5f6368;
+                font-weight: 500;
+                text-align: center;
+                user-select: none;
+                border-bottom: 2px solid var(--border-color);
+                position: sticky;
+                top: 0;
+                z-index: 10;
                 min-width: 100px;
+            }
+            .col-resizer {
+                position: absolute;
+                top: 0;
+                right: 0;
+                width: 4px;
+                height: 100%;
+                cursor: col-resize;
+                user-select: none;
+                z-index: 20;
+            }
+            .col-resizer:hover, .col-resizer.resizing {
+                background: var(--accent-color, #3498db);
+            }
+            .excel-row-num {
+                background: #f8f9fa;
+                color: #5f6368;
+                text-align: center;
+                font-weight: 500;
+                width: 45px;
+                min-width: 45px !important;
+                max-width: 45px;
+                user-select: none;
+                border-right: 2px solid var(--border-color);
+                position: sticky;
+                left: 0;
+                z-index: 5;
+            }
+            .row-resizer {
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                width: 100%;
+                height: 4px;
+                cursor: row-resize;
+                user-select: none;
+                z-index: 20;
+            }
+            .row-resizer:hover, .row-resizer.resizing {
+                background: var(--accent-color, #3498db);
+            }
+            .excel-row-num-header {
+                background: #f1f3f4;
+                width: 45px;
+                min-width: 45px !important;
+                max-width: 45px;
+                position: sticky;
+                top: 0;
+                left: 0;
+                z-index: 15;
+                border-right: 2px solid var(--border-color);
+                border-bottom: 2px solid var(--border-color);
+            }
+            .excel-cell-empty {
+                background: var(--container-bg);
+            }
+            .excel-grid tr:hover td {
+                background-color: #f1f4f9;
+            }
+            .excel-grid tr:hover td.excel-row-num {
+                background-color: #f8f9fa; /* Keep header color */
             }
 
             /* Tab Bar */
@@ -181,9 +290,9 @@
             /* Slide & Page Separation */
             .slide {
                 background: white;
-                min-height: 600px;
+                aspect-ratio: 297 / 210;
                 margin: 0 auto 40px auto;
-                padding: 60px 80px;
+                padding: 4% 6%;
                 border-radius: 12px;
                 box-shadow: 0 10px 30px rgba(0,0,0,0.1);
                 position: relative;
@@ -193,21 +302,74 @@
                 border: 1px solid var(--border-color);
                 box-sizing: border-box;
                 width: 100%;
+                overflow: hidden;
+                overflow-y: auto;
                 overflow-wrap: break-word;
                 page-break-after: always;
             }
+            .slide:has(+ .slide-note) {
+                margin-bottom: 0;
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
+                border-bottom: none;
+            }
+            .slide table {
+                width: auto;
+                max-width: 100%;
+                font-size: 0.85em;
+                margin: 10px 0;
+            }
+            .slide th, .slide td {
+                padding: 6px 10px;
+            }
+            .slide > * {
+                flex-shrink: 0;
+            }
+            .slide > .table-container {
+                flex-shrink: 1;
+                min-height: 0;
+            }
+            .slide .table-container {
+                margin: 10px auto;
+                overflow-y: auto;
+            }
+            .slide .chart-container {
+                margin: 15px auto;
+                max-width: 100%;
+                padding: 10px;
+                height: 240px;
+                box-shadow: none;
+                border-radius: 8px;
+            }
+            .slide img {
+                max-height: 200px;
+                width: auto;
+                margin: 10px auto;
+                box-shadow: none;
+            }
+            .slide .image-container {
+                margin: 15px 0;
+            }
+            .slide h1 { font-size: 1.8em; margin-top: 0.4em; margin-bottom: 0.3em; padding-bottom: 5px; }
+            .slide h2 { font-size: 1.4em; margin-top: 0.4em; }
+            .slide h3 { font-size: 1.25em; }
+            .slide p { margin-bottom: 0.6em; font-size: 0.95em; }
+            .slide li > p { margin-bottom: 0.25em; }
+            .slide ul, .slide ol { margin: 0.6em 0; }
+            .slide li { margin-bottom: 0.25em; }
             .slide-note {
                 background: #fdfdfd;
                 border: 1px solid var(--border-color);
-                border-left: 4px solid var(--accent-color);
-                border-radius: 12px;
+                border-top: 1px dashed var(--border-color);
+                border-radius: 0 0 12px 12px;
                 padding: 30px 50px;
-                margin: 20px auto 60px auto;
-                max-width: 1000px;
+                margin: 0 auto 40px auto;
+                width: 100%;
+                box-sizing: border-box;
                 font-size: 0.95em;
                 color: var(--text-color);
                 position: relative;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+                box-shadow: 0 10px 30px rgba(0,0,0,0.1);
             }
             .note-footnote, .note-endnote {
                 margin: 30px auto;
@@ -237,9 +399,9 @@
             }
             .page {
                 background: white;
-                min-height: 1000px;
+                aspect-ratio: 1 / 1.4142;
                 margin: 0 auto 40px auto;
-                padding: 70px 90px;
+                padding: 8% 10%;
                 box-shadow: 0 5px 20px rgba(0,0,0,0.08);
                 position: relative;
                 border: 1px solid var(--border-color);
@@ -259,8 +421,8 @@
             
             /* High Fidelity Presentation Mode */
             @media screen and (max-width: 800px) {
-                .slide { min-height: auto; padding: 40px 30px; }
-                .page { padding: 40px; }
+                .slide { min-height: auto; aspect-ratio: auto; padding: 40px 30px; }
+                .page { aspect-ratio: auto; padding: 40px; }
             }
             
             /* Nested Table Styles */
@@ -269,6 +431,8 @@
                 border-radius: 6px;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.03);
                 background-color: #ffffff;
+                border: 1px solid var(--border-color);
+                overflow: hidden;
             }
             td td {
                 padding: 10px 14px;
@@ -388,22 +552,27 @@
                     height: auto !important;
                 }
             }
+
+            /* --- Custom User CSS --- */
+            
         
     </style>
+    
 </head>
 <body>
+    
     <div class="presentation-container">
         <article>
             
-            <section class="slide" data-slide-num="1"><p style="text-align: center"></p>
+            <section class="slide" data-slide-num="1"><p class="empty-paragraph" style="text-align: center"><br></p>
 
-<p style="text-align: center"></p>
+<p class="empty-paragraph" style="text-align: center"><br></p>
 
-<p style="text-align: center"></p>
+<p class="empty-paragraph" style="text-align: center"><br></p>
 
-<p style="text-align: center"></p>
+<p class="empty-paragraph" style="text-align: center"><br></p>
 
-<p style="text-align: center"></p>
+<p class="empty-paragraph" style="text-align: center"><br></p>
 
 <h1 id="demonstration-of-docx-support-in-calibre" style="text-align: left"><span style="color: #17365d; font-size: 0.36111in; font-family: Ubuntu, sans-serif">Demonstration of DOCX support in </span>
 
@@ -456,16 +625,6 @@
 </p>
 
 </section>
-
-<div class="slide-note"><p style="text-align: left"><span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif">Slide Note 1.</span>
-
-</p>
-
-<p style="text-align: right">1
-
-</p>
-
-</div>
 
 <section class="slide" data-slide-num="2"><h1 id="text-formatting" style="text-align: left"><span style="color: #365f91; font-size: 0.19444in; font-family: Ubuntu, sans-serif"><b>Text Formatting</b></span>
 
@@ -581,47 +740,15 @@
 
 </section>
 
-<div class="slide-note"><p style="text-align: left"><span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif">Slide Note 2. This is a</span>
-
-<span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif"> </span>
-
-<span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif"><b>bold</b></span>
-
-<span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif"> </span>
-
-<span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif">text, but no</span>
-
-<span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif"> </span>
-
-<span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif"><i>italic</i></span>
-
-<span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif">. Let's strike</span>
-
-<span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif"> </span>
-
-<span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif"><strike>that</strike></span>
-
-<span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif"> </span>
-
-<span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif">out.</span>
-
-</p>
-
-<p style="text-align: right">2
-
-</p>
-
-</div>
-
 <section class="slide" data-slide-num="3"><h1 id="tables" style="text-align: left"><span style="color: #365f91; font-size: 0.19444in; font-family: Ubuntu, sans-serif"><b>Tables</b></span>
 
 </h1>
 
-<div class="table-container"><table><tr><td><p style="text-align: left"><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>ITEM </b></span>
+<div class="table-container"><table><tr><td style="background-color: #9bbb59"><p style="text-align: left"><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>ITEM </b></span>
 
 </p>
 
-</td><td><p style="text-align: left"><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>NEEDED </b></span>
+</td><td style="background-color: #9bbb59"><p style="text-align: left"><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>NEEDED </b></span>
 
 </p>
 
@@ -693,53 +820,53 @@
 
 </p>
 
-<p style="text-align: center"></p>
+<p class="empty-paragraph" style="text-align: center"><br></p>
 
-<div class="table-container"><table><tr><td><p><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">City or Town </span>
-
-</p>
-
-</td><td><p style="text-align: center"><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">Point A </span>
+<div class="table-container"><table><tr><td style="background-color: #ffffff"><p><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">City or Town </span>
 
 </p>
 
-</td><td><p style="text-align: center"><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">Point B </span>
+</td><td style="background-color: #ffffff"><p style="text-align: center"><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">Point A </span>
 
 </p>
 
-</td><td><p style="text-align: center"><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">Point C </span>
+</td><td style="background-color: #ffffff"><p style="text-align: center"><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">Point B </span>
 
 </p>
 
-</td><td><p style="text-align: center"><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">Point D </span>
+</td><td style="background-color: #ffffff"><p style="text-align: center"><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">Point C </span>
 
 </p>
 
-</td><td><p style="text-align: center"><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">Point E </span>
+</td><td style="background-color: #ffffff"><p style="text-align: center"><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">Point D </span>
+
+</p>
+
+</td><td style="background-color: #ffffff"><p style="text-align: center"><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">Point E </span>
 
 </p>
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Point A </span>
+<tr><td style="background-color: #ffffff"><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Point A </span>
 
 </p>
 
-</td><td><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">— </span>
+</td><td style="background-color: #d3dfee"><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">— </span>
 
 </p>
 
-</td><td><p style="text-align: center"></p>
+</td><td style="background-color: #d3dfee"><p class="empty-paragraph" style="text-align: center"><br></p>
 
-</td><td><p style="text-align: center"></p>
+</td><td style="background-color: #d3dfee"><p class="empty-paragraph" style="text-align: center"><br></p>
 
-</td><td><p style="text-align: center"></p>
+</td><td style="background-color: #d3dfee"><p class="empty-paragraph" style="text-align: center"><br></p>
 
-</td><td><p style="text-align: center"></p>
+</td><td style="background-color: #d3dfee"><p class="empty-paragraph" style="text-align: center"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Point B </span>
+<tr><td style="background-color: #ffffff"><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Point B </span>
 
 </p>
 
@@ -751,37 +878,37 @@
 
 </p>
 
-</td><td><p style="text-align: center"></p>
+</td><td><p class="empty-paragraph" style="text-align: center"><br></p>
 
-</td><td><p style="text-align: center"></p>
+</td><td><p class="empty-paragraph" style="text-align: center"><br></p>
 
-</td><td><p style="text-align: center"></p>
-
-</td></tr>
-
-<tr><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Point C </span>
-
-</p>
-
-</td><td><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">64 </span>
-
-</p>
-
-</td><td><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">56 </span>
-
-</p>
-
-</td><td><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">— </span>
-
-</p>
-
-</td><td><p style="text-align: center"></p>
-
-</td><td><p style="text-align: center"></p>
+</td><td><p class="empty-paragraph" style="text-align: center"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Point D </span>
+<tr><td style="background-color: #ffffff"><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Point C </span>
+
+</p>
+
+</td><td style="background-color: #d3dfee"><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">64 </span>
+
+</p>
+
+</td><td style="background-color: #d3dfee"><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">56 </span>
+
+</p>
+
+</td><td style="background-color: #d3dfee"><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">— </span>
+
+</p>
+
+</td><td style="background-color: #d3dfee"><p class="empty-paragraph" style="text-align: center"><br></p>
+
+</td><td style="background-color: #d3dfee"><p class="empty-paragraph" style="text-align: center"><br></p>
+
+</td></tr>
+
+<tr><td style="background-color: #ffffff"><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Point D </span>
 
 </p>
 
@@ -801,31 +928,31 @@
 
 </p>
 
-</td><td><p style="text-align: center"></p>
+</td><td><p class="empty-paragraph" style="text-align: center"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Point E </span>
+<tr><td style="background-color: #ffffff"><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Point E </span>
 
 </p>
 
-</td><td><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">93 </span>
+</td><td style="background-color: #d3dfee"><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">93 </span>
 
 </p>
 
-</td><td><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">35 </span>
+</td><td style="background-color: #d3dfee"><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">35 </span>
 
 </p>
 
-</td><td><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">54 </span>
+</td><td style="background-color: #d3dfee"><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">54 </span>
 
 </p>
 
-</td><td><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">43 </span>
+</td><td style="background-color: #d3dfee"><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">43 </span>
 
 </p>
 
-</td><td><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">— </span>
+</td><td style="background-color: #d3dfee"><p style="text-align: center"><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">— </span>
 
 </p>
 
@@ -835,41 +962,29 @@
 
 </section>
 
-<div class="slide-note"><p style="text-align: left"><span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif">And then about tables</span>
-
-</p>
-
-<p style="text-align: right">3
-
-</p>
-
-</div>
-
 <section class="slide" data-slide-num="4"><p style="text-align: left"><span style="color: #000000; font-size: 0.16667in; font-family: Ubuntu, sans-serif">Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.</span>
 
 </p>
 
-<div class="table-container"><table><tr><td><p><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>College </b></span>
+<div class="table-container"><table><tr><td style="background-color: #4bacc6"><p><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>College </b></span>
 
 </p>
 
-</td><td><p><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>New students </b></span>
+</td><td style="background-color: #4bacc6"><p><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>New students </b></span>
 
 </p>
 
-</td><td><p><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>Graduating students </b></span>
+</td><td style="background-color: #4bacc6"><p><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>Graduating students </b></span>
 
 </p>
 
-</td><td><p><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>Change </b></span>
+</td><td style="background-color: #4bacc6"><p><span style="color: #ffffff; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><b>Change </b></span>
 
 </p>
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+<tr><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #808080; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><i>Undergraduate</i></span>
 
@@ -877,13 +992,9 @@
 
 </p>
 
-</td><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
-
-</td><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -923,9 +1034,7 @@
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+<tr><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #808080; font-size: 0.16667in; font-family: Ubuntu, sans-serif"><i>Graduate</i></span>
 
@@ -933,13 +1042,9 @@
 
 </p>
 
-</td><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
-
-</td><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -979,19 +1084,19 @@
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Total </span>
+<tr><td style="background-color: #ffffff"><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">Total </span>
 
 </p>
 
-</td><td><p><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">998 </span>
+</td><td style="background-color: #ffffff"><p><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">998 </span>
 
 </p>
 
-</td><td><p><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">908 </span>
+</td><td style="background-color: #ffffff"><p><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">908 </span>
 
 </p>
 
-</td><td><p><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">90 </span>
+</td><td style="background-color: #ffffff"><p><span style="font-size: 0.15278in; font-family: Ubuntu, sans-serif">90 </span>
 
 </p>
 
@@ -1035,7 +1140,7 @@
 
 </table></div>
 
-<div class="table-container"><table><tr><td><p></p>
+<div class="table-container"><table><tr><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="font-size: 0.16667in; font-family: Ubuntu, sans-serif">To the left is a table inside a table, with some cells merged. </span>
 
@@ -1055,7 +1160,7 @@
 
 </p>
 
-<p style="text-align: left"></p>
+<p class="empty-paragraph" style="text-align: left"><br></p>
 
 <div class="table-container"><table><tr><td colspan="13"><p style="text-align: right"><span style="color: #365f91; font-size: 0.16667in; font-family: Ubuntu, sans-serif">December 2007 </span>
 
@@ -1067,49 +1172,37 @@
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">Mon </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">Tue </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">Wed </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">Thu </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">Fri </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">Sat </span>
 
@@ -1117,53 +1210,29 @@
 
 </td></tr>
 
-<tr><td><p style="text-align: right"><span style="color: #365f91; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">1 </span>
 
@@ -1171,57 +1240,31 @@
 
 </td></tr>
 
-<tr><td><p style="text-align: right"><span style="color: #365f91; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1229,49 +1272,37 @@
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">3 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">4 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">5 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">6 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">7 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">8 </span>
 
@@ -1279,57 +1310,31 @@
 
 </td></tr>
 
-<tr><td><p style="text-align: right"><span style="color: #365f91; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1337,49 +1342,37 @@
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">10 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">11 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">12 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">13 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">14 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">15 </span>
 
@@ -1387,57 +1380,31 @@
 
 </td></tr>
 
-<tr><td><p style="text-align: right"><span style="color: #365f91; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1445,49 +1412,37 @@
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">17 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">18 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">19 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">20 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">21 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">22 </span>
 
@@ -1495,57 +1450,31 @@
 
 </td></tr>
 
-<tr><td><p style="text-align: right"><span style="color: #365f91; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1553,49 +1482,37 @@
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">24 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">25 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">26 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">27 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">28 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">29 </span>
 
@@ -1603,57 +1520,31 @@
 
 </td></tr>
 
-<tr><td><p style="text-align: right"><span style="color: #365f91; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
@@ -1661,84 +1552,37 @@
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif">31 </span>
 
 </p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph" style="text-align: right"><br></p>
 
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td colspan="2"><p style="text-align: right"><span style="color: #7f7f7f; font-size: 0.16667in; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td colspan="2"><p class="empty-paragraph" style="text-align: right"><br></p>
 
 </td></tr>
 
 </table></div>
 
 </section>
-
-<div class="slide-note"><p style="text-align: left"><span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif">Now calendars</span>
-
-</p>
-
-<p style="text-align: left"></p>
-
-<ol>
-<li value="1" style="text-align: left"><span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif">Sun</span>
-
-</li><li value="2" style="text-align: left"><span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif">Mon</span>
-
-</li></ol>
-
-<p style="text-align: left"></p>
-
-<p style="text-align: left"><span style="color: #000000; font-size: 0.16667in; font-family: Calibri, sans-serif">7. Sat</span>
-
-</p>
-
-<p style="text-align: right">5
-
-</p>
-
-</div>
 
 <section class="slide" data-slide-num="6"><h1 id="structural-elements" style="text-align: left"><span style="color: #365f91; font-size: 0.19444in; font-family: Ubuntu, sans-serif"><b>Structural Elements</b></span>
 
@@ -1812,7 +1656,7 @@
 
 </p>
 
-<p style="text-align: left"></p>
+<p class="empty-paragraph" style="text-align: left"><br></p>
 
 </section>
 
@@ -1834,7 +1678,7 @@
 
 </p>
 
-<p style="text-align: center"></p>
+<p class="empty-paragraph" style="text-align: center"><br></p>
 
 </section>
 
@@ -1857,7 +1701,7 @@
 
 </li></ul>
 
-<p style="text-align: center"></p>
+<p class="empty-paragraph" style="text-align: center"><br></p>
 
 <p style="text-align: left"><span style="color: #4f81bd; font-size: 0.18056in; font-family: Ubuntu, sans-serif"><b>Numbered List</b></span>
 
@@ -1895,7 +1739,7 @@
 
 </li></ol>
 
-<p style="text-align: left"></p>
+<p class="empty-paragraph" style="text-align: left"><br></p>
 
 <p style="text-align: left"><span style="color: #000000; font-size: 0.16667in; font-family: Ubuntu, sans-serif">A Multi-level list with bullets:</span>
 
@@ -2022,6 +1866,7 @@
         </article>
         
     </div>
+    
     
 </body>
 </html>

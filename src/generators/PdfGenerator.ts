@@ -16,19 +16,13 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
         super('pdf', ast, config);
     }
 
-    async generate(): Promise<ConversionResult> {
+    async generate(): Promise<ConversionResult<'pdf'>> {
 
         // Step 1: Generate high-fidelity HTML as the source for PDF rendering
         // We reuse the current configuration but ensure standalone mode is on for HTML
         const htmlGenerator = new HtmlGenerator(this.ast, {
             ...this.config,
             htmlConfig: { ...this.config.htmlConfig, standalone: true },
-            mdConfig: undefined,
-            chunksConfig: undefined,
-            csvConfig: undefined,
-            textConfig: undefined,
-            pdfConfig: undefined,
-            rtfConfig: undefined,
         });
 
 
@@ -47,7 +41,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
      * Node.js implementation using Puppeteer.
      * Uses dynamic import to avoid bundling puppeteer into the library core.
      */
-    private async generateInNode(html: string): Promise<ConversionResult> {
+    private async generateInNode(html: string): Promise<ConversionResult<'pdf'>> {
         const signal = this.config.abortSignal;
         if (signal?.aborted) {
             throw getAbortError();
@@ -163,7 +157,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
     /**
      * Browser implementation using hidden iframe and native print.
      */
-    private async generateInBrowser(html: string): Promise<ConversionResult> {
+    private async generateInBrowser(html: string): Promise<ConversionResult<'pdf'>> {
         this.warn(OfficeWarningType.BROWSER_GENERATION_LIMITATION, "Browser-based PDF generation triggered. For automated 'Save as PDF' without user interaction, we recommend using 'html2pdf.js' as a custom generator hook.");
 
         // In a browser environment, we return the HTML and suggest using window.print()

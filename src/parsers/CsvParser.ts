@@ -116,5 +116,5 @@ export const parseCsv = async (buffer: Buffer, config: FullOfficeParserConfig): 
             .replace(/\n{3,}/g, '\n\n');
     };
 
-    return createAST('csv', { title: 'Sheet1' }, [sheetNode], [], config, toTextSync);
+    return createAST('csv', { title: 'Sheet1' }, [sheetNode], [], config, undefined, toTextSync);
 };

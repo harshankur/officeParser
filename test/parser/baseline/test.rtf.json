@@ -28,7 +28,10 @@
     "ignoreInternalLinks": false,
     "csvDelimiter": ",",
     "fileType": null,
-    "abortSignal": null
+    "abortSignal": null,
+    "ignoreComments": false,
+    "ignoreHeadersAndFooters": false,
+    "ignoreSlideMasters": false
   },
   "type": "rtf",
   "metadata": {},
@@ -5996,7 +5999,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Footnotes",
+      "text": "Footnotes and endnotes are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.",
       "children": [
         {
           "type": "text",
@@ -6010,16 +6013,41 @@
             "superscript": false,
             "size": "12pt",
             "font": "Ubuntu"
-          }
-        }
-      ],
-      "metadata": {},
-      "rawContent": "}\\pard \\plain \\ltrpar \\ql \\fi432 \\li0 \\ri0 \\sl276 \\slmult1 \\widctlpar \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap0 \\pararsid15151229 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs24 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid15151229 Footnotes}{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\cs35 \\super \\insrsid15151229 \\chftn {"
-    },
-    {
-      "type": "paragraph",
-      "text": " and endnotes",
-      "children": [
+          },
+          "notes": [
+            {
+              "type": "note",
+              "children": [
+                {
+                  "type": "paragraph",
+                  "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
+                      "formatting": {
+                        "bold": false,
+                        "italic": false,
+                        "underline": false,
+                        "strikethrough": false,
+                        "subscript": false,
+                        "superscript": false,
+                        "size": "10pt",
+                        "font": "Ubuntu"
+                      }
+                    }
+                  ],
+                  "metadata": {},
+                  "rawContent": "\\footnote \\ltrpar \\pard \\plain \\ltrpar \\s25 \\ql \\li0 \\ri0 \\widctlpar \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap0 \\rtlch \\fcs1 \\af31507 \\afs20 \\alang1025 \\ltrch \\fcs0 \\fs20 \\lang1033 \\langfe1033 \\loch \\af31506 \\hich \\af31506 \\dbch \\af31505 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\cs35 \\super \\insrsid15151229 \\chftn }{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid15151229 \\hich \\af31506 \\dbch \\af31505 \\loch \\f31506  In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.}"
+                }
+              ],
+              "metadata": {
+                "noteId": "1",
+                "noteType": "footnote"
+              }
+            }
+          ]
+        },
         {
           "type": "text",
           "text": " and endnotes",
@@ -6032,16 +6060,41 @@
             "superscript": false,
             "size": "12pt",
             "font": "Ubuntu"
-          }
-        }
-      ],
-      "metadata": {},
-      "rawContent": "}}{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid15151229  and endnotes}{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\cs38 \\super \\insrsid15151229 \\chftn {"
-    },
-    {
-      "type": "paragraph",
-      "text": " are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.",
-      "children": [
+          },
+          "notes": [
+            {
+              "type": "note",
+              "children": [
+                {
+                  "type": "paragraph",
+                  "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
+                      "formatting": {
+                        "bold": false,
+                        "italic": false,
+                        "underline": false,
+                        "strikethrough": false,
+                        "subscript": false,
+                        "superscript": false,
+                        "size": "10pt",
+                        "font": "Ubuntu"
+                      }
+                    }
+                  ],
+                  "metadata": {},
+                  "rawContent": "\\footnote \\ftnalt \\ltrpar \\pard \\plain \\ltrpar \\s36 \\ql \\fi432 \\li0 \\ri0 \\widctlpar \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap0 \\rtlch \\fcs1 \\af31507 \\afs20 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs20 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\cs38 \\super \\insrsid15151229 \\chftn }{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid15151229  Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.}"
+                }
+              ],
+              "metadata": {
+                "noteId": "2",
+                "noteType": "endnote"
+              }
+            }
+          ]
+        },
         {
           "type": "text",
           "text": " are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.",
@@ -6058,7 +6111,7 @@
         }
       ],
       "metadata": {},
-      "rawContent": "}}{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid15151229  are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.\\par "
+      "rawContent": "}\\pard \\plain \\ltrpar \\ql \\fi432 \\li0 \\ri0 \\sl276 \\slmult1 \\widctlpar \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap0 \\pararsid15151229 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs24 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid15151229 Footnotes}{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\cs35 \\super \\insrsid15151229 \\chftn {}}{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid15151229  and endnotes}{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\cs38 \\super \\insrsid15151229 \\chftn {}}{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid15151229  are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.\\par "
     },
     {
       "type": "heading",
@@ -8231,70 +8284,6 @@
         "alignment": "left"
       },
       "rawContent": "}\\pard \\ltrpar \\s40 \\ql \\fi-360 \\li1152 \\ri0 \\sl276 \\slmult1 \\widctlpar \\wrapdefault \\aspalpha \\aspnum \\faauto \\ls7 \\adjustright \\rin0 \\lin1152 \\itap0 \\pararsid1900020822 \\contextualspace {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid1372575585 Four\\par "
-    },
-    {
-      "type": "note",
-      "children": [
-        {
-          "type": "paragraph",
-          "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
-          "children": [
-            {
-              "type": "text",
-              "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
-              "formatting": {
-                "bold": false,
-                "italic": false,
-                "underline": false,
-                "strikethrough": false,
-                "subscript": false,
-                "superscript": false,
-                "size": "10pt",
-                "font": "Ubuntu"
-              }
-            }
-          ],
-          "metadata": {},
-          "rawContent": "\\footnote \\ltrpar \\pard \\plain \\ltrpar \\s25 \\ql \\li0 \\ri0 \\widctlpar \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap0 \\rtlch \\fcs1 \\af31507 \\afs20 \\alang1025 \\ltrch \\fcs0 \\fs20 \\lang1033 \\langfe1033 \\loch \\af31506 \\hich \\af31506 \\dbch \\af31505 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\cs35 \\super \\insrsid15151229 \\chftn }{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid15151229 \\hich \\af31506 \\dbch \\af31505 \\loch \\f31506  In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.}"
-        }
-      ],
-      "metadata": {
-        "noteId": "1",
-        "noteType": "footnote"
-      },
-      "text": "In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre."
-    },
-    {
-      "type": "note",
-      "children": [
-        {
-          "type": "paragraph",
-          "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
-          "children": [
-            {
-              "type": "text",
-              "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
-              "formatting": {
-                "bold": false,
-                "italic": false,
-                "underline": false,
-                "strikethrough": false,
-                "subscript": false,
-                "superscript": false,
-                "size": "10pt",
-                "font": "Ubuntu"
-              }
-            }
-          ],
-          "metadata": {},
-          "rawContent": "\\footnote \\ftnalt \\ltrpar \\pard \\plain \\ltrpar \\s36 \\ql \\fi432 \\li0 \\ri0 \\widctlpar \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap0 \\rtlch \\fcs1 \\af31507 \\afs20 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs20 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\cs38 \\super \\insrsid15151229 \\chftn }{\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid15151229  Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.}"
-        }
-      ],
-      "metadata": {
-        "noteId": "2",
-        "noteType": "endnote"
-      },
-      "text": "Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note."
     }
   ],
   "attachments": [

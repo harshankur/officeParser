@@ -1,4 +1,4 @@
-import { OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, StructuredStyleMapping } from '../types.js';
+import { OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
 import { resolveGeneratorConfig } from '../utils/configUtils.js';
 import { getWarningMessage } from '../utils/errorUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
@@ -7,7 +7,7 @@ import { StyleMapper } from '../utils/styleMapper.js';
  * Base class for all document generators.
  * Provides common traversal logic and configuration handling.
  */
-export abstract class BaseGenerator<D extends string = string> {
+export abstract class BaseGenerator<D extends UniversalGeneratorFormat = UniversalGeneratorFormat> {
     protected config: FullGeneratorConfig;
     protected ast: OfficeParserAST;
     protected messages: OfficeIssue[] = [];
@@ -33,7 +33,7 @@ export abstract class BaseGenerator<D extends string = string> {
     /**
      * Entry point for generation.
      */
-    abstract generate(): Promise<ConversionResult>;
+    abstract generate(): Promise<ConversionResult<D>>;
 
     /**
      * Centralized logic for handling the onNode callback.

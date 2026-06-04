@@ -1,5 +1,6 @@
 import { DEFAULT_GENERATOR_CONFIG, DEFAULT_OFFICE_PARSER_CONFIG } from '../defaults.js';
-import { FullGeneratorConfig, FullOfficeParserConfig, GeneratorConfig, OfficeParserConfig } from '../types.js';
+import { FullGeneratorConfig, FullOfficeParserConfig, GeneratorConfig, OfficeParserConfig, OfficeWarningType } from '../types.js';
+import { logWarning } from './errorUtils.js';
 
 /**
  * Deep clones an object, specifically handling arrays and plain objects.
@@ -115,6 +116,7 @@ export function resolveGeneratorConfig<D extends string>(
     // If it's already a full config and we don't need to merge AST config, return it as is.
     // We assume FullGeneratorConfig is already "safe" (references resolved).
     if (isFullGeneratorConfig(userConfig) && !astConfig) {
+        validateHtmlConfigWidth(userConfig.htmlConfig, userConfig);
         return userConfig;
     }
 
@@ -132,7 +134,23 @@ export function resolveGeneratorConfig<D extends string>(
             if (!source) return;
             for (const key in source) {
                 if (source[key] !== undefined) {
-                    target[key] = source[key];
+                    // Deep merge plain objects (like injections or margin)
+                    if (
+                        typeof source[key] === 'object' && 
+                        source[key] !== null && 
+                        !Array.isArray(source[key]) &&
+                        !(source[key] instanceof Function) &&
+                        !(source[key] instanceof Date) &&
+                        !(source[key] instanceof RegExp) &&
+                        !(source[key] instanceof Buffer)
+                    ) {
+                        if (!target[key] || typeof target[key] !== 'object') {
+                            target[key] = {};
+                        }
+                        mergeSubConfig(target[key], source[key]);
+                    } else {
+                        target[key] = source[key];
+                    }
                 }
             }
         };
@@ -165,5 +183,39 @@ export function resolveGeneratorConfig<D extends string>(
         }
     }
 
+    validateHtmlConfigWidth(config.htmlConfig, config);
     return config;
+}
+
+/**
+ * Validates the containerWidth option for HTML generation.
+ * Can be 'auto', a positive number, or a positive CSS length/percentage string.
+ */
+export function isValidContainerWidth(width: any): boolean {
+    if (width === 'auto') return true;
+    if (typeof width === 'number') {
+        return Number.isFinite(width) && width > 0;
+    }
+    if (typeof width === 'string') {
+        const val = width.trim().toLowerCase();
+        if (val === 'auto') return true;
+        const match = val.match(/^((?:\d*\.)?\d+)(px|%|em|rem|vw|vh|vmin|vmax|ch|in|cm|mm|pt|pc)?$/);
+        if (!match) return false;
+        const numericValue = parseFloat(match[1]);
+        return numericValue > 0;
+    }
+    return false;
+}
+
+/**
+ * Emits a warning and falls back to 'auto' if the HTML containerWidth is invalid.
+ */
+function validateHtmlConfigWidth(htmlConfig: any, config: any): void {
+    if (htmlConfig?.containerWidth !== undefined) {
+        const width = htmlConfig.containerWidth;
+        if (!isValidContainerWidth(width)) {
+            logWarning(OfficeWarningType.INVALID_CONTAINER_WIDTH, config as any, width);
+            htmlConfig.containerWidth = 'auto';
+        }
+    }
 }

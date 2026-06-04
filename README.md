@@ -100,7 +100,7 @@ npx officeparser document.pdf --format=chunks
 |------|--------|---------|-------------|
 | `--format` | `json\|text\|md\|html\|csv\|rtf\|pdf\|chunks` | `json` | Output format |
 | `--output` | path | — | Write output to a file |
-| `--toText` | `true\|false` | `false` | **Deprecated.** Use `--format=text` |
+| ~~`--toText`~~ | `true\|false` | `false` | **Deprecated.** Use `--format=text` |
 | `--ignoreNotes` | `true\|false` | `false` | Ignore speaker notes (PPTX/ODP) |
 | `--putNotesAtLast` | `true\|false` | `false` | Collect notes at end of output |
 | `--newlineDelimiter` | string | `\n` | Delimiter between lines |
@@ -108,7 +108,7 @@ npx officeparser document.pdf --format=chunks
 | `--ocr` | `true\|false` | `false` | Enable OCR for images |
 | `--includeRawContent` | `true\|false` | `false` | Include raw XML/RTF in nodes |
 | `--includeBreakNodes` | `true\|false` | `false` | Include break nodes (DOCX only) |
-| `--outputErrorToConsole` | `true\|false` | `false` | **Deprecated.** Use `onWarning` callback |
+| ~~`--outputErrorToConsole`~~ | `true\|false` | `false` | **Deprecated.** Use `onWarning` callback |
 | `--verbose` | `true\|false` | `false` | Show full error stack traces |
 
 ---
@@ -420,13 +420,19 @@ interface OfficeChunk {
 ```text
 OfficeParserAST
 ├── type: 'docx' | 'pdf' | 'xlsx' | 'csv' | 'md' | ...  (11 formats)
-├── metadata: { author, title, created, modified, customProperties, styleMap, ... }
+├── metadata: { author, title, created, modified, keywords, customProperties, nativeProperties, styleMap, ... }
 ├── content: [ OfficeContentNode ]
-│   ├── type: 'paragraph' | 'heading' | 'table' | 'list' | 'image' | 'chart' | ...
+│   ├── type: 'paragraph' | 'heading' | 'table' | 'list' | 'image' | 'chart' | 'comment' | ...
 │   ├── text: string  (concatenated text of node + all descendants)
-│   ├── children: [ OfficeContentNode ]  (recursive)
+│   ├── children: [ OfficeContentNode ]  (recursive structural children)
+│   ├── notes: [ OfficeContentNode ]     (footnotes/endnotes/slide notes attached to this node)
+│   ├── comments: [ OfficeContentNode ] (inline comments attached to this node)
 │   ├── formatting: { bold, italic, underline, color, size, font, alignment, ... }
-│   └── metadata: { level, listId, row, col, rowSpan, colSpan, style, ... }
+│   └── metadata: { level, listId, row, col, rowSpan, colSpan, backgroundColor, style, ... }
+├── auxiliary?: OfficeAuxiliaryContent   (out-of-band layout elements)
+│   ├── headers?: OfficeContentNode[]   (DOCX headers)
+│   ├── footers?: OfficeContentNode[]   (DOCX footers)
+│   └── slideMasters?: OfficeContentNode[] (PPTX slide masters)
 ├── attachments: [ OfficeAttachment ]  (populated when extractAttachments: true)
 │   ├── type: 'image' | 'chart'
 │   ├── name: string
@@ -436,7 +442,7 @@ OfficeParserAST
 │   └── chartData?: { title, dataSets, labels }
 ├── warnings: OfficeIssue[]  (non-fatal issues from the parsing phase)
 ├── to(format, config?)  (format: 'html'|'md'|'text'|'csv'|'rtf'|'pdf'|'chunks', returns { value, messages })
-└── toText()             (Deprecated: use .to('text') instead)
+└── ~~toText()~~             (Deprecated: use .to('text') instead)
 ```
 
 ### `OfficeIssue` — Warning / Error Object
@@ -552,17 +558,21 @@ ast.metadata = {
     created?: Date
     modified?: Date
     description?: string
-    customProperties?: Record<string, any>  // user-defined metadata from the document
-    styleMap?: Record<string, TextFormatting>  // named styles → formatting definitions
-    formatting?: TextFormatting              // document-wide defaults
+    keywords?: string                            // NEW: Keywords from document properties
+    customProperties?: Record<string, any>       // User-defined metadata from the document
+    nativeProperties?: Record<string, any>       // NEW: All format-specific raw metadata
+    styleMap?: Record<string, TextFormatting>    // Named styles → formatting definitions
+    formatting?: TextFormatting                  // Document-wide defaults
 }
 ```
 
-**Accessing custom properties:**
+**Accessing native properties (format-specific metadata):**
 ```js
 const ast = await officeParser.parseOffice('contract.docx');
-console.log(ast.metadata.customProperties);
-// { "ProjectID": "ABC-123", "InternalReview": true }
+console.log(ast.metadata.nativeProperties);
+// DOCX: { Pages: 5, Application: 'Microsoft Word' }
+// HTML: { description: 'My page', 'og:title': 'Title' }
+// PDF:  { Title: 'Report', XMP: { ... } }
 ```
 
 ---
@@ -585,6 +595,61 @@ Key internal optimizations shipped in recent versions:
 const headings = ast.content.filter(n => n.type === 'heading' && n.metadata?.level === 1);
 console.log(headings.map(h => h.text));
 ```
+
+### Extract comments
+```ts
+// Comments can be attached to any nested node, so we must traverse recursively
+const printComments = (nodes: OfficeContentNode[]) => {
+    nodes.forEach(node => {
+        if (node.comments) {
+            node.comments.forEach(c => {
+                console.log(`Comment by ${c.metadata?.author}: ${c.text}`);
+            });
+        }
+        if (node.children) {
+            printComments(node.children);
+        }
+    });
+};
+
+printComments(ast.content);
+```
+
+Set `ignoreComments: true` to skip extraction.
+
+### Extract footnotes, endnotes & slide notes
+```ts
+// Slide speaker notes (PPTX) live on the slide node itself
+const slide = ast.content.find(n => n.type === 'slide');
+console.log(slide?.notes?.map(n => n.text));
+
+// Footnotes and endnotes (DOCX/RTF) can be deeply nested, so we traverse recursively:
+const printNotes = (nodes: OfficeContentNode[]) => {
+    nodes.forEach(node => {
+        if (node.notes) {
+            node.notes.forEach(note => console.log(note.text));
+        }
+        if (node.children) {
+            printNotes(node.children);
+        }
+    });
+};
+
+printNotes(ast.content);
+```
+
+> [!IMPORTANT]
+> `putNotesAtLast` is **deprecated**. Notes are always attached via `node.notes` — this flag has no effect and will be removed in a future major version.
+
+### Access headers, footers & slide masters
+```ts
+// These are NOT in ast.content — use ast.auxiliary
+console.log(ast.auxiliary?.headers?.map(h => h.text));   // DOCX headers
+console.log(ast.auxiliary?.footers?.map(f => f.text));   // DOCX footers
+console.log(ast.auxiliary?.slideMasters?.length);         // PPTX slide masters
+```
+
+Set `ignoreHeadersAndFooters: true` or `ignoreSlideMasters: true` to skip extraction.
 
 ### Extract images with OCR text
 ```js
@@ -650,8 +715,11 @@ Pass as the second argument to `parseOffice(file, config)`.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `newlineDelimiter` | `string` | `'\n'` | Delimiter inserted between lines in text output |
-| `ignoreNotes` | `boolean` | `false` | Ignore speaker notes (PPTX/ODP) |
-| `putNotesAtLast` | `boolean` | `false` | Collect all notes at the end instead of inline |
+| `ignoreNotes` | `boolean` | `false` | Ignore footnotes/endnotes (DOCX, RTF) and speaker notes (PPTX/ODP) |
+| `ignoreComments` | `boolean` | `false` | **New**: Ignore inline comments/annotations (DOCX, XLSX, PPTX) — by default attached via `node.comments[]` |
+| `ignoreHeadersAndFooters` | `boolean` | `false` | **New**: Skip DOCX headers & footers (populated in `ast.auxiliary.headers/footers` by default) |
+| `ignoreSlideMasters` | `boolean` | `false` | **New**: Skip PPTX slide masters (populated in `ast.auxiliary.slideMasters` by default) |
+| ~~`putNotesAtLast`~~ | `boolean` | `false` | **Deprecated**: Notes are now attached via `node.notes[]`. This flag has no effect |
 | `extractAttachments` | `boolean` | `false` | Populate `ast.attachments` with Base64 images/charts |
 | `ocr` | `boolean` | `false` | Run Tesseract OCR on images (requires `extractAttachments: true`) |
 | `ocrConfig` | `OcrConfig` | `{}` | OCR worker pool settings — see [OCR section](#ocr-scheduler--resource-management) |
@@ -665,7 +733,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `pdfWorkerSrc` | `string` | CDN (jsDelivr) | Path/URL to `pdf.worker.min.mjs` (required in browser) |
 | `onWarning` | `(issue: OfficeIssue) => void` | — | Callback for non-fatal parsing issues |
 | `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel parsing (rejects with AbortError) |
-| `outputErrorToConsole` | `boolean` | `false` | **Deprecated.** Use `onWarning` instead |
+| ~~`outputErrorToConsole`~~ | `boolean` | `false` | **Deprecated.** Use `onWarning` instead |
 
 ---
 
@@ -764,6 +832,12 @@ Pass as `htmlConfig` inside `GeneratorConfig`.
 |--------|------|---------|-------------|
 | `standalone` | `boolean` | `true` | Wrap output in a full `<html>` document with CSS |
 | `chartJsSrc` | `string` | jsDelivr CDN | URL for the Chart.js library |
+| `containerWidth` | `string \| number` | `'auto'` | Max width of the content container. Positive number (px), CSS length string (`'900px'`, `'100%'`, `'60vw'`), or `'auto'`. Invalid values fall back to `'auto'` with an `INVALID_CONTAINER_WIDTH` warning |
+| `customCss` | `string` | `''` | Raw CSS injected into the `<style>` block — use to override built-in styles |
+| `injections.headStart` | `string` | `''` | Raw HTML injected after `<head>` |
+| `injections.headEnd` | `string` | `''` | Raw HTML injected before `</head>` |
+| `injections.bodyStart` | `string` | `''` | Raw HTML injected after `<body>` |
+| `injections.bodyEnd` | `string` | `''` | Raw HTML injected before `</body>` |
 
 ### MdGeneratorConfig
 
@@ -780,6 +854,8 @@ Pass as `pdfConfig` inside `GeneratorConfig`. Requires the optional `puppeteer` 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `format` | `string` | `'A4'` | Paper format (`'A4'`, `'Letter'`, `'Legal'`, etc.) |
+| `width` | `string \| number` | `''` | Paper width (e.g., `'5in'`, `'3cm'`) or pixels |
+| `height` | `string \| number` | `''` | Paper height (e.g., `'5in'`, `'3cm'`) or pixels |
 | `landscape` | `boolean` | `false` | Landscape page orientation |
 | `printBackground` | `boolean` | `true` | Print background graphics |
 | `margin` | `object` | `{0,0,0,0}` | Page margins (`top`, `right`, `bottom`, `left`) |
@@ -885,7 +961,7 @@ When `ocr: true` is set, `officeParser` maintains an intelligent **Smart Worker 
 | `corePath` | `string` | `''` | Custom path to Tesseract core script |
 | `langPath` | `string` | `''` | Custom path for language data files |
 | `timeout` | `OcrTimeoutConfig` | `{}` | Consolidated timeouts: `autoTerminate`, `workerLoad`, `recognition` |
-| `autoTerminateTimeout` | `number` | `10000` | **Deprecated.** Use `timeout.autoTerminate` instead |
+| ~~`autoTerminateTimeout`~~ | `number` | `10000` | **Deprecated.** Use `timeout.autoTerminate` instead |
 
 See all language codes at [tesseract-ocr.github.io](https://tesseract-ocr.github.io/tessdoc/Data-Files).
 
@@ -986,7 +1062,6 @@ For a full debugging guide, visit the [Live Documentation](https://harshankur.gi
 
 1. **ODT/ODS Charts**: May show inaccurate data when the chart references external cell ranges or uses complex layout-based data.
 2. **PDF Images (Browser)**: Extracted as BMP files for cross-platform compatibility. Conversion is automatic.
-3. **RTF Notes**: `putNotesAtLast` has no effect for RTF files; footnotes and endnotes are always appended at the end.
 
 ---
 

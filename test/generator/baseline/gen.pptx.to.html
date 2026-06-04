@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Document</title>
@@ -20,6 +21,7 @@
                 --border-color: #e9ecef;
                 --accent-color: #3498db;
                 --shadow: 0 10px 25px rgba(0,0,0,0.05);
+                --container-width: 297mm;
             }
             * {
                 box-sizing: border-box;
@@ -33,7 +35,7 @@
                 padding: 50px 20px;
             }
             .container {
-                max-width: 850px;
+                max-width: var(--container-width);
                 margin: 0 auto;
                 background: var(--container-bg);
                 padding: 60px 80px;
@@ -41,7 +43,7 @@
                 box-shadow: var(--shadow);
             }
             .presentation-container, .pdf-container {
-                max-width: 1200px;
+                max-width: var(--container-width);
                 margin: 0 auto;
             }
             .presentation-container .metadata-summary, .pdf-container .metadata-summary {
@@ -89,33 +91,50 @@
             h3 { font-size: 1.5em; }
             
             p { margin-bottom: 1.3em; }
+            p.empty-paragraph { margin: 0; min-height: 1em; }
             
-            ul, ol { margin: 1.5em 0; padding-left: 2em; }
-            li { margin-bottom: 0.6em; }
+            ul, ol { margin: 1em 0; padding-left: 2em; }
+            li { margin-bottom: 0.25em; }
+            li > p { margin-bottom: 0.25em; }
             
             .table-container {
-                width: 100%;
+                width: fit-content;
+                max-width: 100%;
                 overflow-x: auto;
                 -webkit-overflow-scrolling: touch;
-                margin: 25px 0;
+                margin: 25px auto;
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                background: white;
             }
             table {
                 width: auto;
                 max-width: 100%;
                 min-width: 300px;
-                border-collapse: collapse;
-                margin: 0 auto;
-                border: 1px solid var(--border-color);
-                border-radius: 8px;
-                overflow: hidden;
+                border-collapse: separate;
+                border-spacing: 0;
+                margin: 0;
+                border: none;
             }
             th, td {
-                padding: 12px 16px;
+                padding: 8px 12px;
                 border-bottom: 1px solid var(--border-color);
                 border-right: 1px solid var(--border-color);
                 text-align: left;
                 vertical-align: top;
                 overflow-wrap: break-word;
+            }
+            th:last-child, td:last-child {
+                border-right: none;
+            }
+            tr:last-child th, tr:last-child td {
+                border-bottom: none;
+            }
+            th, td > p {
+                margin: 0;
+            }
+            td > *:last-child, th > *:last-child {
+                margin-bottom: 0;
             }
             th {
                 background-color: #f8f9fa;
@@ -128,7 +147,6 @@
                 top: 0;
                 z-index: 10;
             }
-            tr:last-child td { border-bottom: none; }
             tr:nth-child(even) { background-color: #fdfdfd; }
             tr:hover { background-color: #f1f4f9; }
             
@@ -146,7 +164,98 @@
                 padding: 8px 12px;
                 font-size: 13px;
                 white-space: nowrap;
+            }
+            /* Spreadsheet Grid styling */
+            .excel-grid {
+                border-collapse: collapse;
+                border-spacing: 0;
+                background: var(--container-bg);
+                border: 1px solid var(--border-color);
+                width: max-content;
+                max-width: none;
+                min-width: 0;
+            }
+            .excel-grid th, .excel-grid td {
+                border: 1px solid var(--border-color);
+                padding: 4px 8px;
+                font-size: 13px;
+                line-height: 1.2;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .excel-col-header {
+                background: #f8f9fa;
+                color: #5f6368;
+                font-weight: 500;
+                text-align: center;
+                user-select: none;
+                border-bottom: 2px solid var(--border-color);
+                position: sticky;
+                top: 0;
+                z-index: 10;
                 min-width: 100px;
+            }
+            .col-resizer {
+                position: absolute;
+                top: 0;
+                right: 0;
+                width: 4px;
+                height: 100%;
+                cursor: col-resize;
+                user-select: none;
+                z-index: 20;
+            }
+            .col-resizer:hover, .col-resizer.resizing {
+                background: var(--accent-color, #3498db);
+            }
+            .excel-row-num {
+                background: #f8f9fa;
+                color: #5f6368;
+                text-align: center;
+                font-weight: 500;
+                width: 45px;
+                min-width: 45px !important;
+                max-width: 45px;
+                user-select: none;
+                border-right: 2px solid var(--border-color);
+                position: sticky;
+                left: 0;
+                z-index: 5;
+            }
+            .row-resizer {
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                width: 100%;
+                height: 4px;
+                cursor: row-resize;
+                user-select: none;
+                z-index: 20;
+            }
+            .row-resizer:hover, .row-resizer.resizing {
+                background: var(--accent-color, #3498db);
+            }
+            .excel-row-num-header {
+                background: #f1f3f4;
+                width: 45px;
+                min-width: 45px !important;
+                max-width: 45px;
+                position: sticky;
+                top: 0;
+                left: 0;
+                z-index: 15;
+                border-right: 2px solid var(--border-color);
+                border-bottom: 2px solid var(--border-color);
+            }
+            .excel-cell-empty {
+                background: var(--container-bg);
+            }
+            .excel-grid tr:hover td {
+                background-color: #f1f4f9;
+            }
+            .excel-grid tr:hover td.excel-row-num {
+                background-color: #f8f9fa; /* Keep header color */
             }
 
             /* Tab Bar */
@@ -181,9 +290,9 @@
             /* Slide & Page Separation */
             .slide {
                 background: white;
-                min-height: 600px;
+                aspect-ratio: 297 / 210;
                 margin: 0 auto 40px auto;
-                padding: 60px 80px;
+                padding: 4% 6%;
                 border-radius: 12px;
                 box-shadow: 0 10px 30px rgba(0,0,0,0.1);
                 position: relative;
@@ -193,21 +302,74 @@
                 border: 1px solid var(--border-color);
                 box-sizing: border-box;
                 width: 100%;
+                overflow: hidden;
+                overflow-y: auto;
                 overflow-wrap: break-word;
                 page-break-after: always;
             }
+            .slide:has(+ .slide-note) {
+                margin-bottom: 0;
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
+                border-bottom: none;
+            }
+            .slide table {
+                width: auto;
+                max-width: 100%;
+                font-size: 0.85em;
+                margin: 10px 0;
+            }
+            .slide th, .slide td {
+                padding: 6px 10px;
+            }
+            .slide > * {
+                flex-shrink: 0;
+            }
+            .slide > .table-container {
+                flex-shrink: 1;
+                min-height: 0;
+            }
+            .slide .table-container {
+                margin: 10px auto;
+                overflow-y: auto;
+            }
+            .slide .chart-container {
+                margin: 15px auto;
+                max-width: 100%;
+                padding: 10px;
+                height: 240px;
+                box-shadow: none;
+                border-radius: 8px;
+            }
+            .slide img {
+                max-height: 200px;
+                width: auto;
+                margin: 10px auto;
+                box-shadow: none;
+            }
+            .slide .image-container {
+                margin: 15px 0;
+            }
+            .slide h1 { font-size: 1.8em; margin-top: 0.4em; margin-bottom: 0.3em; padding-bottom: 5px; }
+            .slide h2 { font-size: 1.4em; margin-top: 0.4em; }
+            .slide h3 { font-size: 1.25em; }
+            .slide p { margin-bottom: 0.6em; font-size: 0.95em; }
+            .slide li > p { margin-bottom: 0.25em; }
+            .slide ul, .slide ol { margin: 0.6em 0; }
+            .slide li { margin-bottom: 0.25em; }
             .slide-note {
                 background: #fdfdfd;
                 border: 1px solid var(--border-color);
-                border-left: 4px solid var(--accent-color);
-                border-radius: 12px;
+                border-top: 1px dashed var(--border-color);
+                border-radius: 0 0 12px 12px;
                 padding: 30px 50px;
-                margin: 20px auto 60px auto;
-                max-width: 1000px;
+                margin: 0 auto 40px auto;
+                width: 100%;
+                box-sizing: border-box;
                 font-size: 0.95em;
                 color: var(--text-color);
                 position: relative;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+                box-shadow: 0 10px 30px rgba(0,0,0,0.1);
             }
             .note-footnote, .note-endnote {
                 margin: 30px auto;
@@ -237,9 +399,9 @@
             }
             .page {
                 background: white;
-                min-height: 1000px;
+                aspect-ratio: 1 / 1.4142;
                 margin: 0 auto 40px auto;
-                padding: 70px 90px;
+                padding: 8% 10%;
                 box-shadow: 0 5px 20px rgba(0,0,0,0.08);
                 position: relative;
                 border: 1px solid var(--border-color);
@@ -259,8 +421,8 @@
             
             /* High Fidelity Presentation Mode */
             @media screen and (max-width: 800px) {
-                .slide { min-height: auto; padding: 40px 30px; }
-                .page { padding: 40px; }
+                .slide { min-height: auto; aspect-ratio: auto; padding: 40px 30px; }
+                .page { aspect-ratio: auto; padding: 40px; }
             }
             
             /* Nested Table Styles */
@@ -269,6 +431,8 @@
                 border-radius: 6px;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.03);
                 background-color: #ffffff;
+                border: 1px solid var(--border-color);
+                overflow: hidden;
             }
             td td {
                 padding: 10px 14px;
@@ -388,10 +552,15 @@
                     height: auto !important;
                 }
             }
+
+            /* --- Custom User CSS --- */
+            
         
     </style>
+    
 </head>
 <body>
+    
     <div class="presentation-container">
         <article>
             
@@ -446,16 +615,6 @@
 </p>
 
 </section>
-
-<div class="slide-note"><p>Slide Note 1.
-
-</p>
-
-<p>1
-
-</p>
-
-</div>
 
 <section class="slide" data-slide-num="2"><h1 id="text-formatting"><span style="color: #365F91; font-size: 14pt; font-family: Ubuntu, sans-serif"><b>Text Formatting</b></span>
 
@@ -569,37 +728,15 @@
 
 </section>
 
-<div class="slide-note"><p>Slide Note 2. This is a 
-
-<b>bold</b>
-
- text, but no 
-
-<i>italic</i>
-
-. Let's strike 
-
-<strike>that</strike>
-
- out.
-
-</p>
-
-<p>2
-
-</p>
-
-</div>
-
 <section class="slide" data-slide-num="3"><h1 id="tables"><span style="color: #365F91; font-size: 14pt; font-family: Ubuntu, sans-serif"><b>Tables</b></span>
 
 </h1>
 
-<div class="table-container"><table><tr><td><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>ITEM </b></span>
+<div class="table-container"><table><tr><td style="background-color: #9BBB59"><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>ITEM </b></span>
 
 </p>
 
-</td><td><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>NEEDED </b></span>
+</td><td style="background-color: #9BBB59"><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>NEEDED </b></span>
 
 </p>
 
@@ -671,59 +808,51 @@
 
 </p>
 
-<div class="table-container"><table><tr><td><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">City or Town </span>
+<div class="table-container"><table><tr><td style="background-color: #FFFFFF"><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">City or Town </span>
 
 </p>
 
-</td><td><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">Point A </span>
+</td><td style="background-color: #FFFFFF"><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">Point A </span>
 
 </p>
 
-</td><td><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">Point B </span>
+</td><td style="background-color: #FFFFFF"><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">Point B </span>
 
 </p>
 
-</td><td><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">Point C </span>
+</td><td style="background-color: #FFFFFF"><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">Point C </span>
 
 </p>
 
-</td><td><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">Point D </span>
+</td><td style="background-color: #FFFFFF"><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">Point D </span>
 
 </p>
 
-</td><td><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">Point E </span>
-
-</p>
-
-</td></tr>
-
-<tr><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Point A </span>
-
-</p>
-
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">— </span>
-
-</p>
-
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td style="background-color: #FFFFFF"><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">Point E </span>
 
 </p>
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Point B </span>
+<tr><td style="background-color: #FFFFFF"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Point A </span>
+
+</p>
+
+</td><td style="background-color: #D3DFEE"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">— </span>
+
+</p>
+
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph"><br></p>
+
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph"><br></p>
+
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph"><br></p>
+
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph"><br></p>
+
+</td></tr>
+
+<tr><td style="background-color: #FFFFFF"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Point B </span>
 
 </p>
 
@@ -735,47 +864,37 @@
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Point C </span>
+<tr><td style="background-color: #FFFFFF"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Point C </span>
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">64 </span>
+</td><td style="background-color: #D3DFEE"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">64 </span>
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">56 </span>
+</td><td style="background-color: #D3DFEE"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">56 </span>
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">— </span>
+</td><td style="background-color: #D3DFEE"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">— </span>
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph"><br></p>
 
-</p>
-
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td style="background-color: #D3DFEE"><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Point D </span>
+<tr><td style="background-color: #FFFFFF"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Point D </span>
 
 </p>
 
@@ -795,33 +914,31 @@
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Point E </span>
+<tr><td style="background-color: #FFFFFF"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Point E </span>
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">93 </span>
+</td><td style="background-color: #D3DFEE"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">93 </span>
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">35 </span>
+</td><td style="background-color: #D3DFEE"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">35 </span>
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">54 </span>
+</td><td style="background-color: #D3DFEE"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">54 </span>
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">43 </span>
+</td><td style="background-color: #D3DFEE"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">43 </span>
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">— </span>
+</td><td style="background-color: #D3DFEE"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">— </span>
 
 </p>
 
@@ -831,41 +948,29 @@
 
 </section>
 
-<div class="slide-note"><p>And then about tables
-
-</p>
-
-<p>3
-
-</p>
-
-</div>
-
 <section class="slide" data-slide-num="4"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.</span>
 
 </p>
 
-<div class="table-container"><table><tr><td><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>College </b></span>
+<div class="table-container"><table><tr><td style="background-color: #4BACC6"><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>College </b></span>
 
 </p>
 
-</td><td><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>New students </b></span>
+</td><td style="background-color: #4BACC6"><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>New students </b></span>
 
 </p>
 
-</td><td><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>Graduating students </b></span>
+</td><td style="background-color: #4BACC6"><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>Graduating students </b></span>
 
 </p>
 
-</td><td><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>Change </b></span>
+</td><td style="background-color: #4BACC6"><p><span style="color: #FFFFFF; font-size: 12pt; font-family: Ubuntu, sans-serif"><b>Change </b></span>
 
 </p>
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+<tr><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #808080; font-size: 12pt; font-family: Ubuntu, sans-serif"><i>Undergraduate</i></span>
 
@@ -873,13 +978,9 @@
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
-
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -919,9 +1020,7 @@
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+<tr><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #808080; font-size: 12pt; font-family: Ubuntu, sans-serif"><i>Graduate</i></span>
 
@@ -929,13 +1028,9 @@
 
 </p>
 
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
-
-</td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -975,19 +1070,19 @@
 
 </td></tr>
 
-<tr><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Total </span>
+<tr><td style="background-color: #FFFFFF"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Total </span>
 
 </p>
 
-</td><td><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">998 </span>
+</td><td style="background-color: #FFFFFF"><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">998 </span>
 
 </p>
 
-</td><td><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">908 </span>
+</td><td style="background-color: #FFFFFF"><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">908 </span>
 
 </p>
 
-</td><td><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">90 </span>
+</td><td style="background-color: #FFFFFF"><p><span style="font-size: 11pt; font-family: Ubuntu, sans-serif">90 </span>
 
 </p>
 
@@ -1023,7 +1118,7 @@
 
 </td></tr>
 
-<tr><td><p></p>
+<tr><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">Four </span>
 
@@ -1033,9 +1128,7 @@
 
 </table></div>
 
-<div class="table-container"><table><tr><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+<div class="table-container"><table><tr><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif">To the left is a table inside a table, with some cells merged. </span>
 
@@ -1046,27 +1139,6 @@
 </table></div>
 
 </section>
-
-<div class="slide-note"><p>Now calendars
-
-</p>
-
-<ol>
-<li value="1" style="text-align: left">Sun
-
-</li><li value="2" style="text-align: left">Mon
-
-</li></ol>
-
-<p>7. Sat
-
-</p>
-
-<p>5
-
-</p>
-
-</div>
 
 <section class="slide" data-slide-num="5"><p><span style="font-size: 12pt; font-family: Ubuntu, sans-serif"> We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in </span>
 
@@ -1080,31 +1152,31 @@
 
 </p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -1112,167 +1184,105 @@
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">Mon </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">Tue </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">Wed </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">Thu </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">Fri </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">Sat </span>
 
 </p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="color: #365F91; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">1 </span>
 
 </p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="color: #365F91; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -1280,111 +1290,73 @@
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">3 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">4 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">5 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">6 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">7 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">8 </span>
 
 </p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="color: #365F91; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -1392,111 +1364,73 @@
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">10 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">11 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">12 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">13 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">14 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">15 </span>
 
 </p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="color: #365F91; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -1504,111 +1438,73 @@
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">17 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">18 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">19 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">20 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">21 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">22 </span>
 
 </p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="color: #365F91; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -1616,111 +1512,73 @@
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">24 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">25 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">26 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">27 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">28 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">29 </span>
 
 </p>
 
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
-<tr><td><p><span style="color: #365F91; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+<tr><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -1728,55 +1586,33 @@
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif">31 </span>
 
 </p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
+</td><td><p class="empty-paragraph"><br></p>
 
-</p>
+</td><td><p class="empty-paragraph"><br></p>
 
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p><span style="color: #7F7F7F; font-size: 12pt; font-family: Ubuntu, sans-serif"> </span>
-
-</p>
-
-</td><td><p></p>
+</td><td><p class="empty-paragraph"><br></p>
 
 </td></tr>
 
@@ -2054,6 +1890,7 @@
         </article>
         
     </div>
+    
     
 </body>
 </html>

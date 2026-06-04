@@ -17,7 +17,7 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
      * 
      * @returns A CSV string or a ZIP archive containing multiple CSVs
      */
-    async generate(): Promise<ConversionResult> {
+    async generate(): Promise<ConversionResult<'csv'>> {
         const csvConfig = this.config.csvConfig;
         const delimiter = csvConfig.columnDelimiter;
         const mergeSheets = csvConfig.mergeSheets;

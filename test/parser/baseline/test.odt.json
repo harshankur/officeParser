@@ -28,13 +28,32 @@
     "ignoreInternalLinks": false,
     "csvDelimiter": ",",
     "fileType": null,
-    "abortSignal": null
+    "abortSignal": null,
+    "ignoreComments": false,
+    "ignoreHeadersAndFooters": false,
+    "ignoreSlideMasters": false
   },
   "type": "odt",
   "metadata": {
+    "nativeProperties": {
+      "meta:generator": "MicrosoftOffice/15.0 MicrosoftWord",
+      "dc:title": "DOCX Demo",
+      "dc:description": "Demonstration of DOCX support in calibre",
+      "meta:keyword": " conversion",
+      "meta:initial-creator": "Kovid Goyal",
+      "dc:creator": "Harsh Ankur",
+      "meta:creation-date": "2025-11-29T07:48:00Z",
+      "dc:date": "2025-11-29T07:48:00Z",
+      "meta:template": "",
+      "meta:editing-cycles": "80",
+      "meta:editing-duration": "PT0S",
+      "meta:document-statistic": "",
+      "meta:user-defined": "true"
+    },
     "title": "DOCX Demo",
     "author": "Harsh Ankur",
     "description": "Demonstration of DOCX support in calibre",
+    "keywords": "calibre,  docs,  ebook,  conversion",
     "created": "2025-11-29T07:48:00.000Z",
     "modified": "2025-11-29T07:48:00.000Z",
     "customProperties": {
@@ -411,10 +430,20 @@
           "bold": true
         }
       },
+      "TableCell26": {
+        "formatting": {
+          "backgroundColor": "#9BBB59"
+        }
+      },
       "P27": {
         "formatting": {
           "bold": true,
           "color": "#FFFFFF"
+        }
+      },
+      "TableCell28": {
+        "formatting": {
+          "backgroundColor": "#9BBB59"
         }
       },
       "P29": {
@@ -423,10 +452,20 @@
           "color": "#FFFFFF"
         }
       },
+      "TableCell63": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
+      },
       "P64": {
         "formatting": {
           "size": "11pt",
           "font": "Ubuntu"
+        }
+      },
+      "TableCell65": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
         }
       },
       "P66": {
@@ -436,12 +475,22 @@
         },
         "alignment": "center"
       },
+      "TableCell67": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
+      },
       "P68": {
         "formatting": {
           "size": "11pt",
           "font": "Ubuntu"
         },
         "alignment": "center"
+      },
+      "TableCell69": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
       },
       "P70": {
         "formatting": {
@@ -450,12 +499,22 @@
         },
         "alignment": "center"
       },
+      "TableCell71": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
+      },
       "P72": {
         "formatting": {
           "size": "11pt",
           "font": "Ubuntu"
         },
         "alignment": "center"
+      },
+      "TableCell73": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
       },
       "P74": {
         "formatting": {
@@ -464,9 +523,19 @@
         },
         "alignment": "center"
       },
+      "TableCell76": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
+      },
       "P77": {
         "formatting": {
           "font": "Ubuntu"
+        }
+      },
+      "TableCell78": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
         }
       },
       "P79": {
@@ -475,11 +544,21 @@
         },
         "alignment": "center"
       },
+      "TableCell80": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
+      },
       "P81": {
         "formatting": {
           "font": "Ubuntu"
         },
         "alignment": "center"
+      },
+      "TableCell82": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
       },
       "P83": {
         "formatting": {
@@ -487,17 +566,32 @@
         },
         "alignment": "center"
       },
+      "TableCell84": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
+      },
       "P85": {
         "formatting": {
           "font": "Ubuntu"
         },
         "alignment": "center"
       },
+      "TableCell86": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
+      },
       "P87": {
         "formatting": {
           "font": "Ubuntu"
         },
         "alignment": "center"
+      },
+      "TableCell89": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
       },
       "P90": {
         "formatting": {
@@ -534,9 +628,19 @@
         },
         "alignment": "center"
       },
+      "TableCell102": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
+      },
       "P103": {
         "formatting": {
           "font": "Ubuntu"
+        }
+      },
+      "TableCell104": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
         }
       },
       "P105": {
@@ -545,11 +649,21 @@
         },
         "alignment": "center"
       },
+      "TableCell106": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
+      },
       "P107": {
         "formatting": {
           "font": "Ubuntu"
         },
         "alignment": "center"
+      },
+      "TableCell108": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
       },
       "P109": {
         "formatting": {
@@ -557,17 +671,32 @@
         },
         "alignment": "center"
       },
+      "TableCell110": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
+      },
       "P111": {
         "formatting": {
           "font": "Ubuntu"
         },
         "alignment": "center"
       },
+      "TableCell112": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
+      },
       "P113": {
         "formatting": {
           "font": "Ubuntu"
         },
         "alignment": "center"
+      },
+      "TableCell115": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
       },
       "P116": {
         "formatting": {
@@ -604,9 +733,19 @@
         },
         "alignment": "center"
       },
+      "TableCell128": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
+      },
       "P129": {
         "formatting": {
           "font": "Ubuntu"
+        }
+      },
+      "TableCell130": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
         }
       },
       "P131": {
@@ -615,11 +754,21 @@
         },
         "alignment": "center"
       },
+      "TableCell132": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
+      },
       "P133": {
         "formatting": {
           "font": "Ubuntu"
         },
         "alignment": "center"
+      },
+      "TableCell134": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
       },
       "P135": {
         "formatting": {
@@ -627,11 +776,21 @@
         },
         "alignment": "center"
       },
+      "TableCell136": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
+      },
       "P137": {
         "formatting": {
           "font": "Ubuntu"
         },
         "alignment": "center"
+      },
+      "TableCell138": {
+        "formatting": {
+          "backgroundColor": "#D3DFEE"
+        }
       },
       "P139": {
         "formatting": {
@@ -639,10 +798,20 @@
         },
         "alignment": "center"
       },
+      "TableCell147": {
+        "formatting": {
+          "backgroundColor": "#4BACC6"
+        }
+      },
       "P148": {
         "formatting": {
           "bold": true,
           "color": "#FFFFFF"
+        }
+      },
+      "TableCell149": {
+        "formatting": {
+          "backgroundColor": "#4BACC6"
         }
       },
       "P150": {
@@ -651,16 +820,46 @@
           "color": "#FFFFFF"
         }
       },
+      "TableCell151": {
+        "formatting": {
+          "backgroundColor": "#4BACC6"
+        }
+      },
       "P152": {
         "formatting": {
           "bold": true,
           "color": "#FFFFFF"
         }
       },
+      "TableCell153": {
+        "formatting": {
+          "backgroundColor": "#4BACC6"
+        }
+      },
       "P154": {
         "formatting": {
           "bold": true,
           "color": "#FFFFFF"
+        }
+      },
+      "TableCell212": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
+      },
+      "TableCell214": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
+      },
+      "TableCell216": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
+        }
+      },
+      "TableCell218": {
+        "formatting": {
+          "backgroundColor": "#FFFFFF"
         }
       },
       "P261": {
@@ -2678,7 +2877,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 0
+                "col": 0,
+                "backgroundColor": "#9BBB59"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell26\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P27\">ITEM</text:p></table:table-cell>"
             },
@@ -2707,7 +2907,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 1
+                "col": 1,
+                "backgroundColor": "#9BBB59"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell28\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P29\">NEEDED</text:p></table:table-cell>"
             }
@@ -3176,7 +3377,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 0
+                "col": 0,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell63\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P64\">City or Town</text:p></table:table-cell>"
             },
@@ -3206,7 +3408,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 1
+                "col": 1,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell65\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P66\">Point A</text:p></table:table-cell>"
             },
@@ -3236,7 +3439,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 2
+                "col": 2,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell67\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P68\">Point B</text:p></table:table-cell>"
             },
@@ -3266,7 +3470,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 3
+                "col": 3,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell69\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P70\">Point C</text:p></table:table-cell>"
             },
@@ -3296,7 +3501,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 4
+                "col": 4,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell71\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P72\">Point D</text:p></table:table-cell>"
             },
@@ -3326,7 +3532,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 5
+                "col": 5,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell73\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P74\">Point E</text:p></table:table-cell>"
             }
@@ -3361,7 +3568,8 @@
               ],
               "metadata": {
                 "row": 1,
-                "col": 0
+                "col": 0,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell76\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P77\">Point A</text:p></table:table-cell>"
             },
@@ -3391,7 +3599,8 @@
               ],
               "metadata": {
                 "row": 1,
-                "col": 1
+                "col": 1,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell78\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P79\">—</text:p></table:table-cell>"
             },
@@ -3412,7 +3621,8 @@
               ],
               "metadata": {
                 "row": 1,
-                "col": 2
+                "col": 2,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell80\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P81\"/></table:table-cell>"
             },
@@ -3433,7 +3643,8 @@
               ],
               "metadata": {
                 "row": 1,
-                "col": 3
+                "col": 3,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell82\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P83\"/></table:table-cell>"
             },
@@ -3454,7 +3665,8 @@
               ],
               "metadata": {
                 "row": 1,
-                "col": 4
+                "col": 4,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell84\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P85\"/></table:table-cell>"
             },
@@ -3475,7 +3687,8 @@
               ],
               "metadata": {
                 "row": 1,
-                "col": 5
+                "col": 5,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell86\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P87\"/></table:table-cell>"
             }
@@ -3510,7 +3723,8 @@
               ],
               "metadata": {
                 "row": 2,
-                "col": 0
+                "col": 0,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell89\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P90\">Point B</text:p></table:table-cell>"
             },
@@ -3668,7 +3882,8 @@
               ],
               "metadata": {
                 "row": 3,
-                "col": 0
+                "col": 0,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell102\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P103\">Point C</text:p></table:table-cell>"
             },
@@ -3698,7 +3913,8 @@
               ],
               "metadata": {
                 "row": 3,
-                "col": 1
+                "col": 1,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell104\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P105\">64</text:p></table:table-cell>"
             },
@@ -3728,7 +3944,8 @@
               ],
               "metadata": {
                 "row": 3,
-                "col": 2
+                "col": 2,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell106\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P107\">56</text:p></table:table-cell>"
             },
@@ -3758,7 +3975,8 @@
               ],
               "metadata": {
                 "row": 3,
-                "col": 3
+                "col": 3,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell108\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P109\">—</text:p></table:table-cell>"
             },
@@ -3779,7 +3997,8 @@
               ],
               "metadata": {
                 "row": 3,
-                "col": 4
+                "col": 4,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell110\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P111\"/></table:table-cell>"
             },
@@ -3800,7 +4019,8 @@
               ],
               "metadata": {
                 "row": 3,
-                "col": 5
+                "col": 5,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell112\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P113\"/></table:table-cell>"
             }
@@ -3835,7 +4055,8 @@
               ],
               "metadata": {
                 "row": 4,
-                "col": 0
+                "col": 0,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell115\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P116\">Point D</text:p></table:table-cell>"
             },
@@ -4011,7 +4232,8 @@
               ],
               "metadata": {
                 "row": 5,
-                "col": 0
+                "col": 0,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell128\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P129\">Point E</text:p></table:table-cell>"
             },
@@ -4041,7 +4263,8 @@
               ],
               "metadata": {
                 "row": 5,
-                "col": 1
+                "col": 1,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell130\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P131\">93</text:p></table:table-cell>"
             },
@@ -4071,7 +4294,8 @@
               ],
               "metadata": {
                 "row": 5,
-                "col": 2
+                "col": 2,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell132\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P133\">35</text:p></table:table-cell>"
             },
@@ -4101,7 +4325,8 @@
               ],
               "metadata": {
                 "row": 5,
-                "col": 3
+                "col": 3,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell134\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P135\">54</text:p></table:table-cell>"
             },
@@ -4131,7 +4356,8 @@
               ],
               "metadata": {
                 "row": 5,
-                "col": 4
+                "col": 4,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell136\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P137\">43</text:p></table:table-cell>"
             },
@@ -4161,7 +4387,8 @@
               ],
               "metadata": {
                 "row": 5,
-                "col": 5
+                "col": 5,
+                "backgroundColor": "#D3DFEE"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell138\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P139\">—</text:p></table:table-cell>"
             }
@@ -4229,7 +4456,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 0
+                "col": 0,
+                "backgroundColor": "#4BACC6"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell147\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P148\">College</text:p></table:table-cell>"
             },
@@ -4258,7 +4486,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 1
+                "col": 1,
+                "backgroundColor": "#4BACC6"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell149\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P150\">New students</text:p></table:table-cell>"
             },
@@ -4287,7 +4516,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 2
+                "col": 2,
+                "backgroundColor": "#4BACC6"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell151\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P152\">Graduating students</text:p></table:table-cell>"
             },
@@ -4316,7 +4546,8 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 3
+                "col": 3,
+                "backgroundColor": "#4BACC6"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell153\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P154\">Change</text:p></table:table-cell>"
             }
@@ -5029,7 +5260,8 @@
               ],
               "metadata": {
                 "row": 7,
-                "col": 0
+                "col": 0,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell212\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P213\">Total</text:p></table:table-cell>"
             },
@@ -5058,7 +5290,8 @@
               ],
               "metadata": {
                 "row": 7,
-                "col": 1
+                "col": 1,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell214\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P215\">998</text:p></table:table-cell>"
             },
@@ -5087,7 +5320,8 @@
               ],
               "metadata": {
                 "row": 7,
-                "col": 2
+                "col": 2,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell216\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P217\">908</text:p></table:table-cell>"
             },
@@ -5116,7 +5350,8 @@
               ],
               "metadata": {
                 "row": 7,
-                "col": 3
+                "col": 3,
+                "backgroundColor": "#FFFFFF"
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell218\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P219\">90</text:p></table:table-cell>"
             }
@@ -9322,36 +9557,45 @@
           }
         },
         {
-          "type": "note",
-          "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
-          "children": [
+          "type": "text",
+          "text": "",
+          "notes": [
             {
-              "type": "paragraph",
+              "type": "note",
               "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
               "children": [
                 {
-                  "type": "text",
-                  "text": " ",
-                  "formatting": {},
-                  "metadata": {
-                    "style": "FootnoteText"
-                  }
-                },
-                {
-                  "type": "text",
-                  "text": "In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
-                  "formatting": {},
-                  "metadata": {
-                    "style": "FootnoteText"
-                  }
+                  "type": "paragraph",
+                  "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": " ",
+                      "formatting": {},
+                      "metadata": {
+                        "style": "FootnoteText"
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "text": "In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
+                      "formatting": {},
+                      "metadata": {
+                        "style": "FootnoteText"
+                      }
+                    }
+                  ],
+                  "metadata": {}
                 }
               ],
-              "metadata": {}
+              "metadata": {
+                "noteType": "footnote",
+                "noteId": "_ftn0"
+              }
             }
           ],
           "metadata": {
-            "noteType": "footnote",
-            "noteId": "_ftn0"
+            "style": "Normal"
           }
         },
         {
@@ -9371,36 +9615,45 @@
           }
         },
         {
-          "type": "note",
-          "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
-          "children": [
+          "type": "text",
+          "text": "",
+          "notes": [
             {
-              "type": "paragraph",
+              "type": "note",
               "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
               "children": [
                 {
-                  "type": "text",
-                  "text": " ",
-                  "formatting": {},
-                  "metadata": {
-                    "style": "EndnoteText"
-                  }
-                },
-                {
-                  "type": "text",
-                  "text": "Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
-                  "formatting": {},
-                  "metadata": {
-                    "style": "EndnoteText"
-                  }
+                  "type": "paragraph",
+                  "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": " ",
+                      "formatting": {},
+                      "metadata": {
+                        "style": "EndnoteText"
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "text": "Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
+                      "formatting": {},
+                      "metadata": {
+                        "style": "EndnoteText"
+                      }
+                    }
+                  ],
+                  "metadata": {}
                 }
               ],
-              "metadata": {}
+              "metadata": {
+                "noteType": "endnote",
+                "noteId": "_edn0"
+              }
             }
           ],
           "metadata": {
-            "noteType": "endnote",
-            "noteId": "_edn0"
+            "style": "Normal"
           }
         },
         {

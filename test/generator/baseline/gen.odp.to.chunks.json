@@ -32,22 +32,6 @@
     }
   },
   {
-    "text": "Slide Note 1.",
-    "metadata": {
-      "sourceType": "odp",
-      "closestHeading": "Demonstration of DOCX support in calibre",
-      "slideNumber": 1
-    }
-  },
-  {
-    "text": "1",
-    "metadata": {
-      "sourceType": "odp",
-      "closestHeading": "Demonstration of DOCX support in calibre",
-      "slideNumber": 1
-    }
-  },
-  {
     "text": "Text Formatting",
     "metadata": {
       "sourceType": "odp",
@@ -128,22 +112,6 @@
     }
   },
   {
-    "text": "Slide Note 2. This is a bold text, but no italic. Let's strike that out.",
-    "metadata": {
-      "sourceType": "odp",
-      "closestHeading": "Text Formatting",
-      "slideNumber": 2
-    }
-  },
-  {
-    "text": "2",
-    "metadata": {
-      "sourceType": "odp",
-      "closestHeading": "Text Formatting",
-      "slideNumber": 2
-    }
-  },
-  {
     "text": "Tables",
     "metadata": {
       "sourceType": "odp",
@@ -183,22 +151,6 @@
       "closestHeading": "Tables",
       "slideNumber": 3,
       "isTableChunk": true
-    }
-  },
-  {
-    "text": "And then about tables",
-    "metadata": {
-      "sourceType": "odp",
-      "closestHeading": "Tables",
-      "slideNumber": 3
-    }
-  },
-  {
-    "text": "3",
-    "metadata": {
-      "sourceType": "odp",
-      "closestHeading": "Tables",
-      "slideNumber": 3
     }
   },
   {
@@ -258,46 +210,6 @@
       "closestHeading": "Tables",
       "slideNumber": 5,
       "isTableChunk": true
-    }
-  },
-  {
-    "text": "Now calendars",
-    "metadata": {
-      "sourceType": "odp",
-      "closestHeading": "Tables",
-      "slideNumber": 5
-    }
-  },
-  {
-    "text": "Sun",
-    "metadata": {
-      "sourceType": "odp",
-      "closestHeading": "Tables",
-      "slideNumber": 5
-    }
-  },
-  {
-    "text": "Mon",
-    "metadata": {
-      "sourceType": "odp",
-      "closestHeading": "Tables",
-      "slideNumber": 5
-    }
-  },
-  {
-    "text": "7. Sat",
-    "metadata": {
-      "sourceType": "odp",
-      "closestHeading": "Tables",
-      "slideNumber": 5
-    }
-  },
-  {
-    "text": "5",
-    "metadata": {
-      "sourceType": "odp",
-      "closestHeading": "Tables",
-      "slideNumber": 5
     }
   },
   {

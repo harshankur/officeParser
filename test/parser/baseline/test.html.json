@@ -28,11 +28,25 @@
     "ignoreInternalLinks": false,
     "csvDelimiter": ",",
     "fileType": null,
-    "abortSignal": null
+    "abortSignal": null,
+    "ignoreComments": false,
+    "ignoreHeadersAndFooters": false,
+    "ignoreSlideMasters": false
   },
   "type": "html",
   "metadata": {
     "title": "DOCX Demo",
+    "nativeProperties": {
+      "viewport": "width=device-width, initial-scale=1.0",
+      "author": "Kovid Goyal",
+      "description": "Demonstration of DOCX support in calibre",
+      "dcterms.created": "2013-06-05T07:56:00.000Z",
+      "dcterms.modified": "2025-11-25T20:13:45.823Z",
+      "lastModifiedBy": "Harsh Ankur",
+      "custom:TestString": "Hello from custom props",
+      "custom:TestNumber": "42",
+      "custom:TestBool": "true"
+    },
     "author": "Kovid Goyal",
     "description": "Demonstration of DOCX support in calibre",
     "created": "2013-06-05T07:56:00.000Z",

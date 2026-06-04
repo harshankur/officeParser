@@ -28,10 +28,24 @@
     "ignoreInternalLinks": false,
     "csvDelimiter": ",",
     "fileType": null,
-    "abortSignal": null
+    "abortSignal": null,
+    "ignoreComments": false,
+    "ignoreHeadersAndFooters": false,
+    "ignoreSlideMasters": false
   },
   "type": "ods",
   "metadata": {
+    "nativeProperties": {
+      "meta:generator": "Microsoft Excel Online",
+      "dc:title": "",
+      "dc:description": "",
+      "dc:subject": "",
+      "meta:initial-creator": "",
+      "dc:creator": "",
+      "meta:creation-date": "2025-11-28T15:36:44Z",
+      "dc:date": "2025-12-26T10:17:43Z",
+      "meta:user-defined": "true"
+    },
     "created": "2025-11-28T15:36:44.000Z",
     "modified": "2025-12-26T10:17:43.000Z",
     "customProperties": {
@@ -64,6 +78,7 @@
       },
       "ce4": {
         "formatting": {
+          "backgroundColor": "#DDDDDD",
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -113,6 +128,7 @@
       },
       "ce11": {
         "formatting": {
+          "backgroundColor": "#FFFFFF",
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -120,6 +136,7 @@
       },
       "ce12": {
         "formatting": {
+          "backgroundColor": "#D3DFEE",
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -127,6 +144,7 @@
       },
       "ce13": {
         "formatting": {
+          "backgroundColor": "#D3DFEE",
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -141,6 +159,7 @@
       },
       "ce15": {
         "formatting": {
+          "backgroundColor": "#FFFFFF",
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -148,6 +167,7 @@
       },
       "ce16": {
         "formatting": {
+          "backgroundColor": "#D3DFEE",
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -155,6 +175,7 @@
       },
       "ce17": {
         "formatting": {
+          "backgroundColor": "#D3DFEE",
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -182,6 +203,7 @@
       },
       "ce21": {
         "formatting": {
+          "backgroundColor": "#FFFFFF",
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -189,12 +211,14 @@
       },
       "ce22": {
         "formatting": {
+          "backgroundColor": "#FFFFFF",
           "color": "#000000",
           "font": "Ubuntu"
         }
       },
       "ce23": {
         "formatting": {
+          "backgroundColor": "#FFFFFF",
           "color": "#000000",
           "font": "Ubuntu"
         }
@@ -342,6 +366,7 @@
       },
       "ce49": {
         "formatting": {
+          "backgroundColor": "#000000",
           "size": "12pt",
           "color": "#FFFFFF",
           "font": "Ubuntu"
@@ -390,6 +415,7 @@
       },
       "ce55": {
         "formatting": {
+          "backgroundColor": "#9BBB59",
           "bold": true,
           "size": "12pt",
           "color": "#FFFFFF",
@@ -399,6 +425,7 @@
       },
       "ce56": {
         "formatting": {
+          "backgroundColor": "#9BBB59",
           "bold": true,
           "size": "12pt",
           "color": "#FFFFFF",
@@ -408,6 +435,7 @@
       },
       "ce57": {
         "formatting": {
+          "backgroundColor": "#FFFFFF",
           "color": "#000000",
           "font": "Ubuntu"
         },
@@ -415,6 +443,7 @@
       },
       "ce58": {
         "formatting": {
+          "backgroundColor": "#FFFFFF",
           "color": "#000000",
           "font": "Ubuntu"
         },
@@ -422,6 +451,7 @@
       },
       "ce59": {
         "formatting": {
+          "backgroundColor": "#FFFFFF",
           "color": "#000000",
           "font": "Ubuntu"
         },
@@ -429,6 +459,7 @@
       },
       "ce60": {
         "formatting": {
+          "backgroundColor": "#4BACC6",
           "bold": true,
           "size": "12pt",
           "color": "#FFFFFF",
@@ -438,6 +469,7 @@
       },
       "ce61": {
         "formatting": {
+          "backgroundColor": "#4BACC6",
           "bold": true,
           "size": "12pt",
           "color": "#FFFFFF",
@@ -447,6 +479,7 @@
       },
       "ce62": {
         "formatting": {
+          "backgroundColor": "#4BACC6",
           "bold": true,
           "size": "12pt",
           "color": "#FFFFFF",

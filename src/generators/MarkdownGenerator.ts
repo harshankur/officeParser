@@ -47,7 +47,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
      * 
      * @returns A Markdown string
      */
-    async generate(): Promise<ConversionResult> {
+    async generate(): Promise<ConversionResult<'md'>> {
         let output = '';
 
         // Add Metadata (YAML Front Matter)
@@ -132,7 +132,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         id = ` {#${this.slugify(this.getNodeText(node))}}`;
                     }
 
-                    const anchors = remainingAnchors.map(aid => `<a name="${aid}"></a>`).join('');
+                    const anchors = this.config.mdConfig.fallbackToHtml
+                        ? remainingAnchors.map(aid => `<a name="${aid}"></a>`).join('')
+                        : '';
                     let content = `${prefix}${childrenOutput}${id}`;
 
                     // Alignment fallback via HTML div/p

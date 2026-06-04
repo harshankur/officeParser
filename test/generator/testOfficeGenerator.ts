@@ -18,8 +18,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { OfficeParser } from '../../src/OfficeParser';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
+import { OfficeParser } from '../../src/OfficeParser';
 import {
     DeepRequired,
     GeneratorConfig,
@@ -27,6 +27,7 @@ import {
     OfficeParserAST,
     OfficeParserConfig,
 } from '../../src/types';
+import { resolveGeneratorConfig } from '../../src/utils/configUtils.js';
 
 // ============================================================================
 // CONSTANTS & CONFIGURATION
@@ -50,7 +51,7 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     extractAttachments: true,
     ocr: false,
     ocrLanguage: 'eng',
-    ocrConfig: { language: 'eng', workerPath: '', corePath: '', langPath: '', autoTerminateTimeout: 10000 },
+    ocrConfig: { language: 'eng', workerPath: '', corePath: '', langPath: '', timeout: { autoTerminate: 10000, workerLoad: 60000, recognition: 30000 }, autoTerminateTimeout: 10000, abortSignal: null },
     includeRawContent: false,
     ignoreNotes: false,
     putNotesAtLast: false,
@@ -64,6 +65,10 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     csvDelimiter: ',',
     onWarning: () => { },
     fileType: null,
+    ignoreComments: false,
+    ignoreHeadersAndFooters: false,
+    ignoreSlideMasters: false,
+    abortSignal: null,
 };
 
 /** Generator config permutations */
@@ -134,6 +139,18 @@ const GENERATOR_CONFIG_TESTS = [
         name: 'Chunks Document-Structure',
         config: { chunksConfig: { strategy: 'document-structure', splitBy: 'heading', maxChunkSize: 800 } } as GeneratorConfig,
         formats: ['chunks'] as GeneratorFormat[],
+    },
+    {
+        id: 'G13',
+        name: 'HTML Custom Width String',
+        config: { htmlConfig: { containerWidth: '950px' } } as GeneratorConfig,
+        formats: ['html'] as GeneratorFormat[],
+    },
+    {
+        id: 'G14',
+        name: 'HTML Custom Width Number',
+        config: { htmlConfig: { containerWidth: 1000 } } as GeneratorConfig,
+        formats: ['html'] as GeneratorFormat[],
     },
 ];
 
@@ -988,6 +1005,57 @@ function generateReport(allResults: GenFeatureTest[], logger: DualLogger): numbe
     return failed;
 }
 
+/**
+ * Runs unit tests for generator configuration validation rules.
+ */
+function runConfigValidationTests(): GenFeatureTest[] {
+    const results: GenFeatureTest[] = [];
+    const category = 'Config Validation';
+    const sourceFormat = 'docx';
+    const destFormat = 'html';
+
+    const mk = (feature: string, exp: any, act: any, ok: boolean, details: string): GenFeatureTest => ({
+        category, feature, sourceFormat, destFormat,
+        result: { status: ok ? 'PASS' : 'FAIL', expected: exp, actual: act, details, duration: 0 }
+    });
+
+    // Valid test cases
+    const validWidths = ['auto', 900, '900px', '100%', '50vw', '.5rem', '  120  ', '80.5%'];
+    validWidths.forEach(w => {
+        try {
+            const config = resolveGeneratorConfig('html', undefined, { htmlConfig: { containerWidth: w } });
+            const resolved = config.htmlConfig.containerWidth;
+            const ok = resolved === w || (typeof w === 'number' && resolved === w) || (typeof w === 'string' && resolved === w);
+            results.push(mk(`Valid: ${w}`, 'Should not throw', resolved, ok, `Resolved to: ${resolved}`));
+        } catch (e: any) {
+            results.push(mk(`Valid: ${w}`, 'Should not throw', e.message, false, `Threw error unexpectedly: ${e.message}`));
+        }
+    });
+
+    // Invalid test cases
+    const invalidWidths = [0, -100, '-50px', 'abc', '', '  ', 'NaN', NaN, Infinity, -Infinity, {}, [], null];
+    invalidWidths.forEach(w => {
+        try {
+            let warningTriggered = false;
+            let warningCode = '';
+            const config = resolveGeneratorConfig('html', undefined, {
+                onWarning: (issue) => {
+                    warningTriggered = true;
+                    warningCode = issue.code;
+                },
+                htmlConfig: { containerWidth: w as any }
+            });
+            const resolved = config.htmlConfig.containerWidth;
+            const ok = warningTriggered && warningCode === 'INVALID_CONTAINER_WIDTH' && resolved === 'auto';
+            results.push(mk(`Invalid: ${JSON.stringify(w)}`, 'Should warn and fallback to auto', `Warned: ${warningTriggered}, Code: ${warningCode}, Width: ${resolved}`, ok, `Warning: ${warningCode}, Fallback: ${resolved}`));
+        } catch (e: any) {
+            results.push(mk(`Invalid: ${JSON.stringify(w)}`, 'Should warn and fallback to auto', e.message, false, `Threw error unexpectedly: ${e.message}`));
+        }
+    });
+
+    return results;
+}
+
 // ============================================================================
 // MAIN RUNNERS
 // ============================================================================
@@ -1049,6 +1117,12 @@ async function runAllTests(): Promise<void> {
     const csvRt = await testCsvRoundtrip();
     allResults.push(...csvRt);
     console.log(csvRt.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
+
+    // Configuration Validation tests
+    process.stdout.write('  config validation...');
+    const validationFails = runConfigValidationTests();
+    allResults.push(...validationFails);
+    console.log(validationFails.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
 
     // 3. Report
     console.log('\n');

@@ -1187,7 +1187,7 @@
 
         .html-iframe {
             width: 100%;
-            max-width: 850px;
+            max-width: 100%;
             height: 100%;
             margin: 0 auto;
             border: none;
@@ -1195,6 +1195,93 @@
             border-radius: 8px;
             display: block;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .excel-grid {
+            border-collapse: collapse;
+            border-spacing: 0;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            width: max-content;
+            min-width: 100%;
+        }
+        .excel-grid th, .excel-grid td {
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            font-size: 13px;
+            height: 28px;
+        }
+        .excel-col-header {
+            background: var(--bg-deep);
+            color: var(--text-dim);
+            font-weight: 500;
+            text-align: center;
+            user-select: none;
+            border-bottom: 2px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .col-resizer {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 4px;
+            height: 100%;
+            cursor: col-resize;
+            user-select: none;
+            z-index: 20;
+        }
+        .col-resizer:hover, .col-resizer.resizing {
+            background: var(--primary);
+        }
+        .excel-row-num {
+            background: var(--bg-deep);
+            color: var(--text-dim);
+            text-align: center;
+            font-weight: 500;
+            width: 45px;
+            min-width: 45px !important;
+            max-width: 45px;
+            user-select: none;
+            border-right: 2px solid var(--border);
+            position: sticky;
+            left: 0;
+            z-index: 5;
+        }
+        .row-resizer {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            cursor: row-resize;
+            user-select: none;
+            z-index: 20;
+        }
+        .row-resizer:hover, .row-resizer.resizing {
+            background: var(--primary);
+        }
+        .excel-row-num-header {
+            background: var(--bg-deep);
+            width: 45px;
+            min-width: 45px !important;
+            max-width: 45px;
+            position: sticky;
+            top: 0;
+            left: 0;
+            z-index: 15;
+            border-right: 2px solid var(--border);
+            border-bottom: 2px solid var(--border);
+        }
+        .excel-cell-empty {
+            background: var(--bg-card);
+        }
+        .excel-grid tr:hover td {
+            background-color: var(--bg-card-hover);
+        }
+        .excel-grid tr:hover td.excel-row-num {
+            background-color: var(--bg-deep);
         }
 
         .code-container {
@@ -2691,6 +2778,36 @@
     </style>
     <script>
         // Global schemas for dynamic control generation
+        window.toggleConfigPopover = function(id, btnElement) {
+            const popover = document.getElementById(id);
+            if (!popover) return;
+            const isVisible = popover.style.display === 'block';
+            document.querySelectorAll('.config-popover').forEach(p => p.style.display = 'none');
+            if (!isVisible) {
+                if (popover.parentElement !== document.body) {
+                    document.body.appendChild(popover);
+                }
+                popover.style.display = 'block';
+                if (btnElement) {
+                    const rect = btnElement.getBoundingClientRect();
+                    popover.style.top = (rect.bottom + 8) + 'px';
+                    
+                    const popoverRect = popover.getBoundingClientRect();
+                    let leftPos = rect.left;
+                    if (leftPos + popoverRect.width > window.innerWidth - 20) {
+                        leftPos = window.innerWidth - popoverRect.width - 20;
+                    }
+                    popover.style.left = leftPos + 'px';
+                }
+            }
+        };
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.window-config-item') && !e.target.closest('.config-popover')) {
+                document.querySelectorAll('.config-popover').forEach(p => p.style.display = 'none');
+            }
+        });
+
         window.CONFIG_SCHEMAS = {
             parser: [
                 { id: 'cfg_fileType', label: 'File Type Hint', type: 'select', options: ['', 'docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp'], names: ['Auto', 'DOCX', 'XLSX', 'PPTX', 'PDF', 'RTF', 'CSV', 'Markdown', 'HTML', 'ODT', 'ODS', 'ODP'], width: '100px' },
@@ -2701,10 +2818,10 @@
                 { id: 'cfg_serializeRawContent', label: 'Serialize Raw XML', type: 'switch', default: true },
                 { id: 'cfg_preserveXmlWhitespace', label: 'Preserve XML Space', type: 'switch', default: false },
                 { id: 'cfg_ignoreNotes', label: 'Ignore Notes', type: 'switch', default: false },
-                { id: 'cfg_putNotesAtLast', label: 'Notes At Last', type: 'switch', default: false },
+                { id: 'cfg_putNotesAtLast', label: '<del>Notes At Last</del> <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'switch', default: false },
                 { id: 'cfg_includeBreakNodes', label: 'Include Break Nodes', type: 'switch', default: true },
-                { id: 'cfg_outputErrorToConsole', label: 'Verbose Errors <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'switch', default: false },
-                { id: 'cfg_ocrLanguage', label: 'OCR Lang', type: 'text', default: 'eng', width: '80px' },
+                { id: 'cfg_outputErrorToConsole', label: '<del>Verbose Errors</del> <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'switch', default: false },
+                { id: 'cfg_ocrLanguage', label: '<del>OCR Lang</del> <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'text', default: 'eng', width: '80px' },
                 { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: ',', width: '60px' },
                 { id: 'cfg_ocrAutoTerminate', label: 'OCR Auto Terminate (s)', type: 'number', default: 10, width: '70px', min: 0 },
                 { id: 'cfg_ocrWorkerLoad', label: 'OCR Worker Load (s)', type: 'number', default: 60, width: '70px', min: 0 },
@@ -2722,13 +2839,19 @@
             ],
             html: [
                 { id: 'cfg_html_standalone', label: 'Standalone', type: 'inline-switch', default: true },
-                { id: 'cfg_html_chartJsSrc', label: 'Charts URL', type: 'inline-text', default: 'https://cdn.jsdelivr.net/npm/chart.js', width: '180px' }
+                { id: 'cfg_html_containerWidth', label: 'Width', type: 'inline-text', default: 'auto', width: '100px' },
+                { id: 'cfg_html_chartJsSrc', label: 'Charts URL', type: 'inline-text', default: 'https://cdn.jsdelivr.net/npm/chart.js', width: '180px' },
+                { id: 'cfg_html_customCss', label: 'Custom CSS', type: 'inline-popover-textarea', default: '', height: '120px', placeholder: '.my-class { color: red; }' },
+                { id: 'cfg_html_inj_headStart', label: 'Inj Head Start', type: 'inline-popover-textarea', default: '', height: '100px' },
+                { id: 'cfg_html_inj_headEnd', label: 'Inj Head End', type: 'inline-popover-textarea', default: '', height: '100px' },
+                { id: 'cfg_html_inj_bodyStart', label: 'Inj Body Start', type: 'inline-popover-textarea', default: '', height: '100px' },
+                { id: 'cfg_html_inj_bodyEnd', label: 'Inj Body End', type: 'inline-popover-textarea', default: '', height: '100px' }
             ],
             md: [
                 { id: 'cfg_md_fallbackToHtml', label: 'HTML Fallback', type: 'inline-switch', default: true }
             ],
             chunks: [
-                { id: 'cfg_chunks_strategy', label: 'Strategy', type: 'inline-select', options: ['document-structure', 'fixed-size', 'semantic'], names: ['Structure', 'Fixed Size', 'Semantic (External Only)'], default: 'document-structure' },
+                { id: 'cfg_chunks_strategy', label: 'Strategy', type: 'inline-select', options: ['document-structure', 'fixed-size', 'semantic'], names: ['Structure', 'Fixed Size', 'Semantic (External Only)'], disabledOptions: ['semantic'], default: 'document-structure' },
                 { id: 'cfg_chunks_maxChunkSize', label: 'Max Size', type: 'inline-number', default: 1000, width: '85px' },
                 { id: 'cfg_chunks_chunkOverlap', label: 'Overlap', type: 'inline-number', default: 200, width: '80px' },
                 { id: 'cfg_chunks_splitBy', label: 'Split By', type: 'inline-select', options: ['paragraph', 'heading', 'page', 'slide', 'sheet'], names: ['Paragraph', 'Heading', 'Page', 'Slide', 'Sheet'], default: 'paragraph' },
@@ -2769,8 +2892,35 @@
                         <div class="${isInline ? 'window-config-item' : 'config-item'}">
                             <span class="config-label">${item.label}</span>
                             <select id="${item.id}" class="btn btn-outline" style="padding: ${isInline ? '0.2rem' : '0.4rem'}; font-size: 0.8rem; width: ${item.width || 'auto'};">
-                                ${item.options.map((opt, i) => `<option value="${opt}" ${opt === value ? 'selected' : ''}>${item.names[i]}</option>`).join('')}
+                                ${item.options.map((opt, i) => `<option value="${opt}" ${opt === value ? 'selected' : ''} ${item.disabledOptions && item.disabledOptions.includes(opt) ? 'disabled' : ''}>${item.names[i]}</option>`).join('')}
                             </select>
+                        </div>
+                    `;
+                } else if (item.type.includes('popover-textarea')) {
+                    html += `
+                        <div class="${isInline ? 'window-config-item' : 'config-item'}">
+                            <button class="btn btn-outline" style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; font-size: ${isInline ? '0.75rem' : '0.8rem'}; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);" onclick="window.toggleConfigPopover('${item.id}_popover', this)">
+                                ${item.label}
+                                <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                            </button>
+                            <div id="${item.id}_popover" class="config-popover" style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 350px;">
+                                <div style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                                    ${item.label}
+                                    <button class="modal-close-btn" style="font-size: 0.8rem;" onclick="window.toggleConfigPopover('${item.id}_popover')">✕</button>
+                                </div>
+                                <textarea id="${item.id}" class="btn btn-outline" 
+                                    style="padding: 0.5rem; width: 100%; min-height: ${item.height || '100px'}; font-size: 0.75rem; font-family: monospace; resize: vertical; background: var(--bg-card); color: var(--text-main); cursor: text;" 
+                                    ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>${value}</textarea>
+                            </div>
+                        </div>
+                    `;
+                } else if (item.type.includes('textarea')) {
+                    html += `
+                        <div class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}" style="align-items: flex-start;">
+                            <span class="config-label">${item.label}</span>
+                            <textarea id="${item.id}" class="btn btn-outline" 
+                                style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; min-height: ${item.height || '60px'}; font-size: ${isInline ? '0.75rem' : '0.8rem'}; font-family: monospace; resize: vertical;" 
+                                ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>${value}</textarea>
                         </div>
                     `;
                 } else {
@@ -4677,9 +4827,9 @@
             }
 
             // Window-specific generator config listeners
-            ['cfg_html_standalone', 'cfg_html_chartJsSrc'].forEach(id => {
+            ['cfg_html_standalone', 'cfg_html_chartJsSrc', 'cfg_html_containerWidth', 'cfg_html_customCss', 'cfg_html_inj_headStart', 'cfg_html_inj_headEnd', 'cfg_html_inj_bodyStart', 'cfg_html_inj_bodyEnd'].forEach(id => {
                 document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('html'));
-                if (document.getElementById(id).type === 'text') {
+                if (document.getElementById(id).type === 'text' || document.getElementById(id).tagName === 'TEXTAREA') {
                     document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('html'));
                 }
             });
@@ -4722,7 +4872,15 @@
                         if (format === 'html') {
                             genConfig.htmlConfig = {
                                 standalone: document.getElementById('cfg_html_standalone').checked,
-                                chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined
+                                chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined,
+                                containerWidth: document.getElementById('cfg_html_containerWidth').value || 'auto',
+                                customCss: document.getElementById('cfg_html_customCss').value || undefined,
+                                injections: {
+                                    headStart: document.getElementById('cfg_html_inj_headStart').value || undefined,
+                                    headEnd: document.getElementById('cfg_html_inj_headEnd').value || undefined,
+                                    bodyStart: document.getElementById('cfg_html_inj_bodyStart').value || undefined,
+                                    bodyEnd: document.getElementById('cfg_html_inj_bodyEnd').value || undefined
+                                }
                             };
                         } else if (format === 'md') {
                             genConfig.mdConfig = {
@@ -4768,7 +4926,20 @@
                         doc.open();
 
                         const isModal = container.closest('.preview-modal-body') !== null;
-                        const maxWidth = isModal ? '100%' : '800px';
+                        let widthVal = document.getElementById('cfg_html_containerWidth').value.trim() || 'auto';
+                        if (widthVal === 'auto') {
+                            if (result.value.includes('class="spreadsheet-container"')) {
+                                widthVal = '100%';
+                            } else if (result.value.includes('class="presentation-container"')) {
+                                widthVal = '1100px';
+                            } else {
+                                widthVal = '900px';
+                            }
+                        } else if (/^\d+$/.test(widthVal)) {
+                            widthVal = widthVal + 'px';
+                        }
+                        const maxWidth = isModal ? '100%' : widthVal;
+                        contentFrame.style.maxWidth = maxWidth;
 
                         // Inject CSS to ensure the preview has margins and padding
                         let styledHtml;
@@ -4776,6 +4947,10 @@
                             styledHtml = /<body/i.test(result.value)
                                 ? result.value.replace(/<body[^>]*>/i, '<body style="margin: 0; padding: 0; height: 100vh; overflow: hidden; font-family: sans-serif;">')
                                 : `<div style="width: 100%; height: 100vh; margin: 0; padding: 0; overflow: hidden; font-family: sans-serif; display: flex; flex-direction: column;">${result.value}</div>`;
+                        } else if (result.value.includes('class="presentation-container"')) {
+                            styledHtml = /<body/i.test(result.value)
+                                ? result.value.replace(/<body[^>]*>/i, `<body style="padding: 1.5rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
+                                : `<div style="padding: 1.5rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${result.value}</div>`;
                         } else {
                             styledHtml = /<body/i.test(result.value)
                                 ? result.value.replace(/<body[^>]*>/i, `<body style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
@@ -4882,7 +5057,13 @@
                             doc.open();
 
                             const isModal = container.closest('.preview-modal-body') !== null;
-                            const maxWidth = isModal ? '100%' : '800px';
+                            let widthVal = document.getElementById('cfg_html_containerWidth').value.trim() || 'auto';
+                            if (widthVal === 'auto') {
+                                widthVal = '900px';
+                            } else if (/^\d+$/.test(widthVal)) {
+                                widthVal = widthVal + 'px';
+                            }
+                            const maxWidth = isModal ? '100%' : widthVal;
 
                             const styledHtml = /<body/i.test(htmlResult.value)
                                 ? htmlResult.value.replace(/<body[^>]*>/i, `<body style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
@@ -4981,7 +5162,7 @@
 
             // Helper to render CSV as table
             function renderCsvTable(csvContent, container) {
-                container.style.padding = '1.5rem';
+                container.style.padding = '0';
                 container.style.overflow = 'auto';
                 const lines = csvContent.split('\n').filter(line => line.trim() !== '');
                 if (lines.length === 0) {
@@ -4989,34 +5170,144 @@
                     return;
                 }
 
-                const table = document.createElement('table');
-                table.style.width = '100%';
-                table.style.borderCollapse = 'collapse';
-                table.style.fontSize = '0.85rem';
-                table.style.background = 'var(--bg-card)';
-                table.style.border = '1px solid var(--border)';
+                function getColumnLetter(colIndex) {
+                    let temp = colIndex;
+                    let letter = '';
+                    while (temp >= 0) {
+                        letter = String.fromCharCode((temp % 26) + 65) + letter;
+                        temp = Math.floor(temp / 26) - 1;
+                    }
+                    return letter;
+                }
 
-                lines.forEach((line, idx) => {
+                const records = [];
+                let maxCols = 0;
+                lines.forEach(line => {
+                    const cells = line.split(',').map(cell => cell.replace(/^"(.*)"$/, '$1'));
+                    records.push(cells);
+                    if (cells.length > maxCols) {
+                        maxCols = cells.length;
+                    }
+                });
+
+                const table = document.createElement('table');
+                table.className = 'excel-grid';
+
+                const thead = document.createElement('thead');
+                const headerRow = document.createElement('tr');
+                const cornerHeader = document.createElement('th');
+                cornerHeader.className = 'excel-row-num-header';
+                headerRow.appendChild(cornerHeader);
+
+                for (let c = 0; c < maxCols; c++) {
+                    const colHeader = document.createElement('th');
+                    colHeader.className = 'excel-col-header';
+                    colHeader.textContent = getColumnLetter(c);
+                    headerRow.appendChild(colHeader);
+                }
+                thead.appendChild(headerRow);
+                table.appendChild(thead);
+
+                const tbody = document.createElement('tbody');
+                records.forEach((record, rIdx) => {
                     const row = document.createElement('tr');
-                    const cells = line.split(','); // Basic splitting, might need better CSV parsing but for demo it's fine
-                    cells.forEach(cell => {
-                        const cellEl = document.createElement(idx === 0 ? 'th' : 'td');
-                        cellEl.textContent = cell.replace(/^"(.*)"$/, '$1'); // Basic unquote
-                        cellEl.style.padding = '0.75rem';
-                        cellEl.style.border = '1px solid var(--border)';
-                        cellEl.style.textAlign = 'left';
-                        if (idx === 0) {
-                            cellEl.style.background = 'rgba(99, 102, 241, 0.1)';
-                            cellEl.style.color = 'var(--primary)';
-                            cellEl.style.fontWeight = '800';
+                    
+                    const rowNumCell = document.createElement('td');
+                    rowNumCell.className = 'excel-row-num';
+                    rowNumCell.textContent = rIdx + 1;
+                    row.appendChild(rowNumCell);
+
+                    for (let c = 0; c < maxCols; c++) {
+                        const cellEl = document.createElement('td');
+                        if (c < record.length) {
+                            cellEl.textContent = record[c];
+                        } else {
+                            cellEl.className = 'excel-cell-empty';
                         }
                         row.appendChild(cellEl);
-                    });
-                    table.appendChild(row);
+                    }
+                    tbody.appendChild(row);
                 });
+                table.appendChild(tbody);
 
                 container.innerHTML = '';
                 container.appendChild(table);
+                initSpreadsheetResizing();
+            }
+
+            function initSpreadsheetResizing() {
+                document.querySelectorAll('.excel-grid').forEach(table => {
+                    if (table.dataset.resizingInitialized) return;
+                    table.dataset.resizingInitialized = 'true';
+
+                    table.querySelectorAll('.excel-col-header').forEach(header => {
+                        if (header.querySelector('.col-resizer')) return;
+                        const resizer = document.createElement('div');
+                        resizer.className = 'col-resizer';
+                        header.appendChild(resizer);
+
+                        let startX = 0;
+                        let startWidth = 0;
+
+                        const onMouseMove = (e) => {
+                            const width = startWidth + (e.clientX - startX);
+                            if (width > 40) {
+                                header.style.width = width + 'px';
+                                header.style.minWidth = width + 'px';
+                            }
+                        };
+
+                        const onMouseUp = () => {
+                            resizer.classList.remove('resizing');
+                            document.removeEventListener('mousemove', onMouseMove);
+                            document.removeEventListener('mouseup', onMouseUp);
+                        };
+
+                        resizer.addEventListener('mousedown', (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            startX = e.clientX;
+                            startWidth = header.offsetWidth;
+                            resizer.classList.add('resizing');
+                            document.addEventListener('mousemove', onMouseMove);
+                            document.addEventListener('mouseup', onMouseUp);
+                        });
+                    });
+
+                    table.querySelectorAll('.excel-row-num').forEach(rowHeader => {
+                        if (rowHeader.querySelector('.row-resizer')) return;
+                        const resizer = document.createElement('div');
+                        resizer.className = 'row-resizer';
+                        rowHeader.appendChild(resizer);
+
+                        const row = rowHeader.parentElement;
+                        let startY = 0;
+                        let startHeight = 0;
+
+                        const onMouseMove = (e) => {
+                            const height = startHeight + (e.clientY - startY);
+                            if (height > 20) {
+                                row.style.height = height + 'px';
+                            }
+                        };
+
+                        const onMouseUp = () => {
+                            resizer.classList.remove('resizing');
+                            document.removeEventListener('mousemove', onMouseMove);
+                            document.removeEventListener('mouseup', onMouseUp);
+                        };
+
+                        resizer.addEventListener('mousedown', (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            startY = e.clientY;
+                            startHeight = row.offsetHeight;
+                            resizer.classList.add('resizing');
+                            document.addEventListener('mousemove', onMouseMove);
+                            document.addEventListener('mouseup', onMouseUp);
+                        });
+                    });
+                });
             }
 
             // --- AST JSON Collapsible Logic ---
@@ -5069,7 +5360,15 @@
                         ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
                         htmlConfig: {
                             standalone: document.getElementById('cfg_html_standalone').checked,
-                            chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined
+                            chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined,
+                            containerWidth: document.getElementById('cfg_html_containerWidth').value || 'auto',
+                            customCss: document.getElementById('cfg_html_customCss').value || undefined,
+                            injections: {
+                                headStart: document.getElementById('cfg_html_inj_headStart').value || undefined,
+                                headEnd: document.getElementById('cfg_html_inj_headEnd').value || undefined,
+                                bodyStart: document.getElementById('cfg_html_inj_bodyStart').value || undefined,
+                                bodyEnd: document.getElementById('cfg_html_inj_bodyEnd').value || undefined
+                            }
                         }
                     };
                     return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'html', genConfig)).value;

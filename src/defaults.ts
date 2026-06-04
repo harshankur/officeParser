@@ -46,6 +46,9 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     onWarning: () => { },
     newlineDelimiter: '\n',
     ignoreNotes: false,
+    ignoreComments: false,
+    ignoreHeadersAndFooters: false,
+    ignoreSlideMasters: false,
     putNotesAtLast: false,
     extractAttachments: false,
     includeRawContent: false,
@@ -68,6 +71,14 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
 const DEFAULT_HTML_GENERATOR_CONFIG: DeepRequired<HtmlGeneratorConfig> = {
     standalone: true,
     chartJsSrc: 'https://cdn.jsdelivr.net/npm/chart.js',
+    containerWidth: 'auto',
+    customCss: '',
+    injections: {
+        headStart: '',
+        headEnd: '',
+        bodyStart: '',
+        bodyEnd: '',
+    }
 };
 
 /**

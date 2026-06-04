@@ -22,13 +22,13 @@
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
  */
 
-import { ChartMetadata, FullOfficeParserConfig, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, SlideMetadata, TextFormatting } from '../types.js';
+import { ChartMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, SlideMetadata, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
-import { getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
+import { getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 
 /**
@@ -52,12 +52,20 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     const chartFileRegex = /ppt\/charts\/chart\d+\.xml/;
     const corePropsFileRegex = /docProps\/core\.xml/;
     const customPropsFileRegex = /docProps\/custom\.xml/;
+    const appPropsFileRegex = /docProps\/app\.xml/;
+
+    const commentsFileRegex = /ppt\/comments\/comment\d+\.xml/;
+    const commentAuthorsRegex = /ppt\/commentAuthors\.xml/;
+    const slideMastersRegex = /ppt\/slideMasters\/slideMaster\d+\.xml/;
 
     const files = await extractFiles(buffer, x =>
         !!x.match(config.ignoreNotes ? slidesRegex : allFilesRegex) ||
         !!x.match(corePropsFileRegex) ||
         !!x.match(customPropsFileRegex) ||
+        !!x.match(appPropsFileRegex) ||
         !!x.match(slideRelsRegex) ||
+        (!config.ignoreComments && (!!x.match(commentsFileRegex) || !!x.match(commentAuthorsRegex))) ||
+        (!config.ignoreSlideMasters && !!x.match(slideMastersRegex)) ||
         (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(chartFileRegex)))
     );
 
@@ -68,6 +76,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     if (customPropsFile) {
         const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString());
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
+    }
+    const appPropsFile = files.find(f => f.path.match(appPropsFileRegex));
+    if (appPropsFile) {
+        const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString());
+        if (Object.keys(appProperties).length > 0) metadata.nativeProperties = appProperties;
     }
 
     // Sort files
@@ -82,6 +95,24 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     const content: OfficeContentNode[] = [];
     const rawContents: string[] = [];
     const slideRelsMap: Record<number, Record<string, { type: string, target: string }>> = {};
+
+    const authorMap: Record<string, { author?: string, initials?: string }> = {};
+    if (!config.ignoreComments) {
+        const authorsFile = files.find(f => f.path === 'ppt/commentAuthors.xml');
+        if (authorsFile) {
+            const authorsXml = parseXmlString(authorsFile.content.toString());
+            const authorNodes = getElementsByTagName(authorsXml, "p:cmAuthor");
+            for (const aNode of authorNodes) {
+                const id = aNode.getAttribute("id");
+                if (id !== null) {
+                    authorMap[id] = {
+                        author: aNode.getAttribute("name") || undefined,
+                        initials: aNode.getAttribute("initials") || undefined
+                    };
+                }
+            }
+        }
+    }
 
     let currentListId = 0;
     let runningListIndex = 0;
@@ -172,11 +203,26 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                     }
                 }
 
+                let backgroundColor: string | undefined;
+                const tcPr = getFirstElementByTagName(tcNode, "a:tcPr");
+                if (tcPr) {
+                    for (const child of Array.from(tcPr.childNodes)) {
+                        if (isElement(child) && child.nodeName === "a:solidFill") {
+                            const srgbClr = getFirstElementByTagName(child, "a:srgbClr");
+                            if (srgbClr) {
+                                const val = srgbClr.getAttribute("val");
+                                if (val) backgroundColor = "#" + val;
+                            }
+                            break;
+                        }
+                    }
+                }
+
                 const cellNode: OfficeContentNode = {
                     type: 'cell',
                     text: cellText,
                     children: cellChildren,
-                    metadata: { row: rIndex, col: cIndex }
+                    metadata: { row: rIndex, col: cIndex, ...(backgroundColor ? { backgroundColor } : {}) }
                 };
                 cells.push(cellNode);
             }
@@ -320,12 +366,22 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
             for (let i = 0; i < paragraphs.length; i++) {
                 const p = paragraphs[i];
-                const pNode: OfficeContentNode = {
-                    type: isTitle ? 'heading' : 'paragraph',
-                    text: '',
-                    children: [],
-                    metadata: isTitle ? { level: 1 } : {}
-                };
+                let pNode: OfficeContentNode;
+                if (isTitle) {
+                    pNode = {
+                        type: 'heading',
+                        text: '',
+                        children: [],
+                        metadata: { level: 1 }
+                    };
+                } else {
+                    pNode = {
+                        type: 'paragraph',
+                        text: '',
+                        children: [],
+                        metadata: {}
+                    };
+                }
 
                 // Paragraph Alignment and List Detection
                 const pPr = getFirstElementByTagName(p, "a:pPr");
@@ -369,8 +425,6 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                 }
 
                 if (isList) {
-                    pNode.type = 'list';
-
                     const ilvl = lvl;
 
                     // detect a new list when bullet type changes or previous was not a list
@@ -426,14 +480,18 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                     lastListIndent = ilvl;
 
                     // metadata output
-                    pNode.metadata = {
-                        ...pNode.metadata,
-                        listType,
-                        indentation: ilvl,
-                        listId: currentListId.toString(),
-                        itemIndex: runningListIndex,
-                        alignment: (pNode.metadata as any)?.alignment || 'left',
-                    } as ListMetadata;
+                    pNode = {
+                        type: 'list',
+                        text: pNode.text,
+                        children: pNode.children,
+                        metadata: {
+                            listType,
+                            indentation: ilvl,
+                            listId: currentListId.toString(),
+                            itemIndex: runningListIndex,
+                            alignment: (pNode.metadata as any)?.alignment || 'left',
+                        }
+                    };
                 }
                 else {
                     lastWasList = false;
@@ -441,8 +499,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                     lastListIndent = 0;
                 }
 
-                if (isTitle) {
-                    pNode.metadata = { ...pNode.metadata, level: 1 };
+                if (isTitle && pNode.type === 'heading') {
+                    pNode.metadata = { ...pNode.metadata, level: 1 } as HeadingMetadata;
                 }
 
                 if (config.includeRawContent) {
@@ -550,7 +608,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                                 text: '',
                                 children: [],
                                 metadata: {
-                                    indentation: lvl,
+                                    paragraphIndentation: { left: lvl },
                                     alignment: (pNode.metadata as any)?.alignment || 'left'
                                 }
                             };
@@ -689,6 +747,10 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                         else if (typeAttr.includes("relationships/notesSlide")) {
                             simplifiedType = "notes";
                         }
+                        // Check comments
+                        else if (typeAttr.includes("relationships/comments")) {
+                            simplifiedType = "comments";
+                        }
                         // Now normalize the target only if it is a local file path.
                         // Hyperlinks are external and should not be normalized.
                         let normalizedTarget = targetRaw;
@@ -710,12 +772,16 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         }
     }
 
+    const slidesMap: Record<number, OfficeContentNode> = {};
+    const slideMasters: OfficeContentNode[] = [];
+
     // Now for processing all the other files - slides and notes.
     for (const file of files) {
         if (file.path.match(mediaFileRegex)) continue;
         if (file.path.match(chartFileRegex)) continue;
         if (file.path.match(slideRelsRegex)) continue;
         if (file.path.match(corePropsFileRegex)) continue;
+        if (file.path.includes("comment")) continue;
 
         const xmlContentString = file.content.toString();
         const xml = parseXmlString(xmlContentString, { locator: config.includeRawContent });
@@ -725,33 +791,91 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
         const slideMatch = file.path.match(slideNumberRegex);
         const slideNumber = slideMatch ? parseInt(slideMatch[1]) : 0;
-        const isNote = file.path.includes("notesSlide");
 
-        const slideNode: OfficeContentNode = {
-            type: isNote ? 'note' : 'slide',
-            children: [],
-            metadata: {
-                slideNumber: slideNumber,
-                ...(isNote ? { noteId: `slide-note-${slideNumber}` } : {})
-            } as SlideMetadata
-        };
+        const masterMatch = file.path.match(/slideMaster(\d+)\.xml/);
+        const masterNumber = masterMatch ? parseInt(masterMatch[1]) : 0;
+
+        const isNote = file.path.includes("notesSlide");
+        const isMaster = file.path.includes("slideMaster");
+        const nodeType = isNote ? 'note' : (isMaster ? 'slideMaster' : 'slide');
+        const nodeNumber = isMaster ? masterNumber : slideNumber;
+
+        let slideNode: OfficeContentNode;
+        if (isNote) {
+            slideNode = {
+                type: 'note',
+                children: [],
+                metadata: {
+                    slideNumber: nodeNumber,
+                    noteId: `slide-note-${slideNumber}`
+                }
+            };
+        } else {
+            slideNode = {
+                type: isMaster ? 'slideMaster' : 'slide',
+                children: [],
+                metadata: {
+                    slideNumber: nodeNumber
+                }
+            };
+        }
 
         if (config.includeRawContent) {
             slideNode.rawContent = getRawContent(xml, xmlContentString, config);
         }
 
-        /**
-         * Extract slide contents in correct document order by scanning p:spTree children.
-         * This ensures p:pic, p:sp, p:graphicFrame appear in AST in the exact sequence.
-         */
         const spTree = getFirstElementByTagName(xml, "p:spTree");
         if (spTree) {
-            slideNode.children?.push(...traverseSpTree(spTree, slideNumber, xmlContentString));
+            slideNode.children?.push(...traverseSpTree(spTree, nodeNumber, xmlContentString));
         }
 
         if (slideNode.children && slideNode.children.length > 0) {
-            content.push(slideNode);
+            if (isMaster) {
+                slideMasters.push(slideNode);
+            } else if (isNote) {
+                if (!slidesMap[slideNumber]) slidesMap[slideNumber] = { type: 'slide', children: [], metadata: { slideNumber } as SlideMetadata };
+                if (!slidesMap[slideNumber].notes) slidesMap[slideNumber].notes = [];
+                slidesMap[slideNumber].notes.push(slideNode);
+            } else {
+                if (!slidesMap[slideNumber]) {
+                    slidesMap[slideNumber] = slideNode;
+                } else {
+                    slidesMap[slideNumber].children = slideNode.children;
+                    slidesMap[slideNumber].rawContent = slideNode.rawContent;
+                }
+
+                // Process comments
+                if (!config.ignoreComments && slideRelsMap[slideNumber]) {
+                    const commentRels = Object.values(slideRelsMap[slideNumber]).filter(r => r.type === "comments");
+                    for (const rel of commentRels) {
+                        const cFile = files.find(f => f.path.endsWith(rel.target));
+                        if (cFile) {
+                            const cXml = parseXmlString(cFile.content.toString());
+                            const commentNodes = getElementsByTagName(cXml, "p:cm");
+                            for (const cNode of commentNodes) {
+                                const authorId = cNode.getAttribute("authorId");
+                                const authorData = authorId !== null ? authorMap[authorId] : undefined;
+                                const text = getElementsByTagName(cNode, "a:t").map(t => t.textContent || '').join('');
+                                if (text) {
+                                    if (!slidesMap[slideNumber].comments) slidesMap[slideNumber].comments = [];
+                                    slidesMap[slideNumber].comments.push({
+                                        type: 'comment',
+                                        text,
+                                        children: [{ type: 'text', text, formatting: {} }],
+                                        metadata: authorData && authorData.author ? { author: authorData.author } : undefined
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    const sortedSlideNumbers = Object.keys(slidesMap).map(Number).sort((a, b) => a - b);
+    for (const num of sortedSlideNumbers) {
+        content.push(slidesMap[num]);
     }
 
     const attachments: OfficeAttachment[] = [];
@@ -823,14 +947,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         assignAttachmentData(content);
     }
 
-    // Finally, if the notes are required to be at the end of the document, move them there.
-    if (!config.ignoreNotes && config.putNotesAtLast) {
-        content.sort((a, b) => {
-            const aIsNote = a.type === 'note' ? 1 : 0;
-            const bIsNote = b.type === 'note' ? 1 : 0;
-            return aIsNote - bIsNote;
-        });
-    }
+    // putNotesAtLast is deprecated. Notes are now structurally attached to their respective slides.
 
     const toTextSync = () => content.map(c => {
         // Recursive text extraction
@@ -846,12 +963,17 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         return getText(c);
     }).filter(t => t != '').join(config.newlineDelimiter);
 
+    const auxiliaryContent = slideMasters.length > 0 ? {
+        slideMasters
+    } : undefined;
+
     return createAST(
         'pptx',
         metadata,
         content,
         attachments,
         config,
+        auxiliaryContent,
         toTextSync
     );
 };

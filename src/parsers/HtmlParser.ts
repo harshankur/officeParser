@@ -1,4 +1,4 @@
-import { CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 
@@ -150,6 +150,16 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
         const titleNode = findNode(head, 'title');
         if (titleNode && titleNode.children.length > 0 && titleNode.children[0].text) {
             metadata.title = titleNode.children[0].text;
+        }
+
+        metadata.nativeProperties = {};
+        for (const child of head.children) {
+            if (child.tagName === 'meta') {
+                const name = child.attributes?.name || child.attributes?.property || child.attributes?.['http-equiv'];
+                if (name) {
+                    metadata.nativeProperties[name] = child.attributes?.content || '';
+                }
+            }
         }
 
         const extractMeta = (name: string): string | undefined => {
@@ -402,7 +412,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             if (tagName === 'table') {
                 const tableNode: OfficeContentNode = {
                     type: 'table',
-                    metadata: { anchorIds: anchorIds.length > 0 ? anchorIds : undefined },
+                    metadata: { anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as TableMetadata,
                     children: parseChildren(node, newFormatting, listContext)
                 };
                 if (config.includeRawContent) {
@@ -570,5 +580,5 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
     }).join(config.newlineDelimiter)
         .replace(/\n{3,}/g, '\n\n'); // Normalize excessive whitespace
 
-    return createAST('html', metadata, content, attachments, config, toTextSync);
+    return createAST('html', metadata, content, attachments, config, undefined, toTextSync);
 };

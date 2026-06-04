@@ -17,7 +17,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      * 
      * @returns An HTML string
      */
-    async generate(): Promise<ConversionResult> {
+    async generate(): Promise<ConversionResult<'html'>> {
         this.isSpreadsheetMode = this.ast.content.some(n => n.type === 'sheet');
         const isPresentation = this.ast.content.some(n => n.type === 'slide');
         const isPdf = this.ast.content.some(n => n.type === 'page');
@@ -53,6 +53,120 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             spreadsheetTabs = `<div class="spreadsheet-tabs">${tabs}</div>`;
             spreadsheetScript = `
 <script>
+    function initSpreadsheetResizing() {
+        document.querySelectorAll('.excel-grid').forEach(table => {
+            if (table.dataset.resizingInitialized) return;
+            if (table.offsetWidth === 0) return; // skip hidden tables
+            table.dataset.resizingInitialized = 'true';
+            
+            const sheetId = table.parentElement.id || 'sheet';
+            const docId = window.location.pathname;
+
+            // Freeze initial auto-layout widths of columns and set table layout to fixed
+            const colHeaders = table.querySelectorAll('.excel-col-header');
+            colHeaders.forEach((header, index) => {
+                let currentWidth = header.offsetWidth;
+                const savedWidth = localStorage.getItem(docId + '_' + sheetId + '_col_' + index);
+                if (savedWidth) {
+                    currentWidth = parseInt(savedWidth, 10);
+                }
+                header.style.width = currentWidth + 'px';
+                header.style.minWidth = currentWidth + 'px';
+            });
+            table.style.width = table.offsetWidth + 'px';
+            table.style.tableLayout = 'fixed';
+
+            // Freeze initial auto-layout heights of rows
+            table.querySelectorAll('tr').forEach((row, index) => {
+                let currentHeight = row.offsetHeight;
+                const savedHeight = localStorage.getItem(docId + '_' + sheetId + '_row_' + index);
+                if (savedHeight) {
+                    currentHeight = parseInt(savedHeight, 10);
+                }
+                row.style.height = currentHeight + 'px';
+            });
+
+            colHeaders.forEach((header, index) => {
+                if (header.querySelector('.col-resizer')) return;
+                const resizer = document.createElement('div');
+                resizer.className = 'col-resizer';
+                header.appendChild(resizer);
+
+                let startX = 0;
+                let startWidth = 0;
+                let startTableWidth = 0;
+
+                const onMouseMove = (e) => {
+                    const width = startWidth + (e.clientX - startX);
+                    if (width > 40) {
+                        header.style.width = width + 'px';
+                        header.style.minWidth = width + 'px';
+                        table.style.width = (startTableWidth + (width - startWidth)) + 'px';
+                    }
+                };
+
+                const onMouseUp = (e) => {
+                    resizer.classList.remove('resizing');
+                    document.removeEventListener('mousemove', onMouseMove);
+                    document.removeEventListener('mouseup', onMouseUp);
+                    const finalWidth = startWidth + (e.clientX - startX);
+                    if (finalWidth > 40) {
+                        localStorage.setItem(docId + '_' + sheetId + '_col_' + index, finalWidth);
+                    }
+                };
+
+                resizer.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    startX = e.clientX;
+                    startWidth = header.offsetWidth;
+                    startTableWidth = table.offsetWidth;
+                    resizer.classList.add('resizing');
+                    document.addEventListener('mousemove', onMouseMove);
+                    document.addEventListener('mouseup', onMouseUp);
+                });
+            });
+
+            table.querySelectorAll('.excel-row-num').forEach((rowHeader, index) => {
+                if (rowHeader.querySelector('.row-resizer')) return;
+                const resizer = document.createElement('div');
+                resizer.className = 'row-resizer';
+                rowHeader.appendChild(resizer);
+
+                const row = rowHeader.parentElement;
+                let startY = 0;
+                let startHeight = 0;
+
+                const onMouseMove = (e) => {
+                    const height = startHeight + (e.clientY - startY);
+                    if (height > 20) {
+                        row.style.height = height + 'px';
+                    }
+                };
+
+                const onMouseUp = (e) => {
+                    resizer.classList.remove('resizing');
+                    document.removeEventListener('mousemove', onMouseMove);
+                    document.removeEventListener('mouseup', onMouseUp);
+                    const finalHeight = startHeight + (e.clientY - startY);
+                    if (finalHeight > 20) {
+                        localStorage.setItem(docId + '_' + sheetId + '_row_' + index, finalHeight);
+                    }
+                };
+
+                resizer.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    startY = e.clientY;
+                    startHeight = row.offsetHeight;
+                    resizer.classList.add('resizing');
+                    document.addEventListener('mousemove', onMouseMove);
+                    document.addEventListener('mouseup', onMouseUp);
+                });
+            });
+        });
+    }
+
     function switchSheet() {
         try {
             let hash = window.location.hash;
@@ -82,6 +196,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     }
                 });
             }
+
+            initSpreadsheetResizing();
         } catch (e) {
             console.error('Sheet switch failed:', e);
             const firstSheet = document.querySelector('.spreadsheet-sheet');
@@ -102,9 +218,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
         const styles = this.config.htmlConfig.standalone ? '' : `<style>${this.getPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)}</style>`;
 
+        const inj = this.config.htmlConfig.injections;
         const value = this.config.htmlConfig.standalone ? `<!DOCTYPE html>
 <html lang="en">
 <head>
+    ${inj.headStart}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${this.escape(title)}</title>
@@ -113,8 +231,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     <style>
         ${this.getPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)}
     </style>
+    ${inj.headEnd}
 </head>
 <body>
+    ${inj.bodyStart}
     <div class="${containerClass}">
         <article>
             ${metadataBlock}
@@ -123,6 +243,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         ${spreadsheetTabs}
     </div>
     ${spreadsheetScript}
+    ${inj.bodyEnd}
 </body>
 </html>` : `${styles}<div class="${containerClass}">${metadataBlock}${bodyContent}${spreadsheetTabs}</div>${spreadsheetScript}`;
 
@@ -531,27 +652,137 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
 
             case 'sheet': {
-                // For sheet-based files, wrap rows in a table
-                let finalChildren = childrenOutput;
                 const rows = node.children || [];
 
-                // Apply same header detection as 'table' nodes
-                if (rows.length > 0 && rows[0].type === 'row') {
-                    const firstRow = rows[0];
-                    const firstRowCells = firstRow.children || [];
-                    const isHeaderStyle = (firstRow.metadata as any)?.style?.toLowerCase().includes('header');
-                    const allBold = firstRowCells.length > 0 && firstRowCells.every(c =>
-                        c.children?.every(child => child.formatting?.bold === true)
-                    );
+                // Find grid bounds
+                let maxRow = -1;
+                let maxCol = -1;
 
-                    if (isHeaderStyle || allBold) {
-                        const headOutput = await this.processNodeRecursive(firstRow, async (n, children) => {
-                            return children.replace(/<td/g, '<th').replace(/<\/td>/g, '</th>');
-                        });
-                        const bodyRows = rows.slice(1);
-                        const bodyOutput = await this.processNodeArray(bodyRows);
-                        finalChildren = `<thead>${headOutput}</thead><tbody>${bodyOutput}</tbody>`;
+                for (const child of rows) {
+                    if (child.type === 'row') {
+                        for (const cell of child.children || []) {
+                            if (cell.type === 'cell') {
+                                const meta = cell.metadata as CellMetadata;
+                                if (meta) {
+                                    const r = meta.row;
+                                    const c = meta.col;
+                                    const rSpan = meta.rowSpan || 1;
+                                    const cSpan = meta.colSpan || 1;
+                                    if (r + rSpan - 1 > maxRow) maxRow = r + rSpan - 1;
+                                    if (c + cSpan - 1 > maxCol) maxCol = c + cSpan - 1;
+                                }
+                            }
+                        }
                     }
+                }
+
+                let tableHtml = '';
+
+                if (maxRow >= 0 && maxCol >= 0) {
+                    // Populate cell grid and track merged cells
+                    const grid: (OfficeContentNode | null)[][] = Array.from(
+                        { length: maxRow + 1 },
+                        () => Array(maxCol + 1).fill(null)
+                    );
+                    const mergedCovered: boolean[][] = Array.from(
+                        { length: maxRow + 1 },
+                        () => Array(maxCol + 1).fill(false)
+                    );
+                    const rowNodeMap = new Map<number, OfficeContentNode>();
+
+                    for (const child of rows) {
+                        if (child.type === 'row') {
+                            const cellsInRow = child.children?.filter(c => c.type === 'cell') || [];
+                            if (cellsInRow.length > 0) {
+                                const r = (cellsInRow[0].metadata as CellMetadata).row;
+                                rowNodeMap.set(r, child);
+
+                                for (const cell of cellsInRow) {
+                                    const meta = cell.metadata as CellMetadata;
+                                    if (meta) {
+                                        const c = meta.col;
+                                        if (r >= 0 && r <= maxRow && c >= 0 && c <= maxCol) {
+                                            grid[r][c] = cell;
+
+                                            const rSpan = meta.rowSpan || 1;
+                                            const cSpan = meta.colSpan || 1;
+                                            if (rSpan > 1 || cSpan > 1) {
+                                                for (let rOffset = 0; rOffset < rSpan; rOffset++) {
+                                                    for (let cOffset = 0; cOffset < cSpan; cOffset++) {
+                                                        if (rOffset === 0 && cOffset === 0) continue;
+                                                        const targetR = r + rOffset;
+                                                        const targetC = c + cOffset;
+                                                        if (targetR <= maxRow && targetC <= maxCol) {
+                                                            mergedCovered[targetR][targetC] = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Build column headers (A, B, C...)
+                    let ths = '<th class="excel-row-num-header"></th>';
+                    for (let c = 0; c <= maxCol; c++) {
+                        ths += `<th class="excel-col-header">${this.getColumnLetter(c)}</th>`;
+                    }
+                    const thead = `<thead><tr>${ths}</tr></thead>`;
+
+                    // Build rows
+                    let tbodyRows = '';
+                    for (let r = 0; r <= maxRow; r++) {
+                        const rowNode = rowNodeMap.get(r);
+                        let trAttrs = '';
+                        if (rowNode) {
+                            const mapping = this.getSemanticMapping(rowNode);
+                            const rClasses = ['excel-row'];
+                            if (mapping?.classes) rClasses.push(...mapping.classes);
+                            trAttrs += ` class="${rClasses.join(' ')}"`;
+                            if (mapping?.attributes) {
+                                for (const [key, val] of Object.entries(mapping.attributes)) {
+                                    trAttrs += ` ${key}="${this.escape(val)}"`;
+                                }
+                            }
+                            const rAnchorIds = this.config.ignoreInternalLinks ? [] : [...((rowNode.metadata as any)?.anchorIds || [])];
+                            if (rAnchorIds.length > 0) {
+                                trAttrs += ` id="${rAnchorIds[0]}"`;
+                            }
+                            if (this.config.includeFormatting) {
+                                const styles = this.getInlineStyles(rowNode);
+                                if (styles) trAttrs += ` style="${styles}"`;
+                            }
+                        } else {
+                            trAttrs = ' class="excel-row"';
+                        }
+
+                        let rowCellsHtml = `<td class="excel-row-num">${r + 1}</td>`;
+                        for (let c = 0; c <= maxCol; c++) {
+                            if (mergedCovered[r][c]) {
+                                continue;
+                            }
+                            const cell = grid[r][c];
+                            if (cell) {
+                                const cellHtml = await this.processNodeRecursive(cell, this.nodeProcessor.bind(this));
+                                rowCellsHtml += cellHtml;
+                            } else {
+                                rowCellsHtml += '<td class="excel-cell-empty"></td>';
+                            }
+                        }
+                        tbodyRows += `<tr${trAttrs}>${rowCellsHtml}</tr>\n`;
+                    }
+                    const tbody = `<tbody>${tbodyRows}</tbody>`;
+                    tableHtml = `<table class="spreadsheet-table excel-grid">${thead}${tbody}</table>`;
+                }
+
+                // Process non-row elements (images, charts, etc.)
+                const nonRowNodes = rows.filter(c => c.type !== 'row');
+                let nonRowHtml = '';
+                if (nonRowNodes.length > 0) {
+                    nonRowHtml = await this.processNodeArray(nonRowNodes);
                 }
 
                 const isFirstSheet = this.ast.content.filter(n => n.type === 'sheet')[0] === node;
@@ -568,12 +799,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // Ensure we don't have duplicate IDs
                 const finalIdAttr = ` id="${sheetId}"`;
 
-                return `${extraAnchors}<div${finalIdAttr}${classAttr}${mappedAttrs}${styleAttr}><table class="spreadsheet-table">${finalChildren}</table></div>`;
+                return `${extraAnchors}<div${finalIdAttr}${classAttr}${mappedAttrs}${styleAttr}>${tableHtml}${nonRowHtml}</div>`;
             }
 
             case 'paragraph':
             case 'heading': {
                 const tag = node.type === 'heading' ? `h${(node.metadata as HeadingMetadata)?.level || 1}` : 'p';
+
+                // Normalize empty paragraphs so DOCX and PPTX empty cells render with consistent height
+                // Strip tags to check if it's purely empty or just contains non-breaking spaces (like PPTX)
+                const textOnly = childrenOutput.replace(/<[^>]+>/g, '').trim();
+                if (!textOnly && !node.children?.some(c => c.type === 'image' || c.type === 'chart')) {
+                    const extraClass = className ? ` class="${className.replace('class="', '').replace('"', '')} empty-paragraph"` : ' class="empty-paragraph"';
+                    return `${extraAnchors}<${tag}${idAttr}${extraClass}${mappedAttrs}${styleAttr}><br></${tag}>`;
+                }
+
                 return `${extraAnchors}<${tag}${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</${tag}>`;
             }
             case 'slide': {
@@ -667,6 +907,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     }
 
     private getPremiumStyles(isSpreadsheet: boolean = false, isPresentation: boolean = false, isPdf: boolean = false): string {
+        let resolvedWidth = this.config.htmlConfig.containerWidth;
+        if (!resolvedWidth || resolvedWidth === 'auto') {
+            if (isSpreadsheet) {
+                resolvedWidth = '100%';
+            } else if (isPresentation) {
+                resolvedWidth = '297mm';
+            } else {
+                resolvedWidth = '900px';
+            }
+        } else if (typeof resolvedWidth === 'number') {
+            resolvedWidth = `${resolvedWidth}px`;
+        }
+
         return `
             :root {
                 --primary-color: #2c3e50;
@@ -676,6 +929,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 --border-color: #e9ecef;
                 --accent-color: #3498db;
                 --shadow: 0 10px 25px rgba(0,0,0,0.05);
+                --container-width: ${resolvedWidth};
             }
             * {
                 box-sizing: border-box;
@@ -689,7 +943,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 padding: ${isSpreadsheet ? '0' : '50px 20px'};
             }
             .container {
-                max-width: 850px;
+                max-width: var(--container-width);
                 margin: 0 auto;
                 background: var(--container-bg);
                 padding: 60px 80px;
@@ -697,7 +951,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 box-shadow: var(--shadow);
             }
             .presentation-container, .pdf-container {
-                max-width: 1200px;
+                max-width: var(--container-width);
                 margin: 0 auto;
             }
             .presentation-container .metadata-summary, .pdf-container .metadata-summary {
@@ -745,33 +999,50 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             h3 { font-size: 1.5em; }
             
             p { margin-bottom: 1.3em; }
+            p.empty-paragraph { margin: 0; min-height: 1em; }
             
-            ul, ol { margin: 1.5em 0; padding-left: 2em; }
-            li { margin-bottom: 0.6em; }
+            ul, ol { margin: 1em 0; padding-left: 2em; }
+            li { margin-bottom: 0.25em; }
+            li > p { margin-bottom: 0.25em; }
             
             .table-container {
-                width: 100%;
+                width: fit-content;
+                max-width: 100%;
                 overflow-x: auto;
                 -webkit-overflow-scrolling: touch;
-                margin: 25px 0;
+                margin: 25px auto;
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                background: white;
             }
             table {
                 width: auto;
                 max-width: 100%;
                 min-width: ${isSpreadsheet ? '100%' : '300px'};
-                border-collapse: collapse;
-                margin: 0 auto;
-                border: 1px solid var(--border-color);
-                border-radius: 8px;
-                overflow: hidden;
+                border-collapse: separate;
+                border-spacing: 0;
+                margin: 0;
+                border: none;
             }
             th, td {
-                padding: 12px 16px;
+                padding: 8px 12px;
                 border-bottom: 1px solid var(--border-color);
                 border-right: 1px solid var(--border-color);
                 text-align: left;
                 vertical-align: top;
                 overflow-wrap: break-word;
+            }
+            th:last-child, td:last-child {
+                border-right: none;
+            }
+            tr:last-child th, tr:last-child td {
+                border-bottom: none;
+            }
+            th, td > p {
+                margin: 0;
+            }
+            td > *:last-child, th > *:last-child {
+                margin-bottom: 0;
             }
             th {
                 background-color: #f8f9fa;
@@ -784,7 +1055,6 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 top: 0;
                 z-index: 10;
             }
-            tr:last-child td { border-bottom: none; }
             tr:nth-child(even) { background-color: #fdfdfd; }
             tr:hover { background-color: #f1f4f9; }
             
@@ -802,7 +1072,98 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 padding: 8px 12px;
                 font-size: 13px;
                 white-space: nowrap;
+            }
+            /* Spreadsheet Grid styling */
+            .excel-grid {
+                border-collapse: collapse;
+                border-spacing: 0;
+                background: var(--container-bg);
+                border: 1px solid var(--border-color);
+                width: max-content;
+                max-width: none;
+                min-width: 0;
+            }
+            .excel-grid th, .excel-grid td {
+                border: 1px solid var(--border-color);
+                padding: 4px 8px;
+                font-size: 13px;
+                line-height: 1.2;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .excel-col-header {
+                background: #f8f9fa;
+                color: #5f6368;
+                font-weight: 500;
+                text-align: center;
+                user-select: none;
+                border-bottom: 2px solid var(--border-color);
+                position: sticky;
+                top: 0;
+                z-index: 10;
                 min-width: 100px;
+            }
+            .col-resizer {
+                position: absolute;
+                top: 0;
+                right: 0;
+                width: 4px;
+                height: 100%;
+                cursor: col-resize;
+                user-select: none;
+                z-index: 20;
+            }
+            .col-resizer:hover, .col-resizer.resizing {
+                background: var(--accent-color, #3498db);
+            }
+            .excel-row-num {
+                background: #f8f9fa;
+                color: #5f6368;
+                text-align: center;
+                font-weight: 500;
+                width: 45px;
+                min-width: 45px !important;
+                max-width: 45px;
+                user-select: none;
+                border-right: 2px solid var(--border-color);
+                position: sticky;
+                left: 0;
+                z-index: 5;
+            }
+            .row-resizer {
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                width: 100%;
+                height: 4px;
+                cursor: row-resize;
+                user-select: none;
+                z-index: 20;
+            }
+            .row-resizer:hover, .row-resizer.resizing {
+                background: var(--accent-color, #3498db);
+            }
+            .excel-row-num-header {
+                background: #f1f3f4;
+                width: 45px;
+                min-width: 45px !important;
+                max-width: 45px;
+                position: sticky;
+                top: 0;
+                left: 0;
+                z-index: 15;
+                border-right: 2px solid var(--border-color);
+                border-bottom: 2px solid var(--border-color);
+            }
+            .excel-cell-empty {
+                background: var(--container-bg);
+            }
+            .excel-grid tr:hover td {
+                background-color: #f1f4f9;
+            }
+            .excel-grid tr:hover td.excel-row-num {
+                background-color: #f8f9fa; /* Keep header color */
             }
 
             /* Tab Bar */
@@ -837,9 +1198,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             /* Slide & Page Separation */
             .slide {
                 background: white;
-                min-height: 600px;
+                aspect-ratio: 297 / 210;
                 margin: 0 auto 40px auto;
-                padding: 60px 80px;
+                padding: 4% 6%;
                 border-radius: 12px;
                 box-shadow: 0 10px 30px rgba(0,0,0,0.1);
                 position: relative;
@@ -849,21 +1210,74 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 border: 1px solid var(--border-color);
                 box-sizing: border-box;
                 width: 100%;
+                overflow: hidden;
+                overflow-y: auto;
                 overflow-wrap: break-word;
                 page-break-after: always;
             }
+            .slide:has(+ .slide-note) {
+                margin-bottom: 0;
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
+                border-bottom: none;
+            }
+            .slide table {
+                width: auto;
+                max-width: 100%;
+                font-size: 0.85em;
+                margin: 10px 0;
+            }
+            .slide th, .slide td {
+                padding: 6px 10px;
+            }
+            .slide > * {
+                flex-shrink: 0;
+            }
+            .slide > .table-container {
+                flex-shrink: 1;
+                min-height: 0;
+            }
+            .slide .table-container {
+                margin: 10px auto;
+                overflow-y: auto;
+            }
+            .slide .chart-container {
+                margin: 15px auto;
+                max-width: 100%;
+                padding: 10px;
+                height: 240px;
+                box-shadow: none;
+                border-radius: 8px;
+            }
+            .slide img {
+                max-height: 200px;
+                width: auto;
+                margin: 10px auto;
+                box-shadow: none;
+            }
+            .slide .image-container {
+                margin: 15px 0;
+            }
+            .slide h1 { font-size: 1.8em; margin-top: 0.4em; margin-bottom: 0.3em; padding-bottom: 5px; }
+            .slide h2 { font-size: 1.4em; margin-top: 0.4em; }
+            .slide h3 { font-size: 1.25em; }
+            .slide p { margin-bottom: 0.6em; font-size: 0.95em; }
+            .slide li > p { margin-bottom: 0.25em; }
+            .slide ul, .slide ol { margin: 0.6em 0; }
+            .slide li { margin-bottom: 0.25em; }
             .slide-note {
                 background: #fdfdfd;
                 border: 1px solid var(--border-color);
-                border-left: 4px solid var(--accent-color);
-                border-radius: 12px;
+                border-top: 1px dashed var(--border-color);
+                border-radius: 0 0 12px 12px;
                 padding: 30px 50px;
-                margin: 20px auto 60px auto;
-                max-width: 1000px;
+                margin: 0 auto 40px auto;
+                width: 100%;
+                box-sizing: border-box;
                 font-size: 0.95em;
                 color: var(--text-color);
                 position: relative;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+                box-shadow: 0 10px 30px rgba(0,0,0,0.1);
             }
             .note-footnote, .note-endnote {
                 margin: 30px auto;
@@ -893,9 +1307,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
             .page {
                 background: white;
-                min-height: 1000px;
+                aspect-ratio: 1 / 1.4142;
                 margin: 0 auto 40px auto;
-                padding: 70px 90px;
+                padding: 8% 10%;
                 box-shadow: 0 5px 20px rgba(0,0,0,0.08);
                 position: relative;
                 border: 1px solid var(--border-color);
@@ -915,8 +1329,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             
             /* High Fidelity Presentation Mode */
             @media screen and (max-width: 800px) {
-                .slide { min-height: auto; padding: 40px 30px; }
-                .page { padding: 40px; }
+                .slide { min-height: auto; aspect-ratio: auto; padding: 40px 30px; }
+                .page { aspect-ratio: auto; padding: 40px; }
             }
             
             /* Nested Table Styles */
@@ -925,6 +1339,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 border-radius: 6px;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.03);
                 background-color: #ffffff;
+                border: 1px solid var(--border-color);
+                overflow: hidden;
             }
             td td {
                 padding: 10px 14px;
@@ -1044,11 +1460,24 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     height: auto !important;
                 }
             }
+
+            /* --- Custom User CSS --- */
+            ${this.config.htmlConfig.customCss}
         `;
     }
 
     protected override slugify(text: string): string {
         return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    }
+
+    private getColumnLetter(colIndex: number): string {
+        let temp = colIndex;
+        let letter = '';
+        while (temp >= 0) {
+            letter = String.fromCharCode((temp % 26) + 65) + letter;
+            temp = Math.floor(temp / 26) - 1;
+        }
+        return letter;
     }
 
     private escape(text: string): string {

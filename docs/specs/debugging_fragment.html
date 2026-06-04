@@ -36,9 +36,9 @@
         <li><strong>For CLI/Short-lived scripts:</strong> Call <code>await terminateOcr()</code> manually after your
             <code>parseOffice</code> call.
         </li>
-        <li><strong>Change Timeout:</strong> Set a shorter idle period via <code>ocrConfig.autoTerminateTimeout</code>.
+        <li><strong>Change Timeout:</strong> Set a shorter idle period via <code>ocrConfig.timeout.autoTerminate</code> (preferred) or the deprecated <del><code>ocrConfig.autoTerminateTimeout</code></del>.
         </li>
-        <li><strong>Disable Pooled Persistence:</strong> Set <code>autoTerminateTimeout: 0</code> to kill workers
+        <li><strong>Disable Pooled Persistence:</strong> Set the auto-terminate timeout to <code>0</code> to kill workers
             immediately (similar to legacy behavior).</li>
     </ul>
     <pre><code>import { parseOffice, terminateOcr } from 'officeparser';
