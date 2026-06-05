@@ -325,7 +325,7 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     if (isBrowser) {
         pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
     } else {
-        // Node.js: Try to auto-resolve local worker path to avoid remote fetch errors
+        // Node.js: Try to auto-resolve local worker path to avoid remote download errors
         assertNode('pdf-worker-auto-resolution');
         let resolved = false;
 

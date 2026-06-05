@@ -97,7 +97,7 @@ export class OfficeParser {
      * });
      * 
      * // Parse a Buffer with OCR enabled
-     * const buffer = await fetch('document.pdf').then(r => r.arrayBuffer());
+     * const buffer = await retrieveData('document.pdf').then(r => r.arrayBuffer());
      * const ast = await OfficeParser.parseOffice(buffer, {
      *   ocr: true,
      *   ocrLanguage: 'eng+fra'          

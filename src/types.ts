@@ -417,7 +417,7 @@ export interface CommonGeneratorConfig {
      * 1. **Filter/Remove Nodes**: Return `false` to skip a node and all its children.
      * 2. **Override Rendering**: Return a `string` to use that exact text as the output, bypassing default logic and recursion.
      * 3. **Mutate Nodes**: Modify the `node` object directly (e.g., changing `node.text`) and return `void` to let the generator proceed with your changes.
-     * 4. **Async Support**: The callback can be `async`, allowing you to fetch external data or perform complex logic during generation.
+     * 4. **Async Support**: The callback can be `async`, allowing you to load external data or perform complex logic during generation.
      */
     onNode?: (node: OfficeContentNode) => string | false | Promise<string | false | void> | void;
     /**
