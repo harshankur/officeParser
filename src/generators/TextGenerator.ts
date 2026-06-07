@@ -68,6 +68,13 @@ export class TextGenerator extends BaseGenerator<'text'> {
             output += await this.processNodeRecursive(node, processor);
         }
 
+        if (this.collectedNotes.length > 0) {
+            output += `${newline}${newline}--- Notes ---${newline}`;
+            for (const note of this.collectedNotes) {
+                output += await this.processNodeRecursive(note, processor);
+            }
+        }
+
         return {
             value: output.trim(),
             messages: this.messages

@@ -1,4 +1,4 @@
-# officeParser — Universal Office Document Parser & Generator
+# officeParser: Universal Office Document Parser & Generator
 
 A robust, strictly-typed **Node.js and Browser** library for parsing office files into a rich **Abstract Syntax Tree (AST)** and generating high-fidelity output in multiple formats.
 
@@ -14,7 +14,7 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 ---
 
 ### 🌟 [Live Interactive AST Visualizer & Documentation](https://harshankur.github.io/officeParser/) 🌟
-*Upload any office file in your browser — inspect the AST, tweak config, and preview generated output in real-time.*
+*Upload any office file in your browser: inspect the AST, tweak config, and preview generated output in real-time.*
 
 - **AST Visualizer**: Inspect the hierarchical node tree, metadata, and raw content
 - **Config Configurator**: Tweak options (`ignoreNotes`, `ocr`, `newlineDelimiter`) and see results instantly
@@ -35,10 +35,10 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
   - [Async/Await](#asyncawait)
   - [Callback (Backward Compat)](#callback-backward-compat)
   - [File Buffers & ArrayBuffers](#file-buffers--arraybuffers)
-  - [`ast.to()` — Generate from AST](#astto--generate-from-ast)
-  - [`ast.toText()` — Quick Text Extraction](#asttotext--quick-text-extraction)
+  - [`ast.to()`: Generate from AST](#astto-generate-from-ast)
+  - [`ast.toText()`: Quick Text Extraction](#asttotext-quick-text-extraction)
 - [OfficeGenerator](#officegenerator)
-- [OfficeConverter — One-Step API](#officeconverter--one-step-api)
+- [OfficeConverter: One-Step API](#officeconverter-one-step-api)
 - [Native RAG Chunking](#native-rag-chunking)
 - [The AST Structure](#the-ast-structure)
 - [Deep Dive: Document Components](#deep-dive-document-components)
@@ -47,8 +47,8 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 - [Configuration Reference](#configuration-reference)
   - [OfficeParserConfig](#officeparserconfig)
   - [GeneratorConfig (Common)](#generatorconfig-common)
-  - [onNode Callback](#onnode-callback--advanced-node-manipulation)
-  - [styleMap — Semantic Style Mapping](#stylemap--semantic-style-mapping)
+  - [onNode Callback](#onnode-callback-advanced-node-manipulation)
+  - [styleMap: Semantic Style Mapping](#stylemap-semantic-style-mapping)
   - [HtmlGeneratorConfig](#htmlgeneratorconfig)
   - [MdGeneratorConfig](#mdgeneratorconfig)
   - [PdfGeneratorConfig](#pdfgeneratorconfig)
@@ -79,37 +79,58 @@ npm i officeparser
 npx officeparser /path/to/file.docx
 
 # Plain text output
-npx officeparser /path/to/file.docx --format=text
+npx officeparser /path/to/file.docx --to=text
 
 # Convert DOCX to Markdown and save
-npx officeparser report.docx --format=md --output=report.md
+npx officeparser report.docx --to=md --output=report.md
 
-# Convert PPTX to HTML
-npx officeparser presentation.pptx --format=html --output=preview.html
+# Convert PPTX to HTML (using a bare flag for ocr)
+npx officeparser presentation.pptx --to=html --output=preview.html --ocr
 
-# Convert XLSX to CSV
-npx officeparser data.xlsx --format=csv
+# Convert XLSX to CSV with a custom delimiter
+npx officeparser data.xlsx --to=csv --csvDelimiter=";"
 
 # Generate RAG chunks
-npx officeparser document.pdf --format=chunks
+npx officeparser document.pdf --to=chunks
+
+# Overriding file extension mapping
+npx officeparser my_document --fileType=docx --to=json
 ```
+
+### CLI Syntax
+- **Values:** Flags can be passed as `--flag=value` or `--flag value`.
+- **Booleans:** Bare flags imply `true` (e.g. `--ocr` is equivalent to `--ocr=true`). Negation flags start with `no-` (e.g. `--no-ocr` is equivalent to `--ocr=false`).
+- **Nested Objects:** You can pass nested properties directly using JSON dot-notation (e.g. `--ocrConfig.language=fra` or `--htmlConfig.containerWidth=900px`).
 
 ### CLI Options
 
 | Flag | Values | Default | Description |
 |------|--------|---------|-------------|
-| `--format` | `json\|text\|md\|html\|csv\|rtf\|pdf\|chunks` | `json` | Output format |
+| `--to` | `json\|text\|md\|html\|csv\|rtf\|pdf\|chunks` | `json` | Output format |
 | `--output` | path | — | Write output to a file |
-| ~~`--toText`~~ | `true\|false` | `false` | **Deprecated.** Use `--format=text` |
-| `--ignoreNotes` | `true\|false` | `false` | Ignore speaker notes (PPTX/ODP) |
-| `--putNotesAtLast` | `true\|false` | `false` | Collect notes at end of output |
-| `--newlineDelimiter` | string | `\n` | Delimiter between lines |
-| `--extractAttachments` | `true\|false` | `false` | Extract images/charts as Base64 |
-| `--ocr` | `true\|false` | `false` | Enable OCR for images |
-| `--includeRawContent` | `true\|false` | `false` | Include raw XML/RTF in nodes |
-| `--includeBreakNodes` | `true\|false` | `false` | Include break nodes (DOCX only) |
-| ~~`--outputErrorToConsole`~~ | `true\|false` | `false` | **Deprecated.** Use `onWarning` callback |
-| `--verbose` | `true\|false` | `false` | Show full error stack traces |
+| `--fileType` | `docx\|xlsx\|pptx\|odt\|odp\|ods\|pdf\|rtf\|csv\|md\|html` | — | Explicitly override input file type detection |
+| `--ocr` | boolean | `false` | Enable OCR for images |
+| `--extractAttachments` | boolean | `false` | Extract images/charts as Base64 |
+| `--ignoreNotes` | boolean | `false` | Ignore footnotes/endnotes/speaker notes |
+| `--ignoreComments` | boolean | `false` | Ignore inline comments |
+| `--ignoreHeadersAndFooters` | boolean | `false` | Ignore headers and footers |
+| `--ignoreSlideMasters` | boolean | `false` | Ignore slide masters |
+| `--ignoreInternalLinks` | boolean | `false` | Ignore internal links |
+| `--newlineDelimiter` | string | `\n` | Delimiter between lines/blocks in plaintext outputs |
+| `--csvDelimiter` | string | `,` | Custom delimiter for CSV files |
+| `--includeRawContent` | boolean | `false` | Include raw XML/RTF in nodes |
+| `--serializeRawContent` | boolean | `true` | Include stringified XML in metadata |
+| `--preserveXmlWhitespace` | boolean | `false` | Keep raw formatting space |
+| `--includeBreakNodes` | boolean | `false` | Include break nodes (DOCX only) |
+| `--verbose` | boolean | `false` | Show full error stack traces and warning logs |
+| `--includeFormatting` | boolean | `true` | Include formatting style map matching |
+| `--renderMetadata` | boolean | `false` | Render metadata as visible content in the generated output |
+| `--htmlConfig.containerWidth` | string \| number | `auto` | HTML output container width (e.g. `900px`, `100%`) |
+| ~~`--format`~~ | `json\|text\|md\|html\|csv\|rtf\|pdf\|chunks` | `json` | **Deprecated.** Use `--to` |
+| ~~`--toText`~~ | `true\|false` | `false` | **Deprecated.** Use `--to=text` |
+| ~~`--ocrLanguage`~~ | string | `eng` | **Deprecated.** Use `--ocrConfig.language` |
+| ~~`--putNotesAtLast`~~ | `true\|false` | `false` | **Deprecated and ignored.** Notes are attached structurally to their nodes. |
+| ~~`--outputErrorToConsole`~~ | `true\|false` | `false` | **Deprecated.** Use `--verbose` |
 
 ---
 
@@ -232,7 +253,7 @@ const ast = await officeParser.parseOffice('scanned_document.pdf', {
 > **Non-Fatal Timeout Recovery**
 > If `workerLoad` or `recognition` timeouts are exceeded, the parser will log a warning in `ast.warnings` and **continue parsing the rest of the document**. The overall promise resolves successfully with the text extracted from the document layers (rather than failing the entire parse).
 
-### `ast.to()` — Generate from AST
+### `ast.to()`: Generate from AST
 
 The preferred way to convert a parsed AST to another format. Returns a `ConversionResult`.
 
@@ -246,7 +267,7 @@ const { value: chunks }             = await ast.to('chunks', { strategy: 'fixed-
 const { value: pdfBytes }           = await ast.to('pdf'); // Uint8Array
 ```
 
-### `ast.toText()` — Quick Text Extraction
+### `ast.toText()`: Quick Text Extraction
 
 > [!NOTE]
 > `toText()` is **synchronous** and deprecated in favour of the async `ast.to('text')`.
@@ -295,7 +316,7 @@ const { value: csv } = await OfficeGenerator.generate(ast, 'csv');
 
 ---
 
-## OfficeConverter — One-Step API
+## OfficeConverter: One-Step API
 
 `OfficeConverter.convert()` combines parsing and generation in a single call. It automatically syncs parser options from generator config (e.g., enables `extractAttachments` when images are requested).
 
@@ -326,7 +347,7 @@ const { value: html, messages } = await OfficeConverter.convert('data.xlsx', 'ht
 
 > [!IMPORTANT]
 > The `OfficeConverterConfig` shape uses **nested** `parseConfig` and `generatorConfig` sub-objects.
-> Do **not** put parser or generator options at the top level — only `onWarning` lives there.
+> Do **not** put parser or generator options at the top level; only `onWarning` lives there.
 
 ---
 
@@ -344,7 +365,7 @@ const { value: chunks } = await OfficeConverter.convert('report.docx', 'chunks',
             strategy: 'document-structure',
             splitBy: 'heading',    // 'paragraph' | 'heading' | 'page' | 'slide' | 'sheet'
             maxChunkSize: 1500,
-            tableSplitStrategy: 'row', // repeats header row in every chunk — ideal for RAG
+            tableSplitStrategy: 'row', // repeats header row in every chunk, ideal for RAG
         }
     }
 });
@@ -445,7 +466,7 @@ OfficeParserAST
 └── ~~toText()~~             (Deprecated: use .to('text') instead)
 ```
 
-### `OfficeIssue` — Warning / Error Object
+### `OfficeIssue`: Warning / Error Object
 
 All warnings and errors (from both parsing and generation) use this shape:
 
@@ -639,11 +660,11 @@ printNotes(ast.content);
 ```
 
 > [!IMPORTANT]
-> `putNotesAtLast` is **deprecated**. Notes are always attached via `node.notes` — this flag has no effect and will be removed in a future major version.
+> `putNotesAtLast` is **deprecated**. Notes are always attached via `node.notes`; this flag has no effect and will be removed in a future major version.
 
 ### Access headers, footers & slide masters
 ```ts
-// These are NOT in ast.content — use ast.auxiliary
+// These are NOT in ast.content; use ast.auxiliary
 console.log(ast.auxiliary?.headers?.map(h => h.text));   // DOCX headers
 console.log(ast.auxiliary?.footers?.map(f => f.text));   // DOCX footers
 console.log(ast.auxiliary?.slideMasters?.length);         // PPTX slide masters
@@ -716,13 +737,13 @@ Pass as the second argument to `parseOffice(file, config)`.
 |--------|------|---------|-------------|
 | `newlineDelimiter` | `string` | `'\n'` | Delimiter inserted between lines in text output |
 | `ignoreNotes` | `boolean` | `false` | Ignore footnotes/endnotes (DOCX, RTF) and speaker notes (PPTX/ODP) |
-| `ignoreComments` | `boolean` | `false` | **New**: Ignore inline comments/annotations (DOCX, XLSX, PPTX) — by default attached via `node.comments[]` |
+| `ignoreComments` | `boolean` | `false` | **New**: Ignore inline comments/annotations (DOCX, XLSX, PPTX), attached by default via `node.comments[]` |
 | `ignoreHeadersAndFooters` | `boolean` | `false` | **New**: Skip DOCX headers & footers (populated in `ast.auxiliary.headers/footers` by default) |
 | `ignoreSlideMasters` | `boolean` | `false` | **New**: Skip PPTX slide masters (populated in `ast.auxiliary.slideMasters` by default) |
 | ~~`putNotesAtLast`~~ | `boolean` | `false` | **Deprecated**: Notes are now attached via `node.notes[]`. This flag has no effect |
 | `extractAttachments` | `boolean` | `false` | Populate `ast.attachments` with Base64 images/charts |
 | `ocr` | `boolean` | `false` | Run Tesseract OCR on images (requires `extractAttachments: true`) |
-| `ocrConfig` | `OcrConfig` | `{}` | OCR worker pool settings — see [OCR section](#ocr-scheduler--resource-management) |
+| `ocrConfig` | `OcrConfig` | `{}` | OCR worker pool settings (see [OCR section](#ocr-scheduler--resource-management)) |
 | `includeRawContent` | `boolean` | `false` | Attach raw XML/RTF source to each node |
 | `serializeRawContent` | `boolean` | `true` | Re-serialize XML to clean strings (only if `includeRawContent: true`) |
 | `preserveXmlWhitespace` | `boolean` | `false` | Preserve original XML whitespace during serialization |
@@ -757,7 +778,7 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 
 ---
 
-### `onNode` Callback — Advanced Node Manipulation
+### `onNode` Callback: Advanced Node Manipulation
 
 Called for **every node** in the AST during generation. Can be `async`.
 
@@ -788,7 +809,7 @@ const { value: md } = await ast.to('md', {
 
 ---
 
-### `styleMap` — Semantic Style Mapping
+### `styleMap`: Semantic Style Mapping
 
 Maps document style names to semantic output elements. Two formats supported:
 
@@ -833,7 +854,7 @@ Pass as `htmlConfig` inside `GeneratorConfig`.
 | `standalone` | `boolean` | `true` | Wrap output in a full `<html>` document with CSS |
 | `chartJsSrc` | `string` | jsDelivr CDN | URL for the Chart.js library |
 | `containerWidth` | `string \| number` | `'auto'` | Max width of the content container. Positive number (px), CSS length string (`'900px'`, `'100%'`, `'60vw'`), or `'auto'`. Invalid values fall back to `'auto'` with an `INVALID_CONTAINER_WIDTH` warning |
-| `customCss` | `string` | `''` | Raw CSS injected into the `<style>` block — use to override built-in styles |
+| `customCss` | `string` | `''` | Raw CSS injected into the `<style>` block; use this to override built-in styles |
 | `injections.headStart` | `string` | `''` | Raw HTML injected after `<head>` |
 | `injections.headEnd` | `string` | `''` | Raw HTML injected before `</head>` |
 | `injections.bodyStart` | `string` | `''` | Raw HTML injected after `<body>` |
@@ -883,7 +904,7 @@ Pass as `textConfig` inside `GeneratorConfig`.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `newlineDelimiter` | `string` | `'\n'` | String inserted between structural blocks |
-| `preserveLayout` | `boolean` | `false` | Render tables with aligned columns using whitespace |
+| `preserveLayout` | `boolean` | `true` | Render tables with aligned columns using whitespace |
 
 ---
 
@@ -901,7 +922,7 @@ Configuration for `OfficeConverter.convert(file, format, config)`.
 
 ### ChunkingConfig
 
-`ChunkingConfig` is a **discriminated union** — the available options depend on the `strategy` field.
+`ChunkingConfig` is a **discriminated union**: the available options depend on the `strategy` field.
 
 #### Common Options (all strategies)
 
@@ -989,8 +1010,8 @@ Two bundles are available in the `dist/` directory:
 
 | Bundle | Usage |
 |--------|-------|
-| `officeparser.browser.mjs` | ESM — use with `import` statements or modern bundlers (Vite, Webpack, Next.js) |
-| `officeparser.browser.iife.js` | IIFE — use with a `<script>` tag; exposes the global `officeParser` object |
+| `officeparser.browser.mjs` | ESM, use with `import` statements or modern bundlers (Vite, Webpack, Next.js) |
+| `officeparser.browser.iife.js` | IIFE, use with a `<script>` tag; exposes the global `officeParser` object |
 
 ### ESM (Vite / Webpack / Next.js)
 
@@ -1050,7 +1071,7 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer, {
 | `"Worker not found"` in browser for PDF | Verify `pdfWorkerSrc` points to `pdf.worker.min.mjs` matching version `5.6.205` |
 | Low OCR accuracy | Verify `ocrConfig.language` matches the document language; quality depends on image resolution |
 | Out of memory on large Excel files | Call `ast.toText()` early and discard the AST object to allow garbage collection |
-| `md`/`html`/`csv` buffer not detected | Add `fileType: 'md'` (or `'html'`, `'csv'`) to config — these formats have no magic bytes |
+| `md`/`html`/`csv` buffer not detected | Add `fileType: 'md'` (or `'html'`, `'csv'`) to config (these formats have no magic bytes) |
 | `IMPROPER_BUFFERS` error | Usually means no file extension and no `fileType` hint was provided for a buffer input |
 | PDF generation fails | Install the optional peer dependency: `npm install puppeteer` |
 
@@ -1086,4 +1107,4 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License; see the [LICENSE](LICENSE) file for details.

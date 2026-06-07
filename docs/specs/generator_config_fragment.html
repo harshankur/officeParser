@@ -224,7 +224,7 @@
                 <td><code>margin</code></td>
                 <td><code>object</code></td>
                 <td><code>{0,0,0,0}</code></td>
-                <td>Page margins — <code>{ top, right, bottom, left }</code> in inches or mm.</td>
+                <td>Page margins: <code>{ top, right, bottom, left }</code> in inches or mm.</td>
             </tr>
             <tr>
                 <td><code>displayHeaderFooter</code></td>
@@ -312,7 +312,7 @@
             <tr>
                 <td><code>preserveLayout</code></td>
                 <td><code>boolean</code></td>
-                <td><code>false</code></td>
+                <td><code>true</code></td>
                 <td>Attempts to align table columns using spaces.</td>
             </tr>
         </tbody>
@@ -342,7 +342,7 @@
     </p>
 
     <h2>ChunkingConfig Reference</h2>
-    <p><code>ChunkingConfig</code> is a <strong>discriminated union</strong> — available options depend on the
+    <p><code>ChunkingConfig</code> is a <strong>discriminated union</strong>; available options depend on the
         <code>strategy</code> field. Default strategy is <code>'document-structure'</code>.
     </p>
 

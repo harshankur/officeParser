@@ -389,10 +389,11 @@ function compareRoundtripASTs(
         result: { status: ok ? 'PASS' : (warn ? 'WARN' : 'FAIL'), expected: exp, actual: act, details }
     });
 
-    // Text length within 5% (cosmetic whitespace variance allowed)
+    // Text length within 5% (cosmetic whitespace variance allowed; 10% for RTF to allow footnote body conversion)
+    const tLimit = srcFmt === 'rtf' ? 0.10 : 0.05;
     const tRatio = original.textLength > 0 ? regenerated.textLength / original.textLength : 1;
-    const tOk = tRatio >= 0.95 && tRatio <= 1.05;
-    results.push(mk('Text Length (±5%)', `${original.textLength}`, regenerated.textLength,
+    const tOk = tRatio >= (1 - tLimit) && tRatio <= (1 + tLimit);
+    results.push(mk(`Text Length (±${tLimit * 100}%)`, `${original.textLength}`, regenerated.textLength,
         tOk, `${(tRatio * 100).toFixed(1)}% of original text length`));
 
     // Headings — WARN for RTF (re-parser uses heuristics)

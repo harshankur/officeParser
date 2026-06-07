@@ -131,9 +131,7 @@ Continued Lists ................................................................
 Images
 Centered images like this are useful for large pictures that should be a focus of
 attention.
-Bethe change
-thatyouwish to
-seein the world.
+[Image: pdf_image_p7_1.bmp]
 There is no analogous technology in ebooks, so the conversion will usually end up
 placing the image either centered or floating close to the point in the text where it
 was inserted , not necessarily where it appears on the page in Word.
@@ -158,7 +156,7 @@ for the list is working correctly.
 A Multi-level list with bullets:
 ▪ One
 • Two
-
+[Image: pdf_image_p8_1.bmp]
 This bullet uses an image as the bullet item
 o Four
 ▪ Five

@@ -265,10 +265,17 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
 
         if (isForcedSplit) {
             // Process children of the container as individual chunks within the boundary
-            if (node.children) {
+            if (node.children || node.notes) {
                 const innerChunks: OfficeChunk[] = [];
-                for (const child of node.children) {
-                    await this.processNodeForStructure(child, config, 'paragraph', maxChunkSize, measure, innerChunks, contextStack);
+                if (node.children) {
+                    for (const child of node.children) {
+                        await this.processNodeForStructure(child, config, 'paragraph', maxChunkSize, measure, innerChunks, contextStack);
+                    }
+                }
+                if (node.notes) {
+                    for (const note of node.notes) {
+                        await this.processNodeForStructure(note, config, 'paragraph', maxChunkSize, measure, innerChunks, contextStack);
+                    }
                 }
                 for (const ic of innerChunks) {
                     ic.metadata.slideNumber = contextStack.slideNumber;
@@ -325,10 +332,15 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             return;
         }
 
-        // Recurse into children for container nodes
+        // Recurse into children and notes for container nodes
         if (node.children) {
             for (const child of node.children) {
                 await this.processNodeForStructure(child, config, splitBy, maxChunkSize, measure, chunks, contextStack);
+            }
+        }
+        if (node.notes) {
+            for (const note of node.notes) {
+                await this.processNodeForStructure(note, config, splitBy, maxChunkSize, measure, chunks, contextStack);
             }
         }
     }
@@ -618,6 +630,9 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             if (node.children) {
                 for (const child of node.children) await walk(child);
             }
+            if (node.notes) {
+                for (const note of node.notes) await walk(note);
+            }
         };
 
         for (const node of this.ast.content) await walk(node);
@@ -664,6 +679,9 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             }
             if (node.children) {
                 for (const child of node.children) await walk(child);
+            }
+            if (node.notes) {
+                for (const note of node.notes) await walk(note);
             }
         };
 

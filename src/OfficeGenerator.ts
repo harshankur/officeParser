@@ -6,13 +6,23 @@ import { MarkdownGenerator } from './generators/MarkdownGenerator.js';
 import { PdfGenerator } from './generators/PdfGenerator.js';
 import { RtfGenerator } from './generators/RtfGenerator.js';
 import { TextGenerator } from './generators/TextGenerator.js';
-import { ConversionResult, GeneratorConfig, OfficeErrorType, OfficeParserAST, SupportedDestination, SupportedFileType } from './types.js';
+import { ConversionResult, GeneratorConfig, OfficeErrorType, OfficeParserAST, SupportedDestination, SupportedFileType, UniversalGeneratorFormat } from './types.js';
 import { getOfficeError } from './utils/errorUtils.js';
 
 /**
  * Main generator class providing document conversion functionality.
  */
 export class OfficeGenerator {
+    /**
+     * Normalizes format aliases (e.g., 'txt' to 'text', 'markdown' to 'md') to standard internal formats.
+     */
+    public static normalizeDestination(dest: string): UniversalGeneratorFormat {
+        const d = dest?.toLowerCase();
+        if (d === 'txt') return 'text';
+        if (d === 'markdown') return 'md';
+        return d as UniversalGeneratorFormat;
+    }
+
     /**
      * Generates a file of the specified type from an AST.
      * This is the single source of truth for generation logic.
@@ -29,8 +39,9 @@ export class OfficeGenerator {
         config?: GeneratorConfig<D>
     ): Promise<ConversionResult<D>> {
         let generator: BaseGenerator<any>;
+        const normalizedDestination = OfficeGenerator.normalizeDestination(destination);
 
-        switch (destination.toLowerCase() as SupportedDestination<T>) {
+        switch (normalizedDestination) {
             case 'text':
                 generator = new TextGenerator(ast, config as GeneratorConfig<'text'>);
                 break;
@@ -53,7 +64,7 @@ export class OfficeGenerator {
                 generator = new ChunkingGenerator(ast, config as GeneratorConfig<'chunks'>);
                 break;
             default:
-                throw getOfficeError(OfficeErrorType.EXTENSION_UNSUPPORTED, undefined, destination);
+                throw getOfficeError(OfficeErrorType.FORMAT_UNSUPPORTED, undefined, destination);
         }
 
         return generator.generate() as Promise<ConversionResult<D>>;

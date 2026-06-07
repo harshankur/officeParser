@@ -5,6 +5,8 @@
 export enum OfficeErrorType {
     /** Unsupported file extension */
     EXTENSION_UNSUPPORTED = 'EXTENSION_UNSUPPORTED',
+    /** Unsupported output generator format */
+    FORMAT_UNSUPPORTED = 'FORMAT_UNSUPPORTED',
     /** File appears to be corrupted or malformed */
     FILE_CORRUPTED = 'FILE_CORRUPTED',
     /** File could not be found at the specified path */

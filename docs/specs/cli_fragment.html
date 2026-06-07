@@ -1,0 +1,185 @@
+<div class="doc-body">
+    <h1>CLI Options Reference</h1>
+    <p>This document details the command line interface options available when running <code>officeparser</code> via <code>npx</code> or globally installed scripts.</p>
+
+    <h2>Basic Usage</h2>
+    <pre><code>npx officeparser &lt;file&gt; [options]</code></pre>
+
+    <p>Options can be passed in multiple formats: <code>--key=value</code>, <code>--key value</code>, as bare flags (e.g. <code>--ocr</code> which defaults to true), or negation flags (e.g. <code>--no-ocr</code>). Most options map directly to the <code>OfficeParserConfig</code> and <code>GeneratorConfig</code> properties, and you can access nested properties using JSON dot-notation (e.g. <code>--htmlConfig.containerWidth=900px</code>).</p>
+
+    <h2>Available Flags</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Flag</th>
+                <th>Values</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>--to</code></td>
+                <td><code>json | text | md | html | csv | rtf | pdf | chunks</code></td>
+                <td><code>json</code></td>
+                <td>The desired output format for the parsed document.</td>
+            </tr>
+            <tr>
+                <td><code>--output</code></td>
+                <td>path</td>
+                <td>—</td>
+                <td>Write the generated output to a specified file instead of stdout.</td>
+            </tr>
+            <tr>
+                <td><code>--fileType</code></td>
+                <td><code>docx | xlsx | pptx | odt | odp | ods | pdf | rtf | csv | md | html</code></td>
+                <td>—</td>
+                <td>Explicitly override input file type detection (useful when input file lacks extension).</td>
+            </tr>
+            <tr>
+                <td><code>--ocr</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Enable Optical Character Recognition (OCR) for embedded images.</td>
+            </tr>
+            <tr>
+                <td><code>--extractAttachments</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Extract embedded images and charts as Base64 data URIs.</td>
+            </tr>
+            <tr>
+                <td><code>--ignoreNotes</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Ignore footnotes, endnotes, and speaker notes.</td>
+            </tr>
+            <tr>
+                <td><code>--ignoreComments</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Ignore inline comments and threaded replies.</td>
+            </tr>
+            <tr>
+                <td><code>--ignoreHeadersAndFooters</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Ignore page headers and footers.</td>
+            </tr>
+            <tr>
+                <td><code>--ignoreSlideMasters</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Ignore slide master layouts and static template elements (PPTX/ODP).</td>
+            </tr>
+            <tr>
+                <td><code>--ignoreInternalLinks</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Skip internal anchors and bookmark links.</td>
+            </tr>
+            <tr>
+                <td><code>--newlineDelimiter</code></td>
+                <td>string</td>
+                <td><code>\n</code></td>
+                <td>Delimiter string to use between lines/blocks in plaintext outputs.</td>
+            </tr>
+            <tr>
+                <td><code>--csvDelimiter</code></td>
+                <td>string</td>
+                <td><code>,</code></td>
+                <td>Custom delimiter character for CSV files.</td>
+            </tr>
+            <tr>
+                <td><code>--includeRawContent</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Include the raw XML/RTF format strings within parsed nodes.</td>
+            </tr>
+            <tr>
+                <td><code>--serializeRawContent</code></td>
+                <td>boolean</td>
+                <td><code>true</code></td>
+                <td>Include raw XML metadata directly in the AST properties.</td>
+            </tr>
+            <tr>
+                <td><code>--preserveXmlWhitespace</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Keep raw formatting spaces in XML parsing.</td>
+            </tr>
+            <tr>
+                <td><code>--includeBreakNodes</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Include explicit page/column break nodes (DOCX only).</td>
+            </tr>
+            <tr>
+                <td><code>--verbose</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Show full error stack traces and warning logs on failures.</td>
+            </tr>
+            <tr>
+                <td><code>--includeFormatting</code></td>
+                <td>boolean</td>
+                <td><code>true</code></td>
+                <td>Include formatting style map matching for generators.</td>
+            </tr>
+            <tr>
+                <td><code>--renderMetadata</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Render metadata block as visible content in the generated output.</td>
+            </tr>
+            <tr>
+                <td><code>--htmlConfig.containerWidth</code></td>
+                <td>string | number</td>
+                <td><code>auto</code></td>
+                <td>HTML output container width (e.g. <code>900px</code>, <code>100%</code>, <code>auto</code>).</td>
+            </tr>
+            <tr>
+                <td><code><del>--format</del></code></td>
+                <td><code>json | text | md | html | csv | rtf | pdf | chunks</code></td>
+                <td><code>json</code></td>
+                <td><strong>Deprecated.</strong> Use <code>--to</code> instead.</td>
+            </tr>
+            <tr>
+                <td><code><del>--toText</del></code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td><strong>Deprecated.</strong> Use <code>--to=text</code> instead.</td>
+            </tr>
+            <tr>
+                <td><code><del>--ocrLanguage</del></code></td>
+                <td>string</td>
+                <td><code>eng</code></td>
+                <td><strong>Deprecated.</strong> Use <code>--ocrConfig.language</code> instead.</td>
+            </tr>
+            <tr>
+                <td><code><del>--putNotesAtLast</del></code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td><strong>Deprecated and ignored.</strong> Notes are attached structurally to their nodes.</td>
+            </tr>
+            <tr>
+                <td><code><del>--outputErrorToConsole</del></code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td><strong>Deprecated.</strong> Use <code>--verbose</code> instead.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <br>
+    <h2>Examples</h2>
+    
+    <h3>Generate HTML Preview</h3>
+    <pre><code>npx officeparser report.docx --to html --output preview.html --htmlConfig.containerWidth=800px</code></pre>
+
+    <h3>Extract RAG Chunks with OCR</h3>
+    <pre><code>npx officeparser presentation.pptx --to chunks --ocr --ocrConfig.language=eng --output chunks.json</code></pre>
+
+    <h3>Plain Text Extraction</h3>
+    <pre><code>npx officeparser data.pdf --to text --ignoreNotes</code></pre>
+</div>

@@ -128,7 +128,7 @@ const DEFAULT_MD_GENERATOR_CONFIG: DeepRequired<MdGeneratorConfig> = {
  */
 const DEFAULT_TEXT_GENERATOR_CONFIG: DeepRequired<TextGeneratorConfig> = {
     newlineDelimiter: '\n',
-    preserveLayout: false,
+    preserveLayout: true,
 };
 
 /**

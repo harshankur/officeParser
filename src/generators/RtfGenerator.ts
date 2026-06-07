@@ -226,6 +226,12 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         for (const node of ast.content) {
             body += await this.processNodeRecursive(node, processor);
         }
+        if (this.collectedNotes.length > 0) {
+            body += '\\pard\\sb120\\sa120\\keepn{\\b Notes:}\\par\n';
+            for (const note of this.collectedNotes) {
+                body += await this.processNodeRecursive(note, processor);
+            }
+        }
         return body;
     }
 

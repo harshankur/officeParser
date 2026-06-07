@@ -1238,13 +1238,12 @@ function compareCsvParity(expected: FeatureMetrics, actual: FeatureMetrics): Fea
 function validateTextExtraction(
     category: string,
     fileType: string,
-    ast: OfficeParserAST,
+    extractedText: string,
     metrics: FeatureMetrics
 ): FeatureTest[] {
     const results: FeatureTest[] = [];
 
     // Extract text
-    const extractedText = ast.toText();
     const textLength = extractedText.length;
     const lineCount = extractedText.split('\n').length;
 
@@ -1526,7 +1525,7 @@ async function testXlsxInlineStrings(): Promise<FeatureTest[]> {
 
     try {
         const ast = await OfficeParser.parseOffice(zipBuffer, { fileType: 'xlsx' });
-        const text = ast.toText();
+        const text = (await ast.to('text')).value;
 
         results.push(createResult(
             'Decode Decimal Entities',
@@ -1591,12 +1590,12 @@ async function testFile(ext: string): Promise<FeatureTest[]> {
     try {
         const ast = await OfficeParser.parseOffice(filePath, FULL_CONFIG);
         fs.writeFileSync(`${getOutputPath(ext)}.actual.json`, JSON.stringify(ast, null, 2), 'utf-8');
-        fs.writeFileSync(`${getOutputPath(ext)}.actual.txt`, ast.toText(), 'utf-8');
+        fs.writeFileSync(`${getOutputPath(ext)}.actual.txt`, (await ast.to('text')).value, 'utf-8');
         const metrics = extractMetrics(ast);
         const results: FeatureTest[] = [];
 
         // Add text extraction validation
-        results.push(...validateTextExtraction('Text Extraction', ext, ast, metrics));
+        results.push(...validateTextExtraction('Text Extraction', ext, (await ast.to('text')).value, metrics));
         if (ext === 'xlsx') {
             results.push(...await testXlsxInlineStrings());
         }
@@ -1635,7 +1634,7 @@ async function testFile(ext: string): Promise<FeatureTest[]> {
             }
 
             // Add text baseline comparison
-            const extractedText = ast.toText();
+            const extractedText = (await ast.to('text')).value;
             results.push(...compareTextBaseline('Text Baseline', ext, extractedText));
         } else {
             // No baseline - just report metrics
@@ -1841,17 +1840,17 @@ async function testConfigs(ext: string): Promise<FeatureTest[]> {
 
             // Note validation
             const checkHasNotes = (nodes: any[]): boolean => {
-                return nodes.some(node => 
-                    node.type === 'note' || 
-                    (node.notes && node.notes.length > 0) || 
+                return nodes.some(node =>
+                    node.type === 'note' ||
+                    (node.notes && node.notes.length > 0) ||
                     (node.children && checkHasNotes(node.children))
                 );
             };
             const hasNotes = checkHasNotes(ast.content);
 
             const checkHasComments = (nodes: any[]): boolean => {
-                return nodes.some(node => 
-                    (node.comments && node.comments.length > 0) || 
+                return nodes.some(node =>
+                    (node.comments && node.comments.length > 0) ||
                     (node.children && checkHasComments(node.children))
                 );
             };
@@ -1863,8 +1862,8 @@ async function testConfigs(ext: string): Promise<FeatureTest[]> {
             const hasSlideMasters = Boolean(ast.auxiliary?.slideMasters && ast.auxiliary.slideMasters.length > 0);
 
             const checkHasInternalLinks = (nodes: any[]): boolean => {
-                return nodes.some(node => 
-                    (node.type === 'link' && node.metadata?.internal) || 
+                return nodes.some(node =>
+                    (node.type === 'link' && node.metadata?.internal) ||
                     (node.children && checkHasInternalLinks(node.children))
                 );
             };
@@ -2244,7 +2243,7 @@ async function runSingleFileTest(ext: string) {
     logger.log(`Parsing ${ext}...`);
     const ast = await OfficeParser.parseOffice(filePath, FULL_CONFIG);
     fs.writeFileSync(`${getOutputPath(ext)}.actual.json`, JSON.stringify(ast, null, 2), 'utf-8');
-    fs.writeFileSync(`${getOutputPath(ext)}.actual.txt`, ast.toText(), 'utf-8');
+    fs.writeFileSync(`${getOutputPath(ext)}.actual.txt`, (await ast.to('text')).value, 'utf-8');
     const metrics = extractMetrics(ast);
 
     // Load baseline if available
@@ -2285,7 +2284,7 @@ async function runSingleFileTest(ext: string) {
     logger.log('─'.repeat(100));
     logger.log('');
 
-    const extractedText = ast.toText();
+    const extractedText = (await ast.to('text')).value;
     const textLength = extractedText.length;
     const lineCount = extractedText.split('\n').length;
 
@@ -2293,7 +2292,7 @@ async function runSingleFileTest(ext: string) {
     logger.log(`Line Count: ${lineCount} lines`);
     logger.log('');
 
-    const textValidation = validateTextExtraction('Text Extraction', ext, ast, metrics);
+    const textValidation = validateTextExtraction('Text Extraction', ext, extractedText, metrics);
     if (ext === 'xlsx') {
         textValidation.push(...await testXlsxInlineStrings());
     }
@@ -2480,7 +2479,7 @@ async function generateParsedOutputs(): Promise<void> {
     for (const ext of Object.keys(BASELINE_STATUS)) {
         const ast = await OfficeParser.parseOffice(getFilePath(ext), FULL_CONFIG);
         fs.writeFileSync(`${getOutputPath(ext)}.actual.json`, JSON.stringify(ast, null, 2), 'utf-8');
-        fs.writeFileSync(`${getOutputPath(ext)}.actual.txt`, ast.toText(), 'utf-8');
+        fs.writeFileSync(`${getOutputPath(ext)}.actual.txt`, (await ast.to('text')).value, 'utf-8');
     }
 }
 

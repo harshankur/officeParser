@@ -12,6 +12,7 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     protected ast: OfficeParserAST;
     protected messages: OfficeIssue[] = [];
     protected styleMapper: StyleMapper;
+    protected collectedNotes: OfficeContentNode[] = [];
 
     constructor(protected destination: D, ast: OfficeParserAST, config?: GeneratorConfig<D> | FullGeneratorConfig) {
         this.config = resolveGeneratorConfig(destination, ast.config, config);
@@ -74,7 +75,21 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
             }
         }
 
-        return await processor(node, childrenOutput);
+        if (node.notes && node.notes.length > 0) {
+            if (node.type !== 'slide') {
+                this.collectedNotes.push(...node.notes);
+            }
+        }
+
+        let result = await processor(node, childrenOutput);
+
+        if (node.type === 'slide' && node.notes && node.notes.length > 0) {
+            for (const note of node.notes) {
+                result += await this.processNodeRecursive(note, processor);
+            }
+        }
+
+        return result;
     }
 
     /**

@@ -27,7 +27,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         else if (isPresentation) containerClass = 'presentation-container';
         else if (isPdf) containerClass = 'pdf-container';
 
-        const bodyContent = await this.processNodeArray(this.ast.content);
+        let bodyContent = await this.processNodeArray(this.ast.content);
+
+        if (this.collectedNotes.length > 0) {
+            let notesHtml = '';
+            for (const note of this.collectedNotes) {
+                notesHtml += await this.processNodeRecursive(note, this.nodeProcessor.bind(this));
+            }
+            bodyContent += `\n<div class="document-notes-section">\n<hr class="page-break">\n${notesHtml}\n</div>\n`;
+        }
 
         const metadataBlock = this.config.renderMetadata ? this.renderMetadataSummary() : '';
 
@@ -404,9 +412,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             childrenOutput = this.escape(node.text);
         }
 
-        const result = await processor(node, childrenOutput);
+        if (node.notes && node.notes.length > 0) {
+            if (node.type !== 'slide') {
+                this.collectedNotes.push(...node.notes);
+            }
+        }
+
+        let result = await processor(node, childrenOutput);
 
         if (isTable) this.tableNestingLevel--;
+
+        if (node.type === 'slide' && node.notes && node.notes.length > 0) {
+            for (const note of node.notes) {
+                result += await this.processNodeRecursive(note, processor);
+            }
+        }
 
         return result;
     }

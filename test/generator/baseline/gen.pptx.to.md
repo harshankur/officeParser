@@ -19,6 +19,10 @@ To see the DOCX conversion in action, simply add this file to calibre using th
 
 
 
+> **Note:** Slide Note 1.
+
+1
+
 
 ---
 
@@ -43,6 +47,10 @@ This document has embedded the Ubuntu font family. The body text is in the Ubunt
 For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.
 
 
+
+> **Note:** Slide Note 2. This is a **bold** text, but no *italic*. Let's strike ~~that~~ out.
+
+2
 
 
 ---
@@ -72,6 +80,10 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like th
 | Point E | 93 | 35 | 54 | 43 | — |
 
 
+
+> **Note:** And then about tables
+
+3
 
 
 ---
@@ -103,6 +115,14 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 |  ---  |  ---  |
 
 
+
+> **Note:** Now calendars
+
+1. Sun
+2. Mon
+7. Sat
+
+5
 
 
 ---

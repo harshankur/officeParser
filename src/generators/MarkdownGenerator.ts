@@ -227,6 +227,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const anchors = this.renderAnchors(node.metadata);
                     return `\n---\n\n${anchors}${anchors ? '\n' : ''}${childrenOutput}\n\n`;
                 }
+                case 'note': {
+                    const meta = node.metadata as any;
+                    const typeLabel = meta?.noteType === 'footnote' ? 'Footnote' : (meta?.noteType === 'endnote' ? 'Endnote' : 'Note');
+                    return `> **${typeLabel}:** ${childrenOutput.trim()}\n\n`;
+                }
 
                 default:
                     return childrenOutput;
@@ -251,6 +256,14 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             }
 
             output += result;
+        }
+
+        if (this.collectedNotes.length > 0) {
+            let notesMd = '\n\n---\n\n### Notes\n\n';
+            for (const note of this.collectedNotes) {
+                notesMd += await this.processNodeRecursive(note, processor);
+            }
+            output += notesMd;
         }
 
         return {
@@ -285,7 +298,21 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             }
         }
 
-        return await processor(node, childrenOutput);
+        if (node.notes && node.notes.length > 0) {
+            if (node.type !== 'slide') {
+                this.collectedNotes.push(...node.notes);
+            }
+        }
+
+        let result = await processor(node, childrenOutput);
+
+        if (node.type === 'slide' && node.notes && node.notes.length > 0) {
+            for (const note of node.notes) {
+                result += await this.processNodeRecursive(note, processor);
+            }
+        }
+
+        return result;
     }
 
     /**
@@ -303,8 +330,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 JSON.stringify(node.metadata) === JSON.stringify(current.metadata)) {
                 current.text = (current.text || '') + (node.text || '');
                 if (current.rawContent && node.rawContent) current.rawContent += node.rawContent;
+                if (node.notes && node.notes.length > 0) {
+                    if (!current.notes) current.notes = [];
+                    current.notes.push(...node.notes);
+                }
             } else {
                 current = { ...node }; // Clone
+                if (node.notes) {
+                    current.notes = [...node.notes];
+                }
                 result.push(current);
             }
         }

@@ -330,9 +330,11 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         let resolved = false;
 
         // If the user provided a custom path (not the default CDN one), use it.
-        // Otherwise, try to find it locally.
+        // Otherwise, check if the worker is already loaded globally, or try to find it locally.
         if (workerSrc !== DEFAULT_OFFICE_PARSER_CONFIG.pdfWorkerSrc && workerSrc !== '') {
             pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+            resolved = true;
+        } else if ((globalThis as any).pdfjsWorker) {
             resolved = true;
         } else {
             try {
