@@ -31,7 +31,11 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.INVALID_SELECTOR]: (selector: string) => `Invalid selector: ${selector}`,
     [OfficeErrorType.INVALID_OUTPUT_MAPPING]: (output: string) => `Invalid output mapping: ${output}`,
     [OfficeErrorType.MISSING_EMBEDDING_FUNCTION]: `Semantic chunking requires an "embeddingFunction" to be provided in chunksConfig. This function must accept a string and return a Promise resolving to a number array (vector).`,
-    [OfficeErrorType.OPERATION_ABORTED]: `The operation was aborted.`
+    [OfficeErrorType.OPERATION_ABORTED]: `The operation was aborted.`,
+    [OfficeErrorType.ZIP_ENTRY_COUNT_LIMIT_EXCEEDED]: (limit: number) => `ZIP entry count exceeds limit (${limit})`,
+    [OfficeErrorType.ZIP_ENTRY_INVALID_SIZE]: `ZIP entry missing a valid declared size`,
+    [OfficeErrorType.ZIP_SIZE_LIMIT_EXCEEDED]: (limit: number) => `ZIP uncompressed size limit exceeded (${limit} bytes)`,
+    [OfficeErrorType.EMBEDDING_TIMEOUT]: (timeout: number) => `Embedding call timed out after ${timeout}ms`
 };
 
 /**

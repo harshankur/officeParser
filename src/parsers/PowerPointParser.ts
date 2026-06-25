@@ -58,15 +58,18 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     const commentAuthorsRegex = /ppt\/commentAuthors\.xml/;
     const slideMastersRegex = /ppt\/slideMasters\/slideMaster\d+\.xml/;
 
-    const files = await extractFiles(buffer, x =>
-        !!x.match(config.ignoreNotes ? slidesRegex : allFilesRegex) ||
-        !!x.match(corePropsFileRegex) ||
-        !!x.match(customPropsFileRegex) ||
-        !!x.match(appPropsFileRegex) ||
-        !!x.match(slideRelsRegex) ||
-        (!config.ignoreComments && (!!x.match(commentsFileRegex) || !!x.match(commentAuthorsRegex))) ||
-        (!config.ignoreSlideMasters && !!x.match(slideMastersRegex)) ||
-        (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(chartFileRegex)))
+    const files = await extractFiles(
+        buffer,
+        x =>
+            !!x.match(config.ignoreNotes ? slidesRegex : allFilesRegex) ||
+            !!x.match(corePropsFileRegex) ||
+            !!x.match(customPropsFileRegex) ||
+            !!x.match(appPropsFileRegex) ||
+            !!x.match(slideRelsRegex) ||
+            (!config.ignoreComments && (!!x.match(commentsFileRegex) || !!x.match(commentAuthorsRegex))) ||
+            (!config.ignoreSlideMasters && !!x.match(slideMastersRegex)) ||
+            (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(chartFileRegex))),
+        config.decompressionLimits
     );
 
     // Extract metadata

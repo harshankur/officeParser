@@ -69,6 +69,10 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     ignoreHeadersAndFooters: false,
     ignoreSlideMasters: false,
     abortSignal: null,
+    decompressionLimits: {
+        maxUncompressedBytes: 512 * 1024 * 1024,
+        maxZipEntries: 10000
+    }
 };
 
 /** Generator config permutations */

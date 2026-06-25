@@ -227,6 +227,24 @@
                 <td><strong>Data Parsing</strong>: Custom delimiter for CSV files (e.g., <code>;</code> or
                     <code>\t</code>).</td>
             </tr>
+            <tr>
+                <td><code>decompressionLimits</code></td>
+                <td><code>object</code></td>
+                <td><code>{}</code></td>
+                <td><strong>Archive Limits</strong>: Settings to limit resources used during ZIP extraction to protect against excessive memory and resource usage.</td>
+            </tr>
+            <tr>
+                <td><code>decompressionLimits.maxUncompressedBytes</code></td>
+                <td><code>number</code></td>
+                <td><code>536870912</code> (512MB)</td>
+                <td><strong>Decompression Limit</strong>: Maximum allowable uncompressed size in bytes for the ZIP archive contents. Set to <code>0</code> or higher to override.</td>
+            </tr>
+            <tr>
+                <td><code>decompressionLimits.maxZipEntries</code></td>
+                <td><code>number</code></td>
+                <td><code>10000</code></td>
+                <td><strong>ZIP Entry Limit</strong>: Maximum number of files (entries) allowed inside the ZIP archive.</td>
+            </tr>
         </tbody>
     </table>
 

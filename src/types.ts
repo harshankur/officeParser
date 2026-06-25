@@ -32,7 +32,15 @@ export enum OfficeErrorType {
     /** Semantic chunking strategy is selected but no embedding function is provided */
     MISSING_EMBEDDING_FUNCTION = 'MISSING_EMBEDDING_FUNCTION',
     /** The operation was aborted */
-    OPERATION_ABORTED = 'OPERATION_ABORTED'
+    OPERATION_ABORTED = 'OPERATION_ABORTED',
+    /** ZIP entry count exceeds limit */
+    ZIP_ENTRY_COUNT_LIMIT_EXCEEDED = 'ZIP_ENTRY_COUNT_LIMIT_EXCEEDED',
+    /** ZIP entry missing a valid declared size */
+    ZIP_ENTRY_INVALID_SIZE = 'ZIP_ENTRY_INVALID_SIZE',
+    /** ZIP uncompressed size limit exceeded */
+    ZIP_SIZE_LIMIT_EXCEEDED = 'ZIP_SIZE_LIMIT_EXCEEDED',
+    /** Embedding call timed out */
+    EMBEDDING_TIMEOUT = 'EMBEDDING_TIMEOUT'
 }
 
 /**
@@ -352,6 +360,29 @@ export interface OfficeParserConfig {
      * Defaults to ',' but can be overridden (e.g., ';', '\t').
      */
     csvDelimiter?: string;
+    /**
+     * Limits and checks applied during ZIP extraction to protect against excessive
+     * memory and resource usage.
+     */
+    decompressionLimits?: DecompressionLimits;
+}
+
+/**
+ * Limits applied to ZIP archive decompression.
+ */
+export interface DecompressionLimits {
+    /**
+     * Maximum allowed total uncompressed size (in bytes) of files extracted from a ZIP archive.
+     * Applies to OOXML (DOCX, XLSX, PPTX) and ODF (ODT, ODP, ODS) formats.
+     * Default is 536870912 (512 MB).
+     */
+    maxUncompressedBytes?: number;
+    /**
+     * Maximum allowed number of entries (files and directories) in a ZIP archive.
+     * Applies to OOXML (DOCX, XLSX, PPTX) and ODF (ODT, ODP, ODS) formats.
+     * Default is 10000.
+     */
+    maxZipEntries?: number;
 }
 
 /**

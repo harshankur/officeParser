@@ -751,7 +751,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                     let timerId: any;
                     const timeoutPromise = new Promise<never>((_, reject) => {
                         timerId = setTimeout(() => {
-                            reject(new Error(`Embedding call timed out after ${timeoutMs}ms`));
+                            reject(getOfficeError(OfficeErrorType.EMBEDDING_TIMEOUT, this.config as any, timeoutMs));
                         }, timeoutMs);
                     });
                     return Promise.race([call, timeoutPromise]).finally(() => {

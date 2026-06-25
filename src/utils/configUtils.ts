@@ -58,6 +58,12 @@ export function resolveParserConfig(
     userConfig?: OfficeParserConfig | FullOfficeParserConfig
 ): FullOfficeParserConfig {
     if (isFullParserConfig(userConfig)) {
+        if (!userConfig.decompressionLimits) {
+            userConfig.decompressionLimits = {
+                maxUncompressedBytes: 512 * 1024 * 1024,
+                maxZipEntries: 10000,
+            };
+        }
         return userConfig;
     }
 
@@ -69,9 +75,16 @@ export function resolveParserConfig(
     }
 
     // 2. Merge user config
-    // We handle ocrConfig specially to avoid shallow-overwriting the whole object
-    const { ocrConfig, ...rest } = userConfig;
+    // We handle ocrConfig and decompressionLimits specially to avoid shallow-overwriting the whole objects
+    const { ocrConfig, decompressionLimits, ...rest } = userConfig;
     Object.assign(config, rest);
+
+    if (decompressionLimits) {
+        config.decompressionLimits = {
+            ...config.decompressionLimits,
+            ...decompressionLimits,
+        };
+    }
 
     if (ocrConfig) {
         const { timeout, ...ocrRest } = ocrConfig;

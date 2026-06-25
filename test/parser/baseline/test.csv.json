@@ -31,7 +31,11 @@
     "abortSignal": null,
     "ignoreComments": false,
     "ignoreHeadersAndFooters": false,
-    "ignoreSlideMasters": false
+    "ignoreSlideMasters": false,
+    "decompressionLimits": {
+      "maxUncompressedBytes": 536870912,
+      "maxZipEntries": 10000
+    }
   },
   "type": "csv",
   "metadata": {

@@ -27,3 +27,4 @@ repro
 /.cursor
 /.codex
 /.claude
+*.ignore*

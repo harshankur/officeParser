@@ -130,6 +130,20 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
     }
 });</code></pre>
 
+    <h2>9. ZIP Decompression Limits & Resource Protection</h2>
+    <p>By default, <code>officeParser</code> enforces extraction limits to prevent excessive memory and CPU consumption when processing large archives (archives that expand to massive sizes or contain a very large number of files).</p>
+    <ul>
+        <li><strong>Max Uncompressed Size:</strong> Defaults to 512 MB. Files exceeding this size will reject with a <code>ZIP_SIZE_LIMIT_EXCEEDED</code> error.</li>
+        <li><strong>Max Zip Entries:</strong> Defaults to 10,000 entries. Archives with more files will reject with a <code>ZIP_ENTRY_COUNT_LIMIT_EXCEEDED</code> error.</li>
+    </ul>
+    <p>If you need to process larger files, you can increase these limits or disable them by providing custom values in <code>decompressionLimits</code>:</p>
+    <pre><code>const ast = await officeParser.parseOffice('large_file.docx', {
+    decompressionLimits: {
+        maxUncompressedBytes: 1024 * 1024 * 1024, // 1 GB limit
+        maxZipEntries: 50000 // Allow up to 50k zip entries
+    }
+});</code></pre>
+
     <h2>Quick Reference</h2>
     <table>
         <thead>
@@ -170,6 +184,10 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
             <tr>
                 <td>RTF notes stay at end</td>
                 <td><code>putNotesAtLast</code> has no effect on RTF (behavior is fixed)</td>
+            </tr>
+            <tr>
+                <td>ZIP extraction failed or limit exceeded</td>
+                <td>Increase <code>decompressionLimits.maxUncompressedBytes</code> or <code>decompressionLimits.maxZipEntries</code></td>
             </tr>
         </tbody>
     </table>

@@ -57,20 +57,23 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const drawingRelsRegex = /xl\/drawings\/_rels\/drawing\d+\.xml\.rels/g;
     const commentsRegex = /xl\/comments\d+\.xml/g;
 
-    const files = await extractFiles(buffer, (x: string) =>
-        !!x.match(sheetsRegex) ||
-        !!x.match(drawingsRegex) ||
-        !!x.match(chartsRegex) ||
-        (!config.ignoreComments && !!x.match(commentsRegex)) ||
-        x === stringsFilePath ||
-        x === 'xl/styles.xml' ||
-        x === 'xl/workbook.xml' ||
-        x === 'xl/_rels/workbook.xml.rels' ||
-        !!x.match(corePropsFileRegex) ||
-        !!x.match(customPropsFileRegex) ||
-        !!x.match(appPropsFileRegex) ||
-        (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(drawingRelsRegex))) ||
-        ((!!config.extractAttachments || !config.ignoreComments) && !!x.match(relsRegex))
+    const files = await extractFiles(
+        buffer,
+        (x: string) =>
+            !!x.match(sheetsRegex) ||
+            !!x.match(drawingsRegex) ||
+            !!x.match(chartsRegex) ||
+            (!config.ignoreComments && !!x.match(commentsRegex)) ||
+            x === stringsFilePath ||
+            x === 'xl/styles.xml' ||
+            x === 'xl/workbook.xml' ||
+            x === 'xl/_rels/workbook.xml.rels' ||
+            !!x.match(corePropsFileRegex) ||
+            !!x.match(customPropsFileRegex) ||
+            !!x.match(appPropsFileRegex) ||
+            (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(drawingRelsRegex))) ||
+            ((!!config.extractAttachments || !config.ignoreComments) && !!x.match(relsRegex)),
+        config.decompressionLimits
     );
 
     const sharedStringsFile = files.find(f => f.path === stringsFilePath);

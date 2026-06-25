@@ -80,7 +80,11 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
     abortSignal: null,
     ignoreComments: false,
     ignoreHeadersAndFooters: false,
-    ignoreSlideMasters: false
+    ignoreSlideMasters: false,
+    decompressionLimits: {
+        maxUncompressedBytes: 512 * 1024 * 1024,
+        maxZipEntries: 10000
+    }
 };
 
 /** Config permutations to test */
@@ -2083,6 +2087,196 @@ async function testAbortSignal(): Promise<FeatureTest[]> {
     return results;
 }
 
+async function testDecompressionLimits(): Promise<FeatureTest[]> {
+    const results: FeatureTest[] = [];
+
+    // 1. oversized_archive.docx (100MB, under 512MB limit)
+    {
+        const startTime = Date.now();
+        const filePath = path.join(__dirname, '..', 'files', 'oversized_archive.docx');
+        try {
+            await OfficeParser.parseOffice(filePath);
+            results.push({
+                category: 'DecompressionLimits',
+                feature: 'ZIP under limits parses successfully',
+                fileType: 'docx',
+                result: {
+                    status: 'PASS',
+                    expected: 'Resolved successfully',
+                    actual: 'Resolved successfully',
+                    details: 'ZIP below size limit parsed successfully',
+                    duration: Date.now() - startTime
+                }
+            });
+        } catch (err: any) {
+            results.push({
+                category: 'DecompressionLimits',
+                feature: 'ZIP under limits parses successfully',
+                fileType: 'docx',
+                result: {
+                    status: 'FAIL',
+                    expected: 'Resolved successfully',
+                    actual: `${err.name}: ${err.message}`,
+                    details: `Should have resolved but threw: ${err.message}`,
+                    duration: Date.now() - startTime
+                }
+            });
+        }
+    }
+
+    // 2. large_size_archive.docx (600MB, over 512MB limit)
+    {
+        const startTime = Date.now();
+        const filePath = path.join(__dirname, '..', 'files', 'large_size_archive.docx');
+        try {
+            await OfficeParser.parseOffice(filePath);
+            results.push({
+                category: 'DecompressionLimits',
+                feature: 'ZIP uncompressed size limit exceeded',
+                fileType: 'docx',
+                result: {
+                    status: 'FAIL',
+                    expected: 'ZIP uncompressed size limit exceeded error',
+                    actual: 'Resolved successfully',
+                    details: 'ZIP archive exceeding uncompressed size limit parsed successfully instead of failing',
+                    duration: Date.now() - startTime
+                }
+            });
+        } catch (err: any) {
+            const isLimitError = err.message.includes('uncompressed size limit exceeded');
+            results.push({
+                category: 'DecompressionLimits',
+                feature: 'ZIP uncompressed size limit exceeded',
+                fileType: 'docx',
+                result: {
+                    status: isLimitError ? 'PASS' : 'FAIL',
+                    expected: 'ZIP uncompressed size limit exceeded error',
+                    actual: `${err.name}: ${err.message}`,
+                    details: isLimitError
+                        ? 'ZIP uncompressed size limit exceeded successfully blocked'
+                        : `Expected size limit exceeded error but got: ${err.message}`,
+                    duration: Date.now() - startTime
+                }
+            });
+        }
+    }
+
+    // 3. many_entries_archive.docx (10005 files, over 10000 entries limit)
+    {
+        const startTime = Date.now();
+        const filePath = path.join(__dirname, '..', 'files', 'many_entries_archive.docx');
+        try {
+            await OfficeParser.parseOffice(filePath);
+            results.push({
+                category: 'DecompressionLimits',
+                feature: 'ZIP entry count exceeds limit',
+                fileType: 'docx',
+                result: {
+                    status: 'FAIL',
+                    expected: 'ZIP entry count exceeds limit error',
+                    actual: 'Resolved successfully',
+                    details: 'ZIP with many files parsed successfully instead of failing',
+                    duration: Date.now() - startTime
+                }
+            });
+        } catch (err: any) {
+            const isLimitError = err.message.includes('entry count exceeds limit');
+            results.push({
+                category: 'DecompressionLimits',
+                feature: 'ZIP entry count exceeds limit',
+                fileType: 'docx',
+                result: {
+                    status: isLimitError ? 'PASS' : 'FAIL',
+                    expected: 'ZIP entry count exceeds limit error',
+                    actual: `${err.name}: ${err.message}`,
+                    details: isLimitError
+                        ? 'ZIP entry count exceeds limit successfully blocked'
+                        : `Expected entry count limit error but got: ${err.message}`,
+                    duration: Date.now() - startTime
+                }
+            });
+        }
+    }
+
+    // 4. Custom maxUncompressedBytes configuration
+    {
+        const startTime = Date.now();
+        const filePath = path.join(__dirname, '..', 'files', 'oversized_archive.docx');
+        try {
+            // oversized_archive.docx is ~100MB uncompressed, so setting limit to 50MB should trigger failure
+            await OfficeParser.parseOffice(filePath, { decompressionLimits: { maxUncompressedBytes: 50 * 1024 * 1024 } });
+            results.push({
+                category: 'DecompressionLimits',
+                feature: 'Custom ZIP uncompressed size limit exceeded',
+                fileType: 'docx',
+                result: {
+                    status: 'FAIL',
+                    expected: 'ZIP uncompressed size limit exceeded error',
+                    actual: 'Resolved successfully',
+                    details: 'ZIP archive parsing resolved successfully despite custom low uncompressed size limit',
+                    duration: Date.now() - startTime
+                }
+            });
+        } catch (err: any) {
+            const isLimitError = err.message.includes('uncompressed size limit exceeded');
+            results.push({
+                category: 'DecompressionLimits',
+                feature: 'Custom ZIP uncompressed size limit exceeded',
+                fileType: 'docx',
+                result: {
+                    status: isLimitError ? 'PASS' : 'FAIL',
+                    expected: 'ZIP uncompressed size limit exceeded error',
+                    actual: `${err.name}: ${err.message}`,
+                    details: isLimitError
+                        ? 'Custom ZIP uncompressed size limit exceeded successfully blocked'
+                        : `Expected custom size limit exceeded error but got: ${err.message}`,
+                    duration: Date.now() - startTime
+                }
+            });
+        }
+    }
+
+    // 5. Custom maxZipEntries configuration
+    {
+        const startTime = Date.now();
+        const filePath = path.join(__dirname, '..', 'files', 'oversized_archive.docx');
+        try {
+            // oversized_archive.docx has at least 4 files, so setting limit to 2 should trigger failure
+            await OfficeParser.parseOffice(filePath, { decompressionLimits: { maxZipEntries: 2 } });
+            results.push({
+                category: 'DecompressionLimits',
+                feature: 'Custom ZIP entry count exceeds limit',
+                fileType: 'docx',
+                result: {
+                    status: 'FAIL',
+                    expected: 'ZIP entry count exceeds limit error',
+                    actual: 'Resolved successfully',
+                    details: 'ZIP parsing resolved successfully despite custom low entry count limit',
+                    duration: Date.now() - startTime
+                }
+            });
+        } catch (err: any) {
+            const isLimitError = err.message.includes('entry count exceeds limit');
+            results.push({
+                category: 'DecompressionLimits',
+                feature: 'Custom ZIP entry count exceeds limit',
+                fileType: 'docx',
+                result: {
+                    status: isLimitError ? 'PASS' : 'FAIL',
+                    expected: 'ZIP entry count exceeds limit error',
+                    actual: `${err.name}: ${err.message}`,
+                    details: isLimitError
+                        ? 'Custom ZIP entry count limit successfully blocked'
+                        : `Expected custom entry count limit error but got: ${err.message}`,
+                    duration: Date.now() - startTime
+                }
+            });
+        }
+    }
+
+    return results;
+}
+
 // ============================================================================
 // DUAL LOGGER (Console + Markdown)
 // ============================================================================
@@ -2454,7 +2648,11 @@ async function runAllTests() {
     console.log('Running AbortSignal cancellation tests...');
     allResults.push(...await testAbortSignal());
 
-    // 5. Generate report
+    // 5. ZIP Decompression Limit tests
+    console.log('Running ZIP decompression limit tests...');
+    allResults.push(...await testDecompressionLimits());
+
+    // 6. Generate report
     console.log('\n');
     const logger = new DualLogger();
     const failedCount = generateReport(allResults, logger);

@@ -242,17 +242,20 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         return Array.from(element.childNodes);
     };
 
-    const files = await extractFiles(buffer, x =>
-        !!x.match(documentFileRegex) ||
-        !!x.match(footnotesFileRegex) ||
-        !!x.match(endnotesFileRegex) ||
-        !!x.match(numberingFileRegex) ||
-        !!x.match(corePropsFileRegex) ||
-        !!x.match(customPropsFileRegex) ||
-        !!x.match(appPropsFileRegex) ||
-        !!x.match(relsFileRegex) ||
-        !!x.match(stylesFileRegex) ||
-        (!!config.extractAttachments && !!x.match(mediaFileRegex))
+    const files = await extractFiles(
+        buffer,
+        x =>
+            !!x.match(documentFileRegex) ||
+            !!x.match(footnotesFileRegex) ||
+            !!x.match(endnotesFileRegex) ||
+            !!x.match(numberingFileRegex) ||
+            !!x.match(corePropsFileRegex) ||
+            !!x.match(customPropsFileRegex) ||
+            !!x.match(appPropsFileRegex) ||
+            !!x.match(relsFileRegex) ||
+            !!x.match(stylesFileRegex) ||
+            (!!config.extractAttachments && !!x.match(mediaFileRegex)),
+        config.decompressionLimits
     );
 
     // Extract metadata

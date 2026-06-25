@@ -751,6 +751,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal cross-references from AST |
 | `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`) as these lack magic bytes. |
 | `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
+| `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000 }` | **New**: Limits applied during ZIP extraction to protect against excessive memory and resource usage |
 | `pdfWorkerSrc` | `string` | CDN (jsDelivr) | Path/URL to `pdf.worker.min.mjs` (required in browser) |
 | `onWarning` | `(issue: OfficeIssue) => void` | — | Callback for non-fatal parsing issues |
 | `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel parsing (rejects with AbortError) |

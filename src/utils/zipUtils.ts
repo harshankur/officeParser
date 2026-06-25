@@ -15,6 +15,8 @@
  */
 
 import { unzip } from 'fflate';
+import { DecompressionLimits, OfficeErrorType } from '../types.js';
+import { getOfficeError } from './errorUtils.js';
 
 /**
  * Represents a file extracted from a ZIP archive.
@@ -74,14 +76,58 @@ interface ZipFileContent {
  * 
  * @see https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT ZIP file format specification
  */
-export const extractFiles = (zipInput: Buffer, filterFn: (fileName: string) => boolean): Promise<ZipFileContent[]> => {
+export const extractFiles = (
+    zipInput: Buffer,
+    filterFn: (fileName: string) => boolean,
+    limits: DecompressionLimits
+): Promise<ZipFileContent[]> => {
+    const maxUncompressedBytes = limits?.maxUncompressedBytes !== undefined && Number.isFinite(limits.maxUncompressedBytes) && limits.maxUncompressedBytes >= 0
+        ? limits.maxUncompressedBytes
+        : 512 * 1024 * 1024;
+
+    const maxZipEntries = limits?.maxZipEntries !== undefined && Number.isFinite(limits.maxZipEntries) && limits.maxZipEntries >= 0
+        ? limits.maxZipEntries
+        : 10000;
+
     return new Promise((resolve, reject) => {
-        unzip(new Uint8Array(zipInput.buffer, zipInput.byteOffset, zipInput.byteLength), { filter: (file) => filterFn(file.name) }, (err, decompressed) => {
-            if (err) return reject(err);
-            resolve(Object.entries(decompressed).map(([path, data]) => ({
-                path,
-                content: Buffer.from(data)
-            })));
-        });
+        let totalEntryCount = 0;
+        let entryCount = 0;
+        let declaredTotal = 0;
+
+        unzip(
+            new Uint8Array(zipInput.buffer, zipInput.byteOffset, zipInput.byteLength),
+            {
+                filter: (file) => {
+                    totalEntryCount++;
+                    if (totalEntryCount > maxZipEntries) {
+                        reject(getOfficeError(OfficeErrorType.ZIP_ENTRY_COUNT_LIMIT_EXCEEDED, undefined, maxZipEntries));
+                        return false;
+                    }
+
+                    if (!filterFn(file.name)) return false;
+
+                    if (typeof file.originalSize !== 'number' || !Number.isFinite(file.originalSize) || file.originalSize < 0) {
+                        reject(getOfficeError(OfficeErrorType.ZIP_ENTRY_INVALID_SIZE));
+                        return false;
+                    }
+
+                    entryCount++;
+                    declaredTotal += file.originalSize;
+
+                    if (declaredTotal > maxUncompressedBytes) {
+                        reject(getOfficeError(OfficeErrorType.ZIP_SIZE_LIMIT_EXCEEDED, undefined, maxUncompressedBytes));
+                        return false;
+                    }
+                    return true;
+                }
+            },
+            (err, decompressed) => {
+                if (err) return reject(err);
+                resolve(Object.entries(decompressed).map(([path, data]) => ({
+                    path,
+                    content: Buffer.from(data)
+                })));
+            }
+        );
     });
 };

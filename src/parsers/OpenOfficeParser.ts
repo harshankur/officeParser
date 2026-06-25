@@ -50,13 +50,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     const stylesFileRegex = /styles\.xml/;
     const mimetypeFileRegex = /mimetype/;
 
-    const files = await extractFiles(buffer, x =>
-        !!x.match(contentFileRegex) ||
-        !!x.match(objectContentFileRegex) ||
-        !!x.match(metaFileRegex) ||
-        !!x.match(stylesFileRegex) ||
-        !!x.match(mimetypeFileRegex) ||
-        (!!config.extractAttachments && !!x.match(mediaFileRegex))
+    const files = await extractFiles(
+        buffer,
+        x =>
+            !!x.match(contentFileRegex) ||
+            !!x.match(objectContentFileRegex) ||
+            !!x.match(metaFileRegex) ||
+            !!x.match(stylesFileRegex) ||
+            !!x.match(mimetypeFileRegex) ||
+            (!!config.extractAttachments && !!x.match(mediaFileRegex)),
+        config.decompressionLimits
     );
 
     // 1. Determine File Type

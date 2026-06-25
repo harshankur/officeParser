@@ -499,7 +499,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                         src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
                     }
                 }
-                const img = `<img src="${src}" alt="${this.escape(node.text || meta?.altText || '')}"${className}${mappedAttrs}${styleAttr}>`;
+                const img = `<img src="${this.escape(src)}" alt="${this.escape(node.text || meta?.altText || '')}"${className}${mappedAttrs}${styleAttr}>`;
                 const content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
                 return `${extraAnchors}<div${idAttr}>${content}</div>`;
             }
