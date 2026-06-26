@@ -50,12 +50,13 @@ export class OfficeConverter {
      */
     public static async convert<
         F extends string | Buffer | ArrayBuffer | Uint8Array,
-        T extends SupportedFileType = InferFileTypeFromPath<F>
+        T extends SupportedFileType = InferFileTypeFromPath<F>,
+        D extends SupportedDestination<T> = SupportedDestination<T>
     >(
         file: F,
-        destination: SupportedDestination<T>,
-        config?: OfficeConverterConfig<SupportedDestination<T>, T>
-    ): Promise<ConversionResult<SupportedDestination<T>>> {
+        destination: D,
+        config?: OfficeConverterConfig<D, T>
+    ): Promise<ConversionResult<D>> {
         // 1. Prepare Parser Configuration
         // We prioritize the top-level onWarning if provided.
         const parserConfig: OfficeParserConfig = {
