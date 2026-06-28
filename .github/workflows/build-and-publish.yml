@@ -85,17 +85,18 @@ jobs:
 
       # ── Step 7: Attach all assets to the GitHub Release ───────────────────
       # This uploads:
-      #   officeparser@<version>.browser.iife.js — IIFE bundle
-      #   officeparser@<version>.browser.mjs      — ESM bundle
-      #   officeparser@<version>.browser.d.ts — TypeScript declarations
+      #   officeparser@<version>.browser.iife.js      — IIFE bundle
+      #   officeparser@<version>.browser.mjs          — ESM bundle
+      #   officeparser@<version>.browser.d.ts         — TypeScript declarations
       #   officeparser@<version>.browser.slim.iife.js — Slim IIFE bundle
-      #   officeparser@<version>.browser.slim.mjs      — Slim ESM bundle
-      #   officeparser@<version>.browser.slim.d.ts — Slim TypeScript declarations
-      #   sbom.cdx.json                       — CycloneDX SBOM
+      #   officeparser@<version>.browser.slim.mjs     — Slim ESM bundle
+      #   officeparser@<version>.browser.slim.d.ts    — Slim TypeScript declarations
+      #   sbom.cdx.json                               — CycloneDX SBOM
       - name: Upload Release Assets
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.release.tag_name }}
           files: release_assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
