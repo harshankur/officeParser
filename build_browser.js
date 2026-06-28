@@ -20,66 +20,75 @@ const fs = require('fs');
 const path = require('path');
 
 // ---------------------------------------------------------------------------
-// Shared configuration
+// Config Generator
 // ---------------------------------------------------------------------------
 
-const sharedConfig = {
-    entryPoints: ['src/index.ts'],
-    bundle: true,
-    platform: 'browser',
-    target: ['es2020'],
-    sourcemap: false,
-    minify: true,
-    // Remap node built-ins used in our own source to empty stubs.
-    // The browser bundle is Buffer-in/Buffer-out; nobody reads from disk.
-    alias: {
-        'fs': path.resolve(__dirname, 'scripts/browser-stubs/fs.js'),
-        'fs/promises': path.resolve(__dirname, 'scripts/browser-stubs/fs.js'),
-        'puppeteer': path.resolve(__dirname, 'scripts/browser-stubs/puppeteer.js'),
-    },
-    define: {
-        'process.env.NODE_ENV': '"production"',
-        'global': 'window',
-        'import.meta.url': '""',
-    },
-    inject: ['./scripts/browser-shims.js'],
-    banner: {
-        js: `
+function getBrowserConfig(isSlim) {
+    const config = {
+        entryPoints: ['src/index.ts'],
+        bundle: true,
+        platform: 'browser',
+        target: ['es2020'],
+        sourcemap: false,
+        minify: true,
+        // Remap node built-ins used in our own source to empty stubs.
+        // The browser bundle is Buffer-in/Buffer-out; nobody reads from disk.
+        alias: {
+            'fs': path.resolve(__dirname, 'scripts/browser-stubs/fs.js'),
+            'fs/promises': path.resolve(__dirname, 'scripts/browser-stubs/fs.js'),
+            'puppeteer': path.resolve(__dirname, 'scripts/browser-stubs/puppeteer.js'),
+        },
+        define: {
+            'process.env.NODE_ENV': '"production"',
+            'global': 'window',
+            'import.meta.url': '""',
+            '__SLIM__': isSlim ? 'true' : 'false',
+        },
+        inject: ['./scripts/browser-shims.js'],
+        banner: {
+            js: `
 // officeparser browser bundle
 // Shim for setImmediate (not available in all browsers)
 if (typeof setImmediate === 'undefined') {
   window.setImmediate = function(callback) { return setTimeout(callback, 0); };
 }
 `.trim(),
-    },
-    plugins: [
-        // Polyfill Node.js built-ins for the browser.
-        // fs: 'empty' — browser bundle never reads from disk (callers pass Buffer directly)
-        // Other modules are polyfilled with working browser equivalents.
-        nodeModulesPolyfillPlugin({
-            modules: {
-                zlib: true,
-                crypto: true,
-                stream: true,
-                buffer: true,
-                util: true,
-                events: true,
-                timers: true,
-                path: true,
-                os: true,
-                assert: true,
-                url: true,
-                vm: true,
-                http: true,
-                https: true,
-                string_decoder: true,
-            },
-        }),
-        // Post-process: inject /* @vite-ignore */ into dynamic imports with variables
-        // to suppress Vite's unanalyzable dynamic import warning.
-        viteIgnoreDynamicImportsPlugin(),
-    ],
-};
+        },
+        plugins: [
+            // Polyfill Node.js built-ins for the browser.
+            // fs: 'empty' — browser bundle never reads from disk (callers pass Buffer directly)
+            // Other modules are polyfilled with working browser equivalents.
+            nodeModulesPolyfillPlugin({
+                modules: {
+                    zlib: true,
+                    crypto: true,
+                    stream: true,
+                    buffer: true,
+                    util: true,
+                    events: true,
+                    timers: true,
+                    path: true,
+                    os: true,
+                    assert: true,
+                    url: true,
+                    vm: true,
+                    http: true,
+                    https: true,
+                    string_decoder: true,
+                },
+            }),
+            // Post-process: inject /* @vite-ignore */ into dynamic imports with variables
+            // to suppress Vite's unanalyzable dynamic import warning.
+            viteIgnoreDynamicImportsPlugin(),
+        ],
+    };
+
+    if (isSlim) {
+        config.alias['tesseract.js'] = path.resolve(__dirname, 'scripts/browser-stubs/tesseract.js');
+    }
+
+    return config;
+}
 
 // ---------------------------------------------------------------------------
 // @vite-ignore plugin for pdfjs-dist workerSrc dynamic import
@@ -123,25 +132,27 @@ function viteIgnoreDynamicImportsPlugin() {
 // Build 1: ESM bundle (for Vite, webpack, Angular, etc.)
 // ---------------------------------------------------------------------------
 
-async function buildEsm() {
-    console.log('Building ESM browser bundle → dist/officeparser.browser.mjs');
+async function buildEsm(isSlim = false) {
+    const suffix = isSlim ? '.slim' : '';
+    console.log(`Building ESM browser bundle → dist/officeparser.browser${suffix}.mjs`);
     await esbuild.build({
-        ...sharedConfig,
-        outfile: 'dist/officeparser.browser.mjs',
+        ...getBrowserConfig(isSlim),
+        outfile: `dist/officeparser.browser${suffix}.mjs`,
         format: 'esm',
     });
-    console.log('  ✓ dist/officeparser.browser.mjs');
+    console.log(`  ✓ dist/officeparser.browser${suffix}.mjs`);
 }
 
 // ---------------------------------------------------------------------------
 // Build 2: IIFE bundle (for <script> tags and backward compat)
 // ---------------------------------------------------------------------------
 
-async function buildIife() {
-    console.log('Building IIFE browser bundle → dist/officeparser.browser.iife.js');
+async function buildIife(isSlim = false) {
+    const suffix = isSlim ? '.slim' : '';
+    console.log(`Building IIFE browser bundle → dist/officeparser.browser${suffix}.iife.js`);
     await esbuild.build({
-        ...sharedConfig,
-        outfile: 'dist/officeparser.browser.iife.js',
+        ...getBrowserConfig(isSlim),
+        outfile: `dist/officeparser.browser${suffix}.iife.js`,
         format: 'iife',
         globalName: 'officeParser',
         // UMD-style footer: set module.exports so Vite's __commonJS wrapper
@@ -150,7 +161,7 @@ async function buildIife() {
             js: 'if(typeof module!=="undefined")module.exports=officeParser;',
         },
     });
-    console.log('  ✓ dist/officeparser.browser.iife.js');
+    console.log(`  ✓ dist/officeparser.browser${suffix}.iife.js`);
 }
 
 // ---------------------------------------------------------------------------
@@ -159,8 +170,10 @@ async function buildIife() {
 
 async function main() {
     try {
-        await buildEsm();
-        await buildIife();
+        await buildEsm(false);
+        await buildIife(false);
+        await buildEsm(true);
+        await buildIife(true);
         console.log('\nBrowser bundles built successfully.');
     } catch (err) {
         console.error('Build failed:', err);

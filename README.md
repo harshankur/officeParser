@@ -1007,12 +1007,17 @@ await officeParser.terminateOcr(); // immediate exit
 
 ## Browser Usage
 
-Two bundles are available in the `dist/` directory:
+Four bundles are available in the `dist/` directory:
 
-| Bundle | Usage |
-|--------|-------|
-| `officeparser.browser.mjs` | ESM, use with `import` statements or modern bundlers (Vite, Webpack, Next.js) |
-| `officeparser.browser.iife.js` | IIFE, use with a `<script>` tag; exposes the global `officeParser` object |
+| Bundle | Type | Description |
+|--------|------|-------------|
+| `officeparser.browser.mjs` | ESM | Standard ESM bundle for modern bundlers (Vite, Webpack, Next.js). |
+| `officeparser.browser.iife.js` | IIFE | Standard UMD bundle for direct `<script>` inclusion (exposes global `officeParser`). |
+| `officeparser.browser.slim.mjs` | ESM | Slim ESM bundle with Tesseract.js (OCR) stubbed out and remote CDN URLs removed. |
+| `officeparser.browser.slim.iife.js` | IIFE | Slim UMD bundle with Tesseract.js (OCR) stubbed out and remote CDN URLs removed. |
+
+### Manifest V3 & Extension Compliance (Slim Bundles)
+For strict browser environments like **Chrome/Edge Manifest V3 extensions**, remotely hosted code is forbidden. Use the **slim** bundles (`officeparser.browser.slim.mjs` or `officeparser.browser.slim.iife.js`) as they do not include default remote CDN urls or the Tesseract OCR engine.
 
 ### ESM (Vite / Webpack / Next.js)
 
@@ -1055,12 +1060,12 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer);
 
 // Or specify your own:
 const ast = await officeParser.parseOffice(pdfArrayBuffer, {
-    pdfWorkerSrc: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs'
+    pdfWorkerSrc: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.1.200/build/pdf.worker.min.mjs'
 });
 ```
 
 > [!NOTE]
-> The `pdfjs-dist` worker version must match the version bundled with `officeparser` (currently **5.6.205**).
+> The `pdfjs-dist` worker version must match the version bundled with `officeparser` (currently **6.1.200**).
 
 ---
 
@@ -1069,7 +1074,7 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer, {
 | Symptom | Fix |
 |---------|-----|
 | Node.js process stays alive after finishing | Call `await officeParser.terminateOcr()` at end of script when OCR was used |
-| `"Worker not found"` in browser for PDF | Verify `pdfWorkerSrc` points to `pdf.worker.min.mjs` matching version `5.6.205` |
+| `"Worker not found"` in browser for PDF | Verify `pdfWorkerSrc` points to `pdf.worker.min.mjs` matching version `6.1.200` |
 | Low OCR accuracy | Verify `ocrConfig.language` matches the document language; quality depends on image resolution |
 | Out of memory on large Excel files | Call `ast.toText()` early and discard the AST object to allow garbage collection |
 | `md`/`html`/`csv` buffer not detected | Add `fileType: 'md'` (or `'html'`, `'csv'`) to config (these formats have no magic bytes) |

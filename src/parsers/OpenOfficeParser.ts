@@ -31,6 +31,16 @@ import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getR
 import { extractFiles } from '../utils/zipUtils.js';
 
 /**
+ * Helper to clean and extract attachment name from xlink:href or paths.
+ * Handles trailing slashes, leading "./", and subdirectories.
+ */
+const cleanAttachmentName = (href: string): string => {
+    if (!href) return '';
+    const cleaned = href.replace(/^\.\//, '').replace(/\/$/, '');
+    return cleaned.split('/').pop() || '';
+};
+
+/**
  * Parses an OpenOffice document (.odt, .odp, .ods) and extracts content.
  * 
  * @param buffer - The ODF file as a Buffer
@@ -88,6 +98,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     let lastListStyle: string | null = null;
     let listIdCounter = 0;
     let lastWasList = false;
+    let traverse: (node: Element, targetArray: OfficeContentNode[], forceHeading?: boolean, sourceXml?: string, asSheet?: boolean) => void;
 
     // Helper to parse styles
     const parseStyles = (xml: Document) => {
@@ -178,6 +189,65 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      * Returns the paragraph content without creating a content node.
      * 
      * @param node - The paragraph element to parse
+     */
+    const parseMathML = (node: Node): string => {
+        if (!node) return '';
+        if (node.nodeType === 3) { // Text node
+            return node.textContent || '';
+        }
+        if (node.nodeType !== 1) { // Not an element
+            return '';
+        }
+        const element = node as Element;
+        const tagName = element.tagName.toLowerCase().replace(/^.*:/, ''); // strip namespace prefix
+
+        switch (tagName) {
+            case 'math':
+            case 'mrow':
+            case 'semantics':
+                return Array.from(element.childNodes).map(parseMathML).join('');
+            case 'mfrac': {
+                const children = Array.from(element.childNodes).filter((n: any) => n.nodeType === 1);
+                if (children.length >= 2) {
+                    return `(${parseMathML(children[0])})/(${parseMathML(children[1])})`;
+                }
+                return Array.from(element.childNodes).map(parseMathML).join('');
+            }
+            case 'msub': {
+                const children = Array.from(element.childNodes).filter((n: any) => n.nodeType === 1);
+                if (children.length >= 2) {
+                    return `${parseMathML(children[0])}_${parseMathML(children[1])}`;
+                }
+                return Array.from(element.childNodes).map(parseMathML).join('');
+            }
+            case 'msup': {
+                const children = Array.from(element.childNodes).filter((n: any) => n.nodeType === 1);
+                if (children.length >= 2) {
+                    return `${parseMathML(children[0])}^${parseMathML(children[1])}`;
+                }
+                return Array.from(element.childNodes).map(parseMathML).join('');
+            }
+            case 'msubsup': {
+                const children = Array.from(element.childNodes).filter((n: any) => n.nodeType === 1);
+                if (children.length >= 3) {
+                    return `${parseMathML(children[0])}_${parseMathML(children[1])}^${parseMathML(children[2])}`;
+                }
+                return Array.from(element.childNodes).map(parseMathML).join('');
+            }
+            case 'mi':
+            case 'mn':
+            case 'mo':
+            case 'mtext':
+            case 'ms':
+                return element.textContent || '';
+            case 'annotation':
+                return '';
+            default:
+                return Array.from(element.childNodes).map(parseMathML).join('');
+        }
+    };
+
+    /**
      * Helper to parse inline content (text, spans, links, notes, etc.) recursively.
      * 
      * @param node - The element to parse (paragraph, span, or link)
@@ -343,43 +413,115 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         }
                     }
                 } else if (tagName === 'draw:frame') {
-                    // Inline image
                     const frame = element;
+                    const drawTextBox = getFirstElementByTagName(frame, "draw:text-box");
+                    const drawObject = getFirstElementByTagName(frame, "draw:object");
 
-                    // Extract alt text
-                    let altText = '';
-                    const svgTitle = getFirstElementByTagName(frame, "svg:title");
-                    const svgDesc = getFirstElementByTagName(frame, "svg:desc");
-                    if (svgTitle && svgTitle.textContent) {
-                        altText = svgTitle.textContent;
-                    } else if (svgDesc && svgDesc.textContent) {
-                        altText = svgDesc.textContent;
-                    }
-
-                    // Extract image href
-                    let imageHref = '';
-                    const drawImages = getElementsByTagName(frame, "draw:image");
-                    if (drawImages.length > 0) {
-                        imageHref = drawImages[0].getAttribute("xlink:href") || '';
-                        if (imageHref) {
-                            const parts = imageHref.split('/');
-                            imageHref = parts[parts.length - 1];
+                    if (drawTextBox) {
+                        const textBoxChildren: OfficeContentNode[] = [];
+                        traverse(drawTextBox, textBoxChildren, false, sourceXml);
+                        children.push(...textBoxChildren);
+                        const textBoxText = textBoxChildren.map(c => c.text || '').join('\n');
+                        fullText += textBoxText;
+                    } else if (drawObject) {
+                        const href = drawObject.getAttribute("xlink:href");
+                        let isFormula = false;
+                        let formulaText = '';
+                        let attachmentName = '';
+                        if (href) {
+                            attachmentName = cleanAttachmentName(href);
+                            const objectPath = `${attachmentName}/content.xml`;
+                            const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
+                            if (objectFile) {
+                                const objXml = parseXmlString(objectFile.content.toString());
+                                const mathNode = getFirstElementByTagName(objXml, "math");
+                                if (mathNode) {
+                                    isFormula = true;
+                                    formulaText = parseMathML(mathNode).trim();
+                                }
+                            }
                         }
-                    }
 
-                    const imageNode: OfficeContentNode = {
-                        type: 'image',
-                        text: '',
-                        children: [],
-                        metadata: {
-                            attachmentName: imageHref,
-                            ...(altText ? { altText } : {})
+                        if (isFormula) {
+                            fullText += formulaText;
+                            const textNode: OfficeContentNode = {
+                                type: 'text',
+                                text: formulaText,
+                                formatting: parentFormatting,
+                                metadata: linkMetadata ? { ...linkMetadata } : undefined
+                            };
+                            if (config.includeRawContent) {
+                                textNode.rawContent = getRawContent(frame, sourceXml, config);
+                            }
+                            children.push(textNode);
+                        } else {
+                            // Standard inline image extraction fallback if object is not a formula
+                            let altText = '';
+                            const svgTitle = getFirstElementByTagName(frame, "svg:title");
+                            const svgDesc = getFirstElementByTagName(frame, "svg:desc");
+                            if (svgTitle && svgTitle.textContent) {
+                                altText = svgTitle.textContent;
+                            } else if (svgDesc && svgDesc.textContent) {
+                                altText = svgDesc.textContent;
+                            }
+
+                            let imageHref = '';
+                            const drawImages = getElementsByTagName(frame, "draw:image");
+                            if (drawImages.length > 0) {
+                                imageHref = drawImages[0].getAttribute("xlink:href") || '';
+                                if (imageHref) {
+                                    imageHref = cleanAttachmentName(imageHref);
+                                }
+                            }
+
+                            const imageNode: OfficeContentNode = {
+                                type: 'image',
+                                text: '',
+                                children: [],
+                                metadata: {
+                                    attachmentName: imageHref || attachmentName,
+                                    ...(altText ? { altText } : {})
+                                }
+                            };
+                            if (config.includeRawContent) {
+                                imageNode.rawContent = getRawContent(frame, sourceXml, config);
+                            }
+                            children.push(imageNode);
                         }
-                    };
-                    if (config.includeRawContent) {
-                        imageNode.rawContent = getRawContent(frame, sourceXml, config);
+                    } else {
+                        // Standard inline image extraction fallback
+                        let altText = '';
+                        const svgTitle = getFirstElementByTagName(frame, "svg:title");
+                        const svgDesc = getFirstElementByTagName(frame, "svg:desc");
+                        if (svgTitle && svgTitle.textContent) {
+                            altText = svgTitle.textContent;
+                        } else if (svgDesc && svgDesc.textContent) {
+                            altText = svgDesc.textContent;
+                        }
+
+                        let imageHref = '';
+                        const drawImages = getElementsByTagName(frame, "draw:image");
+                        if (drawImages.length > 0) {
+                            imageHref = drawImages[0].getAttribute("xlink:href") || '';
+                            if (imageHref) {
+                                imageHref = cleanAttachmentName(imageHref);
+                            }
+                        }
+
+                        const imageNode: OfficeContentNode = {
+                            type: 'image',
+                            text: '',
+                            children: [],
+                            metadata: {
+                                attachmentName: imageHref,
+                                ...(altText ? { altText } : {})
+                            }
+                        };
+                        if (config.includeRawContent) {
+                            imageNode.rawContent = getRawContent(frame, sourceXml, config);
+                        }
+                        children.push(imageNode);
                     }
-                    children.push(imageNode);
                 }
             }
         }
@@ -769,7 +911,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
          * @param sourceXml - The source XML string for raw content extraction
          * @param asSheet - If true, treats tables as sheets (for ODS)
          */
-        function traverse(node: Element, targetArray: OfficeContentNode[], forceHeading = false, sourceXml: string, asSheet = false) {
+        traverse = (node: Element, targetArray: OfficeContentNode[], forceHeading = false, sourceXml = '', asSheet = false) => {
             if (node.tagName === "text:p") {
                 const pContent = parseParagraphContent(node, paragraphStyleMap, styleMap, config, sourceXml);
                 const type = (forceHeading || (node.getAttribute("text:style-name") || '').toLowerCase().includes('title')) ? 'heading' : 'paragraph';
@@ -1082,8 +1224,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // Extract image href to link to attachment
                     let imageHref = image.getAttribute("xlink:href") || '';
                     if (imageHref) {
-                        const parts = imageHref.split('/');
-                        imageHref = parts[parts.length - 1];
+                        imageHref = cleanAttachmentName(imageHref);
                     }
 
                     const metadata: any = {
@@ -1107,26 +1248,48 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     }
                     targetArray.push(imageNode);
                 } else if (object) {
-                    // Handle embedded objects like charts
+                    // Handle embedded objects like charts or math formulas
                     const href = object.getAttribute("xlink:href");
                     if (href) {
-                        const attachmentName = href.split('/')[0];
+                        const attachmentName = cleanAttachmentName(href);
                         const objectPath = `${attachmentName}/content.xml`;
                         const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
 
                         if (objectFile) {
-                            const chartData = extractChartData(objectFile.content);
+                            const objXml = parseXmlString(objectFile.content.toString());
+                            const mathNode = getFirstElementByTagName(objXml, "math");
 
-                            const chartNode: OfficeContentNode = {
-                                type: 'chart',
-                                text: chartData.rawTexts.join(" "),
-                                metadata: {
-                                    attachmentName: attachmentName,
-                                    chartData
-                                } as ChartMetadata
-                            };
-                            if (config.includeRawContent) chartNode.rawContent = getRawContent(node, sourceXml, config);
-                            targetArray.push(chartNode);
+                            if (mathNode) {
+                                // Math formula object at block level
+                                const formulaText = parseMathML(mathNode).trim();
+                                const formulaNode: OfficeContentNode = {
+                                    type: 'paragraph',
+                                    text: formulaText,
+                                    children: [
+                                        {
+                                            type: 'text',
+                                            text: formulaText
+                                        }
+                                    ]
+                                };
+                                if (config.includeRawContent) {
+                                    formulaNode.rawContent = getRawContent(node, sourceXml, config);
+                                }
+                                targetArray.push(formulaNode);
+                            } else {
+                                const chartData = extractChartData(objectFile.content);
+
+                                const chartNode: OfficeContentNode = {
+                                    type: 'chart',
+                                    text: chartData.rawTexts.join(" "),
+                                    metadata: {
+                                        attachmentName: attachmentName,
+                                        chartData
+                                    } as ChartMetadata
+                                };
+                                if (config.includeRawContent) chartNode.rawContent = getRawContent(node, sourceXml, config);
+                                targetArray.push(chartNode);
+                            }
                         } else {
                             const chartNode: OfficeContentNode = {
                                 type: 'chart',
@@ -1234,30 +1397,51 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 if (drawImages.length > 0) {
                                     const rawHref = drawImages[0].getAttribute("xlink:href");
                                     if (rawHref) {
-                                        const parts = rawHref.split('/');
-                                        imageHref = parts[parts.length - 1];
+                                        imageHref = cleanAttachmentName(rawHref);
                                     }
                                 }
 
-                                // Extract chart object href
+                                // Extract chart or math object href
                                 let chartHref = '';
+                                let isFormula = false;
+                                let formulaText = '';
                                 const drawObjects = getElementsByTagName(frame, "draw:object");
                                 if (drawObjects.length > 0) {
                                     const href = drawObjects[0].getAttribute("xlink:href");
                                     if (href) {
-                                        // Object href is usually "./Object 1"
-                                        chartHref = href.split('/')[0];
+                                        chartHref = cleanAttachmentName(href);
+                                        const objectPath = `${chartHref}/content.xml`;
+                                        const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
+                                        if (objectFile) {
+                                            const objXml = parseXmlString(objectFile.content.toString());
+                                            const mathNode = getFirstElementByTagName(objXml, "math");
+                                            if (mathNode) {
+                                                isFormula = true;
+                                                formulaText = parseMathML(mathNode).trim();
+                                            }
+                                        }
                                     }
                                 }
 
-                                if (drawImages.length > 0) {
+                                if (isFormula) {
+                                    cellText += formulaText;
+                                    const textNode: OfficeContentNode = {
+                                        type: 'text',
+                                        text: formulaText,
+                                        formatting: {}
+                                    };
+                                    if (config.includeRawContent) {
+                                        textNode.rawContent = getRawContent(frame, xmlString, config);
+                                    }
+                                    children.push(textNode);
+                                } else if (drawImages.length > 0) {
                                     // logic for image node
                                     const imageNode: OfficeContentNode = {
                                         type: 'image',
                                         text: '', // Will be populated by assignAttachmentData
                                         children: [],
                                         metadata: {
-                                            attachmentName: imageHref, // Might be empty, will resolve in assignAttachmentData
+                                            attachmentName: imageHref || chartHref, // Might be empty, will resolve in assignAttachmentData
                                             ...(altText ? { altText } : {})
                                         } as ImageMetadata
                                     };
@@ -1274,6 +1458,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                             attachmentName: chartHref
                                         } as ChartMetadata
                                     };
+                                    if (config.includeRawContent) {
+                                        chartNode.rawContent = getRawContent(frame, xmlString, config);
+                                    }
                                     children.push(chartNode);
                                 }
                             }

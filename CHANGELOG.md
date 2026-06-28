@@ -4,6 +4,16 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.2.3] - 2026-06-28
+### Added
+- **Slim Browser Bundles**: Introduced `officeparser.browser.slim.mjs` and `officeparser.browser.slim.iife.js` bundles along with types `officeparser.browser.slim.d.ts`. In the slim bundles, `tesseract.js` is stubbed out entirely and default CDN URLs for PDF workers and Chart.js are removed, making the library fully compliant with strict environments like Chrome/Edge Manifest V3 extensions where remotely hosted code is prohibited.
+- **MathML Formula Support (ODF)**: Added parsing and extraction for MathML formulas in OpenOffice/LibreOffice documents (`.odt`, `.odp`, `.ods`), handling them at both the block level and inline level.
+
+### Changed
+- **Dependency Upgrades**:
+  - Upgraded `pdfjs-dist` from `5.6.205` to `6.1.200` for optimized rendering performance, modernized Node.js compatibility, and security CVE mitigations.
+  - Upgraded `fflate` from `^0.8.2` to `^0.8.3` to resolve Zip64 over-read bugs and improve large archive parsing stability.
+
 ## [7.2.2] - 2026-06-26
 ### Added
 - **Configurable Decompression Limits**: Introduced a unified `decompressionLimits` configuration object to `OfficeParserConfig` to customize extraction checks during ZIP decompression (preventing excessive resource consumption). Configurable parameters:

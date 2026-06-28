@@ -233,59 +233,61 @@ function checkCli(): CheckResult[] {
 // Section 4: Browser IIFE Bundle
 // ---------------------------------------------------------------------------
 
-function checkBrowserIife(): CheckResult[] {
+function checkBrowserIife(isSlim = false): CheckResult[] {
     const results: CheckResult[] = [];
-    const relPath = 'dist/officeparser.browser.iife.js';
+    const suffix = isSlim ? '.slim' : '';
+    const relPath = `dist/officeparser.browser${suffix}.iife.js`;
+    const label = isSlim ? 'IIFE Slim' : 'IIFE';
 
     if (!fileExists(relPath)) {
-        return [fail('IIFE: dist/officeparser.browser.iife.js exists', 'File not found')];
+        return [fail(`${label}: ${relPath} exists`, 'File not found')];
     }
-    results.push(pass('IIFE: exists'));
+    results.push(pass(`${label}: exists`));
 
     const content = readFile(relPath);
     const size = fileSize(relPath);
 
     // No shebang
     if (content.startsWith('#!')) {
-        results.push(fail('IIFE: no shebang', 'Bundle starts with shebang — Vite will throw SyntaxError'));
+        results.push(fail(`${label}: no shebang`, 'Bundle starts with shebang — Vite will throw SyntaxError'));
     } else {
-        results.push(pass('IIFE: no shebang'));
+        results.push(pass(`${label}: no shebang`));
     }
 
     // Has module.exports (UMD footer)
     if (content.includes('module.exports')) {
-        results.push(pass('IIFE: has module.exports (UMD footer)'));
+        results.push(pass(`${label}: has module.exports (UMD footer)`));
     } else {
-        results.push(fail('IIFE: has module.exports (UMD footer)', 'Missing — Vite __commonJS wrapper will get empty object'));
+        results.push(fail(`${label}: has module.exports (UMD footer)`, 'Missing — Vite __commonJS wrapper will get empty object'));
     }
 
     // Has IIFE assignment
     if (content.includes('officeParser')) {
-        results.push(pass('IIFE: has globalName officeParser'));
+        results.push(pass(`${label}: has globalName officeParser`));
     } else {
-        results.push(fail('IIFE: has globalName officeParser', 'IIFE global not found'));
+        results.push(fail(`${label}: has globalName officeParser`, 'IIFE global not found'));
     }
 
     // Has OfficeGenerator
     if (content.includes('OfficeGenerator')) {
-        results.push(pass('IIFE: contains OfficeGenerator export'));
+        results.push(pass(`${label}: contains OfficeGenerator export`));
     } else {
-        results.push(fail('IIFE: contains OfficeGenerator export', 'OfficeGenerator not found in bundle'));
+        results.push(fail(`${label}: contains OfficeGenerator export`, 'OfficeGenerator not found in bundle'));
     }
 
     // Has @vite-ignore
     if (content.includes('@vite-ignore')) {
-        results.push(pass('IIFE: has @vite-ignore for pdfjs dynamic import'));
+        results.push(pass(`${label}: has @vite-ignore for pdfjs dynamic import`));
     } else {
-        results.push(fail('IIFE: has @vite-ignore for pdfjs dynamic import', 'Missing — Vite will warn about unanalyzable dynamic import'));
+        results.push(fail(`${label}: has @vite-ignore for pdfjs dynamic import`, 'Missing — Vite will warn about unanalyzable dynamic import'));
     }
 
     // Reasonable size (must be > 100KB and < 10MB)
     const sizeMb = (size / 1024 / 1024).toFixed(2);
     if (size > 100 * 1024 && size < 10 * 1024 * 1024) {
-        results.push(pass('IIFE: size is reasonable', `${sizeMb} MB`));
+        results.push(pass(`${label}: size is reasonable`, `${sizeMb} MB`));
     } else {
-        results.push(fail('IIFE: size is reasonable', `${sizeMb} MB — expected between 100KB and 10MB`));
+        results.push(fail(`${label}: size is reasonable`, `${sizeMb} MB — expected between 100KB and 10MB`));
     }
 
     return results;
@@ -295,52 +297,54 @@ function checkBrowserIife(): CheckResult[] {
 // Section 5: Browser ESM Bundle
 // ---------------------------------------------------------------------------
 
-function checkBrowserEsm(): CheckResult[] {
+function checkBrowserEsm(isSlim = false): CheckResult[] {
     const results: CheckResult[] = [];
-    const relPath = 'dist/officeparser.browser.mjs';
+    const suffix = isSlim ? '.slim' : '';
+    const relPath = `dist/officeparser.browser${suffix}.mjs`;
+    const label = isSlim ? 'Browser ESM Slim' : 'Browser ESM';
 
     if (!fileExists(relPath)) {
-        return [fail('Browser ESM: dist/officeparser.browser.mjs exists', 'File not found')];
+        return [fail(`${label}: ${relPath} exists`, 'File not found')];
     }
-    results.push(pass('Browser ESM: exists'));
+    results.push(pass(`${label}: exists`));
 
     const content = readFile(relPath);
     const size = fileSize(relPath);
 
     // No shebang
     if (content.startsWith('#!')) {
-        results.push(fail('Browser ESM: no shebang', 'Bundle starts with shebang'));
+        results.push(fail(`${label}: no shebang`, 'Bundle starts with shebang'));
     } else {
-        results.push(pass('Browser ESM: no shebang'));
+        results.push(pass(`${label}: no shebang`));
     }
 
     // Has export statements (ESM)
     if (/\bexport\b/.test(content)) {
-        results.push(pass('Browser ESM: has export statements'));
+        results.push(pass(`${label}: has export statements`));
     } else {
-        results.push(fail('Browser ESM: has export statements', 'No export keyword found — not a valid ESM module'));
+        results.push(fail(`${label}: has export statements`, 'No export keyword found — not a valid ESM module'));
     }
 
     // Does NOT have module.exports (should be ESM, not CJS)
     if (content.includes('module.exports')) {
-        results.push(fail('Browser ESM: no module.exports', 'Found module.exports in an ESM bundle'));
+        results.push(fail(`${label}: no module.exports`, 'Found module.exports in an ESM bundle'));
     } else {
-        results.push(pass('Browser ESM: no module.exports'));
+        results.push(pass(`${label}: no module.exports`));
     }
 
     // Has @vite-ignore
     if (content.includes('@vite-ignore')) {
-        results.push(pass('Browser ESM: has @vite-ignore for pdfjs dynamic import'));
+        results.push(pass(`${label}: has @vite-ignore for pdfjs dynamic import`));
     } else {
-        results.push(fail('Browser ESM: has @vite-ignore for pdfjs dynamic import', 'Missing — Vite will warn about unanalyzable dynamic import'));
+        results.push(fail(`${label}: has @vite-ignore for pdfjs dynamic import`, 'Missing — Vite will warn about unanalyzable dynamic import'));
     }
 
     // Reasonable size
     const sizeMb = (size / 1024 / 1024).toFixed(2);
     if (size > 100 * 1024 && size < 10 * 1024 * 1024) {
-        results.push(pass('Browser ESM: size is reasonable', `${sizeMb} MB`));
+        results.push(pass(`${label}: size is reasonable`, `${sizeMb} MB`));
     } else {
-        results.push(fail('Browser ESM: size is reasonable', `${sizeMb} MB — expected between 100KB and 10MB`));
+        results.push(fail(`${label}: size is reasonable`, `${sizeMb} MB — expected between 100KB and 10MB`));
     }
 
     return results;
@@ -350,38 +354,41 @@ function checkBrowserEsm(): CheckResult[] {
 // Section 6: Browser Type Declarations
 // ---------------------------------------------------------------------------
 
-function checkBrowserTypes(): CheckResult[] {
+function checkBrowserTypes(isSlim = false): CheckResult[] {
     const results: CheckResult[] = [];
+    const suffix = isSlim ? '.slim' : '';
+    const relPath = `dist/officeparser.browser${suffix}.d.ts`;
+    const label = isSlim ? 'Browser types Slim' : 'Browser types';
 
-    if (!fileExists('dist/officeparser.browser.d.ts')) {
-        return [fail('Browser types: dist/officeparser.browser.d.ts exists', 'File not found')];
+    if (!fileExists(relPath)) {
+        return [fail(`${label}: ${relPath} exists`, 'File not found')];
     }
-    results.push(pass('Browser types: exists'));
+    results.push(pass(`${label}: exists`));
 
-    const content = readFile('dist/officeparser.browser.d.ts');
+    const content = readFile(relPath);
 
     if (content.includes('OfficeParser')) {
-        results.push(pass('Browser types: contains OfficeParser declaration'));
+        results.push(pass(`${label}: contains OfficeParser declaration`));
     } else {
-        results.push(fail('Browser types: contains OfficeParser declaration', 'OfficeParser not found in .d.ts'));
+        results.push(fail(`${label}: contains OfficeParser declaration`, 'OfficeParser not found in .d.ts'));
     }
 
     if (content.includes('parseOffice')) {
-        results.push(pass('Browser types: contains parseOffice declaration'));
+        results.push(pass(`${label}: contains parseOffice declaration`));
     } else {
-        results.push(fail('Browser types: contains parseOffice declaration', 'parseOffice not found in .d.ts'));
+        results.push(fail(`${label}: contains parseOffice declaration`, 'parseOffice not found in .d.ts'));
     }
 
     if (content.includes('OfficeGenerator')) {
-        results.push(pass('Browser types: contains OfficeGenerator declaration'));
+        results.push(pass(`${label}: contains OfficeGenerator declaration`));
     } else {
-        results.push(fail('Browser types: contains OfficeGenerator declaration', 'OfficeGenerator not found in .d.ts'));
+        results.push(fail(`${label}: contains OfficeGenerator declaration`, 'OfficeGenerator not found in .d.ts'));
     }
 
     if (content.includes('GeneratorConfig')) {
-        results.push(pass('Browser types: contains GeneratorConfig declaration'));
+        results.push(pass(`${label}: contains GeneratorConfig declaration`));
     } else {
-        results.push(fail('Browser types: contains GeneratorConfig declaration', 'GeneratorConfig not found in .d.ts'));
+        results.push(fail(`${label}: contains GeneratorConfig declaration`, 'GeneratorConfig not found in .d.ts'));
     }
 
     return results;
@@ -434,6 +441,15 @@ function checkPackageJson(): CheckResult[] {
         checkField('exports["."].require', exp.require);
     }
 
+    const slimExp = pkg.exports?.['./slim'];
+    if (!slimExp) {
+        results.push(fail('package.json: exports["./slim"]', 'Missing exports map for slim'));
+    } else {
+        checkField('exports["./slim"].types', slimExp.types);
+        checkField('exports["./slim"].browser', slimExp.browser);
+        checkField('exports["./slim"].import', slimExp.import);
+    }
+
     return results;
 }
 
@@ -470,9 +486,12 @@ async function main() {
         { title: 'Node.js CJS Package', fn: checkCjs },
         { title: 'Node.js ESM Package', fn: checkEsm },
         { title: 'CLI Entry (dist/cli.js)', fn: checkCli },
-        { title: 'Browser IIFE Bundle (dist/officeparser.browser.iife.js)', fn: checkBrowserIife },
-        { title: 'Browser ESM Bundle (dist/officeparser.browser.mjs)', fn: checkBrowserEsm },
-        { title: 'Browser Type Declarations', fn: checkBrowserTypes },
+        { title: 'Browser IIFE Bundle (dist/officeparser.browser.iife.js)', fn: () => checkBrowserIife(false) },
+        { title: 'Browser IIFE Slim Bundle (dist/officeparser.browser.slim.iife.js)', fn: () => checkBrowserIife(true) },
+        { title: 'Browser ESM Bundle (dist/officeparser.browser.mjs)', fn: () => checkBrowserEsm(false) },
+        { title: 'Browser ESM Slim Bundle (dist/officeparser.browser.slim.mjs)', fn: () => checkBrowserEsm(true) },
+        { title: 'Browser Type Declarations', fn: () => checkBrowserTypes(false) },
+        { title: 'Browser Slim Type Declarations', fn: () => checkBrowserTypes(true) },
         { title: 'package.json Path Integrity', fn: checkPackageJson },
     ];
 

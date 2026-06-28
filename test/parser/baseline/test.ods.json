@@ -6375,7 +6375,8 @@
                   "children": [],
                   "metadata": {
                     "attachmentName": "Object 1"
-                  }
+                  },
+                  "rawContent": "<draw:frame xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" draw:z-index=\"1\" draw:id=\"id1\" draw:style-name=\"a1\" draw:name=\"Chart 1\" xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" svg:x=\"1.53125in\" svg:y=\"0in\" svg:width=\"5in\" svg:height=\"3in\" xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" style:rel-width=\"scale\" style:rel-height=\"scale\"><draw:object xmlns:xlink=\"http://www.w3.org/1999/xlink\" xlink:href=\"Object 1/\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/><svg:title/><svg:desc/></draw:frame>"
                 }
               ],
               "metadata": {

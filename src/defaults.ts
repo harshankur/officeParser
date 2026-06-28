@@ -1,7 +1,7 @@
 import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OfficeParserConfig, PdfGeneratorConfig, SemanticChunkingConfig, TextGeneratorConfig } from './types.js';
 
-const PDFJS_VERSION = '5.6.205';
-const DEFAULT_PDF_WORKER_SRC = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+const PDFJS_VERSION = '6.1.200';
+const DEFAULT_PDF_WORKER_SRC = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
 
 /**
  * The default regex used for identifying sentence boundaries.
@@ -74,7 +74,7 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
  */
 const DEFAULT_HTML_GENERATOR_CONFIG: DeepRequired<HtmlGeneratorConfig> = {
     standalone: true,
-    chartJsSrc: 'https://cdn.jsdelivr.net/npm/chart.js',
+    chartJsSrc: typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : 'https://cdn.jsdelivr.net/npm/chart.js',
     containerWidth: 'auto',
     customCss: '',
     injections: {

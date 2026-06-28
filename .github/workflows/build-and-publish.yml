@@ -63,9 +63,12 @@ jobs:
           VERSION=${{ github.event.release.tag_name }}
           VERSION_CLEAN=${VERSION#v}
           mkdir -p release_assets
-          cp dist/officeparser.browser.iife.js "release_assets/officeparser@$VERSION_CLEAN.browser.iife.js"
-          cp dist/officeparser.browser.mjs     "release_assets/officeparser@$VERSION_CLEAN.browser.mjs"
-          cp dist/officeparser.browser.d.ts    "release_assets/officeparser@$VERSION_CLEAN.browser.d.ts"
+          cp dist/officeparser.browser.iife.js      "release_assets/officeparser@$VERSION_CLEAN.browser.iife.js"
+          cp dist/officeparser.browser.mjs          "release_assets/officeparser@$VERSION_CLEAN.browser.mjs"
+          cp dist/officeparser.browser.d.ts         "release_assets/officeparser@$VERSION_CLEAN.browser.d.ts"
+          cp dist/officeparser.browser.slim.iife.js "release_assets/officeparser@$VERSION_CLEAN.browser.slim.iife.js"
+          cp dist/officeparser.browser.slim.mjs     "release_assets/officeparser@$VERSION_CLEAN.browser.slim.mjs"
+          cp dist/officeparser.browser.slim.d.ts    "release_assets/officeparser@$VERSION_CLEAN.browser.slim.d.ts"
 
       # ── Step 6: Generate SBOM ─────────────────────────────────────────────
       # Produces a CycloneDX JSON SBOM inventorying all production dependencies.
@@ -85,6 +88,9 @@ jobs:
       #   officeparser@<version>.browser.iife.js — IIFE bundle
       #   officeparser@<version>.browser.mjs      — ESM bundle
       #   officeparser@<version>.browser.d.ts — TypeScript declarations
+      #   officeparser@<version>.browser.slim.iife.js — Slim IIFE bundle
+      #   officeparser@<version>.browser.slim.mjs      — Slim ESM bundle
+      #   officeparser@<version>.browser.slim.d.ts — Slim TypeScript declarations
       #   sbom.cdx.json                       — CycloneDX SBOM
       - name: Upload Release Assets
         if: github.event_name == 'release'

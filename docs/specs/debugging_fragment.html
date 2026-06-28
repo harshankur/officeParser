@@ -51,9 +51,9 @@ await terminateOcr(); // Snappy exit</code></pre>
     <p>If PDF parsing fails in the browser with "Worker not found" or "Version mismatch" errors:</p>
     <ul>
         <li><strong>Worker Source:</strong> Ensure <code>pdfWorkerSrc</code> points to a valid URL. By default, it uses
-            a CDN pointing to version <code>5.6.205</code>.</li>
+            a CDN pointing to version <code>6.1.200</code>.</li>
         <li><strong>Version Matching:</strong> If you host the worker locally, ensure it matches the
-            <code>pdfjs-dist</code> version <code>5.6.205</code> used by the library.
+            <code>pdfjs-dist</code> version <code>6.1.200</code> used by the library.
         </li>
     </ul>
 
@@ -159,7 +159,7 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
             </tr>
             <tr>
                 <td>"Worker not found" in browser (PDF)</td>
-                <td>Set <code>pdfWorkerSrc</code> to a valid URL for pdfjs-dist <code>5.6.205</code></td>
+                <td>Set <code>pdfWorkerSrc</code> to a valid URL for pdfjs-dist <code>6.1.200</code></td>
             </tr>
             <tr>
                 <td>Low OCR accuracy</td>

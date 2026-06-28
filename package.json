@@ -1,6 +1,6 @@
 {
   "name": "officeparser",
-  "version": "7.2.2",
+  "version": "7.2.3",
   "description": "A robust, strictly-typed Node.js and Browser library for parsing office files (.docx, .pptx, .xlsx, .odt, .odp, .ods, .pdf, .rtf, .csv, .md, .html) and generating high-fidelity outputs in Markdown, HTML, CSV, RTF, and RAG-focused chunks.",
   "funding": "https://github.com/sponsors/harshankur",
   "main": "dist/index.js",
@@ -13,6 +13,11 @@
       "browser": "./dist/officeparser.browser.mjs",
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
+    },
+    "./slim": {
+      "types": "./dist/officeparser.browser.slim.d.ts",
+      "browser": "./dist/officeparser.browser.slim.mjs",
+      "import": "./dist/officeparser.browser.slim.mjs"
     }
   },
   "sideEffects": false,
@@ -26,10 +31,10 @@
     "build": "npm run sync:versions && npm run build:node && npm run build:esm-wrapper && npm run build:browser:types && npm run build:browser",
     "build:node": "tsc",
     "build:esm-wrapper": "node scripts/generate-esm-wrapper.js",
-    "build:browser:types": "dts-bundle-generator --no-check -o dist/officeparser.browser.d.ts src/index.ts",
+    "build:browser:types": "dts-bundle-generator --no-check -o dist/officeparser.browser.d.ts src/index.ts && cp dist/officeparser.browser.d.ts dist/officeparser.browser.slim.d.ts",
     "build:browser": "node build_browser.js && npm run sync:docs",
     "sync:versions": "node scripts/sync-pdfjs-versions.js",
-    "sync:docs": "mkdir -p docs/dist && cp dist/officeparser.browser.iife.js docs/dist/ && cp dist/officeparser.browser.mjs docs/dist/ && mkdir -p docs/test/files && cp test/files/* docs/test/files/",
+    "sync:docs": "mkdir -p docs/dist && cp dist/officeparser.browser.iife.js docs/dist/ && cp dist/officeparser.browser.mjs docs/dist/ && cp dist/officeparser.browser.slim.iife.js docs/dist/ && cp dist/officeparser.browser.slim.mjs docs/dist/ && mkdir -p docs/test/files && cp test/files/* docs/test/files/",
     "lint": "eslint src",
     "test": "npm run lint && npm run test:clean && npm run build && npm run test:license && npm run test:artifacts && npm run test:parser && npm run test:generator && npm run test:cli",
     "test:baseline": "npm run test:parser:baseline && npm run test:generator:baseline",
@@ -105,9 +110,9 @@
   "homepage": "https://officeparser.harshankur.com",
   "dependencies": {
     "@xmldom/xmldom": "^0.9.10",
-    "fflate": "^0.8.2",
+    "fflate": "^0.8.3",
     "file-type": "^22.0.1",
-    "pdfjs-dist": "5.6.205",
+    "pdfjs-dist": "6.1.200",
     "tesseract.js": "^7.0.0"
   },
   "peerDependenciesMeta": {
@@ -121,8 +126,8 @@
     "@typescript-eslint/parser": "^8.59.3",
     "buffer": "^6.0.3",
     "dts-bundle-generator": "^9.5.1",
-    "esbuild": "^0.27.4",
-    "esbuild-plugins-node-modules-polyfill": "^1.8.1",
+    "esbuild": "^0.28.1",
+    "esbuild-plugins-node-modules-polyfill": "^1.8.2",
     "eslint": "^10.3.0",
     "husky": "^9.1.7",
     "postject": "^1.0.0-alpha.6",

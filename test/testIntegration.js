@@ -231,6 +231,233 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    if (urlPath === '/test-iife-slim') {
+        res.writeHead(200, {
+            'Content-Type': 'text/html',
+            'Cross-Origin-Opener-Policy': 'same-origin',
+            'Cross-Origin-Embedder-Policy': 'require-corp'
+        });
+        res.end(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <title>IIFE Slim Integration Test</title>
+                <script src="/dist/officeparser.browser.slim.iife.js"></script>
+            </head>
+            <body>
+                <div id="status">RUNNING</div>
+                <script>
+                    if (typeof Promise !== 'undefined' && !Promise.try) {
+                        Promise.try = function(fn, ...args) {
+                            return new Promise((resolve, reject) => {
+                                try { resolve(fn(...args)); } catch (err) { reject(err); }
+                            });
+                        };
+                    }
+                    if (typeof Map !== 'undefined') {
+                        if (!Map.prototype.getOrInsertComputed) {
+                            Map.prototype.getOrInsertComputed = function(key, callback) {
+                                if (this.has(key)) return this.get(key);
+                                const value = callback(key);
+                                this.set(key, value);
+                                return value;
+                            };
+                        }
+                        if (!Map.prototype.getOrInsert) {
+                            Map.prototype.getOrInsert = function(key, value) {
+                                if (this.has(key)) return this.get(key);
+                                this.set(key, value);
+                                return value;
+                            };
+                        }
+                    }
+
+                    async function run() {
+                        try {
+                            const results = [];
+                            
+                            // 1. Test DOCX
+                            const docxRes = await fetch('/test/files/test.docx');
+                            const docxBuf = await docxRes.arrayBuffer();
+                            const docxAst = await officeParser.parseOffice(new Uint8Array(docxBuf));
+                            const docxText = (await docxAst.to('text')).value;
+                            if (docxText.includes('Demonstration of DOCX support')) {
+                                results.push('DOCX: PASS');
+                            } else {
+                                results.push('DOCX: FAIL');
+                            }
+
+                            // 2. Test PDF (without worker)
+                            let pdfError = null;
+                            try {
+                                const pdfRes = await fetch('/test/files/test.pdf');
+                                const pdfBuf = await pdfRes.arrayBuffer();
+                                await officeParser.parseOffice(new Uint8Array(pdfBuf));
+                            } catch (err) {
+                                pdfError = err;
+                            }
+                            if (pdfError !== null) {
+                                results.push('PDF_DEFAULT_MISSING: PASS');
+                            } else {
+                                results.push('PDF_DEFAULT_MISSING: FAIL');
+                            }
+
+                            // 3. Test PDF (with worker)
+                            const pdfRes2 = await fetch('/test/files/test.pdf');
+                            const pdfBuf2 = await pdfRes2.arrayBuffer();
+                            const pdfAst = await officeParser.parseOffice(new Uint8Array(pdfBuf2), { pdfWorkerSrc: '/dist/pdf.worker.mjs' });
+                            const pdfText = (await pdfAst.to('text')).value;
+                            if (pdfText.includes('Demonstration of DOCX support')) {
+                                results.push('PDF_WITH_WORKER: PASS');
+                            } else {
+                                results.push('PDF_WITH_WORKER: FAIL');
+                            }
+
+                            // 4. Test OCR Stub
+                            const docxRes2 = await fetch('/test/files/test.docx');
+                            const docxBuf2 = await docxRes2.arrayBuffer();
+                            const docxAst2 = await officeParser.parseOffice(new Uint8Array(docxBuf2), { ocr: true, extractAttachments: true });
+                            const hasOcrStubWarning = docxAst2.warnings && docxAst2.warnings.some(w => 
+                                w.code === 'OCR_FAILED' && 
+                                w.details && 
+                                w.details.message && 
+                                w.details.message.includes('disabled in the slim browser bundle')
+                            );
+                            if (hasOcrStubWarning) {
+                                results.push('OCR_STUB: PASS');
+                            } else {
+                                results.push('OCR_STUB: FAIL (warnings: ' + JSON.stringify(docxAst2.warnings || []) + ')');
+                            }
+
+                            document.getElementById('status').textContent = results.join(' | ');
+                        } catch (err) {
+                            console.error(err);
+                            document.getElementById('status').textContent = 'ERROR: ' + err.message;
+                        }
+                    }
+                    run();
+                </script>
+            </body>
+            </html>
+        `);
+        return;
+    }
+
+    if (urlPath === '/test-esm-slim') {
+        res.writeHead(200, {
+            'Content-Type': 'text/html',
+            'Cross-Origin-Opener-Policy': 'same-origin',
+            'Cross-Origin-Embedder-Policy': 'require-corp'
+        });
+        res.end(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <title>ESM Slim Integration Test</title>
+            </head>
+            <body>
+                <div id="status">RUNNING</div>
+                <script type="module">
+                    if (typeof Promise !== 'undefined' && !Promise.try) {
+                        Promise.try = function(fn, ...args) {
+                            return new Promise((resolve, reject) => {
+                                try { resolve(fn(...args)); } catch (err) { reject(err); }
+                            });
+                        };
+                    }
+                    if (typeof Map !== 'undefined') {
+                        if (!Map.prototype.getOrInsertComputed) {
+                            Map.prototype.getOrInsertComputed = function(key, callback) {
+                                if (this.has(key)) return this.get(key);
+                                const value = callback(key);
+                                this.set(key, value);
+                                return value;
+                            };
+                        }
+                        if (!Map.prototype.getOrInsert) {
+                            Map.prototype.getOrInsert = function(key, value) {
+                                if (this.has(key)) return this.get(key);
+                                this.set(key, value);
+                                return value;
+                            };
+                        }
+                    }
+
+                    import { parseOffice } from '/dist/officeparser.browser.slim.mjs';
+
+                    async function run() {
+                        try {
+                            const results = [];
+                            
+                            // 1. Test DOCX
+                            const docxRes = await fetch('/test/files/test.docx');
+                            const docxBuf = await docxRes.arrayBuffer();
+                            const docxAst = await parseOffice(new Uint8Array(docxBuf));
+                            const docxText = (await docxAst.to('text')).value;
+                            if (docxText.includes('Demonstration of DOCX support')) {
+                                results.push('DOCX: PASS');
+                            } else {
+                                results.push('DOCX: FAIL');
+                            }
+
+                            // 2. Test PDF (without worker)
+                            let pdfError = null;
+                            try {
+                                const pdfRes = await fetch('/test/files/test.pdf');
+                                const pdfBuf = await pdfRes.arrayBuffer();
+                                await parseOffice(new Uint8Array(pdfBuf));
+                            } catch (err) {
+                                pdfError = err;
+                            }
+                            if (pdfError !== null) {
+                                results.push('PDF_DEFAULT_MISSING: PASS');
+                            } else {
+                                results.push('PDF_DEFAULT_MISSING: FAIL');
+                            }
+
+                            // 3. Test PDF (with worker)
+                            const pdfRes2 = await fetch('/test/files/test.pdf');
+                            const pdfBuf2 = await pdfRes2.arrayBuffer();
+                            const pdfAst = await parseOffice(new Uint8Array(pdfBuf2), { pdfWorkerSrc: '/dist/pdf.worker.mjs' });
+                            const pdfText = (await pdfAst.to('text')).value;
+                            if (pdfText.includes('Demonstration of DOCX support')) {
+                                results.push('PDF_WITH_WORKER: PASS');
+                            } else {
+                                results.push('PDF_WITH_WORKER: FAIL');
+                            }
+
+                            // 4. Test OCR Stub
+                            const docxRes2 = await fetch('/test/files/test.docx');
+                            const docxBuf2 = await docxRes2.arrayBuffer();
+                            const docxAst2 = await parseOffice(new Uint8Array(docxBuf2), { ocr: true, extractAttachments: true });
+                            const hasOcrStubWarning = docxAst2.warnings && docxAst2.warnings.some(w => 
+                                w.code === 'OCR_FAILED' && 
+                                w.details && 
+                                w.details.message && 
+                                w.details.message.includes('disabled in the slim browser bundle')
+                            );
+                            if (hasOcrStubWarning) {
+                                results.push('OCR_STUB: PASS');
+                            } else {
+                                results.push('OCR_STUB: FAIL (warnings: ' + JSON.stringify(docxAst2.warnings || []) + ')');
+                            }
+
+                            document.getElementById('status').textContent = results.join(' | ');
+                        } catch (err) {
+                            console.error(err);
+                            document.getElementById('status').textContent = 'ERROR: ' + err.message;
+                        }
+                    }
+                    run();
+                </script>
+            </body>
+            </html>
+        `);
+        return;
+    }
+
     if (urlPath === '/dist/pdf.worker.mjs') {
         const workerPath = path.join(ROOT, 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs');
         if (fs.existsSync(workerPath)) {
@@ -374,6 +601,58 @@ async function main() {
         }
     } catch (err) {
         console.error(`❌ ESM Test execution failed: ${err.message}`);
+        failed = true;
+    }
+
+    // -----------------------------------------------------------------------
+    // PART 2b: IIFE Slim Browser Bundle Tests
+    // -----------------------------------------------------------------------
+    try {
+        console.log('\n--- Testing IIFE Slim Browser Bundle ---');
+        await page.goto(`http://localhost:${port}/test-iife-slim`, { waitUntil: 'networkidle2' });
+
+        await page.waitForFunction(
+            () => document.getElementById('status').textContent !== 'RUNNING',
+            { timeout: 15000 }
+        );
+
+        const status = await page.$eval('#status', el => el.textContent);
+        console.log(`IIFE Slim Status: ${status}`);
+
+        if (status.includes('FAIL') || status.includes('ERROR')) {
+            console.error('❌ IIFE Slim Bundle Integration Tests Failed!');
+            failed = true;
+        } else {
+            console.log('✅ IIFE Slim Bundle Integration Tests Passed!');
+        }
+    } catch (err) {
+        console.error(`❌ IIFE Slim Test execution failed: ${err.message}`);
+        failed = true;
+    }
+
+    // -----------------------------------------------------------------------
+    // PART 2c: ESM Slim Browser Bundle Tests
+    // -----------------------------------------------------------------------
+    try {
+        console.log('\n--- Testing ESM Slim Browser Bundle ---');
+        await page.goto(`http://localhost:${port}/test-esm-slim`, { waitUntil: 'networkidle2' });
+
+        await page.waitForFunction(
+            () => document.getElementById('status').textContent !== 'RUNNING',
+            { timeout: 15000 }
+        );
+
+        const status = await page.$eval('#status', el => el.textContent);
+        console.log(`ESM Slim Status: ${status}`);
+
+        if (status.includes('FAIL') || status.includes('ERROR')) {
+            console.error('❌ ESM Slim Bundle Integration Tests Failed!');
+            failed = true;
+        } else {
+            console.log('✅ ESM Slim Bundle Integration Tests Passed!');
+        }
+    } catch (err) {
+        console.error(`❌ ESM Slim Test execution failed: ${err.message}`);
         failed = true;
     }
 

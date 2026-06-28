@@ -517,7 +517,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
 
         // Traverse children of paragraph (runs, hyperlinks, etc.)
         const processChildNode = (node: Node) => {
-            if (isElement(node) && node.nodeName === 'w:r') {
+            if (isElement(node) && (node.nodeName === 'w:r' || node.nodeName === 'm:r')) {
                 const runNode = node;
                 const rPr = getFirstElementByTagName(runNode, "w:rPr");
 
@@ -561,7 +561,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                     // also handle unprefixed version (mirroring the behaviour of getElementsByTagName)
 
                     // Text content
-                    if (child.tagName === "w:t" || child.tagName === "t") {
+                    if (child.tagName === "w:t" || child.tagName === "t" || child.tagName === "m:t") {
                         const tNode = child;
 
                         const tContent = tNode.textContent || '';
