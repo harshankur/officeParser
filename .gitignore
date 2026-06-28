@@ -15,6 +15,8 @@ officeParser.bk.js
 /test/cli/results/
 /test/cli/output/
 sbom.cdx.json
+/release_assets/
+/.gh-config/
 scratch
 repro
 .npm-cache

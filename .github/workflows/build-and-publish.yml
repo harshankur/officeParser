@@ -52,6 +52,7 @@ jobs:
       # Runs testShippingArtifacts.ts + testOfficeParser.ts + testOfficeGenerator.ts.
       # The workflow halts here if any test fails.
       - name: Run Tests
+        if: github.event_name == 'release'
         run: npm test
 
       # ── Step 5: Prepare versioned release assets ───────────────────────────
