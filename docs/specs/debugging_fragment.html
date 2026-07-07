@@ -189,6 +189,10 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
                 <td>ZIP extraction failed or limit exceeded</td>
                 <td>Increase <code>decompressionLimits.maxUncompressedBytes</code> or <code>decompressionLimits.maxZipEntries</code></td>
             </tr>
+            <tr>
+                <td>Images missing from generated EPUB</td>
+                <td>Pass <code>extractAttachments: true</code> on the parse step — without it there are no image bytes for the EPUB generator to package. <code>OfficeConverter.convert()</code> sets this automatically.</td>
+            </tr>
         </tbody>
     </table>
 </div>

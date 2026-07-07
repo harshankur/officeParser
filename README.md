@@ -2,9 +2,9 @@
 
 A robust, strictly-typed **Node.js and Browser** library for parsing office files into a rich **Abstract Syntax Tree (AST)** and generating high-fidelity output in multiple formats.
 
-**Parses:** [`docx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`odt`](https://en.wikipedia.org/wiki/OpenDocument) · [`odp`](https://en.wikipedia.org/wiki/OpenDocument) · [`ods`](https://en.wikipedia.org/wiki/OpenDocument) · [`pdf`](https://en.wikipedia.org/wiki/PDF) · [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format) · [`csv`](https://en.wikipedia.org/wiki/Comma-separated_values) · [`md`](https://en.wikipedia.org/wiki/Markdown) · [`html`](https://en.wikipedia.org/wiki/HTML)
+**Parses:** [`docx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`odt`](https://en.wikipedia.org/wiki/OpenDocument) · [`odp`](https://en.wikipedia.org/wiki/OpenDocument) · [`ods`](https://en.wikipedia.org/wiki/OpenDocument) · [`pdf`](https://en.wikipedia.org/wiki/PDF) · [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format) · [`csv`](https://en.wikipedia.org/wiki/Comma-separated_values) · [`md`](https://en.wikipedia.org/wiki/Markdown) · [`html`](https://en.wikipedia.org/wiki/HTML) · [`epub`](https://en.wikipedia.org/wiki/EPUB)
 
-**Generates:** `Markdown` · `HTML` · `CSV` · `RTF` · `PDF` · `Plain Text` · `RAG Chunks`
+**Generates:** `Markdown` · `HTML` · `CSV` · `RTF` · `PDF` · `EPUB` · `Plain Text` · `RAG Chunks`
 
 [![npm version](https://badge.fury.io/js/officeparser.svg)](https://badge.fury.io/js/officeparser)
 [![Total Downloads](https://img.shields.io/npm/dt/officeparser.svg)](https://www.npmjs.com/package/officeparser)
@@ -42,6 +42,8 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 - [Native RAG Chunking](#native-rag-chunking)
 - [The AST Structure](#the-ast-structure)
 - [Deep Dive: Document Components](#deep-dive-document-components)
+- [Markdown Dialect Support](#markdown-dialect-support)
+- [EPUB Support](#epub-support)
 - [Performance Highlights](#performance-highlights)
 - [Advanced AST Usage](#advanced-ast-usage)
 - [Configuration Reference](#configuration-reference)
@@ -93,6 +95,9 @@ npx officeparser data.xlsx --to=csv --csvDelimiter=";"
 # Generate RAG chunks
 npx officeparser document.pdf --to=chunks
 
+# Convert DOCX to EPUB (--extractAttachments is required to embed images)
+npx officeparser book.docx --extractAttachments --to=epub --output=book.epub
+
 # Overriding file extension mapping
 npx officeparser my_document --fileType=docx --to=json
 ```
@@ -106,9 +111,9 @@ npx officeparser my_document --fileType=docx --to=json
 
 | Flag | Values | Default | Description |
 |------|--------|---------|-------------|
-| `--to` | `json\|text\|md\|html\|csv\|rtf\|pdf\|chunks` | `json` | Output format |
+| `--to` | `json\|text\|md\|html\|csv\|rtf\|pdf\|epub\|chunks` | `json` | Output format |
 | `--output` | path | — | Write output to a file |
-| `--fileType` | `docx\|xlsx\|pptx\|odt\|odp\|ods\|pdf\|rtf\|csv\|md\|html` | — | Explicitly override input file type detection |
+| `--fileType` | `docx\|xlsx\|pptx\|odt\|odp\|ods\|pdf\|rtf\|csv\|md\|html\|epub` | — | Explicitly override input file type detection |
 | `--ocr` | boolean | `false` | Enable OCR for images |
 | `--extractAttachments` | boolean | `false` | Extract images/charts as Base64 |
 | `--ignoreNotes` | boolean | `false` | Ignore footnotes/endnotes/speaker notes |
@@ -126,7 +131,7 @@ npx officeparser my_document --fileType=docx --to=json
 | `--includeFormatting` | boolean | `true` | Include formatting style map matching |
 | `--renderMetadata` | boolean | `false` | Render metadata as visible content in the generated output |
 | `--htmlConfig.containerWidth` | string \| number | `auto` | HTML output container width (e.g. `900px`, `100%`) |
-| ~~`--format`~~ | `json\|text\|md\|html\|csv\|rtf\|pdf\|chunks` | `json` | **Deprecated.** Use `--to` |
+| ~~`--format`~~ | `json\|text\|md\|html\|csv\|rtf\|pdf\|epub\|chunks` | `json` | **Deprecated.** Use `--to` |
 | ~~`--toText`~~ | `true\|false` | `false` | **Deprecated.** Use `--to=text` |
 | ~~`--ocrLanguage`~~ | string | `eng` | **Deprecated.** Use `--ocrConfig.language` |
 | ~~`--putNotesAtLast`~~ | `true\|false` | `false` | **Deprecated and ignored.** Notes are attached structurally to their nodes. |
@@ -306,13 +311,16 @@ const { value: html } = await OfficeGenerator.generate(ast, 'html', {
 const { value: csv } = await OfficeGenerator.generate(ast, 'csv');
 ```
 
-**Supported destinations:** `'text'` · `'md'` · `'html'` · `'csv'` · `'rtf'` · `'pdf'` · `'chunks'`
+**Supported destinations:** `'text'` · `'md'` · `'html'` · `'csv'` · `'rtf'` · `'pdf'` · `'epub'` · `'chunks'`
 
 > [!NOTE]
 > **PDF generation** requires the optional `puppeteer` peer dependency:
 > ```bash
 > npm install puppeteer
 > ```
+>
+> **EPUB generation with images** requires `extractAttachments: true` on the parse step that
+> produced the AST — see [EPUB Support](#epub-support).
 
 ---
 
@@ -440,10 +448,10 @@ interface OfficeChunk {
 
 ```text
 OfficeParserAST
-├── type: 'docx' | 'pdf' | 'xlsx' | 'csv' | 'md' | ...  (11 formats)
+├── type: 'docx' | 'pdf' | 'xlsx' | 'csv' | 'md' | 'epub' | ...  (12 formats)
 ├── metadata: { author, title, created, modified, keywords, customProperties, nativeProperties, styleMap, ... }
 ├── content: [ OfficeContentNode ]
-│   ├── type: 'paragraph' | 'heading' | 'table' | 'list' | 'image' | 'chart' | 'comment' | ...
+│   ├── type: 'paragraph' | 'heading' | 'table' | 'list' | 'image' | 'chart' | 'comment' | 'admonition' | 'embed' | 'definitionList' | ...
 │   ├── text: string  (concatenated text of node + all descendants)
 │   ├── children: [ OfficeContentNode ]  (recursive structural children)
 │   ├── notes: [ OfficeContentNode ]     (footnotes/endnotes/slide notes attached to this node)
@@ -595,6 +603,94 @@ console.log(ast.metadata.nativeProperties);
 // HTML: { description: 'My page', 'og:title': 'Title' }
 // PDF:  { Title: 'Report', XMP: { ... } }
 ```
+
+### 8. Admonitions, Embeds & Definition Lists
+
+```text
+Admonition Node (type: 'admonition')
+├── metadata: { admonitionType: 'note' | 'tip' | 'important' | 'warning' | 'caution', title?: string }
+└── children: [ Paragraph | List | ... ]   (block content)
+
+Embed Node (type: 'embed')
+└── metadata: { embedType: 'youtube', videoId: string, url?: string, width?: string, align?: string }
+
+Definition List Node (type: 'definitionList')
+└── children:
+    ├── Definition Term (type: 'definitionTerm')
+    └── Definition Description (type: 'definitionDescription')
+```
+
+- `admonition` round-trips through both Markdown (`> [!NOTE]` / `:::note ... :::`) and HTML (`<div class="admonition admonition-note" data-type="note">`)
+- `embed` currently models YouTube videos; HTML round-trips via `<div data-youtube-video="ID">`, Markdown falls back to a raw HTML block or a plain link
+- Abbreviations (`*[HTML]: Hypertext Markup Language`) are stored as `TextMetadata.abbreviationTitle` on the abbreviated text node rather than as a separate node type
+
+---
+
+## Markdown Dialect Support
+
+Beyond CommonMark/GFM basics, `MarkdownParser`/`MarkdownGenerator` support an extended dialect aimed at
+full-fidelity round-tripping with rich Markdown editors. Every construct below parses to a first-class
+AST node/metadata field and regenerates back to the canonical syntax shown, so `.md → AST → .md` is
+idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
+
+| Feature | Markdown syntax | AST representation |
+|---|---|---|
+| Task lists (GFM) | `- [x] Done` / `- [ ] Todo` | `ListMetadata.isTask` / `.checked` |
+| Admonitions | `> [!NOTE]` (also accepts GLFM `:::note ... :::` on import) | `type: 'admonition'`, `AdmonitionMetadata` |
+| Footnotes | `Text[^1]` + `[^1]: Definition` | `type: 'note'`, keyed by footnote id |
+| Definition lists | `Term\n: Definition` | `type: 'definitionList'` / `'definitionTerm'` / `'definitionDescription'` |
+| Abbreviations | `*[HTML]: Hypertext Markup Language` | `TextMetadata.abbreviationTitle` |
+| Attribute lists | `![alt](img.png){width=50% .centered}` | `ImageMetadata.width` / `.align`, `TableMetadata.align` |
+| Citations | `[@smith2024]` | `TextMetadata.citationKey` |
+| Wikilinks | `[[Page]]` / `[[Page\|Alias]]` | `TextMetadata.wikilink`, `.link`, `.linkType` |
+| Inline/block math | `$E=mc^2$` / `` $$...$$ `` | `TextMetadata.math` (`'inline' \| 'block'`) |
+| Frontmatter arrays | `tags: [a, b]` or `tags: ["a","b"]` | Real array in `metadata.customProperties`/`nativeProperties` |
+| MDX components (import-only) | `<Component prop="x">...</Component>` | Stripped; inner Markdown is kept. Never generated back. |
+
+> [!NOTE]
+> MDX/JSX stripping is one-directional (parse-only) — officeParser never authors JSX back into Markdown.
+> Wikilink enable/disable and citekey→bibliography resolution are application-level concerns; officeParser
+> always parses/generates the syntax itself.
+
+The same round-trip fidelity extends to HTML, so content saved from a rich-text editor survives a
+save→reload cycle:
+
+| HTML attribute | AST field | Notes |
+|---|---|---|
+| `data-width` / `data-align` / inline `style="width:…"` on `<img>` | `ImageMetadata.width` / `.align` | |
+| `data-align` on `<table>` | `TableMetadata.align` | |
+| `colspan` / `rowspan` on `<td>`/`<th>` | `CellMetadata.colSpan` / `.rowSpan` | Previously dropped on HTML import — merged cells now survive a save→reload cycle |
+| `<div data-youtube-video="ID">` / `<iframe src="...youtube.com...">` | `type: 'embed'` | |
+| `<ul data-type="taskList">` / `<li data-checked>` | `ListMetadata.isTask` / `.checked` | |
+
+---
+
+## EPUB Support
+
+EPUB files are ZIP archives of XHTML content plus an OPF manifest — `EpubParser` unzips the archive,
+resolves the spine's reading order from `content.opf`, and parses each XHTML document through the
+existing `HtmlParser`, so EPUB content shares the same AST shape (and the same Markdown-dialect
+fidelity above) as every other format. Dublin Core metadata (`dc:title`, `dc:creator`, `dc:description`,
+`dc:subject`, `dc:date`, `dc:publisher`, `dc:language`, `dc:identifier`) maps into `ast.metadata` /
+`ast.metadata.nativeProperties`, and cover art is exposed via `metadata.customProperties.coverImageName`.
+
+`EpubGenerator` renders the AST through `HtmlGenerator` and packages the result as a minimal, valid
+EPUB 3 (`mimetype`, `META-INF/container.xml`, an OPF manifest, a nav document, and one XHTML chapter).
+
+> [!IMPORTANT]
+> **Pass `extractAttachments: true` when converting to or from EPUB if the document has images.**
+> Without it, the parser never pulls embedded image bytes out of the source document, so there is
+> nothing for the EPUB generator to package — images silently disappear even though everything else
+> converts correctly. Images are packaged as real zip entries (`OEBPS/images/...`) declared in the OPF
+> manifest, not `data:` URIs — most EPUB reading systems do not render `data:` URIs in image `src`.
+>
+> This only matters for the two-step `OfficeParser.parseOffice()` → `OfficeGenerator.generate()` API
+> and the CLI. [`OfficeConverter.convert()`](#officeconverter-one-step-api) enables `extractAttachments`
+> automatically unless you explicitly set `generatorConfig.includeImages: false`.
+>
+> ```bash
+> npx officeparser book.docx --extractAttachments --to=epub --output=book.epub
+> ```
 
 ---
 

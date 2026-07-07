@@ -20,7 +20,7 @@
         <tbody>
             <tr>
                 <td><code>--to</code></td>
-                <td><code>json | text | md | html | csv | rtf | pdf | chunks</code></td>
+                <td><code>json | text | md | html | csv | rtf | pdf | epub | chunks</code></td>
                 <td><code>json</code></td>
                 <td>The desired output format for the parsed document.</td>
             </tr>
@@ -32,7 +32,7 @@
             </tr>
             <tr>
                 <td><code>--fileType</code></td>
-                <td><code>docx | xlsx | pptx | odt | odp | ods | pdf | rtf | csv | md | html</code></td>
+                <td><code>docx | xlsx | pptx | odt | odp | ods | pdf | rtf | csv | md | html | epub</code></td>
                 <td>—</td>
                 <td>Explicitly override input file type detection (useful when input file lacks extension).</td>
             </tr>
@@ -140,7 +140,7 @@
             </tr>
             <tr>
                 <td><code><del>--format</del></code></td>
-                <td><code>json | text | md | html | csv | rtf | pdf | chunks</code></td>
+                <td><code>json | text | md | html | csv | rtf | pdf | epub | chunks</code></td>
                 <td><code>json</code></td>
                 <td><strong>Deprecated.</strong> Use <code>--to</code> instead.</td>
             </tr>
@@ -182,4 +182,12 @@
 
     <h3>Plain Text Extraction</h3>
     <pre><code>npx officeparser data.pdf --to text --ignoreNotes</code></pre>
+
+    <h3>Convert DOCX to EPUB</h3>
+    <pre><code>npx officeparser book.docx --extractAttachments --to epub --output book.epub</code></pre>
+    <blockquote>
+        [!IMPORTANT]
+        <code>--extractAttachments</code> is required when converting to EPUB if the document has
+        images — without it, no image bytes are available for the EPUB generator to package.
+    </blockquote>
 </div>

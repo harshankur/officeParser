@@ -10,7 +10,8 @@
  * - Portable: PDF
  * - Legacy: RTF (Rich Text Format)
  * - Web/Plain: CSV, MD, HTML
- * 
+ * - E-book: EPUB
+ *
  * **Key Features:**
  * - Unified AST output across all formats
  * - Rich text formatting (bold, italic, colors, fonts, etc.)

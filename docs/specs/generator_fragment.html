@@ -25,21 +25,29 @@ const { value: html } = await OfficeGenerator.generate(ast, 'html', {
 // Convert to CSV
 const { value: csv } = await OfficeGenerator.generate(ast, 'csv');</code></pre>
 
-    <p><strong>Supported destinations:</strong> <code>'text'</code> · <code>'md'</code> · <code>'html'</code> · <code>'csv'</code> · <code>'rtf'</code> · <code>'pdf'</code> · <code>'chunks'</code></p>
+    <p><strong>Supported destinations:</strong> <code>'text'</code> · <code>'md'</code> · <code>'html'</code> · <code>'csv'</code> · <code>'rtf'</code> · <code>'pdf'</code> · <code>'epub'</code> · <code>'chunks'</code></p>
 
     <blockquote>
         [!IMPORTANT]
         <strong>PDF generation</strong> requires the optional <code>puppeteer</code> peer dependency: <code>npm install puppeteer</code>
     </blockquote>
 
+    <blockquote>
+        [!IMPORTANT]
+        <strong>EPUB generation with images</strong> requires <code>extractAttachments: true</code> on the
+        parse step that produced the AST — otherwise there are no image bytes for the EPUB generator to
+        package. <code>OfficeConverter.convert()</code> sets this automatically.
+    </blockquote>
+
     <h2>ast.to() — Shorthand</h2>
     <p>Every <code>OfficeParserAST</code> exposes a <code>.to(destination, config?)</code> method as a shorthand for <code>OfficeGenerator.generate</code>. This is the preferred way when you already have an AST:</p>
     <pre><code>const ast = await OfficeParser.parseOffice('report.docx');
 
-const { value: markdown } = await ast.to('md');
-const { value: html }     = await ast.to('html', { includeFormatting: false });
-const { value: chunks }   = await ast.to('chunks', { strategy: 'fixed-size', chunkSize: 800 });
-const { value: pdfBytes } = await ast.to('pdf'); // returns Uint8Array</code></pre>
+const { value: markdown }  = await ast.to('md');
+const { value: html }      = await ast.to('html', { includeFormatting: false });
+const { value: chunks }    = await ast.to('chunks', { strategy: 'fixed-size', chunkSize: 800 });
+const { value: pdfBytes }  = await ast.to('pdf');  // returns Uint8Array
+const { value: epubBytes } = await ast.to('epub'); // returns Uint8Array</code></pre>
 
     <h2>ConversionResult Reference</h2>
     <p>All generation methods return this object, which includes the output and any diagnostic messages.</p>
@@ -55,7 +63,7 @@ const { value: pdfBytes } = await ast.to('pdf'); // returns Uint8Array</code></p
             <tr>
                 <td><code>value</code></td>
                 <td><code>string | Uint8Array | OfficeChunk[]</code></td>
-                <td>The actual generated content. Type depends on destination: <code>pdf</code> → <code>Uint8Array</code>, <code>chunks</code> → <code>OfficeChunk[]</code>, <code>csv</code> → <code>string | Uint8Array</code>, all others → <code>string</code>.</td>
+                <td>The actual generated content. Type depends on destination: <code>pdf</code> / <code>epub</code> → <code>Uint8Array</code>, <code>chunks</code> → <code>OfficeChunk[]</code>, <code>csv</code> → <code>string | Uint8Array</code>, all others → <code>string</code>.</td>
             </tr>
             <tr>
                 <td><code>messages</code></td>

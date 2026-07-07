@@ -19,7 +19,7 @@
                 <td><code>SupportedFileType</code></td>
                 <td>The type of the parsed file (<code>docx</code>, <code>xlsx</code>, <code>pptx</code>,
                     <code>pdf</code>, <code>rtf</code>, <code>odt</code>, <code>ods</code>, <code>odp</code>,
-                    <code>csv</code>, <code>md</code>, <code>html</code>).</td>
+                    <code>csv</code>, <code>md</code>, <code>html</code>, <code>epub</code>).</td>
             </tr>
             <tr>
                 <td><code>metadata</code></td>
@@ -57,7 +57,7 @@
             <tr>
                 <td><code>to(destination, config?)</code></td>
                 <td><code>Promise&lt;ConversionResult&gt;</code></td>
-                <td><strong>Recommended</strong>: Universal entry point for generation. Converts the AST to <code>text</code>, <code>md</code>, <code>html</code>, <code>csv</code>, <code>rtf</code>, <code>pdf</code>, or <code>chunks</code>. Returns a <code>ConversionResult</code> with <code>{ value, messages }</code>.</td>
+                <td><strong>Recommended</strong>: Universal entry point for generation. Converts the AST to <code>text</code>, <code>md</code>, <code>html</code>, <code>csv</code>, <code>rtf</code>, <code>pdf</code>, <code>epub</code>, or <code>chunks</code>. Returns a <code>ConversionResult</code> with <code>{ value, messages }</code>.</td>
             </tr>
         </tbody>
     </table>
@@ -154,11 +154,14 @@
 
     <h3>2. Tables</h3>
     <ul>
-        <li><strong><code>table</code></strong>: The container. Carries <code>TableMetadata</code> with optional <code>anchorIds</code>.</li>
+        <li><strong><code>table</code></strong>: The container. Carries <code>TableMetadata</code> with optional
+            <code>anchorIds</code> and <code>align</code> (<code>'left' | 'center' | 'right'</code>, round-tripped
+            from HTML <code>data-align</code>).</li>
         <li><strong><code>row</code></strong>: A horizontal group of cells.</li>
         <li><strong><code>cell</code></strong>: A container for other content (paragraphs, images, or even nested
             tables). Use <code>metadata</code> for <code>rowSpan</code>, <code>colSpan</code>, and
-            <code>backgroundColor</code> (populated from DOCX <code>w:shd</code> fills).</li>
+            <code>backgroundColor</code> (populated from DOCX <code>w:shd</code> fills; also read from HTML
+            <code>colspan</code>/<code>rowspan</code> attributes so merged cells survive an HTML round-trip).</li>
     </ul>
 
     <h3>3. Structural Containers</h3>
@@ -193,10 +196,35 @@
             <code>initials</code>, <code>date</code>, <code>commentId</code>.</li>
     </ul>
 
+    <h3>4c. Markdown-Dialect Nodes</h3>
+    <p>These node types are produced by the extended Markdown/HTML dialect support (task lists, admonitions,
+        embeds, definition lists) and round-trip symmetrically between Markdown, HTML, and EPUB.</p>
+    <ul>
+        <li><strong><code>admonition</code></strong>: A callout/alert block (GitHub <code>&gt; [!NOTE]</code> or
+            GLFM <code>:::note ... :::</code> on import). Carries <code>AdmonitionMetadata.admonitionType</code>
+            (<code>'note' | 'tip' | 'important' | 'warning' | 'caution'</code>) and an optional <code>title</code>.
+            Has <code>children</code> for its block content.</li>
+        <li><strong><code>embed</code></strong>: A rich embed such as a YouTube video. Carries
+            <code>EmbedMetadata</code>: <code>embedType</code>, <code>videoId</code>, <code>url</code>,
+            <code>width</code>, <code>align</code>.</li>
+        <li><strong><code>definitionList</code></strong> / <strong><code>definitionTerm</code></strong> /
+            <strong><code>definitionDescription</code></strong>: Markdown Extra-style definition lists
+            (<code>Term\n: Definition</code>). The list node's <code>children</code> alternate term and
+            description nodes.</li>
+        <li><strong><code>list</code></strong> task-list items: <code>ListMetadata.isTask</code> and
+            <code>.checked</code> mark a GFM task-list item (<code>- [x] Done</code>).</li>
+        <li>Text-node metadata additions: <code>TextMetadata.citationKey</code> (Pandoc/MultiMarkdown
+            <code>[@key]</code>), <code>.wikilink</code> (Obsidian <code>[[page]]</code>),
+            <code>.math</code> (<code>'inline' | 'block'</code> LaTeX), and <code>.abbreviationTitle</code>
+            (Markdown Extra <code>*[HTML]: ...</code> abbreviations).</li>
+    </ul>
+
     <h3>4. Rich Content</h3>
     <ul>
         <li><strong><code>image</code></strong>: References an item in the root <code>attachments</code> array via
-            <code>metadata.attachmentName</code>.</li>
+            <code>metadata.attachmentName</code>. Also carries optional <code>width</code> and
+            <code>align</code> (<code>'left' | 'center' | 'right'</code>), round-tripped from HTML
+            <code>data-width</code>/<code>data-align</code> or an inline <code>style="width:..."</code>.</li>
         <li><strong><code>chart</code></strong>: References a chart attachment. Contains structured
             <code>chartData</code> in metadata if requested.</li>
     </ul>
