@@ -28,6 +28,7 @@ import { BaseGenerator } from './BaseGenerator.js';
 export class MarkdownGenerator extends BaseGenerator<'md'> {
     private isInsideTable = false;
     private hoistedContent: string[] = [];
+    private collectedAbbreviations = new Map<string, string>();
 
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'md'>) {
         super('md', ast, config);
@@ -124,6 +125,12 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             }
                             text = `[${text}](${link})`;
                         }
+                    }
+                    if (meta?.abbreviationTitle) {
+                        // Markdown Extra's abbreviation syntax has no inline marker - the bare
+                        // word round-trips as-is, with its expansion collected at the document
+                        // end via `*[abbr]: title`.
+                        this.collectedAbbreviations.set(node.text || '', meta.abbreviationTitle);
                     }
                     return text;
                 }
@@ -276,6 +283,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     return `> [!${label}]\n${quotedLines}\n\n`;
                 }
 
+                case 'definitionList':
+                    return `${childrenOutput}\n`;
+
+                case 'definitionTerm':
+                    return `${childrenOutput}\n`;
+
+                case 'definitionDescription':
+                    return `: ${childrenOutput}\n`;
+
                 default:
                     return childrenOutput;
             }
@@ -307,6 +323,13 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 notesMd += await this.processNodeRecursive(note, processor);
             }
             output += notesMd;
+        }
+
+        if (this.collectedAbbreviations.size > 0) {
+            output += '\n\n';
+            for (const [abbr, title] of this.collectedAbbreviations) {
+                output += `*[${abbr}]: ${title}\n`;
+            }
         }
 
         return {

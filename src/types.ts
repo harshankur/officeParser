@@ -1121,7 +1121,7 @@ export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods'
 /**
  * Types of content nodes in the AST.
  */
-export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster' | 'embed' | 'admonition';
+export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster' | 'embed' | 'admonition' | 'definitionList' | 'definitionTerm' | 'definitionDescription';
 
 /**
  * Supported MIME types for attachments.
@@ -1529,6 +1529,13 @@ export interface TextMetadata {
      * - 'external': Link to an external URL
      */
     linkType?: 'internal' | 'external';
+
+    /**
+     * When set, this text is an abbreviation and this is its full-form expansion,
+     * rendered as `<abbr title="...">`. Populated from Markdown Extra's
+     * `*[HTML]: Hypertext Markup Language` syntax or an HTML `<abbr>` tag.
+     */
+    abbreviationTitle?: string;
 }
 
 /**
@@ -1742,6 +1749,9 @@ export type OfficeContentNode = BaseContentNode & (
     | { type: 'slideMaster'; metadata?: SlideMetadata }
     | { type: 'embed'; metadata?: EmbedMetadata }
     | { type: 'admonition'; metadata?: AdmonitionMetadata }
+    | { type: 'definitionList'; metadata?: undefined }
+    | { type: 'definitionTerm'; metadata?: undefined }
+    | { type: 'definitionDescription'; metadata?: undefined }
 );
 
 /**
