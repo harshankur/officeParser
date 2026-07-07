@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -55,6 +55,19 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 : JSON.stringify(item)
         );
         return `[${items.join(', ')}]`;
+    }
+
+    /**
+     * Renders a Pandoc-style attribute list (e.g. `{width=50% align=left}`) from
+     * ImageMetadata/TableMetadata's width/align fields - the canonical form is always
+     * `key=value`, matching MarkdownParser's own vocabulary (MARKDOWN_DIALECT.md §15).
+     */
+    private renderAttributeList(meta: { width?: string; align?: string } | undefined): string {
+        if (!meta?.width && !meta?.align) return '';
+        const parts: string[] = [];
+        if (meta.width) parts.push(`width=${meta.width}`);
+        if (meta.align) parts.push(`align=${meta.align}`);
+        return `{${parts.join(' ')}}`;
     }
 
     /**
@@ -206,12 +219,22 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     }
 
                     const anchors = this.renderAnchors(meta);
-                    return `${anchors}${anchors ? '\n' : ''}![${alt}](${src})`;
+                    return `${anchors}${anchors ? '\n' : ''}![${alt}](${src})${this.renderAttributeList(meta)}`;
                 }
 
                 case 'table': {
                     const anchors = this.renderAnchors(node.metadata);
                     const tableOutput = await this.renderMarkdownTable(node, processor);
+                    // The HTML-fallback path (merged cells/nested tables) already carries
+                    // data-align on the <table> tag directly - only the plain pipe-table
+                    // form needs the attribute-list syntax to express alignment.
+                    const usedHtmlFallback = this.config.mdConfig.fallbackToHtml && (this.hasNestedTable(node) || this.hasColspanOrRowspan(node));
+                    const attrList = usedHtmlFallback ? '' : this.renderAttributeList(node.metadata as TableMetadata);
+                    if (attrList) {
+                        // Must glue directly below the last row with no blank line, or
+                        // MarkdownParser's block splitter won't see it as part of the same block.
+                        return `${anchors}${anchors ? '\n' : ''}${tableOutput.replace(/\n+$/, '\n')}${attrList}\n`;
+                    }
                     return `${anchors}${anchors ? '\n' : ''}${tableOutput}`;
                 }
 
