@@ -106,6 +106,18 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
     }
 
+    // Strip MDX/JSX component tags (parse-only - we never author MDX). Components are
+    // distinguished from plain HTML by an uppercase-leading tag name, matching React/MDX
+    // convention. Self-closing components are removed entirely; paired components keep
+    // their inner Markdown content. Iterate to a fixed point so nested components (of
+    // different names) are all unwrapped, not just the outermost one.
+    let previousTextStr;
+    do {
+        previousTextStr = textStr;
+        textStr = textStr.replace(/<[A-Z][A-Za-z0-9]*(?:\s+[^>]*?)?\/>/g, '');
+        textStr = textStr.replace(/<([A-Z][A-Za-z0-9]*)(?:\s+[^>]*?)?>([\s\S]*?)<\/\1>/g, (_m, _name, inner) => inner);
+    } while (textStr !== previousTextStr);
+
     // Extract code blocks first to protect their contents
     const codeBlocks: string[] = [];
     textStr = textStr.replace(/^```(\w*)\n([\s\S]*?)\n```/gm, (match, lang, code) => {
