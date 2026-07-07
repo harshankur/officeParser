@@ -5,6 +5,56 @@ import { HtmlGenerator } from './HtmlGenerator.js';
 
 const VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
 
+/** Block-level tags whose HTML5 content model does not permit them inside a <p>. */
+const BLOCK_TAGS_INVALID_IN_P = ['div', 'table', 'ul', 'ol', 'dl', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'section', 'figure'];
+
+/**
+ * HTML5's content model forbids block elements inside <p> (a <p> can only hold "phrasing
+ * content"), but browsers silently fix this via the HTML5 parsing algorithm's
+ * auto-closing rule: seeing a block start tag implicitly closes the open <p> first.
+ * XML parsers have no such rule - they just build the tree exactly as written. Since
+ * HtmlGenerator always wraps images in `<div class="image-container">`, a paragraph
+ * whose only child is an image becomes `<p><div>...</div></p>`: well-formed XML, but
+ * many EPUB rendering engines refuse to lay out a block box found inside a paragraph and
+ * simply drop it - silently, with no parse error, which is why the image vanishes.
+ *
+ * Fixes this by promoting any `<p ...>` that contains a nested block tag to a `<div ...>`
+ * instead, matching what a browser's auto-correction effectively produces. Paragraphs
+ * don't nest, so the first `</p>` after each `<p>` is always its match.
+ */
+const promoteParagraphsWithBlockContent = (html: string): string => {
+    const blockTagPattern = new RegExp(`<(?:${BLOCK_TAGS_INVALID_IN_P.join('|')})\\b`, 'i');
+    let result = '';
+    let cursor = 0;
+    const pOpenRegex = /<p(\s[^>]*)?>/gi;
+    let match: RegExpExecArray | null;
+
+    while ((match = pOpenRegex.exec(html)) !== null) {
+        if (match.index < cursor) continue; // inside content already emitted by a prior promotion
+
+        result += html.slice(cursor, match.index);
+        const contentStart = match.index + match[0].length;
+        const closeMatch = /<\/p>/i.exec(html.slice(contentStart));
+        if (!closeMatch) {
+            // No closing tag found (shouldn't happen with well-formed generator output) -
+            // leave as-is rather than risk corrupting the rest of the document.
+            result += match[0];
+            cursor = contentStart;
+            pOpenRegex.lastIndex = cursor;
+            continue;
+        }
+
+        const inner = html.slice(contentStart, contentStart + closeMatch.index);
+        const attrs = match[1] || '';
+        result += blockTagPattern.test(inner) ? `<div${attrs}>${inner}</div>` : `<p${attrs}>${inner}</p>`;
+
+        cursor = contentStart + closeMatch.index + closeMatch[0].length;
+        pOpenRegex.lastIndex = cursor;
+    }
+    result += html.slice(cursor);
+    return result;
+};
+
 /**
  * Converts HtmlGenerator's HTML output into well-formed XHTML, which EPUB reading
  * systems parse as strict XML (unlike browsers, which tolerate HTML's looseness).
@@ -14,6 +64,9 @@ const VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', '
  *  - strips `<style>`/`<script>` blocks — browser page-chrome CSS and chart-init JS that
  *    a reading system ignores anyway, and whose CSS comments / JS operators contain raw
  *    `&` and `<` that are illegal as XML character data;
+ *  - promotes `<p>` tags that contain nested block content (see
+ *    promoteParagraphsWithBlockContent above) to `<div>`, since XML readers don't apply
+ *    HTML5's auto-closing correction that hides this in a browser;
  *  - normalises HTML named entities (`&nbsp;`) to numeric references, since XML predefines
  *    only `&amp;`/`&lt;`/`&gt;`/`&quot;`/`&apos;`;
  *  - escapes stray ampersands (e.g. in `href` query strings) not already part of a valid
@@ -25,6 +78,8 @@ const toXhtml = (html: string): string => {
     let out = html
         .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
         .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+
+    out = promoteParagraphsWithBlockContent(out);
 
     // Named -> numeric entities (nbsp is the only named entity HtmlGenerator emits).
     out = out.replace(/&nbsp;/g, '&#160;');
