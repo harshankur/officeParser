@@ -1,6 +1,7 @@
 import { BaseGenerator } from './generators/BaseGenerator.js';
 import { ChunkingGenerator } from './generators/ChunkingGenerator.js';
 import { CsvGenerator } from './generators/CsvGenerator.js';
+import { EpubGenerator } from './generators/EpubGenerator.js';
 import { HtmlGenerator } from './generators/HtmlGenerator.js';
 import { MarkdownGenerator } from './generators/MarkdownGenerator.js';
 import { PdfGenerator } from './generators/PdfGenerator.js';
@@ -62,6 +63,9 @@ export class OfficeGenerator {
                 break;
             case 'chunks':
                 generator = new ChunkingGenerator(ast, config as GeneratorConfig<'chunks'>);
+                break;
+            case 'epub':
+                generator = new EpubGenerator(ast, config as GeneratorConfig<'epub'>);
                 break;
             default:
                 throw getOfficeError(OfficeErrorType.FORMAT_UNSUPPORTED, undefined, destination);
