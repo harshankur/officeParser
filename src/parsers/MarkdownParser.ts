@@ -146,11 +146,33 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return '';
     });
 
+    // Parses a Pandoc-style attribute list body (the part inside `{...}`), e.g.
+    // `width=50% .centered` or `align=right`. Per MARKDOWN_DIALECT.md §15's Decisions,
+    // the vocabulary matches ImageMetadata/TableMetadata's own width/align fields;
+    // several class-name spellings are accepted on import for compatibility with
+    // hand-written content, but the generator only ever emits canonical `align=value`.
+    const parseAttributeList = (attrStr: string): { width?: string; align?: 'left' | 'center' | 'right' } => {
+        const result: { width?: string; align?: 'left' | 'center' | 'right' } = {};
+        for (const token of attrStr.trim().split(/\s+/).filter(Boolean)) {
+            const kv = token.match(/^([a-zA-Z-]+)=(.+)$/);
+            if (kv) {
+                if (kv[1] === 'width') result.width = kv[2];
+                else if (kv[1] === 'align' && ['left', 'center', 'right'].includes(kv[2])) result.align = kv[2] as any;
+            } else if (token.startsWith('.')) {
+                const cls = token.slice(1).toLowerCase();
+                if (cls === 'left' || cls === 'align-left') result.align = 'left';
+                else if (cls === 'center' || cls === 'centered' || cls === 'align-center') result.align = 'center';
+                else if (cls === 'right' || cls === 'align-right') result.align = 'right';
+            }
+        }
+        return result;
+    };
+
     const parseInline = (text: string, currentFormatting: TextFormatting = {}): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
 
-        // Regex matches: 1=!, 2=alt, 3=url | 4=bold | 5=italic | 6=strike | 7=code | 8=underline | 9=subscript | 10=superscript | 11=footnote id
-        const regex = /(!?)\[(.*?)\]\((.*?)\)|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|<u>(.+?)<\/u>|<sub>(.+?)<\/sub>|<sup>(.+?)<\/sup>|\[\^([^\]]+)\]/g;
+        // Regex matches: 1=!, 2=alt, 3=url, 4=attrs | 5=bold | 6=italic | 7=strike | 8=code | 9=underline | 10=subscript | 11=superscript | 12=footnote id
+        const regex = /(!?)\[(.*?)\]\((.*?)\)(?:\{([^}]*)\})?|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|<u>(.+?)<\/u>|<sub>(.+?)<\/sub>|<sup>(.+?)<\/sup>|\[\^([^\]]+)\]/g;
         let lastIndex = 0;
         let match;
 
@@ -163,6 +185,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 const isImage = match[1] === '!';
                 const altText = match[2];
                 const url = match[3];
+                // Pandoc-style attribute list immediately after an image, e.g. {width=50% .centered}
+                const attrs = isImage && match[4] !== undefined ? parseAttributeList(match[4]) : undefined;
                 if (isImage) {
                     if (url.startsWith('data:')) {
                         const dataMatch = url.match(/^data:([^;]+);base64,(.*)$/);
@@ -177,12 +201,12 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                                 name,
                                 extension: mimeType.split('/')[1]
                             });
-                            nodes.push({ type: 'image', metadata: { attachmentName: name, altText } as ImageMetadata });
+                            nodes.push({ type: 'image', metadata: { attachmentName: name, altText, ...attrs } as ImageMetadata });
                         } else {
-                            nodes.push({ type: 'image', metadata: { url, altText } as ImageMetadata });
+                            nodes.push({ type: 'image', metadata: { url, altText, ...attrs } as ImageMetadata });
                         }
                     } else {
-                        nodes.push({ type: 'image', metadata: { url, altText } as ImageMetadata });
+                        nodes.push({ type: 'image', metadata: { url, altText, ...attrs } as ImageMetadata });
                     }
                 } else {
                     const linkNodes = parseInline(altText, currentFormatting);
@@ -193,22 +217,22 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     });
                     nodes.push(...linkNodes);
                 }
-            } else if (match[4]) { // Bold
-                nodes.push(...parseInline(match[4], { ...currentFormatting, bold: true }));
-            } else if (match[5]) { // Italic
-                nodes.push(...parseInline(match[5], { ...currentFormatting, italic: true }));
-            } else if (match[6]) { // Strikethrough
-                nodes.push(...parseInline(match[6], { ...currentFormatting, strikethrough: true }));
-            } else if (match[7]) { // Inline Code
-                nodes.push({ type: 'text', text: match[7], formatting: { ...currentFormatting, font: 'monospace' } });
-            } else if (match[8]) { // Underline
-                nodes.push(...parseInline(match[8], { ...currentFormatting, underline: true }));
-            } else if (match[9]) { // Subscript
-                nodes.push(...parseInline(match[9], { ...currentFormatting, subscript: true }));
-            } else if (match[10]) { // Superscript
-                nodes.push(...parseInline(match[10], { ...currentFormatting, superscript: true }));
-            } else if (match[11]) { // Footnote reference
-                const noteId = match[11];
+            } else if (match[5]) { // Bold
+                nodes.push(...parseInline(match[5], { ...currentFormatting, bold: true }));
+            } else if (match[6]) { // Italic
+                nodes.push(...parseInline(match[6], { ...currentFormatting, italic: true }));
+            } else if (match[7]) { // Strikethrough
+                nodes.push(...parseInline(match[7], { ...currentFormatting, strikethrough: true }));
+            } else if (match[8]) { // Inline Code
+                nodes.push({ type: 'text', text: match[8], formatting: { ...currentFormatting, font: 'monospace' } });
+            } else if (match[9]) { // Underline
+                nodes.push(...parseInline(match[9], { ...currentFormatting, underline: true }));
+            } else if (match[10]) { // Subscript
+                nodes.push(...parseInline(match[10], { ...currentFormatting, subscript: true }));
+            } else if (match[11]) { // Superscript
+                nodes.push(...parseInline(match[11], { ...currentFormatting, superscript: true }));
+            } else if (match[12]) { // Footnote reference
+                const noteId = match[12];
                 const definition = footnoteDefinitions.get(noteId);
                 const noteChildren = definition !== undefined ? parseInline(definition) : [];
                 const noteNode: OfficeContentNode = {
@@ -537,6 +561,16 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
         // Table (Simple Pipe or HTML)
         if ((block.includes('|') && block.match(/\n\s*\|?[-:| ]+\|?\s*\n/)) || block.includes('<table')) {
+            // Pandoc-style trailing attribute list (`{align=right}`) immediately after the
+            // table, or Kramdown's `{: align=right}` on its own following line - both land
+            // in this same raw block since there's no blank line separating them.
+            let tableAlign: 'left' | 'center' | 'right' | undefined;
+            const tableAttrLineMatch = block.match(/\n\{:?\s*([^}]*)\}\s*$/);
+            if (tableAttrLineMatch) {
+                tableAlign = parseAttributeList(tableAttrLineMatch[1]).align;
+                block = block.slice(0, tableAttrLineMatch.index);
+            }
+
             if (block.includes('<table')) {
                 // Basic HTML table recognition (extracting rows/cells)
                 const tableTagMatch = block.match(/<table([^>]*)>/i);
@@ -566,10 +600,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     }
                     if (cells.length > 0) rows.push({ type: 'row', children: cells });
                 }
+                const resolvedAlign = tableAlign || (tableAlignMatch ? tableAlignMatch[1].toLowerCase() as 'left' | 'center' | 'right' : undefined);
                 if (rows.length > 0) {
                     content.push({
                         type: 'table',
-                        metadata: tableAlignMatch ? { align: tableAlignMatch[1].toLowerCase() as 'left' | 'center' | 'right' } : undefined,
+                        metadata: resolvedAlign ? { align: resolvedAlign } : undefined,
                         children: rows
                     });
                     continue;
@@ -587,7 +622,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     }));
                     rows.push({ type: 'row', children: cells });
                 }
-                content.push({ type: 'table', children: rows });
+                content.push({ type: 'table', metadata: tableAlign ? { align: tableAlign } : undefined, children: rows });
                 continue;
             }
         }
