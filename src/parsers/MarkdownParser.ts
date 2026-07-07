@@ -127,11 +127,21 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return `\n\n${id}\n\n`;
     });
 
+    // Extract footnote definitions (`[^id]: text`) before block splitting, since
+    // definitions conventionally live at the end of the document, after every place
+    // they're referenced - inline parsing below needs the full map upfront. v1 only
+    // supports single-line definitions (MultiMarkdown/Pandoc/GLFM's common baseline).
+    const footnoteDefinitions = new Map<string, string>();
+    textStr = textStr.replace(/^\[\^([^\]]+)\]:[ \t]*(.*)$/gm, (_match, id, definition) => {
+        footnoteDefinitions.set(id, definition.trim());
+        return '';
+    });
+
     const parseInline = (text: string, currentFormatting: TextFormatting = {}): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
 
-        // Regex matches: 1=!, 2=alt, 3=url | 4=bold | 5=italic | 6=strike | 7=code | 8=underline | 9=subscript | 10=superscript
-        const regex = /(!?)\[(.*?)\]\((.*?)\)|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|<u>(.+?)<\/u>|<sub>(.+?)<\/sub>|<sup>(.+?)<\/sup>/g;
+        // Regex matches: 1=!, 2=alt, 3=url | 4=bold | 5=italic | 6=strike | 7=code | 8=underline | 9=subscript | 10=superscript | 11=footnote id
+        const regex = /(!?)\[(.*?)\]\((.*?)\)|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|<u>(.+?)<\/u>|<sub>(.+?)<\/sub>|<sup>(.+?)<\/sup>|\[\^([^\]]+)\]/g;
         let lastIndex = 0;
         let match;
 
@@ -188,6 +198,25 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 nodes.push(...parseInline(match[9], { ...currentFormatting, subscript: true }));
             } else if (match[10]) { // Superscript
                 nodes.push(...parseInline(match[10], { ...currentFormatting, superscript: true }));
+            } else if (match[11]) { // Footnote reference
+                const noteId = match[11];
+                const definition = footnoteDefinitions.get(noteId);
+                const noteChildren = definition !== undefined ? parseInline(definition) : [];
+                const noteNode: OfficeContentNode = {
+                    type: 'note',
+                    text: noteChildren.map(c => c.text || '').join(''),
+                    children: noteChildren,
+                    metadata: { noteType: 'footnote', noteId }
+                };
+                // Notes attach to the preceding text node (matches WordParser's convention);
+                // fall back to an empty text node if the reference opens the inline run.
+                if (nodes.length > 0) {
+                    const target = nodes[nodes.length - 1];
+                    if (!target.notes) target.notes = [];
+                    target.notes.push(noteNode);
+                } else {
+                    nodes.push({ type: 'text', text: '', notes: [noteNode] });
+                }
             }
 
             lastIndex = regex.lastIndex;
