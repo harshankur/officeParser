@@ -44,7 +44,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 for (const note of footnotes) {
                     footnotesHtml += await this.processNodeRecursive(note, this.nodeProcessor.bind(this));
                 }
-                bodyContent += `\n<section data-footnotes>\n${footnotesHtml}\n</section>\n`;
+                // data-footnotes carries an explicit empty value (not a bare attribute) so
+                // the markup is valid XHTML too - EpubGenerator embeds this verbatim, and
+                // XML rejects valueless attributes. HtmlParser only checks for presence.
+                bodyContent += `\n<section data-footnotes="">\n${footnotesHtml}\n</section>\n`;
             }
 
             if (otherNotes.length > 0) {
