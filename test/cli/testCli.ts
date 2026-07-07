@@ -505,8 +505,8 @@ async function runTests() {
         results.push({ name: 'CLI: deprecated option prints warning', status: 'FAIL', details: 'Expected warning message in stderr not found', duration: d26 });
     }
 
-    // 27-37: Parity comparison against baseline parser outputs for all 11 formats
-    const extensions = ['docx', 'odt', 'xlsx', 'ods', 'pptx', 'odp', 'pdf', 'rtf', 'csv', 'html', 'md'];
+    // 27-38: Parity comparison against baseline parser outputs for all 12 formats
+    const extensions = ['docx', 'odt', 'xlsx', 'ods', 'pptx', 'odp', 'pdf', 'rtf', 'csv', 'html', 'md', 'epub'];
     for (let idx = 0; idx < extensions.length; idx++) {
         const ext = extensions[idx];
         const testNum = 27 + idx;
