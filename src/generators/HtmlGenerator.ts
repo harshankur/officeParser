@@ -1,4 +1,4 @@
-import { CellMetadata, CodeMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageMetadata, SlideMetadata, TextMetadata } from '../types.js';
+import { CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageMetadata, SlideMetadata, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -506,7 +506,25 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                         src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
                     }
                 }
-                const img = `<img src="${this.escape(src)}" alt="${this.escape(node.text || meta?.altText || '')}"${className}${mappedAttrs}${styleAttr}>`;
+                // Match CustomImage's exact data-width/data-align + style contract so a loaded
+                // image re-hydrates the editor node without losing size/alignment.
+                let imgDataAttrs = '';
+                const imgStyleParts: string[] = [];
+                const baseImgStyle = this.getInlineStyles(node);
+                if (baseImgStyle) imgStyleParts.push(baseImgStyle);
+                if (meta?.width) {
+                    imgDataAttrs += ` data-width="${this.escape(meta.width)}"`;
+                    imgStyleParts.push(`width: ${meta.width}`);
+                }
+                if (meta?.align) {
+                    imgDataAttrs += ` data-align="${this.escape(meta.align)}"`;
+                    const ml = meta.align === 'left' ? '0' : 'auto';
+                    const mr = meta.align === 'right' ? '0' : 'auto';
+                    imgStyleParts.push('display: block', `margin-left: ${ml}`, `margin-right: ${mr}`);
+                }
+                const imgStyleAttr = imgStyleParts.length > 0 ? ` style="${imgStyleParts.join('; ')}"` : '';
+
+                const img = `<img src="${this.escape(src)}" alt="${this.escape(node.text || meta?.altText || '')}"${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
                 const content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
                 return `${extraAnchors}<div${idAttr}>${content}</div>`;
             }
@@ -645,7 +663,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                         finalChildren = `<thead>${headOutput}</thead><tbody>${bodyOutput}</tbody>`;
                     }
                 }
-                const tableHtml = `<table${idAttr}${className}${mappedAttrs}${styleAttr}>${finalChildren}</table>`;
+                // Match CustomTable's exact data-align + margin style contract so a loaded
+                // table re-hydrates the editor node without losing its layout alignment.
+                const tableMeta = node.metadata as TableMetadata;
+                let tableDataAttrs = '';
+                let tableStyleAttr = styleAttr;
+                if (tableMeta?.align) {
+                    tableDataAttrs = ` data-align="${this.escape(tableMeta.align)}"`;
+                    const ml = tableMeta.align === 'left' ? '0' : 'auto';
+                    const mr = tableMeta.align === 'right' ? '0' : 'auto';
+                    const marginStyle = `margin-left: ${ml}; margin-right: ${mr}`;
+                    tableStyleAttr = styleAttr
+                        ? ` style="${styleAttr.replace(/^ style="|"$/g, '')}; ${marginStyle}"`
+                        : ` style="${marginStyle}"`;
+                }
+                const tableHtml = `<table${idAttr}${className}${mappedAttrs}${tableDataAttrs}${tableStyleAttr}>${finalChildren}</table>`;
                 const result = this.tableNestingLevel > 1 ? tableHtml : `<div class="table-container">${tableHtml}</div>`;
                 return `${extraAnchors}${result}`;
             }
@@ -862,6 +894,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const meta = node.metadata as NoteMetadata;
                 const noteClass = meta?.noteType ? ` note-${meta.noteType}` : '';
                 return `${extraAnchors}<div class="slide-note${noteClass}"${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
+            }
+
+            case 'embed': {
+                // Match the Youtube extension's exact wrapper shape so a loaded embed
+                // re-hydrates the editor's Youtube node.
+                const meta = node.metadata as EmbedMetadata;
+                const id = meta?.videoId || '';
+                const width = meta?.width || '100%';
+                const align = meta?.align || 'center';
+                const ml = align === 'left' ? '0' : 'auto';
+                const mr = align === 'right' ? '0' : 'auto';
+                const iframe = id
+                    ? `<iframe src="https://www.youtube.com/embed/${this.escape(id)}" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>`
+                    : '';
+                return `${extraAnchors}<div data-youtube-video="${this.escape(id)}" data-width="${this.escape(width)}" data-align="${this.escape(align)}" class="youtube-embed"${idAttr}${mappedAttrs} style="width: ${width}; margin-left: ${ml}; margin-right: ${mr};">${iframe}</div>`;
             }
 
             default:

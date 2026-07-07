@@ -1,4 +1,4 @@
-import { ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, TextMetadata } from '../types.js';
+import { ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -233,6 +233,21 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const meta = node.metadata as any;
                     const typeLabel = meta?.noteType === 'footnote' ? 'Footnote' : (meta?.noteType === 'endnote' ? 'Endnote' : 'Note');
                     return `> **${typeLabel}:** ${childrenOutput.trim()}\n\n`;
+                }
+
+                case 'embed': {
+                    // Markdown has no native embed syntax. When fallbackToHtml is on (our save
+                    // default), emit the exact single-line div MarkdownParser recognises on
+                    // reimport; otherwise degrade to a plain link.
+                    const meta = node.metadata as EmbedMetadata;
+                    const id = meta?.videoId || '';
+                    if (this.config.mdConfig.fallbackToHtml) {
+                        const width = meta?.width ? ` data-width="${meta.width}"` : '';
+                        const align = meta?.align ? ` data-align="${meta.align}"` : '';
+                        return `\n<div data-youtube-video="${id}"${width}${align}></div>\n\n`;
+                    }
+                    const url = meta?.url || (id ? `https://youtu.be/${id}` : '');
+                    return url ? `[YouTube](${url})\n\n` : '';
                 }
 
                 default:
@@ -490,7 +505,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     rows += await this.renderTableAsHtml(row, await this.handleOnNode(row));
                 }
             }
-            return `<table>\n${rows}</table>\n`;
+            // Carry table-layout alignment through the HTML fallback so it isn't lost
+            // just because the table also needed HTML for merged cells.
+            const tableMeta = node.metadata as any;
+            const alignAttr = tableMeta?.align ? ` data-align="${tableMeta.align}"` : '';
+            return `<table${alignAttr}>\n${rows}</table>\n`;
         } else if (node.type === 'row') {
             let cells = '';
             if (node.children) {

@@ -1,4 +1,4 @@
-import { CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { CellMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 
@@ -311,6 +311,48 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return kids;
             };
 
+            // YouTube embeds: inscript-editor's Youtube node renders
+            // <div data-youtube-video="ID" data-width="…" data-align="…">…<iframe…></div>.
+            // Recognise both the wrapper div and a bare iframe so externally-authored HTML
+            // (and a saved-then-reopened .md that fell back to raw HTML) both round-trip.
+            if (tagName === 'div' && node.attributes?.['data-youtube-video'] !== undefined) {
+                const videoId = node.attributes['data-youtube-video'] || '';
+                const width = node.attributes?.['data-width'];
+                const embedAlignAttr = node.attributes?.['data-align'];
+                const embedAlign = (['left', 'center', 'right'] as const).includes(embedAlignAttr as any) ? embedAlignAttr as 'left' | 'center' | 'right' : undefined;
+                const embedUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined;
+                const embedNode: OfficeContentNode = {
+                    type: 'embed',
+                    // Childless nodes need .text so generic AST consumers (toText, chunking)
+                    // don't silently drop them.
+                    text: embedUrl,
+                    metadata: {
+                        embedType: 'youtube',
+                        videoId,
+                        url: embedUrl,
+                        width,
+                        align: embedAlign
+                    } as EmbedMetadata
+                };
+                if (config.includeRawContent) embedNode.rawContent = '<div data-youtube-video>...</div>';
+                return embedNode;
+            }
+            if (tagName === 'iframe') {
+                const src = node.attributes?.src || '';
+                const ytMatch = /youtube(?:-nocookie)?\.com/.test(src) ? src.match(/(?:embed\/|v=)([^&?/\s]+)/) : null;
+                if (ytMatch) {
+                    const embedUrl = `https://www.youtube.com/watch?v=${ytMatch[1]}`;
+                    const embedNode: OfficeContentNode = {
+                        type: 'embed',
+                        text: embedUrl,
+                        metadata: { embedType: 'youtube', videoId: ytMatch[1], url: embedUrl } as EmbedMetadata
+                    };
+                    if (config.includeRawContent) embedNode.rawContent = '<iframe>...</iframe>';
+                    return embedNode;
+                }
+                return null;
+            }
+
             // Skip structural containers produced by HtmlGenerator to avoid deep AST nesting
             if (tagName === 'div' && (
                 node.attributes?.class === 'container' ||
@@ -337,7 +379,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const children = parseChildren(node, newFormatting, listContext);
 
                 // If it's a div and contains block elements, return children directly
-                const hasBlockElements = children.some(c => ['paragraph', 'table', 'heading', 'list', 'image', 'chart', 'code'].includes(c.type));
+                const hasBlockElements = children.some(c => ['paragraph', 'table', 'heading', 'list', 'image', 'chart', 'code', 'embed'].includes(c.type));
                 if (tagName === 'div' && hasBlockElements) {
                     return children;
                 }
@@ -435,9 +477,13 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return [selfNode, ...nestedLists];
             }
             if (tagName === 'table') {
+                // CustomTable (inscript-editor) renders data-align on the <table> itself.
+                const tableAlignAttr = node.attributes?.['data-align'];
+                const tableAlign = (['left', 'center', 'right'] as const).includes(tableAlignAttr as any) ? tableAlignAttr as 'left' | 'center' | 'right' : undefined;
+
                 const tableNode: OfficeContentNode = {
                     type: 'table',
-                    metadata: { anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as TableMetadata,
+                    metadata: { anchorIds: anchorIds.length > 0 ? anchorIds : undefined, align: tableAlign } as TableMetadata,
                     children: parseChildren(node, newFormatting, listContext)
                 };
                 if (config.includeRawContent) {
@@ -456,8 +502,19 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return rowNode;
             }
             if (tagName === 'td' || tagName === 'th') {
+                // Merged cells: mirrors the colspan/rowspan reading already done in
+                // MarkdownParser's inline HTML-table handler.
+                const colSpanAttr = node.attributes?.colspan;
+                const rowSpanAttr = node.attributes?.rowspan;
+                const colSpan = colSpanAttr ? parseInt(colSpanAttr, 10) : undefined;
+                const rowSpan = rowSpanAttr ? parseInt(rowSpanAttr, 10) : undefined;
+
                 const cellNode: OfficeContentNode = {
                     type: 'cell',
+                    metadata: {
+                        colSpan: colSpan && !isNaN(colSpan) ? colSpan : undefined,
+                        rowSpan: rowSpan && !isNaN(rowSpan) ? rowSpan : undefined
+                    } as CellMetadata,
                     children: parseChildren(node, newFormatting, listContext)
                 };
                 if (config.includeRawContent) {
@@ -468,6 +525,15 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             if (tagName === 'img') {
                 const src = node.attributes?.src;
                 const alt = node.attributes?.alt;
+
+                // CustomImage (inscript-editor) renders data-width/data-align, falling back to
+                // parsing the inline style for consumers that only emit the CSS.
+                const imgStyle = node.attributes?.style || '';
+                const width = node.attributes?.['data-width'] || imgStyle.match(/width:\s*([^;]+)/)?.[1]?.trim();
+                const alignAttr = node.attributes?.['data-align']
+                    || (imgStyle.includes('margin-left: 0') && !imgStyle.includes('margin-right: 0') ? 'left'
+                        : (imgStyle.includes('margin-right: 0') && !imgStyle.includes('margin-left: 0') ? 'right' : undefined));
+                const align = (['left', 'center', 'right'] as const).includes(alignAttr as any) ? alignAttr as 'left' | 'center' | 'right' : undefined;
 
                 let imageNode: OfficeContentNode;
                 if (src?.startsWith('data:')) {
@@ -487,7 +553,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                             type: 'image',
                             metadata: {
                                 attachmentName: name,
-                                altText: alt
+                                altText: alt,
+                                width,
+                                align
                             } as ImageMetadata
                         };
                     } else {
@@ -495,7 +563,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                             type: 'image',
                             metadata: {
                                 url: src,
-                                altText: alt
+                                altText: alt,
+                                width,
+                                align
                             } as ImageMetadata
                         };
                     }
@@ -505,7 +575,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                         metadata: {
                             url: src,
                             altText: alt,
-                            anchorIds: anchorIds.length > 0 ? anchorIds : undefined
+                            anchorIds: anchorIds.length > 0 ? anchorIds : undefined,
+                            width,
+                            align
                         } as ImageMetadata
                     };
                 }
@@ -595,6 +667,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
         const getText = (node: OfficeContentNode): string => {
             if (node.type === 'text' || node.type === 'code') return node.text || '';
             if (node.type === 'break') return '\n';
+            // Childless nodes still carry meaningful text - fall back to it instead of
+            // silently vanishing from plain-text/RAG-chunk output.
+            if (node.type === 'embed') return (node.metadata as EmbedMetadata)?.url || '';
             if (node.children) {
                 const isBlock = ['table', 'row', 'list', 'sheet', 'slide'].includes(node.type);
                 return node.children.map(getText).join(isBlock ? config.newlineDelimiter : '');

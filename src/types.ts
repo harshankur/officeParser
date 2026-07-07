@@ -1120,7 +1120,7 @@ export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods'
 /**
  * Types of content nodes in the AST.
  */
-export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster';
+export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster' | 'embed';
 
 /**
  * Supported MIME types for attachments.
@@ -1405,6 +1405,11 @@ export interface CellMetadata {
 export interface TableMetadata {
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
+    /**
+     * Layout alignment of the table on the page (e.g. inscript-editor's `CustomTable`).
+     * @example 'center'
+     */
+    align?: 'left' | 'center' | 'right';
 }
 
 
@@ -1451,6 +1456,33 @@ export interface ImageMetadata {
     url?: string;
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
+    /**
+     * Display width of the image (e.g. inscript-editor's `CustomImage`), as a CSS length or percentage.
+     * @example "50%"
+     */
+    width?: string;
+    /**
+     * Layout alignment of the image (e.g. inscript-editor's `CustomImage`).
+     * @example 'center'
+     */
+    align?: 'left' | 'center' | 'right';
+}
+
+/**
+ * Metadata for an embedded external media node (e.g. a YouTube video).
+ * Markdown has no native syntax for this - see `MarkdownGenerator`'s `embed` case.
+ */
+export interface EmbedMetadata {
+    /** The kind of embed. Only 'youtube' is supported today; the shape is generic for future providers. */
+    embedType: 'youtube';
+    /** The provider-specific video ID (e.g. the 11-character YouTube video ID). */
+    videoId: string;
+    /** The original/canonical URL of the embedded media, if known. */
+    url?: string;
+    /** Display width, as a CSS length or percentage. */
+    width?: string;
+    /** Layout alignment of the embed. */
+    align?: 'left' | 'center' | 'right';
 }
 
 /**
@@ -1565,7 +1597,7 @@ export interface HeaderFooterMetadata {
 /**
  * Union type for content metadata.
  */
-export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | CommentMetadata | HeaderFooterMetadata | TableMetadata | undefined;
+export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | CommentMetadata | HeaderFooterMetadata | TableMetadata | EmbedMetadata | undefined;
 
 
 /**
@@ -1696,6 +1728,7 @@ export type OfficeContentNode = BaseContentNode & (
     | { type: 'row'; metadata?: undefined }
     | { type: 'drawing'; metadata?: undefined }
     | { type: 'slideMaster'; metadata?: SlideMetadata }
+    | { type: 'embed'; metadata?: EmbedMetadata }
 );
 
 /**
