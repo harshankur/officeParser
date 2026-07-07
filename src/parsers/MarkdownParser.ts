@@ -171,8 +171,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     const parseInline = (text: string, currentFormatting: TextFormatting = {}): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
 
-        // Regex matches: 1=!, 2=alt, 3=url, 4=attrs | 5=bold | 6=italic | 7=strike | 8=code | 9=underline | 10=subscript | 11=superscript | 12=footnote id | 13=citekey
-        const regex = /(!?)\[(.*?)\]\((.*?)\)(?:\{([^}]*)\})?|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|<u>(.+?)<\/u>|<sub>(.+?)<\/sub>|<sup>(.+?)<\/sup>|\[\^([^\]]+)\]|\[@([a-zA-Z0-9_:.-]+)\]/g;
+        // Regex matches: 1=!, 2=alt, 3=url, 4=attrs | 5=bold | 6=italic | 7=strike | 8=code | 9=underline | 10=subscript | 11=superscript | 12=footnote id | 13=citekey | 14=wikilink page | 15=wikilink alias
+        const regex = /(!?)\[(.*?)\]\((.*?)\)(?:\{([^}]*)\})?|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|<u>(.+?)<\/u>|<sub>(.+?)<\/sub>|<sup>(.+?)<\/sup>|\[\^([^\]]+)\]|\[@([a-zA-Z0-9_:.-]+)\]|\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
         let lastIndex = 0;
         let match;
 
@@ -252,6 +252,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 }
             } else if (match[13]) { // Citation reference
                 nodes.push({ type: 'text', text: match[13], metadata: { citationKey: match[13] } as TextMetadata });
+            } else if (match[14]) { // Wikilink
+                const page = match[14].trim();
+                const alias = match[15]?.trim();
+                nodes.push({ type: 'text', text: alias || page, metadata: { link: page, linkType: 'internal', wikilink: true } as TextMetadata });
             }
 
             lastIndex = regex.lastIndex;

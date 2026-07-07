@@ -999,7 +999,14 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         }
 
         const meta = node.metadata as TextMetadata;
-        if (meta?.link) {
+        if (meta?.wikilink) {
+            // No pinned editor contract yet for wikilinks - data-wikilink-page preserves the
+            // exact page name separately from the display text/alias and from href (which
+            // the host app's resolver may rewrite to a real URL).
+            if (!this.config.ignoreInternalLinks) {
+                result = `<a href="#${this.escape(this.slugify(meta.link || ''))}" data-wikilink-page="${this.escape(meta.link || '')}">${result}</a>`;
+            }
+        } else if (meta?.link) {
             const isInternal = meta.linkType !== 'external';
             if (!this.config.ignoreInternalLinks || !isInternal) {
                 result = `<a href="${meta.link}"${meta.linkType === 'external' ? ' target="_blank"' : ''}>${result}</a>`;
