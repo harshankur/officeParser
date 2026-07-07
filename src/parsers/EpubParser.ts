@@ -121,31 +121,58 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
     const content: OfficeContentNode[] = [];
     const attachments: OfficeAttachment[] = [];
 
+    // Map each in-zip image resource by its resolved path, so inline <img> references can
+    // be resolved to real bytes (EPUB images are separate files referenced by relative
+    // path, unlike DOCX's embedded parts).
+    const imageByPath = new Map<string, { content: Buffer; mediaType: string }>();
+    if (config.extractAttachments) {
+        for (const [, item] of manifest) {
+            if (!item.mediaType.startsWith('image/')) continue;
+            const p = resolveOpfPath(opfDir, item.href);
+            const f = files.find(ff => ff.path === p);
+            if (f) imageByPath.set(p, { content: f.content, mediaType: item.mediaType });
+        }
+    }
+    const referencedImagePaths = new Set<string>();
+
     for (const href of spineHrefs) {
         checkAbortSignal(config.abortSignal);
-        const path = resolveOpfPath(opfDir, href.split('#')[0]);
-        const xhtmlFile = files.find(f => f.path === path);
+        const xhtmlPath = resolveOpfPath(opfDir, href.split('#')[0]);
+        const xhtmlFile = files.find(f => f.path === xhtmlPath);
         if (!xhtmlFile) continue;
 
-        const chapterAst = await parseHtml(xhtmlFile.content, config);
+        let xhtml = xhtmlFile.content.toString('utf-8');
+        if (config.extractAttachments && imageByPath.size > 0) {
+            // Inline each referenced image as a data URI so HtmlParser extracts it as an
+            // attachment (with a real image node linked by name) - the same treatment
+            // DOCX images get, and what makes the image survive conversion to any format.
+            const xhtmlDir = xhtmlPath.includes('/') ? xhtmlPath.substring(0, xhtmlPath.lastIndexOf('/') + 1) : '';
+            xhtml = xhtml.replace(/(<img\b[^>]*\bsrc=")([^"]+)(")/gi, (full, pre, src, post) => {
+                if (/^(data:|https?:|\/\/)/i.test(src)) return full;
+                const resolved = resolveOpfPath(xhtmlDir, src.split('#')[0].split('?')[0]);
+                const img = imageByPath.get(resolved);
+                if (!img) return full;
+                referencedImagePaths.add(resolved);
+                return `${pre}data:${img.mediaType};base64,${img.content.toString('base64')}${post}`;
+            });
+        }
+
+        const chapterAst = await parseHtml(Buffer.from(xhtml, 'utf-8'), config);
         content.push(...chapterAst.content);
         attachments.push(...chapterAst.attachments);
     }
 
-    // ─── Embedded images (manifest items not referenced inline as data URIs) ─
-    // XHTML <img> src attributes point at zip-relative paths, which HtmlParser has no
-    // way to resolve into embedded data - so referenced images stay as a relative-path
-    // ImageMetadata.url. Pull manifest-declared images in as attachments too (tagging the
-    // cover explicitly in customProperties) so at least the raw assets aren't lost.
+    // Keep manifest images that were NOT referenced inline (e.g. cover art, or images used
+    // only as CSS list-style bullets) as attachments so the raw assets aren't lost - DOCX
+    // likewise exposes such images as attachments even without an inline image node.
     if (config.extractAttachments) {
         const customProperties: Record<string, string> = {};
         for (const [id, item] of manifest) {
             if (!item.mediaType.startsWith('image/')) continue;
-            const path = resolveOpfPath(opfDir, item.href);
-            const imageFile = files.find(f => f.path === path);
-            if (!imageFile) continue;
-
-            const attachment = createAttachment(item.href.split('/').pop() || item.href, imageFile.content);
+            const p = resolveOpfPath(opfDir, item.href);
+            const img = imageByPath.get(p);
+            if (!img || referencedImagePaths.has(p)) continue;
+            const attachment = createAttachment(item.href.split('/').pop() || item.href, img.content);
             attachments.push(attachment);
             if (id === coverImageId) customProperties.coverImageName = attachment.name;
         }

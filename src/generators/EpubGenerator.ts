@@ -62,14 +62,31 @@ const escapeXml = (text: string): string => text
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
 
+/** Maps an image MIME type to a file extension for the packaged resource. */
+const MIME_EXT: Record<string, string> = {
+    'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/gif': 'gif',
+    'image/svg+xml': 'svg', 'image/webp': 'webp', 'image/bmp': 'bmp', 'image/tiff': 'tiff'
+};
+
+/** Decodes a base64 string to raw bytes, cross-env (atob exists in Node 16+ and browsers). */
+const decodeBase64 = (b64: string): Uint8Array => {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+};
+
 /**
  * Generates a minimal, valid EPUB 3 file from an AST.
  *
  * Every AST node is rendered as a single XHTML content document (reusing `HtmlGenerator`
  * for the actual markup, since EPUB content documents are XHTML) and packaged with the
  * required `mimetype`, `META-INF/container.xml`, OPF manifest, and navigation document.
- * Images are already embedded as base64 data URIs by `HtmlGenerator`, so the content
- * document is fully self-contained without a separate image manifest.
+ *
+ * `HtmlGenerator` embeds images as base64 `data:` URIs, but EPUB reading systems do not
+ * render `data:` URIs - images must be packaged as separate resources referenced by a
+ * relative path. So each data-URI image is extracted into `OEBPS/images/`, declared in
+ * the manifest, and its `<img src>` rewritten to point at the packaged file.
  */
 export class EpubGenerator extends BaseGenerator<'epub'> {
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'epub'>) {
@@ -82,7 +99,37 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
             htmlConfig: { ...this.config.htmlConfig, standalone: false },
         } as GeneratorConfig<'html'>);
         const htmlResult = await htmlGenerator.generate();
-        const bodyHtml = typeof htmlResult.value === 'string' ? htmlResult.value : '';
+        let bodyHtml = typeof htmlResult.value === 'string' ? htmlResult.value : '';
+
+        // Extract base64 data-URI images into packaged files (EPUB readers don't render
+        // `data:` URIs). Each distinct image becomes one OEBPS/images/imageN.ext resource,
+        // a manifest <item>, and a rewritten relative `src`. Deduped so a repeated image
+        // is packaged once.
+        const imageResources: Record<string, Uint8Array> = {};
+        const imageManifestItems: string[] = [];
+        const dataUriToHref = new Map<string, string>();
+        let imageCounter = 0;
+        bodyHtml = bodyHtml.replace(/(<img\b[^>]*\bsrc=")(data:(image\/[a-zA-Z0-9.+-]+);base64,([^"]+))(")/gi,
+            (_full, pre, dataUri, mime, b64, post) => {
+                let href = dataUriToHref.get(dataUri);
+                if (!href) {
+                    imageCounter++;
+                    const ext = MIME_EXT[mime.toLowerCase()] || 'img';
+                    href = `images/image${imageCounter}.${ext}`;
+                    dataUriToHref.set(dataUri, href);
+                    try {
+                        imageResources[`OEBPS/${href}`] = decodeBase64(b64);
+                        imageManifestItems.push(`<item id="img${imageCounter}" href="${href}" media-type="${mime}"/>`);
+                    } catch {
+                        // Undecodable data - leave the original src untouched rather than
+                        // emit a manifest entry for a resource we couldn't write.
+                        dataUriToHref.delete(dataUri);
+                        return `${pre}${dataUri}${post}`;
+                    }
+                }
+                return `${pre}${href}${post}`;
+            });
+
         const xhtmlBody = toXhtml(bodyHtml);
 
         const title = this.ast.metadata?.title || 'Untitled';
@@ -120,7 +167,7 @@ ${xhtmlBody}
   </metadata>
   <manifest>
     <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
-    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>${imageManifestItems.length ? '\n    ' + imageManifestItems.join('\n    ') : ''}
   </manifest>
   <spine>
     <itemref idref="chapter1"/>
@@ -157,6 +204,7 @@ ${xhtmlBody}
             'OEBPS/content.opf': encoder.encode(opf),
             'OEBPS/nav.xhtml': encoder.encode(navXhtml),
             'OEBPS/chapter1.xhtml': encoder.encode(chapterXhtml),
+            ...imageResources,
         };
 
         return {
