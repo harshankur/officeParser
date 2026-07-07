@@ -11,7 +11,7 @@
     <meta property="og:title"
         content="officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser">
     <meta property="og:description"
-        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 11+ formats and generate RAG-ready Markdown, HTML, and high-fidelity PDF with native document awareness.">
+        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 12+ formats (including EPUB) and generate RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
     <meta property="og:image"
         content="https://raw.githubusercontent.com/harshankur/officeParser/master/docs/favicon.png">
     <meta property="og:url" content="https://officeparser.harshankur.com">
@@ -2810,7 +2810,7 @@
 
         window.CONFIG_SCHEMAS = {
             parser: [
-                { id: 'cfg_fileType', label: 'File Type Hint', type: 'select', options: ['', 'docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp'], names: ['Auto', 'DOCX', 'XLSX', 'PPTX', 'PDF', 'RTF', 'CSV', 'Markdown', 'HTML', 'ODT', 'ODS', 'ODP'], width: '100px' },
+                { id: 'cfg_fileType', label: 'File Type Hint', type: 'select', options: ['', 'docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'epub'], names: ['Auto', 'DOCX', 'XLSX', 'PPTX', 'PDF', 'RTF', 'CSV', 'Markdown', 'HTML', 'ODT', 'ODS', 'ODP', 'EPUB'], width: '100px' },
                 { id: 'cfg_extractAttachments', label: 'Extract Attachments', type: 'switch', default: true },
                 { id: 'cfg_ocr', label: 'Enable OCR', type: 'switch', default: false },
                 { id: 'cfg_ignoreInternalLinks_parser', label: 'Ignore Internal Links', type: 'switch', default: false },
@@ -3061,7 +3061,7 @@
                     </a>
                 </div>
                 <div class="stat-item">
-                    <h3>11+</h3>
+                    <h3>12+</h3>
                     <p>Formats Supported</p>
                 </div>
             </div>
@@ -3205,6 +3205,18 @@
                     </span>
                     <h3>HTML</h3>
                     <p>Web Pages</p>
+                </div>
+                <div class="support-card">
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#8b5cf6" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="4.5" y="15.5" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="4.5">EPUB</text>
+                        </svg>
+                    </span>
+                    <h3>EPUB</h3>
+                    <p>eBooks</p>
                 </div>
             </div>
         </section>
@@ -3385,7 +3397,7 @@
                         <p>Drag & Drop your file here or <span>Click to Browse</span></p>
                         <p style="font-size: 0.8rem; margin-top: 1rem; opacity: 0.6;">DOCX, PPTX, XLSX, PDF, RTF, CSV,
                             MD,
-                            HTML, ODT, ODP, ODS</p>
+                            HTML, ODT, ODP, ODS, EPUB</p>
                     </div>
                     <div id="file-selected-info" class="file-info hidden">
                         <span class="file-icon">📄</span>
@@ -3394,7 +3406,7 @@
                         </div>
                     </div>
                     <input type="file" id="file-input" class="hidden-input"
-                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.pdf,.rtf,.csv,.md,.html">
+                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.pdf,.rtf,.csv,.md,.html,.epub">
                 </div>
 
                 <!-- Sample Document Picker -->
@@ -3969,6 +3981,7 @@
                 csv: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#1e293b"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5.5" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="5">CSV</text></svg>`,
                 md: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#0ea5e9"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="5">MD</text></svg>`,
                 html: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#f43f5e"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5" y="15.5" fill="white" font-family="Outfit" font-weight="800" font-size="4.5">&lt;/&gt;</text></svg>`,
+                epub: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#8b5cf6"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="4.5" y="15.5" fill="white" font-family="Outfit" font-weight="800" font-size="4.5">EPUB</text></svg>`,
                 default: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#94a3b8"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/></svg>`
             };
 
@@ -4326,7 +4339,7 @@
             // --- Sample Document Picker ---
             const samplePickerGrid = document.getElementById('sample-picker-grid');
             if (samplePickerGrid) {
-                const sampleFormats = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp'];
+                const sampleFormats = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'epub'];
                 sampleFormats.forEach(fmt => {
                     const btn = document.createElement('button');
                     btn.className = 'sample-btn';
