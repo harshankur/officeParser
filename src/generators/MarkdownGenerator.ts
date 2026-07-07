@@ -163,7 +163,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const meta = node.metadata as ListMetadata;
                     const indentSpaces = ' '.repeat(4);
                     const indent = indentSpaces.repeat(meta?.indentation || 0);
-                    const marker = meta?.listType === 'ordered' ? `${(meta.itemIndex ?? 0) + 1}. ` : '- ';
+                    const marker = meta?.isTask
+                        ? (meta.checked ? '- [x] ' : '- [ ] ')
+                        : (meta?.listType === 'ordered' ? `${(meta.itemIndex ?? 0) + 1}. ` : '- ');
                     const anchors = this.renderAnchors(meta);
                     return `${indent}${marker}${anchors}${childrenOutput}\n`;
                 }

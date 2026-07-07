@@ -1359,6 +1359,11 @@ export interface ListMetadata {
     style?: string;
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
+
+    /** True when this list item is a GFM task-list item (checkbox), regardless of checked state. */
+    isTask?: boolean;
+    /** Checked state for a task-list item. Only meaningful when isTask is true. */
+    checked?: boolean;
 }
 
 /**

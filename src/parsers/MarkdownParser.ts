@@ -277,7 +277,17 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                         listCounters[level]++;
                     }
 
-                    const children = parseInline(match[3]);
+                    let itemText = match[3];
+                    let isTask: boolean | undefined;
+                    let checked: boolean | undefined;
+                    const taskMatch = itemText.match(/^\[([ xX])\]\s+(.*)$/);
+                    if (taskMatch) {
+                        isTask = true;
+                        checked = taskMatch[1].toLowerCase() === 'x';
+                        itemText = taskMatch[2];
+                    }
+
+                    const children = parseInline(itemText);
                     content.push({
                         type: 'list',
                         text: children.map(c => c.text || '').join(''),
@@ -286,7 +296,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                             indentation: level,
                             alignment: alignment || 'left',
                             listId,
-                            itemIndex: listCounters[level]
+                            itemIndex: listCounters[level],
+                            isTask,
+                            checked
                         } as ListMetadata,
                         children
                     });

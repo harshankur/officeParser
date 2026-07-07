@@ -319,13 +319,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      */
     private async processNodeArray(nodes: OfficeContentNode[]): Promise<string> {
         let html = '';
-        // Stack to track active lists: { indentation, type }
-        const listStack: { indentation: number, type: 'ordered' | 'unordered' }[] = [];
+        // Stack to track active lists: { indentation, type, isTask }
+        const listStack: { indentation: number, type: 'ordered' | 'unordered', isTask: boolean }[] = [];
+
+        const openListTag = (type: 'ordered' | 'unordered', isTask: boolean) => {
+            if (isTask) return '<ul data-type="taskList">';
+            return type === 'ordered' ? '<ol>' : '<ul>';
+        };
+        const closeListTag = (type: 'ordered' | 'unordered') => type === 'ordered' ? '</ol>' : '</ul>';
 
         const closeListsToLevel = (level: number) => {
             while (listStack.length > 0 && listStack[listStack.length - 1].indentation > level) {
                 const list = listStack.pop();
-                html += (list?.type === 'ordered' ? '</ol>' : '</ul>') + '\n\n';
+                html += closeListTag(list!.type) + '\n\n';
             }
         };
 
@@ -339,6 +345,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             if (node.type === 'list') {
                 const meta = node.metadata as ListMetadata;
                 const type = meta?.listType === 'ordered' ? 'ordered' : 'unordered';
+                const isTask = !!meta?.isTask;
                 const indentation = meta?.indentation || 0;
 
                 // Close deeper lists
@@ -346,17 +353,17 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
                 // Handle current level
                 if (listStack.length > 0 && listStack[listStack.length - 1].indentation === indentation) {
-                    if (listStack[listStack.length - 1].type !== type) {
+                    if (listStack[listStack.length - 1].type !== type || listStack[listStack.length - 1].isTask !== isTask) {
                         // Type changed at same level
                         const last = listStack.pop();
-                        html += (last?.type === 'ordered' ? '</ol>' : '</ul>') + '\n';
-                        html += (type === 'ordered' ? '<ol>' : '<ul>') + '\n';
-                        listStack.push({ indentation, type });
+                        html += closeListTag(last!.type) + '\n';
+                        html += openListTag(type, isTask) + '\n';
+                        listStack.push({ indentation, type, isTask });
                     }
                 } else {
                     // Start a new nested list
-                    html += (type === 'ordered' ? '<ol>' : '<ul>') + '\n';
-                    listStack.push({ indentation, type });
+                    html += openListTag(type, isTask) + '\n';
+                    listStack.push({ indentation, type, isTask });
                 }
 
                 html += await this.processNodeRecursive(node, this.nodeProcessor.bind(this), override);
@@ -600,6 +607,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
             case 'list': {
                 const meta = node.metadata as ListMetadata;
+                if (meta?.isTask) {
+                    const checkedAttr = ` data-checked="${meta.checked ? 'true' : 'false'}"`;
+                    const checkedBool = meta.checked ? ' checked' : '';
+                    return `${extraAnchors}<li${checkedAttr}${idAttr}${className}${mappedAttrs}${styleAttr}><label><input type="checkbox"${checkedBool}><span></span></label><div>${childrenOutput}</div></li>`;
+                }
                 const value = (meta?.listType === 'ordered' && typeof meta.itemIndex === 'number')
                     ? ` value="${meta.itemIndex + 1}"`
                     : '';

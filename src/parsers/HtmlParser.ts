@@ -208,7 +208,21 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
         type: 'ordered' | 'unordered';
         level: number;
         counters: Record<number, number>;
+        isTask?: boolean;
     }
+
+    // Finds the checked state from a nested <input type="checkbox"> (GFM task-list items
+    // nest it inside a <label>, so it isn't a direct child of the <li>).
+    const findNestedCheckboxChecked = (n: HtmlNode): boolean | undefined => {
+        if (n.tagName === 'input' && (n.attributes?.type || '').toLowerCase() === 'checkbox') {
+            return 'checked' in (n.attributes || {});
+        }
+        for (const child of n.children) {
+            const found = findNestedCheckboxChecked(child);
+            if (found !== undefined) return found;
+        }
+        return undefined;
+    };
 
     const parseNode = (node: HtmlNode, currentFormatting: TextFormatting = {}, listContext?: ListContext): OfficeContentNode | OfficeContentNode[] | null => {
         if (node.type === 'text') {
@@ -366,7 +380,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     listId: isNewTopLevel ? `html-list-${htmlListIdCounter++}` : listContext!.listId,
                     type: tagName === 'ol' ? 'ordered' : 'unordered',
                     level: isNewTopLevel ? 0 : listContext!.level + 1,
-                    counters: isNewTopLevel ? {} : { ...listContext!.counters } // Clone to avoid side effects on parent levels
+                    counters: isNewTopLevel ? {} : { ...listContext!.counters }, // Clone to avoid side effects on parent levels
+                    isTask: node.attributes?.['data-type'] === 'taskList'
                 };
 
                 // Initialize counter for this level
@@ -393,6 +408,14 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const nestedLists = children.filter(c => c.type === 'list');
                 const selfChildren = children.filter(c => c.type !== 'list');
 
+                let isTask: boolean | undefined;
+                let checked: boolean | undefined;
+                if (listContext?.isTask) {
+                    isTask = true;
+                    const dataChecked = node.attributes?.['data-checked'];
+                    checked = dataChecked !== undefined ? dataChecked === 'true' : (findNestedCheckboxChecked(node) ?? false);
+                }
+
                 const selfNode: OfficeContentNode = {
                     type: 'list',
                     text: selfChildren.map(c => c.text || '').join(''),
@@ -402,7 +425,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                         alignment: newFormatting.alignment || 'left',
                         listId: listContext?.listId || 'html-list-none',
                         itemIndex: (listContext?.counters[listContext.level] ?? 1) - 1,
-                        anchorIds: anchorIds.length > 0 ? anchorIds : undefined
+                        anchorIds: anchorIds.length > 0 ? anchorIds : undefined,
+                        isTask,
+                        checked
                     } as ListMetadata,
                     children: selfChildren
                 };
