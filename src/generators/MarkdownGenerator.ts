@@ -1,4 +1,4 @@
-import { ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -262,6 +262,16 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     }
                     const url = meta?.url || (id ? `https://youtu.be/${id}` : '');
                     return url ? `[YouTube](${url})\n\n` : '';
+                }
+
+                case 'admonition': {
+                    // Canonical output is always the GitHub blockquote form, even when the
+                    // source was GLFM's `:::type` fenced-div - see MARKDOWN_DIALECT.md's Decisions.
+                    const meta = node.metadata as AdmonitionMetadata;
+                    const label = (meta?.admonitionType || 'note').toUpperCase();
+                    const body = childrenOutput.trim();
+                    const quotedLines = body.split('\n').map(l => l.length > 0 ? `> ${l}` : '>').join('\n');
+                    return `> [!${label}]\n${quotedLines}\n\n`;
                 }
 
                 default:

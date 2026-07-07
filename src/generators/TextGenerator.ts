@@ -47,6 +47,13 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 return meta?.url ? `[${meta.embedType === 'youtube' ? 'YouTube' : 'Embed'}: ${meta.url}]${newline}` : '';
             }
 
+            if (node.type === 'admonition') {
+                const meta = node.metadata as any;
+                if (childrenOutput.trim() === '') return '';
+                const label = (meta?.admonitionType || 'note').toUpperCase();
+                return `[${label}] ${childrenOutput.trim()}${newline}`;
+            }
+
             if (node.type === 'table' && this.config.textConfig.preserveLayout) {
                 return await this.renderTable(node, processor, newline);
             }

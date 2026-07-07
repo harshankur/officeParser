@@ -1120,7 +1120,7 @@ export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods'
 /**
  * Types of content nodes in the AST.
  */
-export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster' | 'embed';
+export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster' | 'embed' | 'admonition';
 
 /**
  * Supported MIME types for attachments.
@@ -1486,6 +1486,17 @@ export interface EmbedMetadata {
 }
 
 /**
+ * Metadata for an admonition/alert node (e.g. GitHub's `> [!NOTE]` or GLFM's `:::note`).
+ * `MarkdownParser` accepts both syntaxes; `MarkdownGenerator` only ever writes the
+ * blockquote form. Children are block content (paragraphs) wrapped by the admonition.
+ */
+export interface AdmonitionMetadata {
+    admonitionType: 'note' | 'tip' | 'important' | 'warning' | 'caution';
+    /** Optional custom title; falls back to the type label. */
+    title?: string;
+}
+
+/**
  * Metadata for PDF page nodes.
  * Indicates which page of the PDF this content came from.
  */
@@ -1597,7 +1608,7 @@ export interface HeaderFooterMetadata {
 /**
  * Union type for content metadata.
  */
-export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | CommentMetadata | HeaderFooterMetadata | TableMetadata | EmbedMetadata | undefined;
+export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | CommentMetadata | HeaderFooterMetadata | TableMetadata | EmbedMetadata | AdmonitionMetadata | undefined;
 
 
 /**
@@ -1729,6 +1740,7 @@ export type OfficeContentNode = BaseContentNode & (
     | { type: 'drawing'; metadata?: undefined }
     | { type: 'slideMaster'; metadata?: SlideMetadata }
     | { type: 'embed'; metadata?: EmbedMetadata }
+    | { type: 'admonition'; metadata?: AdmonitionMetadata }
 );
 
 /**
