@@ -43,6 +43,20 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     }
 
     /**
+     * Serializes a frontmatter array as a YAML flow sequence (e.g. `[a, b]`), matching
+     * MarkdownParser's frontmatter array handling. Plain strings are left bare; anything
+     * that would break flow-array syntax (or isn't a string) falls back to JSON encoding.
+     */
+    private serializeFrontmatterArray(arr: any[]): string {
+        const items = arr.map(item =>
+            (typeof item === 'string' && item.trim() === item && !/[,[\]]/.test(item))
+                ? item
+                : JSON.stringify(item)
+        );
+        return `[${items.join(', ')}]`;
+    }
+
+    /**
      * Generates Markdown string from the provided AST.
      * 
      * @returns A Markdown string
@@ -61,7 +75,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
             if (this.ast.metadata.customProperties) {
                 for (const [key, val] of Object.entries(this.ast.metadata.customProperties)) {
-                    output += `${key}: ${JSON.stringify(val)}\n`;
+                    output += `${key}: ${Array.isArray(val) ? this.serializeFrontmatterArray(val) : JSON.stringify(val)}\n`;
                 }
             }
             output += '---\n\n';

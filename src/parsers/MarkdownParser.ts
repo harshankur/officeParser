@@ -2,6 +2,32 @@ import { CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, I
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 
+/**
+ * Splits the inner content of a YAML flow array (`a, "b, c", d`) on top-level commas,
+ * ignoring commas inside single- or double-quoted items.
+ */
+const splitFlowArrayItems = (inner: string): string[] => {
+    const items: string[] = [];
+    let current = '';
+    let quote: '"' | '\'' | null = null;
+    for (const ch of inner) {
+        if (quote) {
+            current += ch;
+            if (ch === quote) quote = null;
+        } else if (ch === '"' || ch === '\'') {
+            quote = ch;
+            current += ch;
+        } else if (ch === ',') {
+            items.push(current.trim());
+            current = '';
+        } else {
+            current += ch;
+        }
+    }
+    if (current.trim() !== '') items.push(current.trim());
+    return items;
+};
+
 export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     // Honour cancellation requests before the line-by-line Markdown scanning loop begins.
     // Markdown parsing is entirely synchronous and CPU-bound, so failing fast avoids
@@ -30,10 +56,22 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 const match = line.match(/^([^:]+):\s*(.*)$/);
                 if (match) {
                     const key = match[1].trim();
-                    let val = match[2].trim().replace(/^"(.*)"$/, '$1');
+                    const rawVal = match[2].trim();
+                    const val = rawVal.replace(/^"(.*)"$/, '$1');
 
                     let parsedVal: any = val;
-                    if (val === 'true') parsedVal = true;
+                    if (rawVal.startsWith('[') && rawVal.endsWith(']')) {
+                        // Flow-array (`tags: [a, b]`) or JSON-array (`tags: ["a","b"]`) value -
+                        // parse into a real array instead of storing the literal bracket string,
+                        // so it round-trips symmetrically with MarkdownGenerator's frontmatter output.
+                        try {
+                            const jsonParsed = JSON.parse(rawVal);
+                            parsedVal = Array.isArray(jsonParsed) ? jsonParsed : val;
+                        } catch {
+                            const inner = rawVal.slice(1, -1).trim();
+                            parsedVal = inner === '' ? [] : splitFlowArrayItems(inner).map(item => item.replace(/^['"](.*)['"]$/, '$1'));
+                        }
+                    } else if (val === 'true') parsedVal = true;
                     else if (val === 'false') parsedVal = false;
                     else if (!isNaN(Number(val)) && val !== '') parsedVal = Number(val);
 
