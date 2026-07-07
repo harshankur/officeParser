@@ -1211,11 +1211,15 @@ function compareMdParity(expected: FeatureMetrics, actual: FeatureMetrics): Feat
  *   indent - so all EPUB lists parse at indentation level 0), so counts are close but
  *   not identical. NOTE: this is calibre's flattening, not a parser limitation -
  *   officeParser's own DOCX->EPUB preserves nesting levels exactly.
- * - Images: calibre's conversion of THIS document happened to drop the main content
- *   image entirely (keeping only a tiny decorative gif, unreferenced). The fixture was
- *   patched to re-insert that image (image.jpg from the DOCX) inline at its original
- *   position under the "Images" heading, so the in-content image count now matches DOCX
- *   exactly and is compared strictly.
+ * - Images: this document contains two images - image.jpg (the main content image under
+ *   the "Images" heading) and image1.gif (used as the bullet marker for a list item that
+ *   literally reads "This bullet uses an image as the bullet item"). officeParser models
+ *   the content image as an inline image node, but a list-BULLET image is not
+ *   representable in its list model (which tracks only ordered/unordered), so - in BOTH
+ *   the DOCX and the EPUB - image1.gif surfaces only as an attachment, not an inline
+ *   image. calibre's conversion of this file dropped image.jpg entirely; the fixture was
+ *   patched to restore it as a packaged image referenced at its original position. Result:
+ *   both DOCX and EPUB expose 1 inline image and 2 image attachments, compared strictly.
  * - Links: DOCX's internal cross-references (TOC, footnote backlinks) become
  *   cross-file anchor links once calibre splits the document into multiple XHTML
  *   files, which HtmlParser classifies as 'external' (no leading '#') - so the
@@ -1255,10 +1259,14 @@ function compareEpubParity(expected: FeatureMetrics, actual: FeatureMetrics): Fe
     const listMatch = actual.lists.total === expected.lists.total;
     results.push(createResult('Lists - Total', expected.lists.total, actual.lists.total, listMatch, `Expected ${expected.lists.total}, got ${actual.lists.total} (calibre may flatten multi-level lists)`, listMatch ? 'PASS' : 'WARN'));
 
-    // Images: the fixture was patched to carry the same inline image as the DOCX (see the
-    // header note), so the in-content image count is expected to match exactly.
+    // Images: the fixture carries the same content image as the DOCX (see the header note),
+    // so both the inline image count and the image-attachment count match exactly - the
+    // content image inline, plus the bullet gif as an attachment-only image.
     const imageMatch = actual.images === expected.images;
     results.push(createResult('Images', expected.images, actual.images, imageMatch, imageMatch ? `Inline image count matches DOCX: ${actual.images}` : `Expected ${expected.images}, got ${actual.images}`));
+
+    const attachMatch = actual.attachments.total === expected.attachments.total;
+    results.push(createResult('Attachments - Total', expected.attachments.total, actual.attachments.total, attachMatch, attachMatch ? `Attachment count matches DOCX: ${actual.attachments.total} (content image + bullet gif)` : `Expected ${expected.attachments.total}, got ${actual.attachments.total}`));
 
     // Links: cross-file anchors from calibre's document splitting count as 'external'
     // rather than 'internal', so only informational.
