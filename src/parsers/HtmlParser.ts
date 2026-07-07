@@ -678,8 +678,15 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             }
             if (tagName === 'a') {
                 const href = node.attributes?.href;
+                const wikilinkPage = node.attributes?.['data-wikilink-page'];
                 const children = parseChildren(node, newFormatting, listContext);
-                if (href) {
+                if (wikilinkPage !== undefined) {
+                    children.forEach(c => {
+                        if (c.type === 'text') {
+                            c.metadata = { ...c.metadata, link: wikilinkPage, linkType: 'internal', wikilink: true } as TextMetadata;
+                        }
+                    });
+                } else if (href) {
                     const linkType = href.startsWith('#') ? 'internal' : 'external';
                     children.forEach(c => {
                         if (c.type === 'text') {

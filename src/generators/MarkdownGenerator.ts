@@ -127,7 +127,12 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         }
                     }
                     const meta = node.metadata as TextMetadata;
-                    if (meta?.link) {
+                    if (meta?.wikilink) {
+                        // Obsidian syntax: bare page name, or page|alias when the display
+                        // text differs from the page name.
+                        const page = meta.link || '';
+                        text = (node.text && node.text !== page) ? `[[${page}|${node.text}]]` : `[[${page}]]`;
+                    } else if (meta?.link) {
                         const isInternal = meta.linkType !== 'external';
                         if (!this.config.ignoreInternalLinks || !isInternal) {
                             let link = meta.link;

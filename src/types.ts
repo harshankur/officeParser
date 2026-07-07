@@ -1543,6 +1543,14 @@ export interface TextMetadata {
      * resolution (author/year display, .bib management) is left to the consuming app.
      */
     citationKey?: string;
+
+    /**
+     * True when this is an Obsidian-style wikilink (`[[page]]` / `[[page|alias]]`).
+     * `link` holds the bare page name and `linkType` is always 'internal'; the
+     * per-workspace enable/disable toggle lives in markdownwriter, not here -
+     * officeParser always parses/generates the syntax.
+     */
+    wikilink?: boolean;
 }
 
 /**
