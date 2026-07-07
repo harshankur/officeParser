@@ -145,6 +145,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         // end via `*[abbr]: title`.
                         this.collectedAbbreviations.set(node.text || '', meta.abbreviationTitle);
                     }
+                    if (meta?.citationKey) {
+                        text = `[@${meta.citationKey}]`;
+                    }
                     return text;
                 }
 
