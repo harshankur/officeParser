@@ -14,7 +14,8 @@
  * - CSV (Comma-Separated Values)
  * - MD (Markdown)
  * - HTML (HyperText Markup Language)
- * 
+ * - EPUB (E-book format)
+ *
  * **Usage:**
  * ```typescript
  * import { OfficeParser } from 'officeparser';
@@ -37,6 +38,7 @@
  */
 
 import { parseCsv } from './parsers/CsvParser.js';
+import { parseEpub } from './parsers/EpubParser.js';
 import { parseExcel } from './parsers/ExcelParser.js';
 import { parseHtml } from './parsers/HtmlParser.js';
 import { parseMarkdown } from './parsers/MarkdownParser.js';
@@ -82,7 +84,8 @@ export class OfficeParser {
      * - `.csv` → CsvParser
      * - `.md` → MarkdownParser
      * - `.html` → HtmlParser
-     * 
+     * - `.epub` → EpubParser
+     *
      * @param file - File path (string), Buffer, or ArrayBuffer containing the document
      * @param config - Optional configuration object (defaults applied for all omitted options)
      * @returns A promise resolving to the parsed OfficeParserAST
@@ -231,6 +234,9 @@ export class OfficeParser {
                     break;
                 case 'md':
                     result = await parseMarkdown(buffer, internalConfig);
+                    break;
+                case 'epub':
+                    result = await parseEpub(buffer, internalConfig);
                     break;
                 default:
                     throw getOfficeError(OfficeErrorType.EXTENSION_UNSUPPORTED, internalConfig, ext);

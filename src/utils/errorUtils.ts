@@ -17,8 +17,8 @@ const ERRORHEADER = "[OfficeParser]: ";
  * Some entries are functions that take parameters to build dynamic messages.
  */
 const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => string)> = {
-    [OfficeErrorType.EXTENSION_UNSUPPORTED]: (ext: string) => `Sorry, OfficeParser currently supports docx, pptx, xlsx, odt, odp, ods, pdf, rtf, md, html, csv files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
-    [OfficeErrorType.FORMAT_UNSUPPORTED]: (format: string) => `Sorry, OfficeGenerator does not support generating '${format}' files. Supported formats: json, text, md, html, csv, rtf, pdf, chunks.`,
+    [OfficeErrorType.EXTENSION_UNSUPPORTED]: (ext: string) => `Sorry, OfficeParser currently supports docx, pptx, xlsx, odt, odp, ods, pdf, rtf, md, html, csv, epub files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
+    [OfficeErrorType.FORMAT_UNSUPPORTED]: (format: string) => `Sorry, OfficeGenerator does not support generating '${format}' files. Supported formats: json, text, md, html, csv, rtf, pdf, chunks, epub.`,
     [OfficeErrorType.FILE_CORRUPTED]: (filepath: string) => `Your file ${filepath} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
     [OfficeErrorType.FILE_DOES_NOT_EXIST]: (filepath: string) => `File ${filepath} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
     [OfficeErrorType.LOCATION_NOT_FOUND]: (location: string) => `Entered location ${location} is not reachable! Please make sure that the entered directory location exists. Check relative paths and reenter.`,

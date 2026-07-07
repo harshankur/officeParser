@@ -411,10 +411,11 @@ export interface OfficeIssue {
 /**
  * The result of a document conversion operation.
  */
-type ConversionValue<D extends UniversalGeneratorFormat> = 
+type ConversionValue<D extends UniversalGeneratorFormat> =
     D extends 'pdf' ? Uint8Array | string :
     D extends 'chunks' ? OfficeChunk[] :
     D extends 'csv' ? string | Uint8Array :
+    D extends 'epub' ? Uint8Array :
     string;
 
 export interface ConversionResult<D extends UniversalGeneratorFormat> {
@@ -427,7 +428,7 @@ export interface ConversionResult<D extends UniversalGeneratorFormat> {
 /**
  * Universal formats supported by all source types for generation.
  */
-export type UniversalGeneratorFormat = 'text' | 'md' | 'html' | 'pdf' | 'csv' | 'rtf' | 'chunks';
+export type UniversalGeneratorFormat = 'text' | 'md' | 'html' | 'pdf' | 'csv' | 'rtf' | 'chunks' | 'epub';
 
 /**
  * Allowed destination formats for a given source type.
@@ -1115,7 +1116,7 @@ export interface OfficeChunk {
 /**
  * Supported file types for parsing.
  */
-export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods' | 'pdf' | 'rtf' | 'md' | 'html' | 'csv';
+export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods' | 'pdf' | 'rtf' | 'md' | 'html' | 'csv' | 'epub';
 
 /**
  * Types of content nodes in the AST.
