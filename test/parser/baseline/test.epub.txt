@@ -93,6 +93,7 @@ Multi-level Lists8
 Continued Lists8
 Images
 Centered images like this are useful for large pictures that should be a focus of attention.
+[Image: 165 Inspirational Quotes To Keep You Motivated In Life]
 There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was inserted, not necessarily where it appears on the page in Word.
 Lists
 All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.

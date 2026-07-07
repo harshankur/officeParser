@@ -1207,11 +1207,15 @@ function compareMdParity(expected: FeatureMetrics, actual: FeatureMetrics): Feat
  * own well-understood differences, verified empirically against this exact fixture pair:
  * - Tables and heading counts: calibre preserves these exactly - compared strictly.
  * - Content nodes / lists: calibre restructures paragraph/list nesting somewhat
- *   (e.g. flattening some multi-level lists), so counts are close but not identical.
- * - Images: calibre can leave the source image as an unreferenced media file in the
- *   manifest (still extracted as an attachment) without an inline <img> in the reading
- *   content, so the in-content image count can legitimately drop to 0 while the
- *   attachment is still present.
+ *   (e.g. flattening multi-level lists into flat sibling lists that use CSS classes for
+ *   indent - so all EPUB lists parse at indentation level 0), so counts are close but
+ *   not identical. NOTE: this is calibre's flattening, not a parser limitation -
+ *   officeParser's own DOCX->EPUB preserves nesting levels exactly.
+ * - Images: calibre's conversion of THIS document happened to drop the main content
+ *   image entirely (keeping only a tiny decorative gif, unreferenced). The fixture was
+ *   patched to re-insert that image (image.jpg from the DOCX) inline at its original
+ *   position under the "Images" heading, so the in-content image count now matches DOCX
+ *   exactly and is compared strictly.
  * - Links: DOCX's internal cross-references (TOC, footnote backlinks) become
  *   cross-file anchor links once calibre splits the document into multiple XHTML
  *   files, which HtmlParser classifies as 'external' (no leading '#') - so the
@@ -1251,10 +1255,10 @@ function compareEpubParity(expected: FeatureMetrics, actual: FeatureMetrics): Fe
     const listMatch = actual.lists.total === expected.lists.total;
     results.push(createResult('Lists - Total', expected.lists.total, actual.lists.total, listMatch, `Expected ${expected.lists.total}, got ${actual.lists.total} (calibre may flatten multi-level lists)`, listMatch ? 'PASS' : 'WARN'));
 
-    // Images: an inline image can legitimately become an unreferenced manifest-only
-    // attachment during conversion (0 in content, still present in attachments).
+    // Images: the fixture was patched to carry the same inline image as the DOCX (see the
+    // header note), so the in-content image count is expected to match exactly.
     const imageMatch = actual.images === expected.images;
-    results.push(createResult('Images', expected.images, actual.images, imageMatch, `EPUB has ${actual.images} inline images (DOCX: ${expected.images}) - source image may survive only as an unreferenced attachment`, imageMatch ? 'PASS' : 'WARN'));
+    results.push(createResult('Images', expected.images, actual.images, imageMatch, imageMatch ? `Inline image count matches DOCX: ${actual.images}` : `Expected ${expected.images}, got ${actual.images}`));
 
     // Links: cross-file anchors from calibre's document splitting count as 'external'
     // rather than 'internal', so only informational.
