@@ -496,6 +496,15 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 }
                 return children;
             }
+            if (tagName === 'cite' && node.attributes?.['data-citation-key'] !== undefined) {
+                const citationKey = node.attributes['data-citation-key'];
+                return {
+                    type: 'text',
+                    text: citationKey,
+                    formatting: Object.keys(newFormatting).length > 0 ? { ...newFormatting } : undefined,
+                    metadata: { citationKey } as TextMetadata
+                };
+            }
             if (tagName === 'ul' || tagName === 'ol') {
                 const isNewTopLevel = !listContext;
                 const newListContext: ListContext = {

@@ -1536,6 +1536,13 @@ export interface TextMetadata {
      * `*[HTML]: Hypertext Markup Language` syntax or an HTML `<abbr>` tag.
      */
     abbreviationTitle?: string;
+
+    /**
+     * When set, this text is a Pandoc/MultiMarkdown-style citation reference
+     * (`[@citekey]`), and this is the bare citekey (e.g. "smith2024"). Bibliography
+     * resolution (author/year display, .bib management) is left to the consuming app.
+     */
+    citationKey?: string;
 }
 
 /**

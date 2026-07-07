@@ -1008,6 +1008,13 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         if (meta?.abbreviationTitle) {
             result = `<abbr title="${this.escape(meta.abbreviationTitle)}">${result}</abbr>`;
         }
+        if (meta?.citationKey) {
+            // No pinned editor contract yet for citations (unlike footnotes/admonitions) -
+            // this is the proposed shape: a <cite> carrying the bare key, matching Pandoc's
+            // [@citekey] on the Markdown side. Keep in sync if inscript-editor's citation
+            // node lands with a different attribute name.
+            result = `<cite data-citation-key="${this.escape(meta.citationKey)}">[@${this.escape(meta.citationKey)}]</cite>`;
+        }
 
         return result;
     }
