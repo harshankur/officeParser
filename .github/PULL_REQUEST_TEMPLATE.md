@@ -6,6 +6,7 @@ Please include a summary of the changes and the related issue (if any).
 - [ ] PowerPointParser (PPTX)
 - [ ] ExcelParser (XLSX)
 - [ ] OpenOfficeParser (ODT/ODS/ODP)
+- [ ] EpubParser / EpubGenerator
 - [ ] PDFParser
 - [ ] OCR / Worker Pool
 - [ ] Infrastructure / Build / CLI

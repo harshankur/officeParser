@@ -12,6 +12,7 @@ body:
         - PowerPoint Parser (PPTX)
         - Excel Parser (XLSX)
         - OpenOffice Parser (ODT, ODS, ODP)
+        - EPUB Parser / Generator
         - PDF Parser
         - OCR Scheduler & Infrastructure
         - CLI / Tooling
