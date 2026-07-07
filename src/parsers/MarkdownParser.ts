@@ -1,4 +1,4 @@
-import { CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 
@@ -26,6 +26,20 @@ const splitFlowArrayItems = (inner: string): string[] => {
     }
     if (current.trim() !== '') items.push(current.trim());
     return items;
+};
+
+/**
+ * Maps every accepted-on-import admonition type spelling (GitHub's five plus GLFM's
+ * `danger`) to the canonical AdmonitionMetadata type. Per MARKDOWN_DIALECT.md's
+ * Decisions, `danger` folds into `caution` - there is no separate danger type.
+ */
+const ADMONITION_TYPE_MAP: Record<string, AdmonitionMetadata['admonitionType']> = {
+    note: 'note',
+    tip: 'tip',
+    important: 'important',
+    warning: 'warning',
+    caution: 'caution',
+    danger: 'caution'
 };
 
 export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
@@ -100,6 +114,19 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return `\n\n${id}\n\n`;
     });
 
+    // Extract GLFM-style fenced-div admonitions (`:::note ... :::`) before block splitting,
+    // since their body may itself contain blank lines that would otherwise fragment them.
+    // The `> [!NOTE]` GitHub form doesn't need this - it's detected inline in the blockquote
+    // branch below, since a `>`-prefixed block never contains a real blank line.
+    const admonitionBlocks: string[] = [];
+    textStr = textStr.replace(/^:::(\w+)[ \t]*\n([\s\S]*?)\n:::[ \t]*$/gm, (match, type, body) => {
+        const admonitionType = ADMONITION_TYPE_MAP[type.toLowerCase()];
+        if (!admonitionType) return match; // Unrecognised type - leave as literal text.
+        const id = `__ADMONITION_${admonitionBlocks.length}__`;
+        admonitionBlocks.push(JSON.stringify({ admonitionType, body }));
+        return `\n\n${id}\n\n`;
+    });
+
     const parseInline = (text: string, currentFormatting: TextFormatting = {}): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
 
@@ -171,6 +198,22 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
 
         return nodes;
+    };
+
+    // Builds an admonition node from its raw body text, splitting on blank lines into
+    // paragraph children. v1 only supports inline content inside admonitions (no nested
+    // lists/headings/code) - acceptable per the roadmap's first cut.
+    const buildAdmonitionNode = (admonitionType: AdmonitionMetadata['admonitionType'], body: string): OfficeContentNode => {
+        const paragraphs = body.split(/\n\n+/).map(p => p.trim()).filter(Boolean);
+        const children: OfficeContentNode[] = paragraphs.map(p => ({
+            type: 'paragraph',
+            children: parseInline(p.replace(/\n/g, ' '))
+        }));
+        return {
+            type: 'admonition',
+            metadata: { admonitionType } as AdmonitionMetadata,
+            children
+        };
     };
 
     const rawBlocks = textStr.split(/\n\n+/);
@@ -277,6 +320,14 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             continue;
         }
 
+        // GLFM-style fenced-div admonition, extracted to a placeholder above
+        const admonitionBlockMatch = block.match(/^__ADMONITION_(\d+)__$/);
+        if (admonitionBlockMatch) {
+            const data = JSON.parse(admonitionBlocks[parseInt(admonitionBlockMatch[1])]);
+            content.push(buildAdmonitionNode(data.admonitionType, data.body));
+            continue;
+        }
+
         // Heading (allowing for leading HTML anchors and trailing {#anchor})
         const headingMatch = block.match(/^((?:<a[^>]*><\/a>)*)\s*(#{1,6})\s+(.*?)(?:\s+\{#([^}]+)\})?\s*$/s);
         if (headingMatch) {
@@ -308,10 +359,22 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Blockquote
         const quoteMatch = block.match(/^>\s+(.*)$/s);
         if (quoteMatch) {
+            // [ \t]? (not \s+) so a bare ">" paragraph-separator line (used between
+            // multi-paragraph admonition bodies) also dequotes to an empty line.
+            const dequoted = quoteMatch[1].replace(/^>[ \t]?/gm, '');
+
+            // GitHub-style admonition: `> [!NOTE]` on the first quoted line.
+            const admonitionHeaderMatch = dequoted.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*\n?([\s\S]*)$/i);
+            if (admonitionHeaderMatch) {
+                const admonitionType = admonitionHeaderMatch[1].toLowerCase() as AdmonitionMetadata['admonitionType'];
+                content.push(buildAdmonitionNode(admonitionType, admonitionHeaderMatch[2]));
+                continue;
+            }
+
             content.push({
                 type: 'paragraph',
                 metadata: { style: 'Quote' } as any,
-                children: parseInline(quoteMatch[1].replace(/^>\s+/gm, ''))
+                children: parseInline(dequoted)
             });
             continue;
         }
@@ -451,7 +514,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             // silently vanishing from plain-text/RAG-chunk output.
             if (node.type === 'embed') return (node.metadata as EmbedMetadata)?.url || '';
             if (node.children) {
-                const isBlock = ['table', 'row', 'list', 'sheet', 'slide'].includes(node.type);
+                const isBlock = ['table', 'row', 'list', 'sheet', 'slide', 'admonition'].includes(node.type);
                 return node.children.map(getText).join(isBlock ? config.newlineDelimiter : '');
             }
             return '';

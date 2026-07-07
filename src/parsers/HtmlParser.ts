@@ -1,4 +1,4 @@
-import { CellMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 
@@ -353,6 +353,22 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return null;
             }
 
+            // Admonition: inscript-editor's Admonition node renders
+            // <div class="admonition admonition-note" data-type="note">…children…</div>.
+            if (tagName === 'div' && (node.attributes?.class || '').split(/\s+/).includes('admonition')) {
+                const admonitionTypeAttr = node.attributes?.['data-type'];
+                const admonitionType = (['note', 'tip', 'important', 'warning', 'caution'] as const).includes(admonitionTypeAttr as any)
+                    ? admonitionTypeAttr as AdmonitionMetadata['admonitionType']
+                    : 'note';
+                const admonitionNode: OfficeContentNode = {
+                    type: 'admonition',
+                    metadata: { admonitionType } as AdmonitionMetadata,
+                    children: parseChildren(node, newFormatting, listContext)
+                };
+                if (config.includeRawContent) admonitionNode.rawContent = '<div class="admonition">...</div>';
+                return admonitionNode;
+            }
+
             // Skip structural containers produced by HtmlGenerator to avoid deep AST nesting
             if (tagName === 'div' && (
                 node.attributes?.class === 'container' ||
@@ -379,7 +395,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const children = parseChildren(node, newFormatting, listContext);
 
                 // If it's a div and contains block elements, return children directly
-                const hasBlockElements = children.some(c => ['paragraph', 'table', 'heading', 'list', 'image', 'chart', 'code', 'embed'].includes(c.type));
+                const hasBlockElements = children.some(c => ['paragraph', 'table', 'heading', 'list', 'image', 'chart', 'code', 'embed', 'admonition'].includes(c.type));
                 if (tagName === 'div' && hasBlockElements) {
                     return children;
                 }
@@ -671,7 +687,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             // silently vanishing from plain-text/RAG-chunk output.
             if (node.type === 'embed') return (node.metadata as EmbedMetadata)?.url || '';
             if (node.children) {
-                const isBlock = ['table', 'row', 'list', 'sheet', 'slide'].includes(node.type);
+                const isBlock = ['table', 'row', 'list', 'sheet', 'slide', 'admonition'].includes(node.type);
                 return node.children.map(getText).join(isBlock ? config.newlineDelimiter : '');
             }
             return '';

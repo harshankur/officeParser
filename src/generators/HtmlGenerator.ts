@@ -1,4 +1,4 @@
-import { CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageMetadata, SlideMetadata, TableMetadata, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageMetadata, SlideMetadata, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -909,6 +909,14 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     ? `<iframe src="https://www.youtube.com/embed/${this.escape(id)}" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>`
                     : '';
                 return `${extraAnchors}<div data-youtube-video="${this.escape(id)}" data-width="${this.escape(width)}" data-align="${this.escape(align)}" class="youtube-embed"${idAttr}${mappedAttrs} style="width: ${width}; margin-left: ${ml}; margin-right: ${mr};">${iframe}</div>`;
+            }
+
+            case 'admonition': {
+                // Match inscript-editor's Admonition node wrapper so a loaded admonition
+                // reaches the editor as that node instead of a plain blockquote.
+                const meta = node.metadata as AdmonitionMetadata;
+                const admonitionType = meta?.admonitionType || 'note';
+                return `${extraAnchors}<div class="admonition admonition-${admonitionType}" data-type="${admonitionType}"${idAttr}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
             }
 
             default:
