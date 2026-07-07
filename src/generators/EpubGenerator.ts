@@ -6,13 +6,54 @@ import { HtmlGenerator } from './HtmlGenerator.js';
 const VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
 
 /**
- * Self-closes HTML5 void elements (`<br>` -> `<br/>`) so HtmlGenerator's output becomes
- * well-formed XHTML, which EPUB 3 content documents require.
+ * Converts HtmlGenerator's HTML output into well-formed XHTML, which EPUB reading
+ * systems parse as strict XML (unlike browsers, which tolerate HTML's looseness).
+ *
+ * This is more than cosmetic: a single raw `&` or unclosed tag makes the whole content
+ * document fail to open. The conversion:
+ *  - strips `<style>`/`<script>` blocks — browser page-chrome CSS and chart-init JS that
+ *    a reading system ignores anyway, and whose CSS comments / JS operators contain raw
+ *    `&` and `<` that are illegal as XML character data;
+ *  - normalises HTML named entities (`&nbsp;`) to numeric references, since XML predefines
+ *    only `&amp;`/`&lt;`/`&gt;`/`&quot;`/`&apos;`;
+ *  - escapes stray ampersands (e.g. in `href` query strings) not already part of a valid
+ *    reference;
+ *  - gives HTML boolean attributes an explicit value (`checked` -> `checked="checked"`);
+ *  - self-closes void elements (`<br>` -> `<br/>`).
  */
 const toXhtml = (html: string): string => {
-    const voidTagPattern = new RegExp(`<(${VOID_TAGS.join('|')})((?:\\s+[^>]*)?)\\s*\\/?>`, 'gi');
-    return html.replace(voidTagPattern, (_m, tag, attrs) => `<${tag}${attrs}/>`);
+    let out = html
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+
+    // Named -> numeric entities (nbsp is the only named entity HtmlGenerator emits).
+    out = out.replace(/&nbsp;/g, '&#160;');
+
+    // Escape ampersands that don't already open a valid XML entity reference.
+    out = out.replace(/&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g, '&amp;');
+
+    // Give bare boolean attributes an explicit value. Scoped to the specific tags that
+    // emit them (checkbox task-list items, media iframes) so body text like "the selected
+    // option" is never rewritten.
+    out = out.replace(/<input\b([^>]*?)\schecked(\s*\/?>)/gi, '<input$1 checked="checked"$2');
+    out = out.replace(/<(iframe|video|audio)\b([^>]*?)\s(allowfullscreen|autoplay|controls|loop|muted)(\s*\/?>|\s)/gi, '<$1$2 $3="$3"$4');
+
+    // Self-close void elements (non-greedy attr capture so an already-present trailing `/`
+    // isn't duplicated, e.g. `<meta .../>` must not become `<meta ...//>`).
+    const voidTagPattern = new RegExp(`<(${VOID_TAGS.join('|')})((?:\\s[^>]*?)?)\\s*/?>`, 'gi');
+    out = out.replace(voidTagPattern, (_m, tag, attrs) => `<${tag}${attrs}/>`);
+
+    return out;
 };
+
+/**
+ * Minimal, book-friendly CSS injected into every EPUB content document. Kept static and
+ * free of `&`/`<` so it is XML-safe inline; the reading system supplies typography, so
+ * this only covers structural essentials the stripped page-chrome would otherwise lose.
+ */
+const EPUB_STYLESHEET = `img { max-width: 100%; height: auto; }
+table { border-collapse: collapse; margin: 1em 0; }
+td, th { border: 1px solid #ccc; padding: 4px 8px; }`;
 
 const escapeXml = (text: string): string => text
     .replace(/&/g, '&amp;')
@@ -58,6 +99,9 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
 <head>
 <meta charset="utf-8"/>
 <title>${escapeXml(title)}</title>
+<style type="text/css">
+${EPUB_STYLESHEET}
+</style>
 </head>
 <body>
 ${xhtmlBody}
