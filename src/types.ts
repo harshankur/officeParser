@@ -1609,6 +1609,12 @@ export interface CodeMetadata {
     language?: string;
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
+    /**
+     * When set, this node is a LaTeX math expression rather than a code block. `node.text`
+     * holds the bare LaTeX (delimiters excluded); 'inline' round-trips as `$...$`,
+     * 'block' as `$$...$$`. Matches inscript-editor's math node (Roadmap Step 11.5).
+     */
+    math?: 'inline' | 'block';
 }
 
 /**

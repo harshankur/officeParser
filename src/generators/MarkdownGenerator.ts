@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, TableMetadata, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -257,7 +257,13 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'code': {
-                    const meta = node.metadata as any;
+                    const meta = node.metadata as CodeMetadata;
+                    if (meta?.math === 'block') {
+                        return `\n$$\n${node.text || ''}\n$$\n\n`;
+                    }
+                    if (meta?.math === 'inline') {
+                        return `$${node.text || ''}$`;
+                    }
                     const lang = meta?.language || '';
                     // Block code if it contains newlines, else inline
                     if (node.text && node.text.includes('\n')) {

@@ -387,6 +387,29 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return null;
             }
 
+            // Math: proposed contract (no editor node built yet) - HtmlGenerator emits
+            // <span/div class="math math-inline|math-block" data-math="inline|block">
+            // with the $-delimited LaTeX as the visible (escaped) text content.
+            if ((tagName === 'div' || tagName === 'span') && node.attributes?.['data-math'] !== undefined) {
+                const mathMode: 'inline' | 'block' = node.attributes['data-math'] === 'block' ? 'block' : 'inline';
+                const rawText = node.children.map(c => c.text || '').join('')
+                    .replace(/&nbsp;/g, ' ')
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&amp;/g, '&')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#39;/g, '\'');
+                const delimiter = mathMode === 'block' ? '$$' : '$';
+                const latex = rawText.startsWith(delimiter) && rawText.endsWith(delimiter)
+                    ? rawText.slice(delimiter.length, -delimiter.length)
+                    : rawText;
+                return {
+                    type: 'code',
+                    text: latex,
+                    metadata: { math: mathMode } as CodeMetadata
+                };
+            }
+
             // Admonition: inscript-editor's Admonition node renders
             // <div class="admonition admonition-note" data-type="note">…children…</div>.
             if (tagName === 'div' && (node.attributes?.class || '').split(/\s+/).includes('admonition')) {

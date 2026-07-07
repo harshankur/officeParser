@@ -126,6 +126,16 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return `\n\n${id}\n\n`;
     });
 
+    // Extract block math ($$\n...\n$$) before block splitting, mirroring the code-block
+    // pre-pass above - its body may contain blank lines that would otherwise fragment it.
+    // Inline math ($...$) is handled directly in parseInline below.
+    const mathBlocks: string[] = [];
+    textStr = textStr.replace(/^\$\$\n([\s\S]*?)\n\$\$$/gm, (_match, latex) => {
+        const id = `__MATH_BLOCK_${mathBlocks.length}__`;
+        mathBlocks.push(latex);
+        return `\n\n${id}\n\n`;
+    });
+
     // Extract GLFM-style fenced-div admonitions (`:::note ... :::`) before block splitting,
     // since their body may itself contain blank lines that would otherwise fragment them.
     // The `> [!NOTE]` GitHub form doesn't need this - it's detected inline in the blockquote
@@ -183,8 +193,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     const parseInline = (text: string, currentFormatting: TextFormatting = {}): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
 
-        // Regex matches: 1=!, 2=alt, 3=url, 4=attrs | 5=bold | 6=italic | 7=strike | 8=code | 9=underline | 10=subscript | 11=superscript | 12=footnote id | 13=citekey | 14=wikilink page | 15=wikilink alias
-        const regex = /(!?)\[(.*?)\]\((.*?)\)(?:\{([^}]*)\})?|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|<u>(.+?)<\/u>|<sub>(.+?)<\/sub>|<sup>(.+?)<\/sup>|\[\^([^\]]+)\]|\[@([a-zA-Z0-9_:.-]+)\]|\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+        // Regex matches: 1=!, 2=alt, 3=url, 4=attrs | 5=bold | 6=italic | 7=strike | 8=code | 9=underline | 10=subscript | 11=superscript | 12=footnote id | 13=citekey | 14=wikilink page | 15=wikilink alias | 16=inline math
+        // Inline math requires no whitespace right after the opening $ or right before the
+        // closing $, the common heuristic (matching Pandoc/KaTeX) for avoiding false
+        // positives on currency like "$5 and $10".
+        const regex = /(!?)\[(.*?)\]\((.*?)\)(?:\{([^}]*)\})?|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|<u>(.+?)<\/u>|<sub>(.+?)<\/sub>|<sup>(.+?)<\/sup>|\[\^([^\]]+)\]|\[@([a-zA-Z0-9_:.-]+)\]|\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|\$(?!\s)([^$\n]+?)(?<!\s)\$/g;
         let lastIndex = 0;
         let match;
 
@@ -268,6 +281,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 const page = match[14].trim();
                 const alias = match[15]?.trim();
                 nodes.push({ type: 'text', text: alias || page, metadata: { link: page, linkType: 'internal', wikilink: true } as TextMetadata });
+            } else if (match[16] !== undefined) { // Inline math
+                nodes.push({ type: 'code', text: match[16], metadata: { math: 'inline' } as CodeMetadata });
             }
 
             lastIndex = regex.lastIndex;
@@ -449,6 +464,17 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         if (admonitionBlockMatch) {
             const data = JSON.parse(admonitionBlocks[parseInt(admonitionBlockMatch[1])]);
             content.push(buildAdmonitionNode(data.admonitionType, data.body));
+            continue;
+        }
+
+        // Block math ($$...$$), extracted to a placeholder above
+        const mathBlockMatch = block.match(/^__MATH_BLOCK_(\d+)__$/);
+        if (mathBlockMatch) {
+            content.push({
+                type: 'code',
+                text: mathBlocks[parseInt(mathBlockMatch[1])],
+                metadata: { math: 'block' } as CodeMetadata
+            });
             continue;
         }
 

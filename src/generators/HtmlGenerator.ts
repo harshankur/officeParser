@@ -644,6 +644,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
             case 'code': {
                 const meta = node.metadata as CodeMetadata;
+                if (meta?.math) {
+                    // No pinned editor contract yet (inscript-editor's math node is v1.2,
+                    // not built) - this is the proposed shape: data-math signals the
+                    // display mode, and the visible text keeps its $ delimiters so the
+                    // raw LaTeX degrades gracefully without a KaTeX renderer.
+                    const delimited = meta.math === 'block' ? `$$${node.text || ''}$$` : `$${node.text || ''}$`;
+                    const tag = meta.math === 'block' ? 'div' : 'span';
+                    return `${extraAnchors}<${tag} class="math math-${meta.math}" data-math="${meta.math}"${idAttr}${mappedAttrs}${styleAttr}>${this.escape(delimited)}</${tag}>`;
+                }
                 const lang = meta?.language ? ` class="language-${this.escape(meta.language)}"` : '';
                 const codeHtml = `<code${lang}>${this.escape(node.text || '')}</code>`;
                 if (node.text && node.text.includes('\n')) {
