@@ -42,6 +42,11 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 return `[Image: ${meta?.altText || meta?.attachmentName || 'Untitled'}]${newline}`;
             }
 
+            if (node.type === 'embed') {
+                const meta = node.metadata as any;
+                return meta?.url ? `[${meta.embedType === 'youtube' ? 'YouTube' : 'Embed'}: ${meta.url}]${newline}` : '';
+            }
+
             if (node.type === 'table' && this.config.textConfig.preserveLayout) {
                 return await this.renderTable(node, processor, newline);
             }

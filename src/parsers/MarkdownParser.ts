@@ -1,4 +1,4 @@
-import { CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
+import { CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 
@@ -200,6 +200,33 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             block = alignMatch[3];
         }
 
+        // YouTube embed fallback: MarkdownGenerator's 'embed' case emits a single-line
+        // <div data-youtube-video="ID" data-width="…" data-align="…"></div> when fallbackToHtml
+        // is on; recognise it here so a saved-then-reopened .md keeps the video.
+        const youtubeMatch = block.match(/^<div\s+data-youtube-video="([^"]*)"([^>]*)>\s*<\/div>$/i);
+        if (youtubeMatch) {
+            const videoId = youtubeMatch[1];
+            const attrsStr = youtubeMatch[2];
+            const widthMatch = attrsStr.match(/data-width="([^"]*)"/i);
+            const youtubeAlignMatch = attrsStr.match(/data-align="([^"]*)"/i);
+            const embedAlign = youtubeAlignMatch && (['left', 'center', 'right'] as const).includes(youtubeAlignMatch[1] as any) ? youtubeAlignMatch[1] as 'left' | 'center' | 'right' : undefined;
+            const embedUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined;
+            content.push({
+                type: 'embed',
+                // Childless nodes need .text so generic AST consumers (toText, chunking)
+                // don't silently drop them.
+                text: embedUrl,
+                metadata: {
+                    embedType: 'youtube',
+                    videoId,
+                    url: embedUrl,
+                    width: widthMatch?.[1],
+                    align: embedAlign
+                } as EmbedMetadata
+            });
+            continue;
+        }
+
         // Code Block
         const codeMatch = block.match(/^__CODE_BLOCK_(\d+)__$/);
         if (codeMatch) {
@@ -311,6 +338,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         if ((block.includes('|') && block.match(/\n\s*\|?[-:| ]+\|?\s*\n/)) || block.includes('<table')) {
             if (block.includes('<table')) {
                 // Basic HTML table recognition (extracting rows/cells)
+                const tableTagMatch = block.match(/<table([^>]*)>/i);
+                const tableAlignMatch = tableTagMatch?.[1]?.match(/data-align=["']?(left|center|right)["']?/i);
+
                 const rows: OfficeContentNode[] = [];
                 const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
                 let trMatch;
@@ -336,7 +366,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     if (cells.length > 0) rows.push({ type: 'row', children: cells });
                 }
                 if (rows.length > 0) {
-                    content.push({ type: 'table', children: rows });
+                    content.push({
+                        type: 'table',
+                        metadata: tableAlignMatch ? { align: tableAlignMatch[1].toLowerCase() as 'left' | 'center' | 'right' } : undefined,
+                        children: rows
+                    });
                     continue;
                 }
             } else {
@@ -375,6 +409,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         const getText = (node: OfficeContentNode): string => {
             if (node.type === 'text' || node.type === 'code') return node.text || '';
             if (node.type === 'break') return '\n';
+            // Childless nodes still carry meaningful text - fall back to it instead of
+            // silently vanishing from plain-text/RAG-chunk output.
+            if (node.type === 'embed') return (node.metadata as EmbedMetadata)?.url || '';
             if (node.children) {
                 const isBlock = ['table', 'row', 'list', 'sheet', 'slide'].includes(node.type);
                 return node.children.map(getText).join(isBlock ? config.newlineDelimiter : '');

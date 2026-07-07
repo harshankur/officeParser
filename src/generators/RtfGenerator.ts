@@ -218,6 +218,15 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     return (node.metadata as any)?.breakType === 'page' ? '\\page\n' : '\\line\n';
                 }
 
+                case 'embed': {
+                    // RTF has no embed concept - degrade to the URL as plain text rather than
+                    // silently dropping the node (it has no children to fall back to).
+                    const meta = node.metadata as any;
+                    if (!meta?.url) return '';
+                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    return `${pPr}\\sa120 ${this.escapeRtf(meta.url)}\\par\n`;
+                }
+
                 default:
                     return childrenOutput;
             }
