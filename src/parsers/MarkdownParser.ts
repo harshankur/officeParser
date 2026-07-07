@@ -137,6 +137,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return '';
     });
 
+    // Extract Markdown Extra abbreviation definitions (`*[HTML]: Hypertext Markup Language`)
+    // before block splitting, for the same reason as footnotes: they conventionally live
+    // at the end of the document.
+    const abbreviationDefinitions = new Map<string, string>();
+    textStr = textStr.replace(/^\*\[([^\]]+)\]:[ \t]*(.*)$/gm, (_match, abbr, definition) => {
+        abbreviationDefinitions.set(abbr, definition.trim());
+        return '';
+    });
+
     const parseInline = (text: string, currentFormatting: TextFormatting = {}): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
 
@@ -226,7 +235,51 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             nodes.push({ type: 'text', text: text.substring(lastIndex), formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined });
         }
 
-        return nodes;
+        return applyAbbreviations(nodes);
+    };
+
+    const escapeRegExpChars = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Splits abbreviation occurrences out of plain text nodes so they carry
+    // TextMetadata.abbreviationTitle, rendered as <abbr title> in HTML/editor output.
+    const applyAbbreviations = (nodes: OfficeContentNode[]): OfficeContentNode[] => {
+        if (abbreviationDefinitions.size === 0) return nodes;
+        const pattern = new RegExp(`\\b(${[...abbreviationDefinitions.keys()].map(escapeRegExpChars).join('|')})\\b`, 'g');
+
+        const result: OfficeContentNode[] = [];
+        for (const node of nodes) {
+            if (node.type !== 'text' || !node.text || node.metadata) {
+                result.push(node);
+                continue;
+            }
+
+            let lastIndex = 0;
+            let match: RegExpExecArray | null;
+            let matched = false;
+            pattern.lastIndex = 0;
+            while ((match = pattern.exec(node.text)) !== null) {
+                matched = true;
+                if (match.index > lastIndex) {
+                    result.push({ type: 'text', text: node.text.substring(lastIndex, match.index), formatting: node.formatting });
+                }
+                result.push({
+                    type: 'text',
+                    text: match[0],
+                    formatting: node.formatting,
+                    metadata: { abbreviationTitle: abbreviationDefinitions.get(match[0]) } as TextMetadata
+                });
+                lastIndex = pattern.lastIndex;
+            }
+
+            if (!matched) {
+                result.push(node);
+                continue;
+            }
+            if (lastIndex < node.text.length) {
+                result.push({ type: 'text', text: node.text.substring(lastIndex), formatting: node.formatting });
+            }
+        }
+        return result;
     };
 
     // Builds an admonition node from its raw body text, splitting on blank lines into
@@ -408,6 +461,24 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             continue;
         }
 
+        // Definition list (Markdown Extra / Pandoc / Kramdown): a term line followed by
+        // one or more ": definition" lines, e.g.:
+        //   Term
+        //   : Definition of the term.
+        const definitionListMatch = block.match(/^([^\n:][^\n]*)\n((?::[ \t]+.+(?:\n:[ \t]+.+)*))$/);
+        if (definitionListMatch) {
+            const term = definitionListMatch[1];
+            const definitions = definitionListMatch[2].split('\n').map(line => line.replace(/^:[ \t]+/, ''));
+            content.push({
+                type: 'definitionList',
+                children: [
+                    { type: 'definitionTerm', children: parseInline(term) },
+                    ...definitions.map(def => ({ type: 'definitionDescription' as const, children: parseInline(def) }))
+                ]
+            });
+            continue;
+        }
+
         // Lists
         if (block.match(/^(\s*)([-*+]|\d+\.)\s+/)) {
             const lines = block.split('\n');
@@ -543,7 +614,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             // silently vanishing from plain-text/RAG-chunk output.
             if (node.type === 'embed') return (node.metadata as EmbedMetadata)?.url || '';
             if (node.children) {
-                const isBlock = ['table', 'row', 'list', 'sheet', 'slide', 'admonition'].includes(node.type);
+                const isBlock = ['table', 'row', 'list', 'sheet', 'slide', 'admonition', 'definitionList'].includes(node.type);
                 return node.children.map(getText).join(isBlock ? config.newlineDelimiter : '');
             }
             return '';

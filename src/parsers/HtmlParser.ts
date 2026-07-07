@@ -429,7 +429,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const children = parseChildren(node, newFormatting, listContext);
 
                 // If it's a div and contains block elements, return children directly
-                const hasBlockElements = children.some(c => ['paragraph', 'table', 'heading', 'list', 'image', 'chart', 'code', 'embed', 'admonition'].includes(c.type));
+                const hasBlockElements = children.some(c => ['paragraph', 'table', 'heading', 'list', 'image', 'chart', 'code', 'embed', 'admonition', 'definitionList'].includes(c.type));
                 if (tagName === 'div' && hasBlockElements) {
                     return children;
                 }
@@ -465,6 +465,36 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     children: parseChildren(node, newFormatting, listContext)
                 };
                 return hNode;
+            }
+            if (tagName === 'dl') {
+                return {
+                    type: 'definitionList',
+                    children: parseChildren(node, newFormatting, listContext)
+                };
+            }
+            if (tagName === 'dt') {
+                return {
+                    type: 'definitionTerm',
+                    children: parseChildren(node, newFormatting, listContext)
+                };
+            }
+            if (tagName === 'dd') {
+                return {
+                    type: 'definitionDescription',
+                    children: parseChildren(node, newFormatting, listContext)
+                };
+            }
+            if (tagName === 'abbr') {
+                const title = node.attributes?.title;
+                const children = parseChildren(node, newFormatting, listContext);
+                if (title) {
+                    children.forEach(c => {
+                        if (c.type === 'text') {
+                            c.metadata = { ...c.metadata, abbreviationTitle: title } as TextMetadata;
+                        }
+                    });
+                }
+                return children;
             }
             if (tagName === 'ul' || tagName === 'ol') {
                 const isNewTopLevel = !listContext;
@@ -754,7 +784,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             // silently vanishing from plain-text/RAG-chunk output.
             if (node.type === 'embed') return (node.metadata as EmbedMetadata)?.url || '';
             if (node.children) {
-                const isBlock = ['table', 'row', 'list', 'sheet', 'slide', 'admonition'].includes(node.type);
+                const isBlock = ['table', 'row', 'list', 'sheet', 'slide', 'admonition', 'definitionList'].includes(node.type);
                 return node.children.map(getText).join(isBlock ? config.newlineDelimiter : '');
             }
             return '';

@@ -953,6 +953,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 return `${extraAnchors}<div class="admonition admonition-${admonitionType}" data-type="${admonitionType}"${idAttr}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
             }
 
+            case 'definitionList':
+                return `${extraAnchors}<dl${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</dl>`;
+
+            case 'definitionTerm':
+                return `${extraAnchors}<dt${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</dt>`;
+
+            case 'definitionDescription':
+                return `${extraAnchors}<dd${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</dd>`;
+
             default:
                 return childrenOutput;
         }
@@ -995,6 +1004,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             if (!this.config.ignoreInternalLinks || !isInternal) {
                 result = `<a href="${meta.link}"${meta.linkType === 'external' ? ' target="_blank"' : ''}>${result}</a>`;
             }
+        }
+        if (meta?.abbreviationTitle) {
+            result = `<abbr title="${this.escape(meta.abbreviationTitle)}">${result}</abbr>`;
         }
 
         return result;
