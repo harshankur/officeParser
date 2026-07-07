@@ -224,6 +224,11 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
         return undefined;
     };
 
+    // Populated from a <section data-footnotes> block (found and parsed before the main
+    // body loop, since references can appear anywhere earlier in the document) and
+    // consulted by parseChildren's <sup data-footnote-ref> handling below.
+    const footnoteDefinitions = new Map<string, OfficeContentNode[]>();
+
     const parseNode = (node: HtmlNode, currentFormatting: TextFormatting = {}, listContext?: ListContext): OfficeContentNode | OfficeContentNode[] | null => {
         if (node.type === 'text') {
             let decodedText = (node.text || '')
@@ -302,6 +307,27 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             const parseChildren = (n: HtmlNode, fmt: TextFormatting, lCtx?: any): OfficeContentNode[] => {
                 const kids: OfficeContentNode[] = [];
                 for (const child of n.children) {
+                    // Footnote/endnote reference: attach as .notes on the preceding node
+                    // instead of inserting a visible node, matching WordParser's convention.
+                    if (child.type === 'element' && child.tagName === 'sup' && child.attributes?.['data-footnote-ref'] !== undefined) {
+                        const key = child.attributes['data-footnote-ref'];
+                        const definition = footnoteDefinitions.get(key);
+                        const noteNode: OfficeContentNode = {
+                            type: 'note',
+                            text: (definition || []).map(d => d.text || '').join(''),
+                            children: definition || [],
+                            metadata: { noteType: 'footnote', noteId: key }
+                        };
+                        if (kids.length > 0) {
+                            const target = kids[kids.length - 1];
+                            if (!target.notes) target.notes = [];
+                            target.notes.push(noteNode);
+                        } else {
+                            kids.push({ type: 'text', text: '', notes: [noteNode] });
+                        }
+                        continue;
+                    }
+
                     const parsed = parseNode(child, fmt, lCtx);
                     if (parsed) {
                         if (Array.isArray(parsed)) kids.push(...parsed);
@@ -350,6 +376,14 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     if (config.includeRawContent) embedNode.rawContent = '<iframe>...</iframe>';
                     return embedNode;
                 }
+                return null;
+            }
+
+            // Footnotes section: its definitions were already extracted up front (see
+            // footnoteDefinitions below), so skip it here wherever it appears in the tree -
+            // it isn't necessarily a direct child of <body> (e.g. it may be nested inside
+            // a non-standalone HtmlGenerator output's wrapping <div>).
+            if (tagName === 'section' && node.attributes?.['data-footnotes'] !== undefined) {
                 return null;
             }
 
@@ -657,6 +691,39 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
         return null;
     };
 
+    // Extract <section data-footnotes> up front so its definitions are available to
+    // <sup data-footnote-ref> references encountered anywhere earlier in the body.
+    const findFootnotesSection = (n: HtmlNode): HtmlNode | undefined => {
+        if (n.tagName === 'section' && n.attributes?.['data-footnotes'] !== undefined) return n;
+        for (const child of n.children) {
+            const found = findFootnotesSection(child);
+            if (found) return found;
+        }
+        return undefined;
+    };
+    const footnotesSectionNode = findFootnotesSection(body);
+    if (footnotesSectionNode) {
+        for (const item of footnotesSectionNode.children) {
+            if (item.type !== 'element') continue;
+            const key = item.attributes?.['data-footnote-id'];
+            if (!key) continue;
+
+            // Strip the generated back-reference link ("↩") - it's round-trip plumbing,
+            // not part of the footnote's actual content.
+            const filteredChildren = item.children.filter(c =>
+                !(c.tagName === 'a' && (c.attributes?.href || '').startsWith('#footnote-ref-'))
+            );
+            const contentNodes: OfficeContentNode[] = [];
+            for (const child of filteredChildren) {
+                const parsed = parseNode(child);
+                if (parsed) {
+                    if (Array.isArray(parsed)) contentNodes.push(...parsed);
+                    else contentNodes.push(parsed);
+                }
+            }
+            footnoteDefinitions.set(key, contentNodes);
+        }
+    }
     for (const child of body.children) {
         const parsed = parseNode(child);
         if (parsed) {

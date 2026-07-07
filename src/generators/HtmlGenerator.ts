@@ -30,11 +30,30 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let bodyContent = await this.processNodeArray(this.ast.content);
 
         if (this.collectedNotes.length > 0) {
-            let notesHtml = '';
-            for (const note of this.collectedNotes) {
-                notesHtml += await this.processNodeRecursive(note, this.nodeProcessor.bind(this));
+            // Footnotes/endnotes get their own <section data-footnotes> (the agreed
+            // contract with inscript-editor's footnote node); other note types (e.g.
+            // slide speaker notes) keep the existing generic notes wrapper.
+            const footnotes = this.collectedNotes.filter(n => {
+                const t = (n.metadata as any)?.noteType;
+                return t === 'footnote' || t === 'endnote';
+            });
+            const otherNotes = this.collectedNotes.filter(n => !footnotes.includes(n));
+
+            if (footnotes.length > 0) {
+                let footnotesHtml = '';
+                for (const note of footnotes) {
+                    footnotesHtml += await this.processNodeRecursive(note, this.nodeProcessor.bind(this));
+                }
+                bodyContent += `\n<section data-footnotes>\n${footnotesHtml}\n</section>\n`;
             }
-            bodyContent += `\n<div class="document-notes-section">\n<hr class="page-break">\n${notesHtml}\n</div>\n`;
+
+            if (otherNotes.length > 0) {
+                let notesHtml = '';
+                for (const note of otherNotes) {
+                    notesHtml += await this.processNodeRecursive(note, this.nodeProcessor.bind(this));
+                }
+                bodyContent += `\n<div class="document-notes-section">\n<hr class="page-break">\n${notesHtml}\n</div>\n`;
+            }
         }
 
         const metadataBlock = this.config.renderMetadata ? this.renderMetadataSummary() : '';
@@ -432,6 +451,17 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         if (node.type === 'slide' && node.notes && node.notes.length > 0) {
             for (const note of node.notes) {
                 result += await this.processNodeRecursive(note, processor);
+            }
+        } else if (node.notes && node.notes.length > 0) {
+            // Emit the reference marker at the point of citation. Without this, a
+            // footnote/endnote would only ever show up in the collected footnotes
+            // section, with no indication of where it was originally cited.
+            for (const note of node.notes) {
+                const meta = note.metadata as any;
+                if (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') {
+                    const key = this.escape(this.getFootnoteKey(note));
+                    result += `<sup data-footnote-ref="${key}" id="footnote-ref-${key}"><a href="#footnote-${key}">${key}</a></sup>`;
+                }
             }
         }
 
@@ -892,6 +922,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
             case 'note': {
                 const meta = node.metadata as NoteMetadata;
+                if (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') {
+                    const key = this.escape(this.getFootnoteKey(node));
+                    return `<p id="footnote-${key}" data-footnote-id="${key}">${childrenOutput} <a href="#footnote-ref-${key}">↩</a></p>`;
+                }
                 const noteClass = meta?.noteType ? ` note-${meta.noteType}` : '';
                 return `${extraAnchors}<div class="slide-note${noteClass}"${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
             }

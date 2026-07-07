@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -244,9 +244,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     return `\n---\n\n${anchors}${anchors ? '\n' : ''}${childrenOutput}\n\n`;
                 }
                 case 'note': {
-                    const meta = node.metadata as any;
-                    const typeLabel = meta?.noteType === 'footnote' ? 'Footnote' : (meta?.noteType === 'endnote' ? 'Endnote' : 'Note');
-                    return `> **${typeLabel}:** ${childrenOutput.trim()}\n\n`;
+                    const meta = node.metadata as NoteMetadata;
+                    if (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') {
+                        return `[^${this.getFootnoteKey(node)}]: ${childrenOutput.trim()}\n\n`;
+                    }
+                    return `> **Note:** ${childrenOutput.trim()}\n\n`;
                 }
 
                 case 'embed': {
@@ -350,6 +352,16 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         if (node.type === 'slide' && node.notes && node.notes.length > 0) {
             for (const note of node.notes) {
                 result += await this.processNodeRecursive(note, processor);
+            }
+        } else if (node.notes && node.notes.length > 0) {
+            // Emit the [^id] reference marker at the point of reference. Without this,
+            // a footnote/endnote would only ever show up in the collected ### Notes
+            // section at the end, with no indication of where it was originally cited.
+            for (const note of node.notes) {
+                const meta = note.metadata as NoteMetadata;
+                if (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') {
+                    result += `[^${this.getFootnoteKey(note)}]`;
+                }
             }
         }
 

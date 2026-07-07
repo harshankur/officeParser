@@ -103,6 +103,37 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
             .replace(/^-+|-+$/g, '');
     }
 
+    private noteFootnoteKeys = new Map<OfficeContentNode, string>();
+    private usedFootnoteKeys = new Set<string>();
+    private footnoteKeyCounter = 0;
+
+    /**
+     * Assigns a stable, unique reference key to a footnote/endnote node, reused for both
+     * its inline reference marker and its collected definition. Source ids aren't reliably
+     * unique across a document - DOCX/ODT number footnotes and endnotes in separate
+     * sequences, so both can carry noteId "1" - so a source id is only reused when it
+     * hasn't already been claimed; otherwise a sequential counter guarantees uniqueness.
+     */
+    protected getFootnoteKey(note: OfficeContentNode): string {
+        const cached = this.noteFootnoteKeys.get(note);
+        if (cached) return cached;
+
+        const preferred = (note.metadata as any)?.noteId;
+        let key: string;
+        if (preferred && !this.usedFootnoteKeys.has(preferred)) {
+            key = preferred;
+        } else {
+            do {
+                this.footnoteKeyCounter++;
+                key = String(this.footnoteKeyCounter);
+            } while (this.usedFootnoteKeys.has(key));
+        }
+
+        this.usedFootnoteKeys.add(key);
+        this.noteFootnoteKeys.set(note, key);
+        return key;
+    }
+
     /**
      * Recursively extracts plain text from a node and its children.
      */
