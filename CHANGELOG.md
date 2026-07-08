@@ -4,6 +4,62 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.3.0] - 2026-07-08
+### Added
+- **EPUB Support (Parser & Generator)**: `epub` is now a first-class `SupportedFileType`/`UniversalGeneratorFormat`.
+  - `EpubParser` unzips the archive, resolves the spine's reading order from `content.opf`, and parses
+    each XHTML document through the existing `HtmlParser`, so EPUB content shares the same AST shape
+    (and the same Markdown-dialect fidelity below) as every other format. Dublin Core metadata
+    (`dc:title`, `dc:creator`, `dc:description`, `dc:subject`, `dc:date`, `dc:publisher`, `dc:language`,
+    `dc:identifier`) maps into `ast.metadata`/`ast.metadata.nativeProperties`; cover art is exposed via
+    `metadata.customProperties.coverImageName`.
+  - `EpubGenerator` renders the AST through `HtmlGenerator` and packages a minimal, valid EPUB 3
+    (`mimetype`, `META-INF/container.xml`, an OPF manifest, a nav document, one XHTML chapter). Images
+    are packaged as real zip entries (`OEBPS/images/...`) declared in the OPF manifest — not `data:`
+    URIs, which most EPUB reading systems do not render. Generated XHTML is sanitized for strict-XML
+    validity (stray `&`, unvalued boolean attributes, void-element self-closing) and paragraphs
+    containing nested block content (e.g. an image's wrapping `<div>`) are promoted to `<div>` so the
+    markup is valid against the HTML5 content model as well as being well-formed XML — a `<p>`
+    containing a `<div>` is silently auto-corrected by browsers but causes strict-XML EPUB readers to
+    drop the block instead of erroring.
+  - Requires `extractAttachments: true` on the parse step to embed images when converting to/from EPUB;
+    `OfficeConverter.convert()` sets this automatically.
+- **GFM Task Lists**: `- [x] Done` / `- [ ] Todo` now round-trip through `ListMetadata.isTask`/`.checked`
+  across Markdown and HTML (`<ul data-type="taskList"><li data-checked="true">`).
+- **Admonitions / Alerts**: New `admonition` AST node type. Parses both GitHub (`> [!NOTE]`) and GLFM
+  (`:::note ... :::`) syntax; always generates the GitHub blockquote form. HTML round-trips via
+  `<div class="admonition admonition-note" data-type="note">`.
+- **HTML Round-Trip Fidelity**:
+  - Image size/alignment (`ImageMetadata.width`/`.align`) now read from `data-width`/`data-align`/inline
+    `style="width:..."` on `<img>` (previously write-only).
+  - Table alignment (`TableMetadata.align`) now read from `data-align` on `<table>` (previously write-only).
+  - **Merged cells**: `HtmlParser`'s `<td>`/`<th>` handling now reads `colspan`/`rowspan` into
+    `CellMetadata` — previously every merged cell silently collapsed to 1×1 on an HTML save→reload cycle.
+  - **YouTube embeds**: New `embed` AST node type (`EmbedMetadata`). Round-trips
+    `<div data-youtube-video="ID" data-width="..." data-align="...">` through HTML; Markdown falls back
+    to the raw HTML block or a plain link.
+- **Frontmatter Arrays**: Markdown frontmatter values written as a flow array (`tags: [a, b]`) or a JSON
+  array (`tags: ["a","b"]`) now parse into real arrays in `customProperties`/`nativeProperties` instead
+  of a literal string, with no new YAML dependency.
+- **Footnotes**: Real `[^id]` inline references and `[^id]: definition` blocks now parse into `note`
+  nodes keyed by id; the generator emits the same syntax instead of a `> **Footnote:**` blockquote.
+- **Definition Lists & Abbreviations** (Markdown Extra): `Term\n: Definition` blocks parse into new
+  `definitionList`/`definitionTerm`/`definitionDescription` node types; `*[HTML]: Hypertext Markup
+  Language`-style abbreviation definitions populate `TextMetadata.abbreviationTitle`.
+- **Attribute Lists** (Pandoc-style): `{width=50% .centered}` immediately after an image or table folds
+  into `ImageMetadata.width`/`.align` and `TableMetadata.align`.
+- **Citations**: `[@citekey]` inline citation syntax populates `TextMetadata.citationKey`.
+- **Wikilinks**: Obsidian-style `[[Page]]` / `[[Page|Alias]]` populates `TextMetadata.wikilink` plus
+  `.link`/`.linkType`.
+- **MDX Import Stripping**: `<Component prop="x">...</Component>` and self-closing JSX tags are stripped
+  on Markdown import (parse-only; officeParser never authors JSX back into Markdown).
+- **Math Tokenisation**: Inline `$E=mc^2$` and block `$$...$$` LaTeX now tokenise into
+  `TextMetadata.math` (`'inline' | 'block'`) instead of passing through as literal text.
+
+### Changed
+- `HtmlGenerator`'s footnotes section now emits `data-footnotes=""` (an explicit empty value) instead of
+  a bare `data-footnotes` attribute, so the markup is valid XHTML as well as HTML.
+
 ## [7.2.3] - 2026-06-28
 ### Added
 - **Slim Browser Bundles**: Introduced `officeparser.browser.slim.mjs` and `officeparser.browser.slim.iife.js` bundles along with types `officeparser.browser.slim.d.ts`. In the slim bundles, `tesseract.js` is stubbed out entirely and default CDN URLs for PDF workers and Chart.js are removed, making the library fully compliant with strict environments like Chrome/Edge Manifest V3 extensions where remotely hosted code is prohibited.
