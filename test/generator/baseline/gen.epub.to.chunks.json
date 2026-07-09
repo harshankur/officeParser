@@ -1,0 +1,181 @@
+[
+  {
+    "text": "| ITEM | NEEDED |\n| Books | 1 |\n| Pens | 3 |\n| Pencils | 2 |\n| Highlighter | 2 colors |\n| Scissors | 1 pair |",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": "",
+      "isTableChunk": true
+    }
+  },
+  {
+    "text": "| City or Town | Point A | Point B | Point C | Point D | Point E |\n| Point A | — |  |  |  |  |\n| Point B | 87 | — |  |  |  |\n| Point C | 64 | 56 | — |  |  |\n| Point D | 37 | 32 | 91 | — |  |\n| Point E | 93 | 35 | 54 | 43 | — |",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": "",
+      "isTableChunk": true
+    }
+  },
+  {
+    "text": "| College | New students | Graduating students | Change |\n|  | Undergraduate |  |  |\n| Cedar University | 110 | 103 | +7 |\n| Oak Institute | 202 | 210 | -8 |\n|  | Graduate |  |  |\n| Cedar University | 24 | 20 | +4 |\n| Elm College | 43 | 53 | -10 |\n| Total | 998 | 908 | 90 |",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": "",
+      "isTableChunk": true
+    }
+  },
+  {
+    "text": "| December 2007 |\n| Sun |  | Mon |  | Tue |  | Wed |  | Thu |  | Fri |  | Sat |\n|  |  |  |  |  |  |  |  |  |  |  |  | 1 |\n|  |  |  |  |  |  |  |  |  |  |  |  |  |\n| 2 |  | 3 |  | 4 |  | 5 |  | 6 |  | 7 |  | 8 |\n|  |  |  |  |  |  |  |  |  |  |  |  |  |\n| 9 |  | 10 |  | 11 |  | 12 |  | 13 |  | 14 |  | 15 |\n|  |  |  |  |  |  |  |  |  |  |  |  |  |\n| 16 |  | 17 |  | 18 |  | 19 |  | 20 |  | 21 |  | 22 |\n|  |  |  |  |  |  |  |  |  |  |  |  |  |\n| 23 |  | 24 |  | 25 |  | 26 |  | 27 |  | 28 |  | 29 |\n|  |  |  |  |  |  |  |  |  |  |  |  |  |\n| 30 |  | 31 |  |  |  |  |  |  |  |  |  |  |",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": "",
+      "isTableChunk": true
+    }
+  },
+  {
+    "text": "One",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "One, with a very long line to demonstrate that the hanging indent for the list is working correctly",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "One",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "Six",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "One",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "This bullet uses an image as the bullet item",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "Four",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "Five",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "One",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "Two",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "We now resume our normal programming",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "Four",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "[",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "←1",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "]",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "[",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "←2",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  },
+  {
+    "text": "]",
+    "metadata": {
+      "sourceType": "epub",
+      "closestHeading": ""
+    }
+  }
+]
