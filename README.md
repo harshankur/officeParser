@@ -948,7 +948,7 @@ Pass as `htmlConfig` inside `GeneratorConfig`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `standalone` | `boolean` | `true` | Wrap output in a full `<html>` document with CSS |
+| `standalone` | `boolean \| StandaloneConfig` | `true` | Controls the HTML "document envelope" — see below |
 | `chartJsSrc` | `string` | jsDelivr CDN | URL for the Chart.js library |
 | `containerWidth` | `string \| number` | `'auto'` | Max width of the content container. Positive number (px), CSS length string (`'900px'`, `'100%'`, `'60vw'`), or `'auto'`. Invalid values fall back to `'auto'` with an `INVALID_CONTAINER_WIDTH` warning |
 | `customCss` | `string` | `''` | Raw CSS injected into the `<style>` block; use this to override built-in styles |
@@ -956,6 +956,49 @@ Pass as `htmlConfig` inside `GeneratorConfig`.
 | `injections.headEnd` | `string` | `''` | Raw HTML injected before `</head>` |
 | `injections.bodyStart` | `string` | `''` | Raw HTML injected after `<body>` |
 | `injections.bodyEnd` | `string` | `''` | Raw HTML injected before `</body>` |
+
+#### `standalone`: granular envelope control
+
+`standalone` conflates several independent decisions: whether to emit the `<!doctype>/<html>/<head>/
+<body>` shell, how CSS is delivered, and whether to inject scripts/meta tags/injections. The boolean
+shorthand still works — **`true`/omitted turns every part on** (a complete document); **`false` turns
+every part off** (a bare content fragment, safe to drop into a page you don't control). Pass an
+object instead for granular control; any field you omit defaults to its "on" (standalone) value:
+
+| `StandaloneConfig` field | Type | Default | Description |
+|--------|------|---------|-------------|
+| `document` | `boolean` | `true` | Wrap in `<!DOCTYPE html><html><head>…</head><body>…</body></html>` |
+| `metaTags` | `boolean` | `true` | Emit `<title>`/`<meta>` tags. Only meaningful when `document` is true |
+| `styles` | `'full' \| 'scoped' \| 'none'` | `'full'` | See below |
+| `scripts` | `boolean` | `true` | Emit the Chart.js CDN loader and spreadsheet-interactivity `<script>` tags |
+| `headInjections` | `boolean` | `true` | Apply `injections.headStart`/`headEnd`. Only meaningful when `document` is true |
+| `bodyInjections` | `boolean` | `true` | Apply `injections.bodyStart`/`bodyEnd` — applies even to a bare fragment |
+
+`styles` controls how the built-in stylesheet is delivered:
+- **`'full'`** — the complete stylesheet using global selectors (`body`, `h1`, `table`, …). This is
+  what `standalone: true` has always emitted.
+- **`'scoped'`** — the same styling, scoped under the fragment's own wrapper via CSS `@scope` so it
+  cannot leak onto a host page's elements. Requires a modern engine (Chrome 118+, Safari 17.4+,
+  Firefox 128+); for universal support use `'none'` (bring your own CSS) or `'full'`.
+- **`'none'`** — no stylesheet at all; the host page (or rich-text editor, or EPUB reader) supplies
+  its own styling.
+
+```js
+// A styled fragment to embed in your own page, without a document shell:
+await ast.to('html', { htmlConfig: { standalone: { document: false } } });
+
+// The same, but with styles scoped so they can't leak onto your page's own elements:
+await ast.to('html', { htmlConfig: { standalone: { document: false, styles: 'scoped' } } });
+
+// A completely bare fragment (no shell, no styles, no scripts) — e.g. for a rich-text editor:
+await ast.to('html', { htmlConfig: { standalone: false } });
+```
+
+> [!NOTE]
+> **Behavior change from `standalone: false`:** previously this emitted a fragment with a *global,
+> unscoped* `<style>` block. It now emits a genuinely bare fragment (no `<style>` at all), matching
+> "every part off." If you relied on the old styled-fragment behavior, pass
+> `{ document: false }` (or `{ document: false, styles: 'full' }`) instead.
 
 ### MdGeneratorConfig
 
