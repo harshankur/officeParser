@@ -2867,7 +2867,6 @@
                 { id: 'cfg_ignoreDefaultStyleMap', label: 'Ignore Default Style Map', type: 'switch', default: false }
             ],
             html: [
-                { id: 'cfg_html_standalone', label: 'Standalone', type: 'inline-switch', default: true },
                 { id: 'cfg_html_containerWidth', label: 'Width', type: 'inline-text', default: 'auto', width: '100px' },
                 { id: 'cfg_html_chartJsSrc', label: 'Charts URL', type: 'inline-text', default: 'https://cdn.jsdelivr.net/npm/chart.js', width: '180px' },
                 { id: 'cfg_html_customCss', label: 'Custom CSS', type: 'inline-popover-textarea', default: '', height: '120px', placeholder: '.my-class { color: red; }' },
@@ -3593,6 +3592,79 @@
                 </div>
                 <div class="panel-sub-header">
                     <div class="window-config-group">
+                        <div class="window-config-item">
+                            <button class="btn btn-outline"
+                                style="padding: 0.2rem 0.5rem; font-size: 0.75rem; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);"
+                                onclick="window.toggleConfigPopover('cfg_html_standalone_popover', this)">
+                                Standalone
+                                <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none"
+                                    stroke="currentColor" stroke-width="2">
+                                    <path d="M6 9l6 6 6-6" />
+                                </svg>
+                            </button>
+                            <div id="cfg_html_standalone_popover" class="config-popover"
+                                style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 260px;">
+                                <div
+                                    style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                                    Standalone
+                                    <button class="modal-close-btn" style="font-size: 0.8rem;"
+                                        onclick="window.toggleConfigPopover('cfg_html_standalone_popover')">✕</button>
+                                </div>
+                                <div
+                                    style="display: flex; gap: 0.5rem; margin-bottom: 0.6rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--border);">
+                                    <button id="cfg_html_standalone_all_on" class="btn btn-outline"
+                                        style="flex: 1; padding: 0.3rem; font-size: 0.7rem;">All On</button>
+                                    <button id="cfg_html_standalone_all_off" class="btn btn-outline"
+                                        style="flex: 1; padding: 0.3rem; font-size: 0.7rem;">All Off</button>
+                                </div>
+                                <div style="display: flex; flex-direction: column; gap: 0.45rem;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span class="config-label" style="font-size: 0.7rem;">Document Shell</span>
+                                        <label class="switch">
+                                            <input type="checkbox" id="cfg_html_standalone_document" checked>
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span class="config-label" style="font-size: 0.7rem;">Meta Tags</span>
+                                        <label class="switch">
+                                            <input type="checkbox" id="cfg_html_standalone_metaTags" checked>
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span class="config-label" style="font-size: 0.7rem;">Styles</span>
+                                        <select id="cfg_html_standalone_styles" class="btn btn-outline"
+                                            style="padding: 0.2rem; font-size: 0.7rem;">
+                                            <option value="full" selected>Full</option>
+                                            <option value="scoped">Scoped</option>
+                                            <option value="none">None</option>
+                                        </select>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span class="config-label" style="font-size: 0.7rem;">Scripts</span>
+                                        <label class="switch">
+                                            <input type="checkbox" id="cfg_html_standalone_scripts" checked>
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span class="config-label" style="font-size: 0.7rem;">Head Injections</span>
+                                        <label class="switch">
+                                            <input type="checkbox" id="cfg_html_standalone_headInjections" checked>
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span class="config-label" style="font-size: 0.7rem;">Body Injections</span>
+                                        <label class="switch">
+                                            <input type="checkbox" id="cfg_html_standalone_bodyInjections" checked>
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                         <script>renderConfigItems('html');</script>
                     </div>
                 </div>
@@ -4844,12 +4916,43 @@
             }
 
             // Window-specific generator config listeners
-            ['cfg_html_standalone', 'cfg_html_chartJsSrc', 'cfg_html_containerWidth', 'cfg_html_customCss', 'cfg_html_inj_headStart', 'cfg_html_inj_headEnd', 'cfg_html_inj_bodyStart', 'cfg_html_inj_bodyEnd'].forEach(id => {
-                document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('html'));
+            const STANDALONE_POPOVER_IDS = ['cfg_html_standalone_document', 'cfg_html_standalone_metaTags', 'cfg_html_standalone_styles', 'cfg_html_standalone_scripts', 'cfg_html_standalone_headInjections', 'cfg_html_standalone_bodyInjections'];
+
+            // Restore persisted values (each control defaults to "on"/'full', matching standalone:true)
+            STANDALONE_POPOVER_IDS.forEach(id => {
+                const el = document.getElementById(id);
+                const saved = localStorage.getItem(id);
+                if (saved === null) return;
+                if (el.tagName === 'SELECT') el.value = saved;
+                else el.checked = saved === 'true';
+            });
+
+            ['cfg_html_chartJsSrc', 'cfg_html_containerWidth', 'cfg_html_customCss', 'cfg_html_inj_headStart', 'cfg_html_inj_headEnd', 'cfg_html_inj_bodyStart', 'cfg_html_inj_bodyEnd', ...STANDALONE_POPOVER_IDS].forEach(id => {
+                document.getElementById(id).addEventListener('change', () => {
+                    const el = document.getElementById(id);
+                    if (STANDALONE_POPOVER_IDS.includes(id)) {
+                        localStorage.setItem(id, el.tagName === 'SELECT' ? el.value : el.checked);
+                    }
+                    window.renderFormatWindow('html');
+                });
                 if (document.getElementById(id).type === 'text' || document.getElementById(id).tagName === 'TEXTAREA') {
                     document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('html'));
                 }
             });
+
+            // Standalone popover quick actions: set every sub-option on/off at once, matching
+            // the standalone:true/false boolean-shorthand semantics.
+            const setAllStandaloneOptions = (on) => {
+                STANDALONE_POPOVER_IDS.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el.tagName === 'SELECT') el.value = on ? 'full' : 'none';
+                    else el.checked = on;
+                    localStorage.setItem(id, el.tagName === 'SELECT' ? el.value : el.checked);
+                });
+                window.renderFormatWindow('html');
+            };
+            document.getElementById('cfg_html_standalone_all_on').addEventListener('click', () => setAllStandaloneOptions(true));
+            document.getElementById('cfg_html_standalone_all_off').addEventListener('click', () => setAllStandaloneOptions(false));
             ['cfg_md_fallbackToHtml'].forEach(id => {
                 document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('md'));
             });
@@ -4887,18 +4990,7 @@
                             ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked
                         };
                         if (format === 'html') {
-                            genConfig.htmlConfig = {
-                                standalone: document.getElementById('cfg_html_standalone').checked,
-                                chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined,
-                                containerWidth: document.getElementById('cfg_html_containerWidth').value || 'auto',
-                                customCss: document.getElementById('cfg_html_customCss').value || undefined,
-                                injections: {
-                                    headStart: document.getElementById('cfg_html_inj_headStart').value || undefined,
-                                    headEnd: document.getElementById('cfg_html_inj_headEnd').value || undefined,
-                                    bodyStart: document.getElementById('cfg_html_inj_bodyStart').value || undefined,
-                                    bodyEnd: document.getElementById('cfg_html_inj_bodyEnd').value || undefined
-                                }
-                            };
+                            genConfig.htmlConfig = readHtmlPanelConfigInputs();
                         } else if (format === 'md') {
                             genConfig.mdConfig = {
                                 fallbackToHtml: document.getElementById('cfg_md_fallbackToHtml').checked
@@ -5375,7 +5467,18 @@
             // just packagings of this same generated HTML and should honor the same settings.
             function readHtmlPanelConfigInputs() {
                 return {
-                    standalone: document.getElementById('cfg_html_standalone').checked,
+                    // Always the granular object form, read straight from the Standalone
+                    // popover's 6 individual controls (see cfg_html_standalone_popover) - this
+                    // is what lets the popover's "All On"/"All Off"/individual toggles reach the
+                    // generator, for the live preview and every export derived from this HTML.
+                    standalone: {
+                        document: document.getElementById('cfg_html_standalone_document').checked,
+                        metaTags: document.getElementById('cfg_html_standalone_metaTags').checked,
+                        styles: document.getElementById('cfg_html_standalone_styles').value,
+                        scripts: document.getElementById('cfg_html_standalone_scripts').checked,
+                        headInjections: document.getElementById('cfg_html_standalone_headInjections').checked,
+                        bodyInjections: document.getElementById('cfg_html_standalone_bodyInjections').checked,
+                    },
                     chartJsSrc: document.getElementById('cfg_html_chartJsSrc').value || undefined,
                     containerWidth: document.getElementById('cfg_html_containerWidth').value || 'auto',
                     customCss: document.getElementById('cfg_html_customCss').value || undefined,
