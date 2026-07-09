@@ -61,9 +61,12 @@ const promoteParagraphsWithBlockContent = (html: string): string => {
  *
  * This is more than cosmetic: a single raw `&` or unclosed tag makes the whole content
  * document fail to open. The conversion:
- *  - strips `<style>`/`<script>` blocks — browser page-chrome CSS and chart-init JS that
- *    a reading system ignores anyway, and whose CSS comments / JS operators contain raw
- *    `&` and `<` that are illegal as XML character data;
+ *  - strips `<script>` blocks — EpubGenerator renders through HtmlGenerator with
+ *    `standalone: false`, which already omits the envelope-level stylesheet and Chart.js/
+ *    spreadsheet scripts entirely, but a chart *node* still emits its own inline
+ *    `<script>` (chart-init JS) regardless of that flag, since it's content, not envelope.
+ *    A reading system can't execute it anyway, and its JS operators can contain raw `&`/`<`
+ *    that are illegal as XML character data, so it's stripped here;
  *  - promotes `<p>` tags that contain nested block content (see
  *    promoteParagraphsWithBlockContent above) to `<div>`, since XML readers don't apply
  *    HTML5's auto-closing correction that hides this in a browser;
@@ -75,9 +78,7 @@ const promoteParagraphsWithBlockContent = (html: string): string => {
  *  - self-closes void elements (`<br>` -> `<br/>`).
  */
 const toXhtml = (html: string): string => {
-    let out = html
-        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
-        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+    let out = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
 
     out = promoteParagraphsWithBlockContent(out);
 
