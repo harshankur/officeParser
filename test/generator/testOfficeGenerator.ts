@@ -156,6 +156,35 @@ const GENERATOR_CONFIG_TESTS = [
         config: { htmlConfig: { containerWidth: 1000 } } as GeneratorConfig,
         formats: ['html'] as GeneratorFormat[],
     },
+    {
+        id: 'G15',
+        name: 'HTML Standalone Object (document:false only)',
+        config: { htmlConfig: { standalone: { document: false } } } as GeneratorConfig,
+        formats: ['html'] as GeneratorFormat[],
+    },
+    {
+        id: 'G16',
+        name: 'HTML Standalone Object (document:false, styles:scoped)',
+        config: { htmlConfig: { standalone: { document: false, styles: 'scoped' } } } as GeneratorConfig,
+        formats: ['html'] as GeneratorFormat[],
+    },
+    {
+        id: 'G17',
+        name: 'HTML Standalone Object (document:false, bodyInjections:true)',
+        config: {
+            htmlConfig: {
+                standalone: { document: false, bodyInjections: true },
+                injections: { bodyStart: '<!--OP_BODY_START_TEST-->', bodyEnd: '<!--OP_BODY_END_TEST-->' }
+            }
+        } as GeneratorConfig,
+        formats: ['html'] as GeneratorFormat[],
+    },
+    {
+        id: 'G18',
+        name: 'HTML Standalone true (explicit)',
+        config: { htmlConfig: { standalone: true } } as GeneratorConfig,
+        formats: ['html'] as GeneratorFormat[],
+    },
 ];
 
 // ============================================================================
@@ -712,7 +741,11 @@ async function testGeneratorConfigs(
                 });
             }
 
-            // G6: HTML Non-Standalone — must NOT contain DOCTYPE
+            // G6: HTML Non-Standalone (standalone:false) — bare fragment: no DOCTYPE, no <style>,
+            // no envelope-level <script> (Chart.js CDN loader / spreadsheet interactivity), but
+            // still has the content container div. Note a per-chart *inline* init script (which
+            // contains "new Chart(") is content, not envelope, and is intentionally NOT gated by
+            // this flag - it survives regardless, same as EpubGenerator relies on.
             if (ct.id === 'G6' && destFmt === 'html') {
                 const htmlVal = typeof result.value === 'string' ? result.value : '';
                 const hasDoctype = htmlVal.includes('<!DOCTYPE');
@@ -722,6 +755,82 @@ async function testGeneratorConfigs(
                         status: !hasDoctype ? 'PASS' : 'FAIL',
                         expected: 'No DOCTYPE', actual: hasDoctype ? 'Has DOCTYPE' : 'No DOCTYPE',
                         details: 'Non-standalone HTML should not include DOCTYPE'
+                    }
+                });
+
+                const hasStyle = htmlVal.includes('<style>');
+                const hasEnvelopeScript = htmlVal.includes('cdn.jsdelivr.net/npm/chart.js') || htmlVal.includes('initSpreadsheetResizing');
+                const hasContainer = /<div class="[^"]*container[^"]*"/.test(htmlVal);
+                results.push({
+                    category, feature: `${ct.id}: Bare fragment (no style/envelope-script, has container)`, sourceFormat: srcFmt, destFormat: destFmt,
+                    result: {
+                        status: (!hasStyle && !hasEnvelopeScript && hasContainer) ? 'PASS' : 'FAIL',
+                        expected: 'No <style>, no envelope <script>, has container div',
+                        actual: `hasStyle=${hasStyle}, hasEnvelopeScript=${hasEnvelopeScript}, hasContainer=${hasContainer}`,
+                        details: 'standalone:false turns every envelope part off (bare content fragment)'
+                    }
+                });
+            }
+
+            // G15: standalone:{document:false} — still a fragment (no DOCTYPE), but styled
+            // (styles defaults to 'full' when omitted from the object).
+            if (ct.id === 'G15' && destFmt === 'html') {
+                const htmlVal = typeof result.value === 'string' ? result.value : '';
+                const hasDoctype = htmlVal.includes('<!DOCTYPE');
+                const hasStyle = htmlVal.includes('<style>');
+                results.push({
+                    category, feature: `${ct.id}: Styled fragment (document:false only)`, sourceFormat: srcFmt, destFormat: destFmt,
+                    result: {
+                        status: (!hasDoctype && hasStyle) ? 'PASS' : 'FAIL',
+                        expected: 'No DOCTYPE, has <style>', actual: `hasDoctype=${hasDoctype}, hasStyle=${hasStyle}`,
+                        details: 'Omitted StandaloneConfig fields default to their "on" (standalone) value'
+                    }
+                });
+            }
+
+            // G16: standalone:{document:false, styles:'scoped'} — CSS wrapped in @scope, and
+            // the leak-prone :root/body selectors must not appear unscoped.
+            if (ct.id === 'G16' && destFmt === 'html') {
+                const htmlVal = typeof result.value === 'string' ? result.value : '';
+                const hasScopeBlock = htmlVal.includes('@scope (.op-html-scope)');
+                const hasBareBodyOrRoot = /(^|\n)\s*body\s*\{/.test(htmlVal) || /:root\s*\{/.test(htmlVal);
+                results.push({
+                    category, feature: `${ct.id}: Scoped styles via @scope`, sourceFormat: srcFmt, destFormat: destFmt,
+                    result: {
+                        status: (hasScopeBlock && !hasBareBodyOrRoot) ? 'PASS' : 'FAIL',
+                        expected: 'Has @scope block, no bare body{}/:root{}',
+                        actual: `hasScopeBlock=${hasScopeBlock}, hasBareBodyOrRoot=${hasBareBodyOrRoot}`,
+                        details: 'styles:"scoped" must not leak global selectors onto a host page'
+                    }
+                });
+            }
+
+            // G17: standalone:{document:false, bodyInjections:true} + injections — body
+            // injections must apply even to a bare content fragment (they wrap body content,
+            // not the document shell).
+            if (ct.id === 'G17' && destFmt === 'html') {
+                const htmlVal = typeof result.value === 'string' ? result.value : '';
+                const hasMarkers = htmlVal.includes('<!--OP_BODY_START_TEST-->') && htmlVal.includes('<!--OP_BODY_END_TEST-->');
+                results.push({
+                    category, feature: `${ct.id}: Body injections applied to fragment`, sourceFormat: srcFmt, destFormat: destFmt,
+                    result: {
+                        status: hasMarkers ? 'PASS' : 'FAIL',
+                        expected: 'Both body injection markers present', actual: hasMarkers ? 'Present' : 'Missing',
+                        details: 'bodyInjections apply regardless of document, unlike headInjections'
+                    }
+                });
+            }
+
+            // G18: standalone:true (explicit) — full document, must contain DOCTYPE.
+            if (ct.id === 'G18' && destFmt === 'html') {
+                const htmlVal = typeof result.value === 'string' ? result.value : '';
+                const hasDoctype = htmlVal.includes('<!DOCTYPE');
+                results.push({
+                    category, feature: `${ct.id}: DOCTYPE present`, sourceFormat: srcFmt, destFormat: destFmt,
+                    result: {
+                        status: hasDoctype ? 'PASS' : 'FAIL',
+                        expected: 'Has DOCTYPE', actual: hasDoctype ? 'Has DOCTYPE' : 'No DOCTYPE',
+                        details: 'standalone:true must still produce a full standalone document'
                     }
                 });
             }

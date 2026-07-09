@@ -655,14 +655,64 @@ export interface HtmlInjectionConfig {
 }
 
 /**
+ * Granular control over which parts of the full HTML "document envelope" are emitted.
+ * Shorthand: `standalone: true` == every part on (a complete document); `standalone: false` ==
+ * every part off (a bare content fragment). When an object is passed, any field you omit
+ * defaults to its "on" (standalone) value.
+ */
+export interface StandaloneConfig {
+    /**
+     * Wrap the output in `<!DOCTYPE html><html><head>…</head><body>…</body></html>`.
+     * When false, only the inner content fragment is emitted. Defaults to true.
+     */
+    document?: boolean;
+    /**
+     * Emit `<title>` and `<meta>` tags (author, description, dates, custom properties) in the head.
+     * Only meaningful when `document` is true. Defaults to true.
+     */
+    metaTags?: boolean;
+    /**
+     * How the library's built-in CSS is delivered:
+     * - `'full'` — the complete premium stylesheet using global selectors (`body`, `h1`, `table`, …).
+     *   This is what `standalone: true` has always emitted.
+     * - `'scoped'` — the same styling, scoped under the fragment's container via CSS `@scope` so it
+     *   cannot leak into a host page's own styles. Requires a modern browser engine (Chrome 118+,
+     *   Safari 17.4+, Firefox 128+).
+     * - `'none'` — no stylesheet is emitted; the host page (or EPUB reader, or rich-text editor)
+     *   supplies its own styling.
+     * The boolean shorthand for `standalone` maps `true` → `'full'`, `false` → `'none'`.
+     * Defaults to `'full'`.
+     */
+    styles?: 'full' | 'scoped' | 'none';
+    /**
+     * Emit injected `<script>` tags: the Chart.js loader (when `includeCharts` is true and charts
+     * are present) and the spreadsheet interactivity script. Defaults to true.
+     */
+    scripts?: boolean;
+    /**
+     * Apply `injections.headStart` / `injections.headEnd`. Only meaningful when `document` is true
+     * (there is no `<head>` to inject into otherwise). Defaults to true.
+     */
+    headInjections?: boolean;
+    /**
+     * Apply `injections.bodyStart` / `injections.bodyEnd`. Applies even when generating a bare
+     * fragment (`document: false`), since these wrap body *content*, not the document shell.
+     * Defaults to true.
+     */
+    bodyInjections?: boolean;
+}
+
+/**
  * Configuration options for HTML generation.
  */
 export interface HtmlGeneratorConfig {
     /**
      * Whether to wrap the output in a full HTML document structure (e.g., <html>, <head>, etc.).
+     * Pass an object instead of a boolean for granular control over individual parts of the
+     * envelope (document shell, meta tags, styles, scripts, injections) - see `StandaloneConfig`.
      * Defaults to true.
      */
-    standalone?: boolean;
+    standalone?: boolean | StandaloneConfig;
     /**
      * URL for the Chart.js library to use when 'includeCharts' is true.
      * Defaults to 'https://cdn.jsdelivr.net/npm/chart.js'.

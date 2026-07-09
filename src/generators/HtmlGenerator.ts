@@ -1,5 +1,38 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageMetadata, SlideMetadata, TableMetadata, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
+
+type ResolvedStandalone = Required<StandaloneConfig>;
+
+/**
+ * Normalizes `HtmlGeneratorConfig.standalone` (`boolean | StandaloneConfig`) into a fully
+ * resolved object. `true`/undefined turns every part on (a complete standalone document);
+ * `false` turns every part off (a bare content fragment). When an object is passed, any field
+ * left unspecified defaults to its "on" value, matching the boolean-shorthand semantics.
+ */
+function resolveStandalone(standalone: boolean | StandaloneConfig | undefined): ResolvedStandalone {
+    const uniform = (on: boolean): ResolvedStandalone => ({
+        document: on,
+        metaTags: on,
+        styles: on ? 'full' : 'none',
+        scripts: on,
+        headInjections: on,
+        bodyInjections: on,
+    });
+
+    if (standalone === undefined || typeof standalone === 'boolean') {
+        return uniform(standalone ?? true);
+    }
+
+    const on = uniform(true);
+    return {
+        document: standalone.document ?? on.document,
+        metaTags: standalone.metaTags ?? on.metaTags,
+        styles: standalone.styles ?? on.styles,
+        scripts: standalone.scripts ?? on.scripts,
+        headInjections: standalone.headInjections ?? on.headInjections,
+        bodyInjections: standalone.bodyInjections ?? on.bodyInjections,
+    };
+}
 
 /**
  * Generates semantic, high-fidelity HTML from an AST.
@@ -241,30 +274,45 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 </script>`;
         }
 
-        if (this.config.htmlConfig.standalone) {
+        const sa = resolveStandalone(this.config.htmlConfig.standalone);
+
+        if (sa.document && sa.metaTags) {
             title = this.ast.metadata?.title || 'Document';
             metaTags = this.renderMetaTags();
         }
 
-        const styles = this.config.htmlConfig.standalone ? '' : `<style>${this.getPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)}</style>`;
+        const styleBlock = sa.styles === 'none' ? '' : `<style>${
+            sa.styles === 'scoped'
+                ? this.getScopedPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)
+                : this.getPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)
+        }</style>`;
+
+        // 'scoped' styles are anchored to this wrapper via CSS @scope, so custom properties and
+        // base body-level styling attach here instead of leaking onto a host page's real <html>/
+        // <body> when the output is embedded as a fragment.
+        const scopeOpen = sa.styles === 'scoped' ? '<div class="op-html-scope">' : '';
+        const scopeClose = sa.styles === 'scoped' ? '</div>' : '';
 
         const inj = this.config.htmlConfig.injections;
-        const value = this.config.htmlConfig.standalone ? `<!DOCTYPE html>
+        const headInjectionsOn = sa.document && sa.headInjections;
+        const chartScriptTag = (sa.scripts && this.config.includeCharts) ? `<script src="${this.config.htmlConfig.chartJsSrc}"></script>` : '';
+        const spreadsheetScriptOut = sa.scripts ? spreadsheetScript : '';
+
+        const value = sa.document ? `<!DOCTYPE html>
 <html lang="en">
 <head>
-    ${inj.headStart}
+    ${headInjectionsOn ? inj.headStart : ''}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${this.escape(title)}</title>
     ${metaTags}
-    ${this.config.includeCharts ? `<script src="${this.config.htmlConfig.chartJsSrc}"></script>` : ''}
-    <style>
-        ${this.getPremiumStyles(this.isSpreadsheetMode, isPresentation, isPdf)}
-    </style>
-    ${inj.headEnd}
+    ${chartScriptTag}
+    ${styleBlock}
+    ${headInjectionsOn ? inj.headEnd : ''}
 </head>
 <body>
-    ${inj.bodyStart}
+    ${sa.bodyInjections ? inj.bodyStart : ''}
+    ${scopeOpen}
     <div class="${containerClass}">
         <article>
             ${metadataBlock}
@@ -272,10 +320,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         </article>
         ${spreadsheetTabs}
     </div>
-    ${spreadsheetScript}
-    ${inj.bodyEnd}
+    ${scopeClose}
+    ${spreadsheetScriptOut}
+    ${sa.bodyInjections ? inj.bodyEnd : ''}
 </body>
-</html>` : `${styles}<div class="${containerClass}">${metadataBlock}${bodyContent}${spreadsheetTabs}</div>${spreadsheetScript}`;
+</html>` : `${styleBlock}${sa.bodyInjections ? inj.bodyStart : ''}${scopeOpen}<div class="${containerClass}">${metadataBlock}${bodyContent}${spreadsheetTabs}</div>${scopeClose}${spreadsheetScriptOut}${sa.bodyInjections ? inj.bodyEnd : ''}`;
 
         return {
             value,
@@ -1623,6 +1672,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             /* --- Custom User CSS --- */
             ${this.config.htmlConfig.customCss}
         `;
+    }
+
+    /**
+     * Same as `getPremiumStyles()`, but wrapped in a CSS `@scope` block anchored to the
+     * `.op-html-scope` wrapper so the rules only apply within the generated fragment - they
+     * cannot leak onto a host page's own elements. `:root` and `body` selectors specifically
+     * target the real page root/body, so they're remapped to `:scope` (the scope root, i.e. the
+     * `.op-html-scope` wrapper) first; every other selector is naturally confined by `@scope`
+     * without needing per-selector rewriting. `customCss` is included in this scoping too.
+     */
+    private getScopedPremiumStyles(isSpreadsheet: boolean = false, isPresentation: boolean = false, isPdf: boolean = false): string {
+        const css = this.getPremiumStyles(isSpreadsheet, isPresentation, isPdf)
+            .replace(/:root(\s*\{)/g, ':scope$1')
+            .replace(/(^|\n)(\s*)body(\s*\{)/g, '$1$2:scope$3');
+        return `@scope (.op-html-scope) {\n${css}\n}`;
     }
 
     protected override slugify(text: string): string {
