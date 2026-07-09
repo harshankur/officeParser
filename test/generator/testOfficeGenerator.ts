@@ -34,7 +34,7 @@ import { resolveGeneratorConfig } from '../../src/utils/configUtils.js';
 // ============================================================================
 
 /** Output formats tested (PDF excluded — slow/brittle in CI) */
-const GENERATOR_FORMATS = ['html', 'md', 'text', 'rtf', 'csv', 'chunks'] as const;
+const GENERATOR_FORMATS = ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub'] as const;
 type GeneratorFormat = typeof GENERATOR_FORMATS[number];
 
 /** Formats that support roundtrip testing (parse → generate → re-parse) */
@@ -42,7 +42,7 @@ const ROUNDTRIP_FORMATS: GeneratorFormat[] = ['html', 'md', 'rtf'];
 
 /** Source baseline formats used to drive generation tests */
 const SOURCE_FORMATS = {
-    documents: ['docx', 'odt', 'pptx', 'odp', 'pdf', 'rtf', 'html', 'md'] as const,
+    documents: ['docx', 'odt', 'pptx', 'odp', 'pdf', 'rtf', 'html', 'md', 'epub'] as const,
     spreadsheets: ['xlsx', 'ods', 'csv'] as const,
 };
 
@@ -496,9 +496,16 @@ async function testGeneration(
 
         // CSV generator returns a ZIP Uint8Array for multi-sheet sources.
         // Detect this and unpack the first CSV file for metric extraction.
+        // EPUB generator always returns a Uint8Array (zip archive).
         let rawOutput: string = '';
         let isZipOutput = false;
-        if (destFmt === 'csv') {
+        let isEpubOutput = false;
+        if (destFmt === 'epub') {
+            // EPUB is always a binary ZIP archive
+            isZipOutput = true;
+            isEpubOutput = true;
+            rawOutput = '[EPUB archive]';
+        } else if (destFmt === 'csv') {
             if (result.value instanceof Uint8Array) {
                 // ZIP archive — convert to base64 placeholder metrics
                 isZipOutput = true;
@@ -533,6 +540,8 @@ async function testGeneration(
         const outPath = getGeneratorOutputPath(srcFmt, destFmt);
         if (destFmt === 'chunks') {
             fs.writeFileSync(`${outPath}.json`, rawOutput, 'utf8');
+        } else if (isEpubOutput) {
+            fs.writeFileSync(`${outPath}.epub`, result.value as Uint8Array);
         } else if (isZipOutput) {
             fs.writeFileSync(`${outPath}.zip`, result.value as Uint8Array);
         } else {
@@ -585,6 +594,18 @@ async function testGeneration(
                     }
                 });
             }
+        } else if (isEpubOutput) {
+            // EPUB: validate it's a non-empty zip and starts with the PK magic bytes
+            const epubBytes = result.value as Uint8Array;
+            const hasPkMagic = epubBytes.length >= 4 && epubBytes[0] === 0x50 && epubBytes[1] === 0x4B && epubBytes[2] === 0x03 && epubBytes[3] === 0x04;
+            results.push({
+                category, feature: 'EPUB Archive Valid', sourceFormat: srcFmt, destFormat: destFmt,
+                result: {
+                    status: (actualMetrics.hasContent && hasPkMagic) ? 'PASS' : 'FAIL',
+                    expected: 'Non-empty EPUB zip (PK magic)', actual: `${actualMetrics.outputLength} bytes, magic=${hasPkMagic}`,
+                    details: `EPUB archive: ${actualMetrics.outputLength} bytes, PK magic: ${hasPkMagic}`
+                }
+            });
         } else {
             results.push({
                 category, feature: 'CSV ZIP Archive', sourceFormat: srcFmt, destFormat: destFmt,
@@ -1293,7 +1314,9 @@ async function generateBaselines(): Promise<void> {
 
                 // Also save the actual file as a baseline
                 const fileBaselinePath = path.join(baselineDir, `gen.${srcFmt}.to.${destFmt}`);
-                if (result.value instanceof Uint8Array) {
+                if (destFmt === 'epub') {
+                    fs.writeFileSync(`${fileBaselinePath}.epub`, result.value as Uint8Array);
+                } else if (result.value instanceof Uint8Array) {
                     fs.writeFileSync(`${fileBaselinePath}.zip`, result.value);
                 } else if (destFmt === 'chunks') {
                     const chunkData = Array.isArray(result.value) ? JSON.stringify(result.value, null, 2) : result.value as string;

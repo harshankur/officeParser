@@ -1,0 +1,19 @@
+{
+  "outputLength": 137331,
+  "hasContent": true,
+  "lineCount": 2054,
+  "wordCount": 3487,
+  "headingCount": 17,
+  "tableCount": 6,
+  "listCount": 7,
+  "imageCount": 1,
+  "linkCount": 57,
+  "tagCounts": {
+    "h1": 6,
+    "h2": 10,
+    "h3": 1,
+    "table": 6,
+    "ul": 2,
+    "ol": 5
+  }
+}
