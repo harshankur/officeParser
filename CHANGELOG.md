@@ -55,10 +55,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on Markdown import (parse-only; officeParser never authors JSX back into Markdown).
 - **Math Tokenisation**: Inline `$E=mc^2$` and block `$$...$$` LaTeX now tokenise into
   `TextMetadata.math` (`'inline' | 'block'`) instead of passing through as literal text.
+- **Granular HTML Envelope Control (`standalone`)**: `HtmlGeneratorConfig.standalone` now accepts a
+  `StandaloneConfig` object in addition to its existing `boolean`. The boolean conflated three
+  unrelated decisions (document shell, CSS delivery, script/injection emission) into one flag and
+  emitted a *global, unscoped* stylesheet whenever `standalone: false` was combined with a fragment
+  embedded in a host page. The object splits these into independently-controllable fields —
+  `document`, `metaTags`, `styles` (`'full' | 'scoped' | 'none'`), `scripts`, `headInjections`,
+  `bodyInjections` — each defaulting to its "on" (standalone) value when omitted, so
+  `{ document: false }` alone yields a fully-styled fragment with just the `<html>` shell removed.
+  New `styles: 'scoped'` mode wraps the built-in stylesheet in a CSS `@scope` block so it cannot leak
+  onto a host page's own elements (requires Chrome 118+, Safari 17.4+, or Firefox 128+).
+  `bodyInjections` (unlike `headInjections`) now applies even to a bare content fragment, fixing an
+  asymmetry where `injections.bodyStart`/`bodyEnd` were silently dropped outside standalone mode.
+  `EpubGenerator` (which renders through `HtmlGenerator` with `standalone: false`) now gets a
+  genuinely style-less, script-less fragment for free, simplifying its own XHTML sanitization.
 
 ### Changed
 - `HtmlGenerator`'s footnotes section now emits `data-footnotes=""` (an explicit empty value) instead of
   a bare `data-footnotes` attribute, so the markup is valid XHTML as well as HTML.
+- **Behavior change — `standalone: false`**: previously emitted an HTML fragment containing a global,
+  unscoped `<style>` block (leaking onto any host page it was embedded in). It now emits a genuinely
+  bare fragment with no `<style>`/`<script>` at all, matching the new "every envelope part off"
+  semantics. Callers relying on the old styled-fragment behavior should pass
+  `{ document: false }` instead of `false`.
 
 ## [7.2.3] - 2026-06-28
 ### Added

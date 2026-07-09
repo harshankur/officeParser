@@ -111,9 +111,12 @@
         <tbody>
             <tr>
                 <td><code>standalone</code></td>
-                <td><code>boolean</code></td>
+                <td><code>boolean | StandaloneConfig</code></td>
                 <td><code>true</code></td>
-                <td>Wraps output in a full <code>&lt;html&gt;</code> shell with CSS and metadata.</td>
+                <td>Controls the HTML "document envelope". <code>true</code>/omitted turns every part on (a full
+                    <code>&lt;html&gt;</code> shell with CSS/scripts/metadata); <code>false</code> turns every part
+                    off (a bare content fragment). Pass a <code>StandaloneConfig</code> object for granular control —
+                    see the table below.</td>
             </tr>
             <tr>
                 <td><code>chartJsSrc</code></td>
@@ -141,18 +144,113 @@
                 <td><code>injections</code></td>
                 <td><code>HtmlInjectionConfig</code></td>
                 <td><code>{}</code></td>
-                <td>Granular raw HTML injection points for the standalone output:
+                <td>Granular raw HTML injection points:
                     <ul>
-                        <li><code>headStart</code>: Injected immediately after <code>&lt;head&gt;</code></li>
-                        <li><code>headEnd</code>: Injected immediately before <code>&lt;/head&gt;</code></li>
-                        <li><code>bodyStart</code>: Injected immediately after <code>&lt;body&gt;</code></li>
-                        <li><code>bodyEnd</code>: Injected immediately before <code>&lt;/body&gt;</code></li>
+                        <li><code>headStart</code>: Injected immediately after <code>&lt;head&gt;</code> (requires
+                            <code>standalone.document</code> + <code>standalone.headInjections</code>)</li>
+                        <li><code>headEnd</code>: Injected immediately before <code>&lt;/head&gt;</code> (same
+                            requirement)</li>
+                        <li><code>bodyStart</code>: Injected immediately after the opening body content (applies even
+                            to a bare fragment when <code>standalone.bodyInjections</code> is on)</li>
+                        <li><code>bodyEnd</code>: Injected immediately before the closing body content (same)</li>
                     </ul>
                     Useful for inserting analytics scripts, custom fonts, or wrapper elements.
                 </td>
             </tr>
         </tbody>
     </table>
+
+    <h4><code>StandaloneConfig</code> (the object form of <code>standalone</code>)</h4>
+    <p>Any field left unspecified defaults to its "on" (standalone) value, so <code>{ document: false }</code> still
+        yields a fully styled fragment — only the <code>&lt;html&gt;</code> shell is dropped.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>document</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Wraps output in <code>&lt;!DOCTYPE html&gt;&lt;html&gt;&lt;head&gt;…&lt;/head&gt;&lt;body&gt;…&lt;/body&gt;&lt;/html&gt;</code>.
+                    When false, only the inner content fragment is emitted.</td>
+            </tr>
+            <tr>
+                <td><code>metaTags</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Emits <code>&lt;title&gt;</code> and <code>&lt;meta&gt;</code> tags. Only meaningful when
+                    <code>document</code> is true.</td>
+            </tr>
+            <tr>
+                <td><code>styles</code></td>
+                <td><code>'full' | 'scoped' | 'none'</code></td>
+                <td><code>'full'</code></td>
+                <td>How the built-in stylesheet is delivered:
+                    <ul>
+                        <li><code>'full'</code> — the complete stylesheet using global selectors
+                            (<code>body</code>, <code>h1</code>, <code>table</code>, …) — what
+                            <code>standalone: true</code> has always emitted.</li>
+                        <li><code>'scoped'</code> — the same styling, scoped under the fragment's own wrapper via CSS
+                            <code>@scope</code> so it cannot leak onto a host page's elements. Requires a modern
+                            engine (Chrome 118+, Safari 17.4+, Firefox 128+).</li>
+                        <li><code>'none'</code> — no stylesheet; the host page/editor/EPUB reader supplies its own.
+                        </li>
+                    </ul>
+                    The boolean shorthand for <code>standalone</code> maps <code>true</code>&nbsp;→&nbsp;<code>'full'</code>,
+                    <code>false</code>&nbsp;→&nbsp;<code>'none'</code>.
+                </td>
+            </tr>
+            <tr>
+                <td><code>scripts</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Emits the Chart.js CDN loader and spreadsheet-interactivity <code>&lt;script&gt;</code> tags. (A
+                    per-chart inline init script is content, not envelope, and is emitted regardless of this flag
+                    whenever a chart node is present.)</td>
+            </tr>
+            <tr>
+                <td><code>headInjections</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Applies <code>injections.headStart</code>/<code>headEnd</code>. Only meaningful when
+                    <code>document</code> is true.</td>
+            </tr>
+            <tr>
+                <td><code>bodyInjections</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Applies <code>injections.bodyStart</code>/<code>bodyEnd</code> — applies even when generating a
+                    bare fragment, since these wrap body content, not the document shell.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-tip">
+        <div class="callout-header">
+            <span class="callout-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 18h6" />
+                    <path d="M10 22h4" />
+                    <path
+                        d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" />
+                </svg>
+            </span>
+            Behavior change from previous versions
+        </div>
+        <div class="callout-content">
+            <code>standalone: false</code> previously emitted a fragment with a <em>global, unscoped</em>
+            <code>&lt;style&gt;</code> block. It now emits a genuinely bare fragment (no <code>&lt;style&gt;</code> at
+            all), matching "every part off". If you relied on the old styled-fragment behavior, pass
+            <code>{ document: false }</code> instead.
+        </div>
+    </div>
 
     <h3>MdGeneratorConfig (<code>mdConfig</code>)</h3>
     <table>
