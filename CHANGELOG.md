@@ -76,8 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Behavior change — `standalone: false`**: previously emitted an HTML fragment containing a global,
   unscoped `<style>` block (leaking onto any host page it was embedded in). It now emits a genuinely
   bare fragment with no `<style>`/`<script>` at all, matching the new "every envelope part off"
-  semantics. Callers relying on the old styled-fragment behavior should pass
-  `{ document: false }` instead of `false`.
+  semantics. **The old output is not lost — it moved from `false` to `{ document: false }`:** because
+  an object's omitted fields each default to their "on" value, `standalone: { document: false }`
+  keeps the full (global, unscoped) stylesheet and the spreadsheet script while dropping only the
+  document shell — reproducing the previous `standalone: false` output byte-for-byte in the common
+  case (the sole difference being that `injections.bodyStart`/`bodyEnd` now apply to the fragment
+  instead of being silently dropped). Callers that want the old styled fragment should pass
+  `{ document: false }`; those that want a leak-free styled fragment can pass
+  `{ document: false, styles: 'scoped' }`.
 
 ## [7.2.3] - 2026-06-28
 ### Added
