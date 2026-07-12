@@ -9,7 +9,7 @@ TestNumber: 42
 TestBool: true
 ---
 
-<a name="_Toc581531977"></a><a name="OLE_LINK1"></a>
+<a name="toc581531977"></a><a name="ole-link1"></a>
 # Demonstration of DOCX support in calibre {#ole-link2}
 
 This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action.
@@ -38,7 +38,7 @@ A paragraph with styled text: *subtle emphasis  *followed by **strong text **and
 
 This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion. 
 
-<a name="_Paragraph_level_formatting"></a>
+<a name="paragraph-level-formatting"></a>
 ## **Paragraph level formatting** {#toc2022725662}
 
 <div style="text-align: right">You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.</div>
