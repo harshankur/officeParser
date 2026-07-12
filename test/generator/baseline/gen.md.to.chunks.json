@@ -50,7 +50,7 @@
     }
   },
   {
-    "text": "| City or Town | <div style=\"text-align: center\">Point A</div> | <div style=\"text-align: center\">Point B</div> | <div style=\"text-align: center\">Point C</div> | <div style=\"text-align: center\">Point D</div> | <div style=\"text-align: center\">Point E</div> |\n| Point A | <div style=\"text-align: center\">—</div> |  |  |  |  |\n| Point B | <div style=\"text-align: center\">87</div> | <div style=\"text-align: center\">—</div> |  |  |  |\n| Point C | <div style=\"text-align: center\">64</div> | <div style=\"text-align: center\">56</div> | <div style=\"text-align: center\">—</div> |  |  |\n| Point D | <div style=\"text-align: center\">37</div> | <div style=\"text-align: center\">32</div> | <div style=\"text-align: center\">91</div> | <div style=\"text-align: center\">—</div> |  |\n| Point E | <div style=\"text-align: center\">93</div> | <div style=\"text-align: center\">35</div> | <div style=\"text-align: center\">54</div> | <div style=\"text-align: center\">43</div> | <div style=\"text-align: center\">—</div> |",
+    "text": "| City or Town | Point A | Point B | Point C | Point D | Point E |\n| Point A | — |  |  |  |  |\n| Point B | 87 | — |  |  |  |\n| Point C | 64 | 56 | — |  |  |\n| Point D | 37 | 32 | 91 | — |  |\n| Point E | 93 | 35 | 54 | 43 | — |",
     "metadata": {
       "sourceType": "md",
       "closestHeading": "Tables",
