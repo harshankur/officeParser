@@ -2,6 +2,7 @@ import { Zippable, zipSync } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeParserAST } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { HtmlGenerator } from './HtmlGenerator.js';
+import { escapeXml } from '../utils/sanitize.js';
 
 const VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
 
@@ -110,13 +111,6 @@ const toXhtml = (html: string): string => {
 const EPUB_STYLESHEET = `img { max-width: 100%; height: auto; }
 table { border-collapse: collapse; margin: 1em 0; }
 td, th { border: 1px solid #ccc; padding: 4px 8px; }`;
-
-const escapeXml = (text: string): string => text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
 
 /** Maps an image MIME type to a file extension for the packaged resource. */
 const MIME_EXT: Record<string, string> = {

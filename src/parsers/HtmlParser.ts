@@ -1,6 +1,6 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
-import { checkAbortSignal } from '../utils/errorUtils.js';
+import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 
 interface HtmlNode {
     type: 'element' | 'text';
@@ -48,15 +48,17 @@ const parseHtmlTree = (html: string): HtmlNode => {
             continue;
         }
 
-        const tagEndMatch = html.substring(tagStart).match(/>/);
-        if (!tagEndMatch) {
+        // indexOf (not substring().match) so scanning for the tag end is O(1) in
+        // allocation — a document with many "<" chars would otherwise be O(n^2).
+        const tagEndIdx = html.indexOf('>', tagStart);
+        if (tagEndIdx === -1) {
             const text = html.substring(tagStart);
             current.children.push({ type: 'text', text, children: [], parent: current });
             break;
         }
 
-        const tagContent = html.substring(tagStart + 1, tagStart + tagEndMatch.index!);
-        cursor = tagStart + tagEndMatch.index! + 1;
+        const tagContent = html.substring(tagStart + 1, tagEndIdx);
+        cursor = tagEndIdx + 1;
 
         const isClosing = tagContent.startsWith('/');
         const isSelfClosing = tagContent.endsWith('/');
@@ -95,16 +97,20 @@ const parseHtmlTree = (html: string): HtmlNode => {
                 current = node;
 
                 if (tagName === 'script' || tagName === 'style') {
-                    const closeTag = `</${tagName}>`;
-                    const closeIdx = html.toLowerCase().indexOf(closeTag, cursor);
-                    if (closeIdx !== -1) {
+                    // Case-insensitive search from `cursor` via a sticky-ish regex, instead of
+                    // lower-casing the whole document on every <script>/<style> (was O(n^2)).
+                    // tagName is validated to /^[a-z0-9-]+$/ above, so it's safe to interpolate.
+                    const closeRe = new RegExp(`</${tagName}>`, 'gi');
+                    closeRe.lastIndex = cursor;
+                    const closeMatch = closeRe.exec(html);
+                    if (closeMatch) {
                         node.children.push({
                             type: 'text',
-                            text: html.substring(cursor, closeIdx),
+                            text: html.substring(cursor, closeMatch.index),
                             children: [],
                             parent: node
                         });
-                        cursor = closeIdx + closeTag.length;
+                        cursor = closeMatch.index + closeMatch[0].length;
                         current = node.parent!;
                     }
                 }
@@ -229,7 +235,13 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
     // consulted by parseChildren's <sup data-footnote-ref> handling below.
     const footnoteDefinitions = new Map<string, OfficeContentNode[]>();
 
-    const parseNode = (node: HtmlNode, currentFormatting: TextFormatting = {}, listContext?: ListContext): OfficeContentNode | OfficeContentNode[] | null => {
+    const parseNode = (node: HtmlNode, currentFormatting: TextFormatting = {}, listContext?: ListContext, depth: number = 0): OfficeContentNode | OfficeContentNode[] | null => {
+        // Guard against a maliciously deep element tree (e.g. tens of thousands of
+        // nested <div>) recursing until the call stack overflows. Real documents
+        // nest only a few dozen levels; this trips well before a RangeError.
+        if (depth > 1000) {
+            throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED);
+        }
         if (node.type === 'text') {
             let decodedText = (node.text || '')
                 .replace(/&nbsp;/g, ' ')
@@ -328,7 +340,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                         continue;
                     }
 
-                    const parsed = parseNode(child, fmt, lCtx);
+                    const parsed = parseNode(child, fmt, lCtx, depth + 1);
                     if (parsed) {
                         if (Array.isArray(parsed)) kids.push(...parsed);
                         else kids.push(parsed);

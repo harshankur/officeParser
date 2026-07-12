@@ -35,6 +35,7 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.ZIP_ENTRY_COUNT_LIMIT_EXCEEDED]: (limit: number) => `ZIP entry count exceeds limit (${limit})`,
     [OfficeErrorType.ZIP_ENTRY_INVALID_SIZE]: `ZIP entry missing a valid declared size`,
     [OfficeErrorType.ZIP_SIZE_LIMIT_EXCEEDED]: (limit: number) => `ZIP uncompressed size limit exceeded (${limit} bytes)`,
+    [OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED]: `Document nesting depth exceeded the safe limit (possible denial-of-service input)`,
     [OfficeErrorType.EMBEDDING_TIMEOUT]: (timeout: number) => `Embedding call timed out after ${timeout}ms`
 };
 

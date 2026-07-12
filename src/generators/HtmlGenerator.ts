@@ -1,5 +1,6 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { escapeHtml, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 
 type ResolvedStandalone = Required<StandaloneConfig>;
 
@@ -338,8 +339,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const tags: string[] = [];
         if (m.author) tags.push(`<meta name="author" content="${this.escape(m.author)}">`);
         if (m.description) tags.push(`<meta name="description" content="${this.escape(m.description)}">`);
-        if (m.created) tags.push(`<meta name="dcterms.created" content="${new Date(m.created).toISOString()}">`);
-        if (m.modified) tags.push(`<meta name="dcterms.modified" content="${new Date(m.modified).toISOString()}">`);
+        const created = this.toIsoDate(m.created);
+        const modified = this.toIsoDate(m.modified);
+        if (created) tags.push(`<meta name="dcterms.created" content="${created}">`);
+        if (modified) tags.push(`<meta name="dcterms.modified" content="${modified}">`);
         if (m.lastModifiedBy) tags.push(`<meta name="lastModifiedBy" content="${this.escape(m.lastModifiedBy)}">`);
 
         if (m.customProperties) {
@@ -559,9 +562,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         }
 
         if (anchorIds.length > 0) {
-            idAttr = ` id="${anchorIds[0]}"`;
+            idAttr = ` id="${this.escape(anchorIds[0])}"`;
             if (anchorIds.length > 1) {
-                extraAnchors = anchorIds.slice(1).map(aid => `<a id="${aid}" name="${aid}"></a>`).join('');
+                extraAnchors = anchorIds.slice(1).map(aid => `<a id="${this.escape(aid)}" name="${this.escape(aid)}"></a>`).join('');
             }
         }
 
@@ -596,7 +599,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 if (baseImgStyle) imgStyleParts.push(baseImgStyle);
                 if (meta?.width) {
                     imgDataAttrs += ` data-width="${this.escape(meta.width)}"`;
-                    imgStyleParts.push(`width: ${meta.width}`);
+                    // Sanitize before it enters the style="" attribute: an unescaped width
+                    // (e.g. `1px" onerror="alert(1)`) would otherwise break out and inject an
+                    // event handler, and a CSS `url(...)` would fetch a remote resource.
+                    const safeWidth = sanitizeCssValue(meta.width);
+                    if (safeWidth) imgStyleParts.push(`width: ${safeWidth}`);
                 }
                 if (meta?.align) {
                     imgDataAttrs += ` data-align="${this.escape(meta.align)}"`;
@@ -606,7 +613,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 }
                 const imgStyleAttr = imgStyleParts.length > 0 ? ` style="${imgStyleParts.join('; ')}"` : '';
 
-                const img = `<img src="${this.escape(src)}" alt="${this.escape(node.text || meta?.altText || '')}"${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
+                const img = `<img src="${sanitizeImageUrl(src)}" alt="${this.escape(node.text || meta?.altText || '')}"${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
                 const content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
                 return `${extraAnchors}<div${idAttr}>${content}</div>`;
             }
@@ -627,7 +634,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     (function() {
         const initChart = () => {
             const ctx = document.getElementById('${chartId}').getContext('2d');
-            const chartData = ${JSON.stringify(chartData)};
+            const chartData = ${serializeForInlineScript(chartData)};
             const getRandomColor = (index, alpha) => {
                 const colors = [
                     'rgba(255, 99, 132, ' + alpha + ')',
@@ -703,7 +710,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     // raw LaTeX degrades gracefully without a KaTeX renderer.
                     const delimited = meta.math === 'block' ? `$$${node.text || ''}$$` : `$${node.text || ''}$`;
                     const tag = meta.math === 'block' ? 'div' : 'span';
-                    return `${extraAnchors}<${tag} class="math math-${meta.math}" data-math="${meta.math}"${idAttr}${mappedAttrs}${styleAttr}>${this.escape(delimited)}</${tag}>`;
+                    return `${extraAnchors}<${tag} class="math math-${this.escape(meta.math)}" data-math="${this.escape(meta.math)}"${idAttr}${mappedAttrs}${styleAttr}>${this.escape(delimited)}</${tag}>`;
                 }
                 const lang = meta?.language ? ` class="language-${this.escape(meta.language)}"` : '';
                 const codeHtml = `<code${lang}>${this.escape(node.text || '')}</code>`;
@@ -904,7 +911,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                             }
                             const rAnchorIds = this.config.ignoreInternalLinks ? [] : [...((rowNode.metadata as any)?.anchorIds || [])];
                             if (rAnchorIds.length > 0) {
-                                trAttrs += ` id="${rAnchorIds[0]}"`;
+                                trAttrs += ` id="${this.escape(rAnchorIds[0])}"`;
                             }
                             if (this.config.includeFormatting) {
                                 const styles = this.getInlineStyles(rowNode);
@@ -973,12 +980,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
             case 'slide': {
                 const meta = node.metadata as SlideMetadata;
-                const slideNum = meta?.slideNumber || '';
+                const slideNum = this.escape(String(meta?.slideNumber || ''));
                 return `${extraAnchors}<section class="slide" data-slide-num="${slideNum}"${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</section>`;
             }
             case 'page': {
                 const meta = node.metadata as PageMetadata;
-                const pageNum = meta?.pageNumber || '';
+                const pageNum = this.escape(String(meta?.pageNumber || ''));
                 return `${extraAnchors}<section class="page" data-page-num="${pageNum}"${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</section>`;
             }
             case 'note': {
@@ -987,7 +994,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     const key = this.escape(this.getFootnoteKey(node));
                     return `<p id="footnote-${key}" data-footnote-id="${key}">${childrenOutput} <a href="#footnote-ref-${key}">↩</a></p>`;
                 }
-                const noteClass = meta?.noteType ? ` note-${meta.noteType}` : '';
+                const noteClass = meta?.noteType ? ` note-${this.escape(meta.noteType)}` : '';
                 return `${extraAnchors}<div class="slide-note${noteClass}"${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
             }
 
@@ -1003,14 +1010,14 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const iframe = id
                     ? `<iframe src="https://www.youtube.com/embed/${this.escape(id)}" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>`
                     : '';
-                return `${extraAnchors}<div data-youtube-video="${this.escape(id)}" data-width="${this.escape(width)}" data-align="${this.escape(align)}" class="youtube-embed"${idAttr}${mappedAttrs} style="width: ${width}; margin-left: ${ml}; margin-right: ${mr};">${iframe}</div>`;
+                return `${extraAnchors}<div data-youtube-video="${this.escape(id)}" data-width="${this.escape(width)}" data-align="${this.escape(align)}" class="youtube-embed"${idAttr}${mappedAttrs} style="width: ${sanitizeCssValue(width)}; margin-left: ${ml}; margin-right: ${mr};">${iframe}</div>`;
             }
 
             case 'admonition': {
                 // Match inscript-editor's Admonition node wrapper so a loaded admonition
                 // reaches the editor as that node instead of a plain blockquote.
                 const meta = node.metadata as AdmonitionMetadata;
-                const admonitionType = meta?.admonitionType || 'note';
+                const admonitionType = this.escape(meta?.admonitionType || 'note');
                 return `${extraAnchors}<div class="admonition admonition-${admonitionType}" data-type="${admonitionType}"${idAttr}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
             }
 
@@ -1070,7 +1077,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         } else if (meta?.link) {
             const isInternal = meta.linkType !== 'external';
             if (!this.config.ignoreInternalLinks || !isInternal) {
-                result = `<a href="${meta.link}"${meta.linkType === 'external' ? ' target="_blank"' : ''}>${result}</a>`;
+                result = `<a href="${sanitizeUrl(meta.link)}"${meta.linkType === 'external' ? ' target="_blank"' : ''}>${result}</a>`;
             }
         }
         if (meta?.abbreviationTitle) {
@@ -1090,11 +1097,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     private getInlineStyles(node: OfficeContentNode): string {
         const styles: string[] = [];
 
+        // Colors/sizes/fonts/alignments are free strings from an untrusted document;
+        // run each through sanitizeCssValue so it can't break out of the style="" attribute
+        // or inject a resource-fetching CSS construct. Drop the declaration if nothing survives.
+        const pushSafe = (prop: string, value: string) => {
+            const safe = sanitizeCssValue(value);
+            if (safe) styles.push(`${prop}: ${safe}`);
+        };
+
         if (node.metadata) {
             const meta = node.metadata as any;
-            if (meta.alignment) styles.push(`text-align: ${meta.alignment}`);
-            if (meta.backgroundColor) styles.push(`background-color: ${meta.backgroundColor}`);
-            if (meta.verticalAlign) styles.push(`vertical-align: ${meta.verticalAlign}`);
+            if (meta.alignment) pushSafe('text-align', meta.alignment);
+            if (meta.backgroundColor) pushSafe('background-color', meta.backgroundColor);
+            if (meta.verticalAlign) pushSafe('vertical-align', meta.verticalAlign);
             if (meta.paragraphIndentation) {
                 const ind = meta.paragraphIndentation;
                 if (ind.left) styles.push(`margin-left: ${ind.left / 20}pt`);
@@ -1105,10 +1120,13 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
         if (node.formatting) {
             const f = node.formatting;
-            if (f.color) styles.push(`color: ${f.color}`);
-            if (f.backgroundColor) styles.push(`background-color: ${f.backgroundColor}`);
-            if (f.size) styles.push(`font-size: ${f.size}`);
-            if (f.font) styles.push(`font-family: ${f.font}, sans-serif`);
+            if (f.color) pushSafe('color', f.color);
+            if (f.backgroundColor) pushSafe('background-color', f.backgroundColor);
+            if (f.size) pushSafe('font-size', f.size);
+            if (f.font) {
+                const safeFont = sanitizeCssValue(f.font);
+                if (safeFont) styles.push(`font-family: ${safeFont}, sans-serif`);
+            }
         }
 
         return styles.join('; ');
@@ -1703,8 +1721,18 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         return letter;
     }
 
+    // Attribute/text escaping, URL sanitizing, and inline-script serialization all
+    // live in ../utils/sanitize.js so every generator shares one implementation.
+    // escape() stays as a thin wrapper because it has many call sites here.
     private escape(text: string): string {
-        if (typeof text !== 'string') return text;
-        return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        return escapeHtml(text);
+    }
+
+    /** Converts a document-supplied date to an ISO string, or '' if it is invalid
+     *  (a malformed date would otherwise throw a RangeError and abort generation). */
+    private toIsoDate(value: unknown): string {
+        if (value === undefined || value === null || value === '') return '';
+        const d = new Date(value as any);
+        return isNaN(d.getTime()) ? '' : d.toISOString();
     }
 }

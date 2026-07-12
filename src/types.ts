@@ -39,6 +39,8 @@ export enum OfficeErrorType {
     ZIP_ENTRY_INVALID_SIZE = 'ZIP_ENTRY_INVALID_SIZE',
     /** ZIP uncompressed size limit exceeded */
     ZIP_SIZE_LIMIT_EXCEEDED = 'ZIP_SIZE_LIMIT_EXCEEDED',
+    /** Document element/structure nesting exceeded the safe recursion depth */
+    MAX_NESTING_DEPTH_EXCEEDED = 'MAX_NESTING_DEPTH_EXCEEDED',
     /** Embedding call timed out */
     EMBEDDING_TIMEOUT = 'EMBEDDING_TIMEOUT'
 }

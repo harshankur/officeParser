@@ -359,7 +359,10 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     const uint8Array = new Uint8Array(buffer);
     const loadingTask = pdfjs.getDocument({
         data: uint8Array,
-        verbosity: 0 // ERRORS only, suppresses warnings
+        verbosity: 0, // ERRORS only, suppresses warnings
+        // Harden against untrusted PDFs: don't let pdf.js JIT font/CMap fast-paths
+        // compile via `new Function`.
+        isEvalSupported: false
     });
 
     // Handle loading errors, specifically missing worker in browser

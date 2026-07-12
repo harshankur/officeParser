@@ -1,6 +1,7 @@
 import { zipSync } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { parseRangeString } from '../utils/sheetUtils.js';
+import { csvSafeCell } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -29,7 +30,7 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
             return { value: '', messages: this.messages };
         }
 
-        const metadataHeader = this.config.renderMetadata ? this.renderMetadata(this.ast) : '';
+        const metadataHeader = this.config.renderMetadata ? this.renderMetadata(this.ast, delimiter) : '';
 
         // 2. Filter sheets based on range
         let selectedNodes = sheetNodes;
@@ -68,7 +69,7 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
             if (metadataHeader) mergedLines.push(metadataHeader.trim());
 
             for (const sheet of sheetData) {
-                if (sheetData.length > 1) mergedLines.push(`# Sheet: ${sheet.name}`);
+                if (sheetData.length > 1) mergedLines.push(`# Sheet: ${this.sanitizeComment(sheet.name, delimiter)}`);
                 for (const row of sheet.rows) {
                     const paddedRow = [...row];
                     // Don't pad comments
@@ -216,30 +217,39 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
     }
 
     /**
-     * Escapes a value for CSV formatting.
+     * Escapes a value for CSV formatting: RFC 4180 quoting plus a spreadsheet
+     * formula-injection guard (see csvSafeCell in ../utils/sanitize.js).
      */
     private escapeCsvValue(val: string, delimiter: string): string {
-        const needsQuotes = val.includes(delimiter) || val.includes('"') || val.includes('\n') || val.includes('\r');
-        if (!needsQuotes) return val;
+        return csvSafeCell(val, delimiter);
+    }
 
-        // Double up existing quotes and wrap in quotes
-        return `"${val.replace(/"/g, '""')}"`;
+    /** Sanitizes a value for a `#` comment line (document metadata or sheet name).
+     *  Comment lines are free text prefixed with `#`, not RFC-4180 cells, so they
+     *  can't be quoted; instead we (a) collapse newlines so the value can't break out
+     *  and inject a new row, and (b) replace the column delimiter with a space so a
+     *  value like `x,=1+1` can't split into a second cell that a spreadsheet would
+     *  evaluate as a formula (CSV formula/DDE injection). */
+    private sanitizeComment(val: string, delimiter: string): string {
+        let s = String(val ?? '').replace(/[\r\n]+/g, ' ');
+        if (delimiter) s = s.split(delimiter).join(' ');
+        return s;
     }
 
     /**
      * Renders metadata as comments.
      */
-    private renderMetadata(ast: OfficeParserAST): string {
+    private renderMetadata(ast: OfficeParserAST, delimiter: string): string {
         if (!ast.metadata) return '';
         const m = ast.metadata;
         let output = '';
-        if (m.title) output += `# Title: ${m.title}\n`;
-        if (m.author) output += `# Author: ${m.author}\n`;
-        if (m.created) output += `# Created: ${new Date(m.created).toLocaleString()}\n`;
-        if (m.modified) output += `# Modified: ${new Date(m.modified).toLocaleString()}\n`;
+        if (m.title) output += `# Title: ${this.sanitizeComment(m.title, delimiter)}\n`;
+        if (m.author) output += `# Author: ${this.sanitizeComment(m.author, delimiter)}\n`;
+        if (m.created) output += `# Created: ${this.sanitizeComment(new Date(m.created).toLocaleString(), delimiter)}\n`;
+        if (m.modified) output += `# Modified: ${this.sanitizeComment(new Date(m.modified).toLocaleString(), delimiter)}\n`;
         if (m.customProperties) {
             for (const [k, v] of Object.entries(m.customProperties)) {
-                output += `# ${k}: ${v}\n`;
+                output += `# ${this.sanitizeComment(k, delimiter)}: ${this.sanitizeComment(String(v), delimiter)}\n`;
             }
         }
         return output ? output + '\n' : '';
