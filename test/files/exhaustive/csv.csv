@@ -1,0 +1,10 @@
+# CSV Exhaustive Features Test
+# Comment row: testing comment parsing
+# Second comment row
+id,name,description,notes
+1,Simple,Basic cell value,No special chars
+2,Commas,"Value with, a comma","Also has, comma"
+3,Quotes,"Value with ""escaped"" quotes",Normal
+4,Multiline,"Value with
+a newline inside",End row
+5,Empty test,Has content,Normal again
