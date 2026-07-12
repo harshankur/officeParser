@@ -34,7 +34,7 @@
     "build:browser:types": "dts-bundle-generator --no-check -o dist/officeparser.browser.d.ts src/index.ts && cp dist/officeparser.browser.d.ts dist/officeparser.browser.slim.d.ts",
     "build:browser": "node build_browser.js && npm run sync:docs",
     "sync:versions": "node scripts/sync-pdfjs-versions.js",
-    "sync:docs": "mkdir -p docs/dist && cp dist/officeparser.browser.iife.js docs/dist/ && cp dist/officeparser.browser.mjs docs/dist/ && cp dist/officeparser.browser.slim.iife.js docs/dist/ && cp dist/officeparser.browser.slim.mjs docs/dist/ && mkdir -p docs/test/files && cp test/files/* docs/test/files/",
+    "sync:docs": "mkdir -p docs/dist && cp dist/officeparser.browser.iife.js docs/dist/ && cp dist/officeparser.browser.mjs docs/dist/ && cp dist/officeparser.browser.slim.iife.js docs/dist/ && cp dist/officeparser.browser.slim.mjs docs/dist/ && mkdir -p docs/test/files && cp -r test/files/* docs/test/files/",
     "lint": "eslint src",
     "test": "npm run lint && npm run test:clean && npm run build && npm run test:license && npm run test:artifacts && npm run test:parser && npm run test:generator && npm run test:cli",
     "test:baseline": "npm run test:parser:baseline && npm run test:generator:baseline",
