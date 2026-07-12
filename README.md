@@ -62,6 +62,7 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 - [Browser Usage](#browser-usage)
 - [Troubleshooting & Common Issues](#troubleshooting--common-issues)
 - [Known Limitations](#known-limitations)
+- [Security & Trust Boundary](#security--trust-boundary)
 - [Contributing](#contributing)
 
 ---
@@ -1228,6 +1229,28 @@ For a full debugging guide, visit the [Live Documentation](https://harshankur.gi
 
 1. **ODT/ODS Charts**: May show inaccurate data when the chart references external cell ranges or uses complex layout-based data.
 2. **PDF Images (Browser)**: Extracted as BMP files for cross-platform compatibility. Conversion is automatic.
+
+---
+
+## Security & Trust Boundary
+
+`officeParser` is a **parser, generator, and converter** — by design, it opens and processes files
+handed to it, which may originate from an untrusted source (a user upload, an inbox attachment, a
+scraped document, etc.). I treat every input as potentially adversarial and actively harden the
+library against it: output sanitization against injection (HTML/CSS/URL/script/CSV/RTF/Markdown),
+zip-bomb protection, resource/recursion limits against denial-of-service payloads, SSRF protection
+during PDF rendering, and more — see [CHANGELOG.md](CHANGELOG.md) for the ongoing history of these
+fixes and [SECURITY.md](SECURITY.md) for how to report a vulnerability.
+
+That said: **no parser can be guaranteed 100% free of vulnerabilities**, and I'm the sole
+maintainer of this project — there is no dedicated security team behind it. I'm committed to
+fixing legitimate reports promptly, but I cannot promise the library is impervious to a
+sufficiently novel attack, and I make no warranty to that effect (see the [LICENSE](LICENSE)'s
+"AS IS" clause, under which this software is provided). **Responsibility for how a compromised or
+malicious input file affects your system ultimately rests with you, the consumer of the library**
+— if you process files from untrusted sources, apply the isolation appropriate to your threat
+model regardless (sandboxing/containerization, resource limits, running as a low-privilege
+process, etc.) rather than treating any single library's hardening as a complete solution.
 
 ---
 

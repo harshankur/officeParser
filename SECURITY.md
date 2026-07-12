@@ -17,9 +17,9 @@ Maintenance and security patches are currently provided for the latest major bra
 **Please do not open public issues for security vulnerabilities.**
 
 ### 🛑 Why Private Disclosure?
-Publicly disclosing a vulnerability before a fix is available creates an immediate window for attackers to exploit the issue against the millions of users currently running this library. Private reporting allows us to develop, test, and release a patch **before** the technical details are shared, ensuring that the community remains protected.
+Publicly disclosing a vulnerability before a fix is available creates an immediate window for attackers to exploit the issue against the millions of users currently running this library. Private reporting allows me to develop, test, and release a patch **before** the technical details are shared, ensuring that the community remains protected.
 
-To facilitate a safe disclosure, please use our private GitHub reporting channel:
+To facilitate a safe disclosure, please use my private GitHub reporting channel:
 
 ### GitHub Private Reporting
 1.  Navigate to the [Security tab](https://github.com/harshankur/officeParser/security) of this repository.
@@ -36,6 +36,26 @@ Upon receiving a valid report, I will:
 *   Credit the researcher in the release notes (optional, at your discretion).
 
 I ask that you follow **coordinated disclosure** practices and allow a reasonable window to release a patch before sharing technical details publicly.
+
+## Security Posture & Disclaimer
+
+`officeParser` is a parser, generator, and converter for office documents — it is often used to
+process files from untrusted sources (user uploads, email attachments, scraped content, etc.), so
+I treat every input as potentially adversarial. I actively invest in hardening the library against
+malicious input — output sanitization against injection, zip-bomb and decompression limits,
+recursion/resource limits against denial-of-service payloads, SSRF protection during PDF
+rendering, and more — and I will keep shipping security fixes for as long as I actively maintain
+this project (see CHANGELOG.md for the ongoing history).
+
+That said, I am the sole maintainer of this project, with no dedicated security team behind it,
+and **no software can be guaranteed free of vulnerabilities**. I make no warranty that
+`officeParser` is or will remain impervious to a sufficiently novel attack — the library is
+provided "AS IS", without warranty of any kind, per the [LICENSE](LICENSE). **Final responsibility
+for the impact of a compromised or malicious input file on your system rests with you, the
+consumer of the library.** If you process files from untrusted sources, apply isolation
+appropriate to your own threat model (sandboxing/containerization, resource limits, a
+low-privilege execution context, etc.) rather than relying on any single library's hardening as a
+complete solution.
 
 ## Out of Scope
 - **Third-Party Dependencies**: Vulnerabilities in upstream libraries (e.g., `tesseract.js`, `pdfjs-dist`, `fflate`) should be reported directly to their respective maintainers.
