@@ -62,21 +62,14 @@
   },
   "content": [
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"OLE_LINK1\"></a><a id=\"OLE_LINK2\"></a><a id=\"_Toc581531977\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Demonstration of DOCX support in calibre",
       "metadata": {
         "level": 1,
         "anchorIds": [
+          "OLE_LINK1",
+          "OLE_LINK2",
+          "_Toc581531977",
           "demonstration-of-docx-support-in-calibre"
         ]
       },
@@ -151,22 +144,13 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc2054249818\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Text Formatting",
       "metadata": {
         "level": 1,
         "alignment": "center",
         "anchorIds": [
+          "_Toc2054249818",
           "text-formatting"
         ]
       },
@@ -181,21 +165,12 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc2137712100\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Inline formatting",
       "metadata": {
         "level": 2,
         "anchorIds": [
+          "_Toc2137712100",
           "inline-formatting"
         ]
       },
@@ -342,21 +317,12 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc1074133965\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Fun with fonts",
       "metadata": {
         "level": 2,
         "anchorIds": [
+          "_Toc1074133965",
           "fun-with-fonts"
         ]
       },
@@ -381,21 +347,13 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Paragraph_level_formatting\"></a><a id=\"_Toc2022725662\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Paragraph level formatting",
       "metadata": {
         "level": 2,
         "anchorIds": [
+          "_Paragraph_level_formatting",
+          "_Toc2022725662",
           "paragraph-level-formatting"
         ]
       },
@@ -432,22 +390,13 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc28114276\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Tables",
       "metadata": {
         "level": 1,
         "alignment": "center",
         "anchorIds": [
+          "_Toc28114276",
           "tables"
         ]
       },
@@ -652,11 +601,19 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">Point A</div>",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "Point A",
+                      "formatting": {
+                        "bold": true
+                      }
+                    }
+                  ]
                 }
               ]
             },
@@ -664,11 +621,19 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">Point B</div>",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "Point B",
+                      "formatting": {
+                        "bold": true
+                      }
+                    }
+                  ]
                 }
               ]
             },
@@ -676,11 +641,19 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">Point C</div>",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "Point C",
+                      "formatting": {
+                        "bold": true
+                      }
+                    }
+                  ]
                 }
               ]
             },
@@ -688,11 +661,19 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">Point D</div>",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "Point D",
+                      "formatting": {
+                        "bold": true
+                      }
+                    }
+                  ]
                 }
               ]
             },
@@ -700,11 +681,19 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">Point E</div>",
-                  "formatting": {
-                    "bold": true
-                  }
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "Point E",
+                      "formatting": {
+                        "bold": true
+                      }
+                    }
+                  ]
                 }
               ]
             }
@@ -726,8 +715,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">—</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "—"
+                    }
+                  ]
                 }
               ]
             },
@@ -765,8 +762,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">87</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "87"
+                    }
+                  ]
                 }
               ]
             },
@@ -774,8 +779,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">—</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "—"
+                    }
+                  ]
                 }
               ]
             },
@@ -809,8 +822,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">64</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "64"
+                    }
+                  ]
                 }
               ]
             },
@@ -818,8 +839,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">56</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "56"
+                    }
+                  ]
                 }
               ]
             },
@@ -827,8 +856,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">—</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "—"
+                    }
+                  ]
                 }
               ]
             },
@@ -858,8 +895,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">37</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "37"
+                    }
+                  ]
                 }
               ]
             },
@@ -867,8 +912,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">32</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "32"
+                    }
+                  ]
                 }
               ]
             },
@@ -876,8 +929,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">91</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "91"
+                    }
+                  ]
                 }
               ]
             },
@@ -885,8 +946,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">—</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "—"
+                    }
+                  ]
                 }
               ]
             },
@@ -912,8 +981,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">93</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "93"
+                    }
+                  ]
                 }
               ]
             },
@@ -921,8 +998,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">35</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "35"
+                    }
+                  ]
                 }
               ]
             },
@@ -930,8 +1015,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">54</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "54"
+                    }
+                  ]
                 }
               ]
             },
@@ -939,8 +1032,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">43</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "43"
+                    }
+                  ]
                 }
               ]
             },
@@ -948,8 +1049,16 @@
               "type": "cell",
               "children": [
                 {
-                  "type": "text",
-                  "text": "<div style=\"text-align: center\">—</div>"
+                  "type": "paragraph",
+                  "metadata": {
+                    "alignment": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "text": "—"
+                    }
+                  ]
                 }
               ]
             }
@@ -2447,22 +2556,13 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc54889875\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Structural Elements",
       "metadata": {
         "level": 1,
         "alignment": "center",
         "anchorIds": [
+          "_Toc54889875",
           "structural-elements"
         ]
       },
@@ -2487,21 +2587,12 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc201580556\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Footnotes & Endnotes",
       "metadata": {
         "level": 2,
         "anchorIds": [
+          "_Toc201580556",
           "footnotes-endnotes"
         ]
       },
@@ -2546,21 +2637,12 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc1977424358\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Dropcaps",
       "metadata": {
         "level": 2,
         "anchorIds": [
+          "_Toc1977424358",
           "dropcaps"
         ]
       },
@@ -2595,21 +2677,12 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc1233048813\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Links",
       "metadata": {
         "level": 2,
         "anchorIds": [
+          "_Toc1233048813",
           "links"
         ]
       },
@@ -2664,21 +2737,12 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc64145348\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Table of Contents",
       "metadata": {
         "level": 2,
         "anchorIds": [
+          "_Toc64145348",
           "table-of-contents"
         ]
       },
@@ -2992,22 +3056,13 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc484565143\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Images",
       "metadata": {
         "level": 1,
         "alignment": "center",
         "anchorIds": [
+          "_Toc484565143",
           "images"
         ]
       },
@@ -3066,22 +3121,13 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc1359965655\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Lists",
       "metadata": {
         "level": 1,
         "alignment": "center",
         "anchorIds": [
+          "_Toc1359965655",
           "lists"
         ]
       },
@@ -3106,21 +3152,12 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc1958162433\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Bulleted List",
       "metadata": {
         "level": 2,
         "anchorIds": [
+          "_Toc1958162433",
           "bulleted-list"
         ]
       },
@@ -3169,21 +3206,12 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc415190676\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Numbered List",
       "metadata": {
         "level": 2,
         "anchorIds": [
+          "_Toc415190676",
           "numbered-list"
         ]
       },
@@ -3232,21 +3260,12 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc1093260318\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Multi-level Lists",
       "metadata": {
         "level": 2,
         "anchorIds": [
+          "_Toc1093260318",
           "multi-level-lists"
         ]
       },
@@ -3458,21 +3477,12 @@
       ]
     },
     {
-      "type": "paragraph",
-      "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "<a id=\"_Toc1471533984\"></a>"
-        }
-      ]
-    },
-    {
       "type": "heading",
       "text": "Continued Lists",
       "metadata": {
         "level": 2,
         "anchorIds": [
+          "_Toc1471533984",
           "continued-lists"
         ]
       },

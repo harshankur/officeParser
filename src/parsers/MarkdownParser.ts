@@ -2,6 +2,11 @@ import { AdmonitionMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 
+// Sentinel node type for a standalone bookmark-anchor block (e.g. `<a id="x"></a>` on its
+// own line). A post-parse pass folds these into the following node's anchorIds so they
+// round-trip as real anchors rather than being escaped to visible text on regeneration.
+const ANCHOR_PLACEHOLDER = '__anchorPlaceholder__';
+
 /**
  * Splits the inner content of a YAML flow array (`a, "b, c", d`) on top-level commas,
  * ignoring commas inside single- or double-quoted items.
@@ -406,6 +411,21 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         block = block.trim();
         if (!block) continue;
 
+        // Standalone anchor-only block: one or more empty `<a name|id="…"></a>` tags on their
+        // own line (bookmark targets the MarkdownGenerator emits just before a heading/paragraph).
+        // Capture them as a placeholder so the post-loop pass can re-attach them to the following
+        // node's anchorIds — otherwise the tag-opening `<` is escaped and they render as visible text.
+        if (/^(?:\s*<a\s[^>]*>\s*<\/a>\s*)+$/i.test(block)) {
+            const anchorIds: string[] = [];
+            for (const m of block.matchAll(/<a\s[^>]*\b(?:name|id)="([^"]*)"/gi)) {
+                if (m[1]) anchorIds.push(m[1]);
+            }
+            if (anchorIds.length > 0) {
+                content.push({ type: ANCHOR_PLACEHOLDER as any, metadata: { anchorIds } as any, children: [] });
+                continue;
+            }
+        }
+
         // Check for alignment wrapper start/end
         const alignStartMatch = block.match(/^<div\s+(?:style="text-align:\s*(left|center|right|justify);?"|align="(left|center|right|justify)")>$/i);
         if (alignStartMatch) {
@@ -492,7 +512,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
             const anchorIds: string[] = [];
             if (leadingAnchorsRaw) {
-                const idMatches = leadingAnchorsRaw.matchAll(/<a\s+name="([^"]+)"/gi);
+                const idMatches = leadingAnchorsRaw.matchAll(/<a\s[^>]*\b(?:name|id)="([^"]+)"/gi);
                 for (const m of idMatches) anchorIds.push(m[1]);
             }
             if (explicitAnchor) anchorIds.push(explicitAnchor);
@@ -665,10 +685,26 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     if (lines[i].match(/^\|?[-:| ]*---[-:| ]*\|?$/)) continue; // Separator row (requires at least one triple-hyphen)
 
                     const cellsStr = lines[i].replace(/^\||\|$/g, '').split('|');
-                    const cells: OfficeContentNode[] = cellsStr.map(c => ({
-                        type: 'cell',
-                        children: parseInline(c.trim(), i === 0 ? { bold: true } : {})
-                    }));
+                    const cells: OfficeContentNode[] = cellsStr.map(c => {
+                        // Recognize the MarkdownGenerator's own cell-alignment fallback,
+                        // `<div style="text-align: X">…</div>`, and lift it into an aligned
+                        // paragraph so it round-trips as alignment instead of being escaped to
+                        // visible text on regeneration. Unwrap wherever it sits (e.g. inside **…**).
+                        let cellText = c.trim();
+                        let cellAlign: 'left' | 'center' | 'right' | 'justify' | undefined;
+                        cellText = cellText.replace(
+                            /<div\s+style="text-align:\s*(left|center|right|justify);?"\s*>([\s\S]*?)<\/div>/gi,
+                            (_m, a: string, inner: string) => { cellAlign = a.toLowerCase() as any; return inner; }
+                        );
+                        const inline = parseInline(cellText, i === 0 ? { bold: true } : {});
+                        if (cellAlign && cellAlign !== 'left') {
+                            return {
+                                type: 'cell',
+                                children: [{ type: 'paragraph', metadata: { alignment: cellAlign } as any, children: inline }]
+                            } as OfficeContentNode;
+                        }
+                        return { type: 'cell', children: inline } as OfficeContentNode;
+                    });
                     rows.push({ type: 'row', children: cells });
                 }
                 content.push({ type: 'table', metadata: tableAlign ? { align: tableAlign } : undefined, children: rows });
@@ -688,6 +724,33 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             metadata: { alignment } as any,
             children: parseInline(block.replace(/\n/g, ' '))
         });
+    }
+
+    // Fold standalone anchor placeholders into the following content node's anchorIds so a
+    // bookmark target emitted on its own line round-trips as a real anchor. A trailing placeholder
+    // with no following node attaches to the previous node instead; if the document is nothing but
+    // anchors, they are dropped (there is no node to host them).
+    if (content.some(n => (n.type as any) === ANCHOR_PLACEHOLDER)) {
+        const merged: OfficeContentNode[] = [];
+        let carried: string[] = [];
+        for (const node of content) {
+            if ((node.type as any) === ANCHOR_PLACEHOLDER) {
+                carried.push(...(((node.metadata as any)?.anchorIds as string[]) || []));
+                continue;
+            }
+            if (carried.length > 0) {
+                const meta: any = node.metadata || (node.metadata = {} as any);
+                meta.anchorIds = [...carried, ...((meta.anchorIds as string[]) || [])];
+                carried = [];
+            }
+            merged.push(node);
+        }
+        if (carried.length > 0 && merged.length > 0) {
+            const last: any = merged[merged.length - 1].metadata || (merged[merged.length - 1].metadata = {} as any);
+            last.anchorIds = [...((last.anchorIds as string[]) || []), ...carried];
+        }
+        content.length = 0;
+        content.push(...merged);
     }
 
     const toTextSync = () => content.map(n => {
