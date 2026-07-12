@@ -96,6 +96,34 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             browser = await puppeteer.launch(launchOptions);
             const page = await browser.newPage();
 
+            // Harden against SSRF: the HTML being rendered is derived from an untrusted
+            // document, and `networkidle0` would otherwise fetch every URL it references
+            // (external images, stylesheets, etc.) from this host — reaching internal
+            // services or a cloud metadata endpoint (169.254.169.254). Intercept requests
+            // and allow only inline data/blob URIs and the configured chart CDN; abort every
+            // other remote fetch.
+            const allowedHosts = new Set<string>();
+            try {
+                const chartSrc = this.config.htmlConfig?.chartJsSrc;
+                if (chartSrc) allowedHosts.add(new URL(chartSrc).host);
+            } catch { /* no or invalid chart CDN configured */ }
+
+            let blockedRemoteResource = false;
+            await page.setRequestInterception(true);
+            page.on('request', (req: any) => {
+                const url = req.url();
+                if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('about:')) {
+                    return req.continue().catch(() => { /* request already handled */ });
+                }
+                try {
+                    if (allowedHosts.has(new URL(url).host)) {
+                        return req.continue().catch(() => { /* request already handled */ });
+                    }
+                } catch { /* unparseable URL — fall through and block */ }
+                blockedRemoteResource = true;
+                return req.abort().catch(() => { /* request already handled */ });
+            });
+
             const pdfConfig = this.config.pdfConfig;
             const timeout = pdfConfig.timeout;
             if (timeout !== undefined && timeout > 0) {
@@ -121,6 +149,10 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
 
             await browser.close();
             browser = null;
+
+            if (blockedRemoteResource) {
+                this.warn(OfficeWarningType.BROWSER_GENERATION_LIMITATION, 'One or more remote resources referenced by the document were blocked during PDF rendering to prevent server-side request forgery (SSRF). Only inline images and the configured chart CDN are loaded.');
+            }
 
             return {
                 value: new Uint8Array(pdfBuffer),

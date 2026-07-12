@@ -85,6 +85,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{ document: false }`; those that want a leak-free styled fragment can pass
   `{ document: false, styles: 'scoped' }`.
 
+### Fixed
+- **Centralized Output Sanitization**: Added `src/utils/sanitize.ts` as the single source of truth for
+  escaping AST-derived (untrusted document) text in every generator's output context, closing several
+  injection gaps: HTML/XHTML text and attributes (`escapeHtml`/`escapeXml`), inline `<style>` CSS values
+  (`sanitizeCssValue` — strips `url()`/`expression()`/`@import`/`javascript:` and CSS-breakout
+  characters), `href`/`src` URLs (`sanitizeUrl`/`sanitizeImageUrl` — reject script-executing schemes,
+  allow only `http(s)`/`mailto`/`tel`/relative/fragment, plus `data:image/*` for images), inline
+  `<script>` JSON payloads (`serializeForInlineScript` — escapes `<`/`>` and U+2028/U+2029 so a
+  document-supplied chart label can't close the script tag early), CSV cells (`csvSafeCell` — guards
+  against formula/DDE injection per CWE-1236), RTF control words (`escapeRtf`), and Markdown text/URLs
+  (`markdownEscapeText`/`sanitizeMarkdownUrl`). `CsvGenerator`, `EpubGenerator`, `HtmlGenerator`,
+  `MarkdownGenerator`, `PdfGenerator`, and `RtfGenerator` all now delegate to these helpers instead of
+  ad hoc per-generator escaping. Covered by a new `test/security/testSanitization.ts` regression suite
+  (`npm run test:security`).
+- **Zip Bomb Protection**: `extractFiles` (`src/utils/zipUtils.ts`) now decompresses via `fflate`'s
+  streaming `Unzip`/`UnzipInflate` and caps `decompressionLimits.maxUncompressedBytes` against the
+  *actual* inflated byte count as it streams in, instead of the ZIP header's declared (and
+  attacker-controlled) `originalSize` — a crafted archive can understate that field and still inflate
+  to gigabytes under the old declared-size check.
+- **Denial-of-Service Hardening**:
+  - `HtmlParser`'s tree builder no longer re-scans/re-lowercases the whole remaining document for every
+    tag or `<script>`/`<style>` close tag (was `O(n²)` on documents with many tags); `parseNode`
+    recursion is now capped at depth 1000, throwing the new `OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED`
+    instead of overflowing the call stack on a maliciously deep element tree.
+  - `MarkdownParser`'s MDX-unwrap fixed-point loop is capped at 100 passes, bounding the cost of a
+    pathologically deep `<A><A>...</A></A>` input.
+- **SSRF Hardening (PDF generation)**: `PdfGenerator`'s Puppeteer page now intercepts every network
+  request and aborts anything that isn't an inline `data:`/`blob:` URI or the configured
+  `htmlConfig.chartJsSrc` host — previously, rendering a document containing an external image or
+  stylesheet URL would let Puppeteer fetch it from the server, which could reach internal services or a
+  cloud metadata endpoint (`169.254.169.254`). A warning is emitted when a resource is blocked.
+- **PDF Parsing Hardening**: `PdfParser` now passes `isEvalSupported: false` to `pdf.js`, preventing its
+  font/CMap fast-path from compiling attacker-controlled PDF content via `new Function`.
+- **Markdown Round-Trip**: Standalone bookmark-anchor blocks (`<a id="x"></a>` on their own line,
+  emitted by `MarkdownGenerator` just before a heading/paragraph) and table cells using the
+  `<div style="text-align: X">` alignment fallback are now correctly folded back into `anchorIds` /
+  cell alignment on re-parse, instead of surviving as escaped literal text on a save→reload cycle.
+
 ## [7.2.3] - 2026-06-28
 ### Added
 - **Slim Browser Bundles**: Introduced `officeparser.browser.slim.mjs` and `officeparser.browser.slim.iife.js` bundles along with types `officeparser.browser.slim.d.ts`. In the slim bundles, `tesseract.js` is stubbed out entirely and default CDN URLs for PDF workers and Chart.js are removed, making the library fully compliant with strict environments like Chrome/Edge Manifest V3 extensions where remotely hosted code is prohibited.

@@ -1,4 +1,5 @@
 import { ConversionResult, GeneratorConfig, HeadingMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, TextMetadata } from '../types.js';
+import { escapeRtf as escapeRtfShared } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -131,7 +132,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     if (meta?.link) {
                         const isInternal = meta.linkType !== 'external';
                         if (!this.config.ignoreInternalLinks || !isInternal) {
-                            return `{\\field{\\*\\fldinst{HYPERLINK "${meta.link}"}}{\\fldrslt ${text}}}`;
+                            return `{\\field{\\*\\fldinst{HYPERLINK "${this.escapeRtf(meta.link)}"}}{\\fldrslt ${text}}}`;
                         }
                     }
 
@@ -267,19 +268,6 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     }
 
     private escapeRtf(text: string): string {
-        return text
-            .replace(/\\/g, '\\\\')
-            .replace(/{/g, '\\{')
-            .replace(/}/g, '\\}')
-            .replace(/[^\x00-\x7F]/g, (match) => {
-                let code = match.charCodeAt(0);
-                if (code < 256) {
-                    return `\\'${code.toString(16).padStart(2, '0')}`;
-                }
-                if (code > 32767) {
-                    code -= 65536;
-                }
-                return `{\\uc0\\u${code}}`;
-            });
+        return escapeRtfShared(text);
     }
 }

@@ -1,4 +1,5 @@
 import { AdmonitionMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, TableMetadata, TextMetadata } from '../types.js';
+import { escapeHtml, markdownEscapeText, sanitizeCssValue, sanitizeMarkdownUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -65,9 +66,18 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private renderAttributeList(meta: { width?: string; align?: string } | undefined): string {
         if (!meta?.width && !meta?.align) return '';
         const parts: string[] = [];
-        if (meta.width) parts.push(`width=${meta.width}`);
-        if (meta.align) parts.push(`align=${meta.align}`);
+        // Strip characters that would break out of the `{...}` attribute list.
+        if (meta.width) parts.push(`width=${String(meta.width).replace(/[{}\s]+/g, '')}`);
+        if (meta.align) parts.push(`align=${String(meta.align).replace(/[{}\s]+/g, '')}`);
         return `{${parts.join(' ')}}`;
+    }
+
+    /** Converts a document-supplied date to an ISO string, or '' if invalid
+     *  (a malformed date would otherwise throw a RangeError and abort generation). */
+    private toIsoDate(value: unknown): string {
+        if (value === undefined || value === null || value === '') return '';
+        const d = new Date(value as any);
+        return isNaN(d.getTime()) ? '' : d.toISOString();
     }
 
     /**
@@ -81,15 +91,23 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         // Add Metadata (YAML Front Matter)
         if (this.ast.metadata) {
             output += '---\n';
-            if (this.ast.metadata.title) output += `title: "${this.ast.metadata.title}"\n`;
-            if (this.ast.metadata.author) output += `author: "${this.ast.metadata.author}"\n`;
-            if (this.ast.metadata.created) output += `created: ${new Date(this.ast.metadata.created).toISOString()}\n`;
-            if (this.ast.metadata.modified) output += `modified: ${new Date(this.ast.metadata.modified).toISOString()}\n`;
-            if (this.ast.metadata.description) output += `description: "${this.ast.metadata.description}"\n`;
+            // JSON-encode scalar values so a title/author/description containing a
+            // quote or newline can't break out of the YAML string and inject
+            // arbitrary front-matter keys. (JSON.stringify of a benign value yields
+            // the same `"..."` form as before, so normal output is unchanged.)
+            if (this.ast.metadata.title) output += `title: ${JSON.stringify(this.ast.metadata.title)}\n`;
+            if (this.ast.metadata.author) output += `author: ${JSON.stringify(this.ast.metadata.author)}\n`;
+            const createdIso = this.toIsoDate(this.ast.metadata.created);
+            if (createdIso) output += `created: ${createdIso}\n`;
+            const modifiedIso = this.toIsoDate(this.ast.metadata.modified);
+            if (modifiedIso) output += `modified: ${modifiedIso}\n`;
+            if (this.ast.metadata.description) output += `description: ${JSON.stringify(this.ast.metadata.description)}\n`;
 
             if (this.ast.metadata.customProperties) {
                 for (const [key, val] of Object.entries(this.ast.metadata.customProperties)) {
-                    output += `${key}: ${Array.isArray(val) ? this.serializeFrontmatterArray(val) : JSON.stringify(val)}\n`;
+                    // Strip newlines/colons from the key so it can't inject a new mapping.
+                    const safeKey = String(key).replace(/[\r\n:]+/g, ' ').trim();
+                    output += `${safeKey}: ${Array.isArray(val) ? this.serializeFrontmatterArray(val) : JSON.stringify(val)}\n`;
                 }
             }
             output += '---\n\n';
@@ -113,7 +131,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
             switch (node.type) {
                 case 'text': {
-                    let text = node.text || '';
+                    // Entity-encode angle brackets so document text can't inject a raw
+                    // HTML tag (e.g. <script>) when the Markdown is rendered to HTML.
+                    let text = markdownEscapeText(node.text || '');
                     if (this.config.includeFormatting && node.formatting) {
                         if (node.formatting.bold) text = `**${text}**`;
                         if (node.formatting.italic) text = `*${text}*`;
@@ -129,9 +149,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const meta = node.metadata as TextMetadata;
                     if (meta?.wikilink) {
                         // Obsidian syntax: bare page name, or page|alias when the display
-                        // text differs from the page name.
-                        const page = meta.link || '';
-                        text = (node.text && node.text !== page) ? `[[${page}|${node.text}]]` : `[[${page}]]`;
+                        // text differs from the page name. Strip the `[]|`/newline chars
+                        // that would break out of the `[[...]]` wrapper.
+                        const page = (meta.link || '').replace(/[[\]|\r\n]+/g, '');
+                        const alias = (node.text || '').replace(/[[\]|\r\n]+/g, '');
+                        text = (node.text && node.text !== (meta.link || '')) ? `[[${page}|${alias}]]` : `[[${page}]]`;
                     } else if (meta?.link) {
                         const isInternal = meta.linkType !== 'external';
                         if (!this.config.ignoreInternalLinks || !isInternal) {
@@ -141,7 +163,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                                 const target = link.substring(1);
                                 link = '#' + this.slugify(target);
                             }
-                            text = `[${text}](${link})`;
+                            // Reject javascript:/data: schemes and encode `()`/whitespace so the
+                            // URL can't break out of `](...)` or inject a script link.
+                            text = `[${text}](${sanitizeMarkdownUrl(link)})`;
                         }
                     }
                     if (meta?.abbreviationTitle) {
@@ -151,7 +175,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         this.collectedAbbreviations.set(node.text || '', meta.abbreviationTitle);
                     }
                     if (meta?.citationKey) {
-                        text = `[@${meta.citationKey}]`;
+                        text = `[@${String(meta.citationKey).replace(/[[\]\r\n]+/g, '')}]`;
                     }
                     return text;
                 }
@@ -175,14 +199,14 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     }
 
                     const anchors = this.config.mdConfig.fallbackToHtml
-                        ? remainingAnchors.map(aid => `<a name="${aid}"></a>`).join('')
+                        ? remainingAnchors.map(aid => `<a name="${this.slugify(aid)}"></a>`).join('')
                         : '';
                     let content = `${prefix}${childrenOutput}${id}`;
 
                     // Alignment fallback via HTML div/p
                     if (this.config.mdConfig.fallbackToHtml && meta?.alignment && meta.alignment !== 'left') {
                         // Use extra newlines to ensure Markdown inside the div is parsed
-                        content = `<div style="text-align: ${meta.alignment}">\n\n${content}\n\n</div>`;
+                        content = `<div style="text-align: ${sanitizeCssValue(meta.alignment)}">\n\n${content}\n\n</div>`;
                     }
 
                     return `${anchors}${anchors ? '\n' : ''}${content}\n\n`;
@@ -195,7 +219,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
                     // Alignment fallback via HTML div/p
                     if (this.config.mdConfig.fallbackToHtml && meta?.alignment && meta.alignment !== 'left') {
-                        content = `<div style="text-align: ${meta.alignment}">${content}</div>`;
+                        content = `<div style="text-align: ${sanitizeCssValue(meta.alignment)}">${content}</div>`;
                     }
 
                     return childrenOutput ? `${anchors}${content}\n\n` : '';
@@ -227,7 +251,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     }
 
                     const anchors = this.renderAnchors(meta);
-                    return `${anchors}${anchors ? '\n' : ''}![${alt}](${src})${this.renderAttributeList(meta)}`;
+                    // Strip `[]` from alt (would close the `![...]`) and neutralize the URL scheme.
+                    const safeAlt = markdownEscapeText(alt).replace(/[[\]]/g, '');
+                    const safeSrc = sanitizeMarkdownUrl(src, { allowDataImage: true });
+                    return `${anchors}${anchors ? '\n' : ''}![${safeAlt}](${safeSrc})${this.renderAttributeList(meta)}`;
                 }
 
                 case 'table': {
@@ -264,12 +291,20 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (meta?.math === 'inline') {
                         return `$${node.text || ''}$`;
                     }
-                    const lang = meta?.language || '';
+                    const lang = (meta?.language || '').replace(/[\r\n`]+/g, '');
                     // Block code if it contains newlines, else inline
                     if (node.text && node.text.includes('\n')) {
-                        return `\n\`\`\`${lang}\n${node.text}\n\`\`\`\n\n`;
+                        // Fence with one more backtick than the longest run inside the content
+                        // so an embedded ``` can't close the block early and inject markup.
+                        const longestRun = Math.max(0, ...(node.text.match(/`+/g) || []).map(s => s.length));
+                        const fence = '`'.repeat(Math.max(3, longestRun + 1));
+                        return `\n${fence}${lang}\n${node.text}\n${fence}\n\n`;
                     } else {
-                        return `\`${node.text || ''}\` `;
+                        const t = node.text || '';
+                        const longestRun = Math.max(0, ...(t.match(/`+/g) || []).map(s => s.length));
+                        const fence = '`'.repeat(Math.max(1, longestRun + 1));
+                        const pad = (t.startsWith('`') || t.endsWith('`')) ? ' ' : '';
+                        return `${fence}${pad}${t}${pad}${fence} `;
                     }
                 }
 
@@ -302,12 +337,12 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const meta = node.metadata as EmbedMetadata;
                     const id = meta?.videoId || '';
                     if (this.config.mdConfig.fallbackToHtml) {
-                        const width = meta?.width ? ` data-width="${meta.width}"` : '';
-                        const align = meta?.align ? ` data-align="${meta.align}"` : '';
-                        return `\n<div data-youtube-video="${id}"${width}${align}></div>\n\n`;
+                        const width = meta?.width ? ` data-width="${escapeHtml(meta.width)}"` : '';
+                        const align = meta?.align ? ` data-align="${escapeHtml(meta.align)}"` : '';
+                        return `\n<div data-youtube-video="${escapeHtml(id)}"${width}${align}></div>\n\n`;
                     }
                     const url = meta?.url || (id ? `https://youtu.be/${id}` : '');
-                    return url ? `[YouTube](${url})\n\n` : '';
+                    return url ? `[YouTube](${sanitizeMarkdownUrl(url)})\n\n` : '';
                 }
 
                 case 'admonition': {
@@ -604,7 +639,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             // Carry table-layout alignment through the HTML fallback so it isn't lost
             // just because the table also needed HTML for merged cells.
             const tableMeta = node.metadata as any;
-            const alignAttr = tableMeta?.align ? ` data-align="${tableMeta.align}"` : '';
+            const alignAttr = tableMeta?.align ? ` data-align="${escapeHtml(tableMeta.align)}"` : '';
             return `<table${alignAttr}>\n${rows}</table>\n`;
         } else if (node.type === 'row') {
             let cells = '';
@@ -626,7 +661,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     content += await this.processNodeRecursive(child, async (n, co) => {
                         switch (n.type) {
                             case 'text': {
-                                let text = n.text || '';
+                                // Inside HTML table cells, entity-encode angle brackets so cell
+                                // text can't inject a raw tag (e.g. </td><script>).
+                                let text = markdownEscapeText(n.text || '');
                                 if (n.formatting?.bold) text = `<b>${text}</b>`;
                                 if (n.formatting?.italic) text = `<i>${text}</i>`;
                                 if (n.formatting?.underline) text = `<u>${text}</u>`;
@@ -636,7 +673,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             }
                             case 'paragraph': return `<p>${co}</p>`;
                             case 'heading': {
-                                const level = (n.metadata as any)?.level || 1;
+                                const level = Math.min(Math.max(Number((n.metadata as any)?.level) || 1, 1), 6);
                                 return `<h${level}>${co}</h${level}>`;
                             }
                             case 'table': return await this.renderTableAsHtml(n);

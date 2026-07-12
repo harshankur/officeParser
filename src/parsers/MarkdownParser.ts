@@ -111,12 +111,17 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // convention. Self-closing components are removed entirely; paired components keep
     // their inner Markdown content. Iterate to a fixed point so nested components (of
     // different names) are all unwrapped, not just the outermost one.
+    // Cap the passes: each iteration unwraps one nesting level, so a pathologically
+    // deep `<A><A>...</A></A>` input would otherwise be O(depth * n). Real documents
+    // nest only a handful of levels; anything past the cap is left as-is.
     let previousTextStr;
+    let mdxPasses = 0;
+    const MAX_MDX_PASSES = 100;
     do {
         previousTextStr = textStr;
         textStr = textStr.replace(/<[A-Z][A-Za-z0-9]*(?:\s+[^>]*?)?\/>/g, '');
         textStr = textStr.replace(/<([A-Z][A-Za-z0-9]*)(?:\s+[^>]*?)?>([\s\S]*?)<\/\1>/g, (_m, _name, inner) => inner);
-    } while (textStr !== previousTextStr);
+    } while (textStr !== previousTextStr && ++mdxPasses < MAX_MDX_PASSES);
 
     // Extract code blocks first to protect their contents
     const codeBlocks: string[] = [];
