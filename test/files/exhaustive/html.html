@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Exhaustive HTML Test</title>
+    <meta name="author" content="Test Author">
+    <meta name="description" content="Exhaustive HTML test description">
+    <meta name="custom:version" content="1">
+    <meta name="custom:reviewed" content="true">
+</head>
+<body>
+    <!-- HTML comment node -->
+
+    <h1 id="heading-1">Heading Level 1</h1>
+    <h2 id="heading-2">Heading Level 2</h2>
+    <h3>Heading Level 3</h3>
+    <h4>Heading Level 4</h4>
+    <h5>Heading Level 5</h5>
+    <h6>Heading Level 6</h6>
+
+    <p>Plain paragraph with <strong>bold</strong>, <em>italic</em>, <u>underline</u>, <s>strikethrough</s>, <sub>subscript</sub>, and <sup>superscript</sup>.</p>
+
+    <p align="center">Center-aligned paragraph via align attribute.</p>
+
+    <p style="text-align: right">Right-aligned paragraph via style.</p>
+
+    <p>Line break follows.<br>After the break.</p>
+
+    <blockquote>
+        <p>Blockquote paragraph content.</p>
+    </blockquote>
+
+    <ul>
+        <li>Unordered item 1</li>
+        <li>Unordered item 2
+            <ul>
+                <li>Nested unordered item</li>
+            </ul>
+        </li>
+    </ul>
+
+    <ol>
+        <li>Ordered item 1</li>
+        <li>Ordered item 2
+            <ol>
+                <li>Nested ordered item</li>
+            </ol>
+        </li>
+    </ol>
+
+    <ul class="contains-task-list" data-type="taskList">
+        <li class="task-list-item" data-checked="true"><input type="checkbox" checked disabled> Checked task item</li>
+        <li class="task-list-item" data-checked="false"><input type="checkbox" disabled> Unchecked task item</li>
+    </ul>
+
+    <dl>
+        <dt>Definition Term 1</dt>
+        <dd>Definition Description 1</dd>
+        <dt>Definition Term 2</dt>
+        <dd>Definition Description 2a</dd>
+        <dd>Definition Description 2b</dd>
+    </dl>
+
+    <pre><code class="language-javascript">console.log("Hello, World!");</code></pre>
+
+    <pre><code class="language-python">def hello():
+    print("world")</code></pre>
+
+    <table data-align="center">
+        <thead>
+            <tr>
+                <th colspan="2">Header Merged Span</th>
+                <th>Header 3</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td rowspan="2">Rowspan Cell</td>
+                <td>Cell B2</td>
+                <td>Cell C2</td>
+            </tr>
+            <tr>
+                <td>Cell B3</td>
+                <td>Cell C3</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="admonition" data-type="note">
+        <p>Note admonition content.</p>
+    </div>
+
+    <div class="admonition" data-type="tip">
+        <p>Tip admonition content.</p>
+    </div>
+
+    <div class="admonition" data-type="important">
+        <p>Important admonition content.</p>
+    </div>
+
+    <div class="admonition" data-type="warning">
+        <p>Warning admonition content.</p>
+    </div>
+
+    <div class="admonition" data-type="caution">
+        <p>Caution admonition content.</p>
+    </div>
+
+    <img src="https://example.com/image.png" alt="Test Image Alt Text" data-width="100px" data-align="center">
+
+    <div data-youtube-video="dQw4w9WgXcQ" data-width="500" data-align="center"></div>
+
+    <p>
+        <a href="https://example.com">External Link Text</a>
+    </p>
+
+    <p>
+        <a href="#heading-1">Internal Link Text</a>
+    </p>
+
+    <p>
+        <a href="WikiPage" data-wikilink-page="WikiPage">Wiki Link Alias</a>
+    </p>
+
+    <p>
+        <abbr title="Abbreviation Full Title">ABBR</abbr>
+    </p>
+
+    <p>
+        Footnote reference<sup data-footnote-ref="fn1">1</sup>
+    </p>
+
+    <span class="math inline" data-math="inline">$E=mc^2$</span>
+
+    <div class="math block" data-math="block">$$a^2 + b^2 = c^2$$</div>
+
+    <section data-footnotes>
+        <li data-footnote-id="fn1">
+            <p>Footnote definition content here.</p>
+        </li>
+    </section>
+
+</body>
+</html>
