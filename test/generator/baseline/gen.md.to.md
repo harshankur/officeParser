@@ -393,18 +393,18 @@ All types of lists are supported by the conversion, with the exception of lists 
 ## **Multi-level Lists** {#multi-level-lists}
 
 1. One
-        1. Two
-                1. Three
-                2. Four with a very long line to demonstrate that the hanging indent for the list is working correctly.
-                3. Five
+    1. Two
+        1. Three
+        2. Four with a very long line to demonstrate that the hanging indent for the list is working correctly.
+        3. Five
 2. Six
 
 A Multi-level list with bullets:
 
 - One
-        - Two
-                - This bullet uses an image as the bullet item
-                        - Four
+    - Two
+        - This bullet uses an image as the bullet item
+            - Four
 - Five
 
 <a name="toc1471533984"></a>

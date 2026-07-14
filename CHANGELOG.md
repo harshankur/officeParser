@@ -4,124 +4,67 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.3.1] - 2026-07-14
+### Fixed
+- Nested-list item numbering could leak across siblings (a second top-level item's nested children could continue a previous sibling's child numbering instead of restarting at 0).
+- Parser/generator indentation-unit mismatch caused this generator's own output to double its nesting depth on re-parse; tab-indented items also failed to nest.
+- Nested blockquotes (`> >`) only had one level of `>` stripped, leaking a literal `>` into text.
+- `)`-style ordered lists (`1) item`) were not recognized, only the `.`-marker form.
+- `----- trailing text` was misclassified as a horizontal rule.
+- Table separator rows with short cells (`|-|-|`) were rejected.
+- Numeric character/entity references decoded via `String.fromCodePoint` (`&#NNN;`/`&#xHHH;` in
+  Markdown, and XML entities in `xmlUtils.ts` used by e.g. `ExcelParser`) would throw a `RangeError`
+  and crash the parser on an out-of-range code point (`&#999999999;`); such references are now left
+  as literal text instead.
+
+### Added
+- Backslash escapes for ASCII punctuation (`\*`, `` \` ``, `\[`, etc.).
+- Reference-style links/images (`[text][ref]`, `[text][]`, `[text]`) resolved against `[ref]: url "title"` definitions.
+- Underscore emphasis (`_em_`, `__strong__`) alongside `*`/`**`.
+- Multi-backtick inline code spans (`` ``code with a ` backtick`` ``).
+- Setext headings (`Heading\n===` / `Heading\n---`) alongside ATX.
+- `<url>` autolinks.
+- HTML entity and numeric character reference decoding (`&amp;`, `&#39;`, `&#x2764;`, etc.).
+- Hard vs. soft line breaks (a trailing 2+ spaces or backslash now produces a real hard break).
+- `~~~`-fenced and 4-space-indented code blocks.
+- List-item continuation lines (a single indented line merges into the previous item).
+
 ## [7.3.0] - 2026-07-08
 ### Added
 - **EPUB Support (Parser & Generator)**: `epub` is now a first-class `SupportedFileType`/`UniversalGeneratorFormat`.
-  - `EpubParser` unzips the archive, resolves the spine's reading order from `content.opf`, and parses
-    each XHTML document through the existing `HtmlParser`, so EPUB content shares the same AST shape
-    (and the same Markdown-dialect fidelity below) as every other format. Dublin Core metadata
-    (`dc:title`, `dc:creator`, `dc:description`, `dc:subject`, `dc:date`, `dc:publisher`, `dc:language`,
-    `dc:identifier`) maps into `ast.metadata`/`ast.metadata.nativeProperties`; cover art is exposed via
-    `metadata.customProperties.coverImageName`.
-  - `EpubGenerator` renders the AST through `HtmlGenerator` and packages a minimal, valid EPUB 3
-    (`mimetype`, `META-INF/container.xml`, an OPF manifest, a nav document, one XHTML chapter). Images
-    are packaged as real zip entries (`OEBPS/images/...`) declared in the OPF manifest — not `data:`
-    URIs, which most EPUB reading systems do not render. Generated XHTML is sanitized for strict-XML
-    validity (stray `&`, unvalued boolean attributes, void-element self-closing) and paragraphs
-    containing nested block content (e.g. an image's wrapping `<div>`) are promoted to `<div>` so the
-    markup is valid against the HTML5 content model as well as being well-formed XML — a `<p>`
-    containing a `<div>` is silently auto-corrected by browsers but causes strict-XML EPUB readers to
-    drop the block instead of erroring.
-  - Requires `extractAttachments: true` on the parse step to embed images when converting to/from EPUB;
-    `OfficeConverter.convert()` sets this automatically.
-- **GFM Task Lists**: `- [x] Done` / `- [ ] Todo` now round-trip through `ListMetadata.isTask`/`.checked`
-  across Markdown and HTML (`<ul data-type="taskList"><li data-checked="true">`).
-- **Admonitions / Alerts**: New `admonition` AST node type. Parses both GitHub (`> [!NOTE]`) and GLFM
-  (`:::note ... :::`) syntax; always generates the GitHub blockquote form. HTML round-trips via
-  `<div class="admonition admonition-note" data-type="note">`.
+  - `EpubParser` unzips the archive, resolves the spine's reading order from `content.opf`, and parses each XHTML document through the existing `HtmlParser`, so EPUB content shares the same AST shape (and the same Markdown-dialect fidelity below) as every other format. Dublin Core metadata (`dc:title`, `dc:creator`, `dc:description`, `dc:subject`, `dc:date`, `dc:publisher`, `dc:language`, `dc:identifier`) maps into `ast.metadata`/`ast.metadata.nativeProperties`; cover art is exposed via `metadata.customProperties.coverImageName`.
+  - `EpubGenerator` renders the AST through `HtmlGenerator` and packages a minimal, valid EPUB 3 (`mimetype`, `META-INF/container.xml`, an OPF manifest, a nav document, one XHTML chapter). Images are packaged as real zip entries (`OEBPS/images/...`) declared in the OPF manifest — not `data:` URIs, which most EPUB reading systems do not render. Generated XHTML is sanitized for strict-XML validity (stray `&`, unvalued boolean attributes, void-element self-closing) and paragraphs containing nested block content (e.g. an image's wrapping `<div>`) are promoted to `<div>` so the markup is valid against the HTML5 content model as well as being well-formed XML — a `<p>` containing a `<div>` is silently auto-corrected by browsers but causes strict-XML EPUB readers to drop the block instead of erroring.
+  - Requires `extractAttachments: true` on the parse step to embed images when converting to/from EPUB; `OfficeConverter.convert()` sets this automatically.
+- **GFM Task Lists**: `- [x] Done` / `- [ ] Todo` now round-trip through `ListMetadata.isTask`/`.checked` across Markdown and HTML (`<ul data-type="taskList"><li data-checked="true">`).
+- **Admonitions / Alerts**: New `admonition` AST node type. Parses both GitHub (`> [!NOTE]`) and GLFM (`:::note ... :::`) syntax; always generates the GitHub blockquote form. HTML round-trips via `<div class="admonition admonition-note" data-type="note">`.
 - **HTML Round-Trip Fidelity**:
-  - Image size/alignment (`ImageMetadata.width`/`.align`) now read from `data-width`/`data-align`/inline
-    `style="width:..."` on `<img>` (previously write-only).
+  - Image size/alignment (`ImageMetadata.width`/`.align`) now read from `data-width`/`data-align`/inline `style="width:..."` on `<img>` (previously write-only).
   - Table alignment (`TableMetadata.align`) now read from `data-align` on `<table>` (previously write-only).
-  - **Merged cells**: `HtmlParser`'s `<td>`/`<th>` handling now reads `colspan`/`rowspan` into
-    `CellMetadata` — previously every merged cell silently collapsed to 1×1 on an HTML save→reload cycle.
-  - **YouTube embeds**: New `embed` AST node type (`EmbedMetadata`). Round-trips
-    `<div data-youtube-video="ID" data-width="..." data-align="...">` through HTML; Markdown falls back
-    to the raw HTML block or a plain link.
-- **Frontmatter Arrays**: Markdown frontmatter values written as a flow array (`tags: [a, b]`) or a JSON
-  array (`tags: ["a","b"]`) now parse into real arrays in `customProperties`/`nativeProperties` instead
-  of a literal string, with no new YAML dependency.
-- **Footnotes**: Real `[^id]` inline references and `[^id]: definition` blocks now parse into `note`
-  nodes keyed by id; the generator emits the same syntax instead of a `> **Footnote:**` blockquote.
-- **Definition Lists & Abbreviations** (Markdown Extra): `Term\n: Definition` blocks parse into new
-  `definitionList`/`definitionTerm`/`definitionDescription` node types; `*[HTML]: Hypertext Markup
-  Language`-style abbreviation definitions populate `TextMetadata.abbreviationTitle`.
-- **Attribute Lists** (Pandoc-style): `{width=50% .centered}` immediately after an image or table folds
-  into `ImageMetadata.width`/`.align` and `TableMetadata.align`.
+  - **Merged cells**: `HtmlParser`'s `<td>`/`<th>` handling now reads `colspan`/`rowspan` into `CellMetadata` — previously every merged cell silently collapsed to 1×1 on an HTML save→reload cycle.
+  - **YouTube embeds**: New `embed` AST node type (`EmbedMetadata`). Round-trips `<div data-youtube-video="ID" data-width="..." data-align="...">` through HTML; Markdown falls back to the raw HTML block or a plain link.
+- **Frontmatter Arrays**: Markdown frontmatter values written as a flow array (`tags: [a, b]`) or a JSON array (`tags: ["a","b"]`) now parse into real arrays in `customProperties`/`nativeProperties` instead of a literal string, with no new YAML dependency.
+- **Footnotes**: Real `[^id]` inline references and `[^id]: definition` blocks now parse into `note` nodes keyed by id; the generator emits the same syntax instead of a `> **Footnote:**` blockquote.
+- **Definition Lists & Abbreviations** (Markdown Extra): `Term\n: Definition` blocks parse into new `definitionList`/`definitionTerm`/`definitionDescription` node types; `*[HTML]: Hypertext Markup Language`-style abbreviation definitions populate `TextMetadata.abbreviationTitle`.
+- **Attribute Lists** (Pandoc-style): `{width=50% .centered}` immediately after an image or table folds into `ImageMetadata.width`/`.align` and `TableMetadata.align`.
 - **Citations**: `[@citekey]` inline citation syntax populates `TextMetadata.citationKey`.
-- **Wikilinks**: Obsidian-style `[[Page]]` / `[[Page|Alias]]` populates `TextMetadata.wikilink` plus
-  `.link`/`.linkType`.
-- **MDX Import Stripping**: `<Component prop="x">...</Component>` and self-closing JSX tags are stripped
-  on Markdown import (parse-only; officeParser never authors JSX back into Markdown).
-- **Math Tokenisation**: Inline `$E=mc^2$` and block `$$...$$` LaTeX now tokenise into
-  `TextMetadata.math` (`'inline' | 'block'`) instead of passing through as literal text.
-- **Granular HTML Envelope Control (`standalone`)**: `HtmlGeneratorConfig.standalone` now accepts a
-  `StandaloneConfig` object in addition to its existing `boolean`. The boolean conflated three
-  unrelated decisions (document shell, CSS delivery, script/injection emission) into one flag and
-  emitted a *global, unscoped* stylesheet whenever `standalone: false` was combined with a fragment
-  embedded in a host page. The object splits these into independently-controllable fields —
-  `document`, `metaTags`, `styles` (`'full' | 'scoped' | 'none'`), `scripts`, `headInjections`,
-  `bodyInjections` — each defaulting to its "on" (standalone) value when omitted, so
-  `{ document: false }` alone yields a fully-styled fragment with just the `<html>` shell removed.
-  New `styles: 'scoped'` mode wraps the built-in stylesheet in a CSS `@scope` block so it cannot leak
-  onto a host page's own elements (requires Chrome 118+, Safari 17.4+, or Firefox 128+).
-  `bodyInjections` (unlike `headInjections`) now applies even to a bare content fragment, fixing an
-  asymmetry where `injections.bodyStart`/`bodyEnd` were silently dropped outside standalone mode.
-  `EpubGenerator` (which renders through `HtmlGenerator` with `standalone: false`) now gets a
-  genuinely style-less, script-less fragment for free, simplifying its own XHTML sanitization.
+- **Wikilinks**: Obsidian-style `[[Page]]` / `[[Page|Alias]]` populates `TextMetadata.wikilink` plus `.link`/`.linkType`.
+- **MDX Import Stripping**: `<Component prop="x">...</Component>` and self-closing JSX tags are stripped on Markdown import (parse-only; officeParser never authors JSX back into Markdown).
+- **Math Tokenisation**: Inline `$E=mc^2$` and block `$$...$$` LaTeX now tokenise into `TextMetadata.math` (`'inline' | 'block'`) instead of passing through as literal text.
+- **Granular HTML Envelope Control (`standalone`)**: `HtmlGeneratorConfig.standalone` now accepts a `StandaloneConfig` object in addition to its existing `boolean`. The boolean conflated three unrelated decisions (document shell, CSS delivery, script/injection emission) into one flag and emitted a *global, unscoped* stylesheet whenever `standalone: false` was combined with a fragment embedded in a host page. The object splits these into independently-controllable fields — `document`, `metaTags`, `styles` (`'full' | 'scoped' | 'none'`), `scripts`, `headInjections`, `bodyInjections` — each defaulting to its "on" (standalone) value when omitted, so `{ document: false }` alone yields a fully-styled fragment with just the `<html>` shell removed. New `styles: 'scoped'` mode wraps the built-in stylesheet in a CSS `@scope` block so it cannot leak onto a host page's own elements (requires Chrome 118+, Safari 17.4+, or Firefox 128+). `bodyInjections` (unlike `headInjections`) now applies even to a bare content fragment, fixing an asymmetry where `injections.bodyStart`/`bodyEnd` were silently dropped outside standalone mode. `EpubGenerator` (which renders through `HtmlGenerator` with `standalone: false`) now gets a genuinely style-less, script-less fragment for free, simplifying its own XHTML sanitization.
 
 ### Changed
-- `HtmlGenerator`'s footnotes section now emits `data-footnotes=""` (an explicit empty value) instead of
-  a bare `data-footnotes` attribute, so the markup is valid XHTML as well as HTML.
-- **Behavior change — `standalone: false`**: previously emitted an HTML fragment containing a global,
-  unscoped `<style>` block (leaking onto any host page it was embedded in). It now emits a genuinely
-  bare fragment with no `<style>`/`<script>` at all, matching the new "every envelope part off"
-  semantics. **The old output is not lost — it moved from `false` to `{ document: false }`:** because
-  an object's omitted fields each default to their "on" value, `standalone: { document: false }`
-  keeps the full (global, unscoped) stylesheet and the spreadsheet script while dropping only the
-  document shell — reproducing the previous `standalone: false` output byte-for-byte in the common
-  case (the sole difference being that `injections.bodyStart`/`bodyEnd` now apply to the fragment
-  instead of being silently dropped). Callers that want the old styled fragment should pass
-  `{ document: false }`; those that want a leak-free styled fragment can pass
-  `{ document: false, styles: 'scoped' }`.
+- `HtmlGenerator`'s footnotes section now emits `data-footnotes=""` (an explicit empty value) instead of a bare `data-footnotes` attribute, so the markup is valid XHTML as well as HTML.
+- **Behavior change — `standalone: false`**: previously emitted an HTML fragment containing a global, unscoped `<style>` block (leaking onto any host page it was embedded in). It now emits a genuinely bare fragment with no `<style>`/`<script>` at all, matching the new "every envelope part off" semantics. **The old output is not lost — it moved from `false` to `{ document: false }`:** because an object's omitted fields each default to their "on" value, `standalone: { document: false }` keeps the full (global, unscoped) stylesheet and the spreadsheet script while dropping only the document shell — reproducing the previous `standalone: false` output byte-for-byte in the common case (the sole difference being that `injections.bodyStart`/`bodyEnd` now apply to the fragment instead of being silently dropped). Callers that want the old styled fragment should pass `{ document: false }`; those that want a leak-free styled fragment can pass `{ document: false, styles: 'scoped' }`.
 
 ### Fixed
-- **Centralized Output Sanitization**: Added `src/utils/sanitize.ts` as the single source of truth for
-  escaping AST-derived (untrusted document) text in every generator's output context, closing several
-  injection gaps: HTML/XHTML text and attributes (`escapeHtml`/`escapeXml`), inline `<style>` CSS values
-  (`sanitizeCssValue` — strips `url()`/`expression()`/`@import`/`javascript:` and CSS-breakout
-  characters), `href`/`src` URLs (`sanitizeUrl`/`sanitizeImageUrl` — reject script-executing schemes,
-  allow only `http(s)`/`mailto`/`tel`/relative/fragment, plus `data:image/*` for images), inline
-  `<script>` JSON payloads (`serializeForInlineScript` — escapes `<`/`>` and U+2028/U+2029 so a
-  document-supplied chart label can't close the script tag early), CSV cells (`csvSafeCell` — guards
-  against formula/DDE injection per CWE-1236), RTF control words (`escapeRtf`), and Markdown text/URLs
-  (`markdownEscapeText`/`sanitizeMarkdownUrl`). `CsvGenerator`, `EpubGenerator`, `HtmlGenerator`,
-  `MarkdownGenerator`, `PdfGenerator`, and `RtfGenerator` all now delegate to these helpers instead of
-  ad hoc per-generator escaping. Covered by a new `test/security/testSanitization.ts` regression suite
-  (`npm run test:security`).
-- **Zip Bomb Protection**: `extractFiles` (`src/utils/zipUtils.ts`) now decompresses via `fflate`'s
-  streaming `Unzip`/`UnzipInflate` and caps `decompressionLimits.maxUncompressedBytes` against the
-  *actual* inflated byte count as it streams in, instead of the ZIP header's declared (and
-  attacker-controlled) `originalSize` — a crafted archive can understate that field and still inflate
-  to gigabytes under the old declared-size check.
+- **Centralized Output Sanitization**: Added `src/utils/sanitize.ts` as the single source of truth for escaping AST-derived (untrusted document) text in every generator's output context, closing several injection gaps: HTML/XHTML text and attributes (`escapeHtml`/`escapeXml`), inline `<style>` CSS values (`sanitizeCssValue` — strips `url()`/`expression()`/`@import`/`javascript:` and CSS-breakout characters), `href`/`src` URLs (`sanitizeUrl`/`sanitizeImageUrl` — reject script-executing schemes, allow only `http(s)`/`mailto`/`tel`/relative/fragment, plus `data:image/*` for images), inline `<script>` JSON payloads (`serializeForInlineScript` — escapes `<`/`>` and U+2028/U+2029 so a document-supplied chart label can't close the script tag early), CSV cells (`csvSafeCell` — guards against formula/DDE injection per CWE-1236), RTF control words (`escapeRtf`), and Markdown text/URLs (`markdownEscapeText`/`sanitizeMarkdownUrl`). `CsvGenerator`, `EpubGenerator`, `HtmlGenerator`, `MarkdownGenerator`, `PdfGenerator`, and `RtfGenerator` all now delegate to these helpers instead of ad hoc per-generator escaping. Covered by a new `test/security/testSanitization.ts` regression suite (`npm run test:security`).
+- **Zip Bomb Protection**: `extractFiles` (`src/utils/zipUtils.ts`) now decompresses via `fflate`'s streaming `Unzip`/`UnzipInflate` and caps `decompressionLimits.maxUncompressedBytes` against the *actual* inflated byte count as it streams in, instead of the ZIP header's declared (and attacker-controlled) `originalSize` — a crafted archive can understate that field and still inflate to gigabytes under the old declared-size check.
 - **Denial-of-Service Hardening**:
-  - `HtmlParser`'s tree builder no longer re-scans/re-lowercases the whole remaining document for every
-    tag or `<script>`/`<style>` close tag (was `O(n²)` on documents with many tags); `parseNode`
-    recursion is now capped at depth 1000, throwing the new `OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED`
-    instead of overflowing the call stack on a maliciously deep element tree.
-  - `MarkdownParser`'s MDX-unwrap fixed-point loop is capped at 100 passes, bounding the cost of a
-    pathologically deep `<A><A>...</A></A>` input.
-- **SSRF Hardening (PDF generation)**: `PdfGenerator`'s Puppeteer page now intercepts every network
-  request and aborts anything that isn't an inline `data:`/`blob:` URI or the configured
-  `htmlConfig.chartJsSrc` host — previously, rendering a document containing an external image or
-  stylesheet URL would let Puppeteer fetch it from the server, which could reach internal services or a
-  cloud metadata endpoint (`169.254.169.254`). A warning is emitted when a resource is blocked.
-- **PDF Parsing Hardening**: `PdfParser` now passes `isEvalSupported: false` to `pdf.js`, preventing its
-  font/CMap fast-path from compiling attacker-controlled PDF content via `new Function`.
-- **Markdown Round-Trip**: Standalone bookmark-anchor blocks (`<a id="x"></a>` on their own line,
-  emitted by `MarkdownGenerator` just before a heading/paragraph) and table cells using the
-  `<div style="text-align: X">` alignment fallback are now correctly folded back into `anchorIds` /
-  cell alignment on re-parse, instead of surviving as escaped literal text on a save→reload cycle.
+  - `HtmlParser`'s tree builder no longer re-scans/re-lowercases the whole remaining document for every tag or `<script>`/`<style>` close tag (was `O(n²)` on documents with many tags); `parseNode` recursion is now capped at depth 1000, throwing the new `OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED` instead of overflowing the call stack on a maliciously deep element tree.
+  - `MarkdownParser`'s MDX-unwrap fixed-point loop is capped at 100 passes, bounding the cost of a pathologically deep `<A><A>...</A></A>` input.
+- **SSRF Hardening (PDF generation)**: `PdfGenerator`'s Puppeteer page now intercepts every network request and aborts anything that isn't an inline `data:`/`blob:` URI or the configured `htmlConfig.chartJsSrc` host — previously, rendering a document containing an external image or stylesheet URL would let Puppeteer fetch it from the server, which could reach internal services or a cloud metadata endpoint (`169.254.169.254`). A warning is emitted when a resource is blocked.
+- **PDF Parsing Hardening**: `PdfParser` now passes `isEvalSupported: false` to `pdf.js`, preventing its font/CMap fast-path from compiling attacker-controlled PDF content via `new Function`.
+- **Markdown Round-Trip**: Standalone bookmark-anchor blocks (`<a id="x"></a>` on their own line, emitted by `MarkdownGenerator` just before a heading/paragraph) and table cells using the `<div style="text-align: X">` alignment fallback are now correctly folded back into `anchorIds` / cell alignment on re-parse, instead of surviving as escaped literal text on a save→reload cycle.
 
 ## [7.2.3] - 2026-06-28
 ### Added

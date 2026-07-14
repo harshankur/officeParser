@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, TableMetadata, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, BreakMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, TableMetadata, TextMetadata } from '../types.js';
 import { escapeHtml, markdownEscapeText, sanitizeCssValue, sanitizeMarkdownUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
@@ -280,6 +280,12 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'break': {
+                    // A hard line break (CommonMark: two trailing spaces before the
+                    // newline) round-trips back to a distinct 'break' node on reparse;
+                    // every other breakType (including 'page', used for a thematic-break
+                    // HR) keeps emitting a bare newline, unchanged.
+                    const meta = node.metadata as BreakMetadata | undefined;
+                    if (meta?.breakType === 'carriageReturn') return '  \n';
                     return '\n';
                 }
 

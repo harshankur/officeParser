@@ -108,6 +108,17 @@ async function testMarkdown(): Promise<void> {
     assertExists(listNodes, n => (n.metadata as any)?.isTask === true && (n.metadata as any)?.checked === false, 'MD: unchecked task list item');
     // itemIndex is a number
     assert.ok(listNodes.every(n => typeof (n.metadata as any)?.itemIndex === 'number'), 'MD: all list items have itemIndex');
+    // Exact itemIndex values, so a nested-list counter regression (e.g. a level-1 counter
+    // leaking across level-0 siblings) is actually caught rather than merely "is a number".
+    const findListItem = (text: string) => assertExists(listNodes, n => n.text === text, `MD: list item "${text}"`);
+    assert.strictEqual((findListItem('Unordered item A').metadata as any)?.itemIndex, 0, 'MD: "Unordered item A" itemIndex 0');
+    assert.strictEqual((findListItem('Unordered item B').metadata as any)?.itemIndex, 1, 'MD: "Unordered item B" itemIndex 1');
+    assert.strictEqual((findListItem('Nested unordered item').metadata as any)?.itemIndex, 0, 'MD: "Nested unordered item" itemIndex 0');
+    assert.strictEqual((findListItem('Unordered item C').metadata as any)?.itemIndex, 2, 'MD: "Unordered item C" itemIndex 2');
+    assert.strictEqual((findListItem('Ordered item 1').metadata as any)?.itemIndex, 0, 'MD: "Ordered item 1" itemIndex 0');
+    assert.strictEqual((findListItem('Ordered item 2').metadata as any)?.itemIndex, 1, 'MD: "Ordered item 2" itemIndex 1');
+    assert.strictEqual((findListItem('Nested ordered item').metadata as any)?.itemIndex, 0, 'MD: "Nested ordered item" itemIndex 0');
+    assert.strictEqual((findListItem('Ordered item 3').metadata as any)?.itemIndex, 2, 'MD: "Ordered item 3" itemIndex 2');
 
     // ── Definition lists ──────────────────────────────────────────────────────
     const defLists = nodes.filter(n => n.type === 'definitionList');
@@ -198,6 +209,72 @@ async function testMarkdown(): Promise<void> {
     // ── Blockquote paragraph ──────────────────────────────────────────────────
     assertExists(paragraphs, n => (n.metadata as any)?.style === 'Quote', 'MD: blockquote paragraph with style=Quote');
 
+    // ── Nested blockquotes (2-level, 3-level) ────────────────────────────────
+    const quoteParas = paragraphs.filter(n => (n.metadata as any)?.style === 'Quote');
+    const quoteText = quoteParas.map(p => (p.children || []).map((c: any) => c.text || '').join('')).join(' ');
+    assert.ok(quoteText.includes('Two-level nested blockquote'), 'MD: 2-level nested blockquote text present');
+    assert.ok(quoteText.includes('Three-level nested blockquote'), 'MD: 3-level nested blockquote text present');
+    assert.ok(!quoteText.includes('>'), 'MD: nested blockquotes fully unwrapped (no literal ">")');
+
+    // ── Paren-marker (')') ordered list ──────────────────────────────────────
+    assertExists(listNodes, n => n.text === 'Paren-marker ordered item one' && (n.metadata as any)?.listType === 'ordered', 'MD: ")"-marker ordered list item');
+
+    // ── Short-cell table separator (|-|-|) ───────────────────────────────────
+    assertExists(tables, n => (n.children || []).some((row: any) => (row.children || []).some((cell: any) => (cell.children || []).some((c: any) => c.text === 'C1'))), 'MD: short-cell-separator table parsed');
+
+    // ── Tilde-fenced code block ───────────────────────────────────────────────
+    assertExists(codeNodes, n => (n.metadata as any)?.language === 'javascript' && n.text?.includes('tilde fence'), 'MD: tilde-fenced code block');
+
+    // ── HR-anchoring edge case (trailing text after hyphens is NOT an Hr) ────
+    assert.ok(paragraphs.some(n => (n.children || []).some((c: any) => c.text?.includes('not actually a horizontal rule'))), 'MD: "----- trailing text" parsed as paragraph, not Hr');
+
+    // ── Nested-list itemIndex leak regression (a sibling's nested counter must not
+    //    carry over to the next sibling's own nested list) ────────────────────
+    assert.strictEqual((findListItem('Sibling parent Alpha').metadata as any)?.itemIndex, 0, 'MD: "Sibling parent Alpha" itemIndex 0');
+    assert.strictEqual((findListItem('Alpha child one').metadata as any)?.itemIndex, 0, 'MD: "Alpha child one" itemIndex 0');
+    assert.strictEqual((findListItem('Alpha child two').metadata as any)?.itemIndex, 1, 'MD: "Alpha child two" itemIndex 1');
+    assert.strictEqual((findListItem('Sibling parent Beta').metadata as any)?.itemIndex, 1, 'MD: "Sibling parent Beta" itemIndex 1');
+    assert.strictEqual((findListItem('Beta child one').metadata as any)?.itemIndex, 0, 'MD: "Beta child one" itemIndex 0 (must NOT continue Alpha\'s children counter)');
+
+    // ── Backslash escapes ────────────────────────────────────────────────────
+    const escapeText = paragraphs.map(p => (p.children || []).map((c: any) => c.text || '').join('')).join(' ');
+    assert.ok(escapeText.includes('*not bold*') && escapeText.includes('_not italic_') && escapeText.includes('`not code`') && escapeText.includes('[not a link]'), 'MD: backslash-escaped punctuation renders literally');
+
+    // ── Reference-style links/images ─────────────────────────────────────────
+    assertExists(textNodes, n => (n.metadata as any)?.link === 'https://example.com/reference', 'MD: explicit reference link resolved');
+    assertExists(textNodes, n => (n.metadata as any)?.link === 'https://example.com/shortcut', 'MD: shortcut reference link resolved');
+    assertExists(images, n => (n.metadata as any)?.url === 'https://example.com/ref-image.png', 'MD: reference-style image resolved');
+    assert.ok(escapeText.includes('[unresolved reference][nowhere]') || nodes.some(n => (n.text || '').includes('[unresolved reference][nowhere]')), 'MD: unresolved explicit reference falls back to literal text');
+    assert.ok(nodes.some(n => (n.text || '').includes('[bare bracket]')), 'MD: unresolved shortcut reference falls back to literal text');
+
+    // ── Underscore emphasis ───────────────────────────────────────────────────
+    assertExists(textNodes, n => n.formatting?.italic === true && n.text === 'underscore italic', 'MD: underscore italic');
+    assertExists(textNodes, n => n.formatting?.bold === true && n.text === 'underscore bold', 'MD: underscore bold');
+
+    // ── Multi-backtick inline code span ──────────────────────────────────────
+    assertExists(textNodes, n => n.formatting?.font === 'monospace' && n.text === 'code with a ` backtick inside', 'MD: multi-backtick code span preserves embedded backtick');
+
+    // ── HTML entity decoding ──────────────────────────────────────────────────
+    assert.ok(escapeText.includes('Fish & Chips') && escapeText.includes('Q&A'), 'MD: bare "&" in ordinary text left untouched');
+    assert.ok(escapeText.includes('& < > \'') && escapeText.includes('❤'), 'MD: named and numeric/hex entities decoded');
+    assert.ok(escapeText.includes('&#999999999;') && escapeText.includes('&#x999999999;'), 'MD: out-of-bounds entity references preserved raw');
+
+    // ── Hard vs soft line break ───────────────────────────────────────────────
+    assertExists(nodes, n => n.type === 'break' && (n.metadata as any)?.breakType === 'carriageReturn', 'MD: hard line break emits a break node');
+
+    // ── Setext headings ───────────────────────────────────────────────────────
+    assertExists(headings, n => (n.metadata as any)?.level === 1 && n.text === 'Setext Heading One', 'MD: setext H1 (=== underline)');
+    assertExists(headings, n => (n.metadata as any)?.level === 2 && n.text === 'Setext Heading Two', 'MD: setext H2 (--- underline)');
+
+    // ── <url> autolink ────────────────────────────────────────────────────────
+    assertExists(textNodes, n => (n.metadata as any)?.link === 'https://example.com/autolink', 'MD: <url> autolink resolved');
+
+    // ── List-item continuation line ──────────────────────────────────────────
+    assertExists(listNodes, n => n.text === 'Continuation parent item continuation text merged into the parent item', 'MD: list-item continuation line merged into item text');
+
+    // ── Standalone indented code block ───────────────────────────────────────
+    assertExists(codeNodes, n => !(n.metadata as any)?.language && !(n.metadata as any)?.math && n.text === 'indented code block line one\nindented code block line two', 'MD: standalone 4-space-indented code block');
+
     // ── Roundtrip: generate to MD ────────────────────────────────────────────
     const result = await OfficeGenerator.generate(ast, 'md');
     const mdOutput = result.value as string;
@@ -212,6 +289,21 @@ async function testMarkdown(): Promise<void> {
     assert.ok(mdOutput.includes('|'), 'MD roundtrip: pipe table');
     assert.ok(mdOutput.includes('[[WikiPage]]'), 'MD roundtrip: wikilink');
     assert.ok(mdOutput.includes('[@smith2023]'), 'MD roundtrip: citation');
+
+    // ── Roundtrip: the bug-fix-pass additions survive generate() ────────────
+    assert.ok(mdOutput.includes('  \n'), 'MD roundtrip: hard line break emits two trailing spaces');
+    assert.ok(mdOutput.includes('https://example.com/reference'), 'MD roundtrip: resolved reference-link URL preserved');
+    assert.ok(mdOutput.includes('https://example.com/ref-image.png'), 'MD roundtrip: resolved reference-image URL preserved');
+    assert.ok(mdOutput.includes('https://example.com/autolink'), 'MD roundtrip: autolink URL preserved');
+    assert.ok(mdOutput.includes('code with a ` backtick inside'), 'MD roundtrip: multi-backtick code content preserved');
+    assert.ok(mdOutput.includes('underscore italic') && mdOutput.includes('underscore bold'), 'MD roundtrip: underscore-emphasized text preserved');
+    assert.ok(mdOutput.includes('not bold') && mdOutput.includes('not code'), 'MD roundtrip: decoded escaped-punctuation text preserved');
+    assert.ok(mdOutput.includes('❤'), 'MD roundtrip: decoded HTML entity character preserved');
+    assert.ok(mdOutput.includes('Continuation parent item') && mdOutput.includes('continuation text merged into the parent item'), 'MD roundtrip: list-item continuation text preserved');
+    assert.ok(mdOutput.includes('indented code block line one'), 'MD roundtrip: indented-code-block content preserved');
+    assert.ok(mdOutput.includes('Setext Heading One') && mdOutput.includes('Setext Heading Two'), 'MD roundtrip: setext heading text preserved');
+    assert.ok(mdOutput.includes('Two-level nested blockquote') && mdOutput.includes('Three-level nested blockquote'), 'MD roundtrip: nested-blockquote text preserved');
+    assert.ok(mdOutput.includes('Paren-marker ordered item one'), 'MD roundtrip: ")"-marker ordered list item preserved');
 
     console.log('  Markdown: All assertions passed ✓');
 }

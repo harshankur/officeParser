@@ -3301,7 +3301,7 @@
       "text": "Two",
       "metadata": {
         "listType": "ordered",
-        "indentation": 2,
+        "indentation": 1,
         "alignment": "left",
         "listId": "md-list-3",
         "itemIndex": 0
@@ -3318,7 +3318,7 @@
       "text": "Three",
       "metadata": {
         "listType": "ordered",
-        "indentation": 4,
+        "indentation": 2,
         "alignment": "left",
         "listId": "md-list-3",
         "itemIndex": 0
@@ -3335,7 +3335,7 @@
       "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly.",
       "metadata": {
         "listType": "ordered",
-        "indentation": 4,
+        "indentation": 2,
         "alignment": "left",
         "listId": "md-list-3",
         "itemIndex": 1
@@ -3352,7 +3352,7 @@
       "text": "Five",
       "metadata": {
         "listType": "ordered",
-        "indentation": 4,
+        "indentation": 2,
         "alignment": "left",
         "listId": "md-list-3",
         "itemIndex": 2
@@ -3413,7 +3413,7 @@
       "text": "Two",
       "metadata": {
         "listType": "unordered",
-        "indentation": 2,
+        "indentation": 1,
         "alignment": "left",
         "listId": "md-list-4",
         "itemIndex": 0
@@ -3430,7 +3430,7 @@
       "text": "This bullet uses an image as the bullet item",
       "metadata": {
         "listType": "unordered",
-        "indentation": 4,
+        "indentation": 2,
         "alignment": "left",
         "listId": "md-list-4",
         "itemIndex": 0
@@ -3447,7 +3447,7 @@
       "text": "Four",
       "metadata": {
         "listType": "unordered",
-        "indentation": 6,
+        "indentation": 3,
         "alignment": "left",
         "listId": "md-list-4",
         "itemIndex": 0

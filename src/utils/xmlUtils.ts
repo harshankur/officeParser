@@ -435,11 +435,11 @@ export const decodeXmlEntities = (text: string): string => {
             if (entity[1] === 'x' || entity[1] === 'X') {
                 const hex = entity.slice(2);
                 const code = parseInt(hex, 16);
-                return !isNaN(code) ? String.fromCodePoint(code) : match;
+                return (!isNaN(code) && code >= 0 && code <= 0x10FFFF) ? String.fromCodePoint(code) : match;
             } else {
                 const dec = entity.slice(1);
                 const code = parseInt(dec, 10);
-                return !isNaN(code) ? String.fromCodePoint(code) : match;
+                return (!isNaN(code) && code >= 0 && code <= 0x10FFFF) ? String.fromCodePoint(code) : match;
             }
         }
         switch (entity) {

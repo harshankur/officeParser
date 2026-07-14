@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, BreakMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 
@@ -128,9 +128,12 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         textStr = textStr.replace(/<([A-Z][A-Za-z0-9]*)(?:\s+[^>]*?)?>([\s\S]*?)<\/\1>/g, (_m, _name, inner) => inner);
     } while (textStr !== previousTextStr && ++mdxPasses < MAX_MDX_PASSES);
 
-    // Extract code blocks first to protect their contents
+    // Extract code blocks first to protect their contents. Accepts both backtick and
+    // tilde fences (CommonMark's two fence characters); the backreference on the fence
+    // run means a `~~~`-fenced block isn't closed early by a stray ``` inside it, and
+    // vice versa.
     const codeBlocks: string[] = [];
-    textStr = textStr.replace(/^```(\w*)\n([\s\S]*?)\n```/gm, (match, lang, code) => {
+    textStr = textStr.replace(/^(`{3,}|~{3,})(\w*)\n([\s\S]*?)\n\1$/gm, (match, _fence, lang, code) => {
         const id = `__CODE_BLOCK_${codeBlocks.length}__`;
         codeBlocks.push(JSON.stringify({ lang, code }));
         return `\n\n${id}\n\n`;
@@ -178,6 +181,16 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return '';
     });
 
+    // Extract link/image reference definitions (`[ref]: /url "title"`) before block
+    // splitting, for the same reason as footnotes/abbreviations: they conventionally
+    // live at the end of the document, after every place they're referenced. Keyed by
+    // trimmed/lowercased label, matching CommonMark's case-insensitive reference matching.
+    const linkDefinitions = new Map<string, { url: string; title?: string }>();
+    textStr = textStr.replace(/^\[([^\]]+)\]:[ \t]*(\S+)(?:[ \t]+"([^"]*)")?[ \t]*$/gm, (_match, label, url, title) => {
+        linkDefinitions.set(label.trim().toLowerCase(), { url, title });
+        return '';
+    });
+
     // Parses a Pandoc-style attribute list body (the part inside `{...}`), e.g.
     // `width=50% .centered` or `align=right`. Per MARKDOWN_DIALECT.md §15's Decisions,
     // the vocabulary matches ImageMetadata/TableMetadata's own width/align fields;
@@ -202,72 +215,101 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
     const parseInline = (text: string, currentFormatting: TextFormatting = {}): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
+        const plainText = (t: string): OfficeContentNode => ({ type: 'text', text: t, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined });
 
-        // Regex matches: 1=!, 2=alt, 3=url, 4=attrs | 5=bold | 6=italic | 7=strike | 8=code | 9=underline | 10=subscript | 11=superscript | 12=footnote id | 13=citekey | 14=wikilink page | 15=wikilink alias | 16=inline math
+        // Builds the same image/link node shape regardless of whether the URL came from
+        // an inline `(url)` or a resolved reference definition - shared by the inline
+        // image/link branch and the two reference-style branches below.
+        const buildLinkOrImageNodes = (isImage: boolean, altText: string, url: string, attrsStr?: string): OfficeContentNode[] => {
+            if (isImage) {
+                // Pandoc-style attribute list immediately after an image, e.g. {width=50% .centered}
+                const attrs = attrsStr !== undefined ? parseAttributeList(attrsStr) : undefined;
+                if (url.startsWith('data:')) {
+                    const dataMatch = url.match(/^data:([^;]+);base64,(.*)$/);
+                    if (dataMatch && config.extractAttachments) {
+                        const mimeType = dataMatch[1] as any;
+                        const data = dataMatch[2];
+                        const name = `image_${attachments.length + 1}.${mimeType.split('/')[1]}`;
+                        attachments.push({
+                            type: 'image',
+                            mimeType,
+                            data,
+                            name,
+                            extension: mimeType.split('/')[1]
+                        });
+                        return [{ type: 'image', metadata: { attachmentName: name, altText, ...attrs } as ImageMetadata }];
+                    }
+                }
+                return [{ type: 'image', metadata: { url, altText, ...attrs } as ImageMetadata }];
+            }
+            const linkNodes = parseInline(altText, currentFormatting);
+            linkNodes.forEach(n => {
+                if (n.type === 'text') {
+                    n.metadata = { link: url, linkType: 'external' } as TextMetadata;
+                }
+            });
+            return linkNodes;
+        };
+
+        // Regex matches (named groups): esc=escaped punctuation char | imgBang/imgAlt/imgUrl/imgAttrs=inline
+        // image or link | boldStar/boldUnderscore=bold | italicStar/italicUnderscore=italic | strike=strikethrough |
+        // codeFence/codeContent=inline code (backreferenced fence run, so a shorter embedded backtick run
+        // doesn't close the span early) | underline/subscript/superscript=HTML tag formatting |
+        // footnoteId | citationKey | wikiPage/wikiAlias | refBang/refText/refId=explicit or collapsed
+        // reference link/image `[text][ref]`/`[text][]` | shortBang/shortText=shortcut reference `[text]`
+        // (deliberately the most generic bracket pattern, so it must stay last among `[`-starting
+        // alternatives) | autolinkUrl=`<url>` autolink | mathInline.
+        //
+        // Named groups (rather than positional match[N] indices) mean adding a new alternative never
+        // requires renumbering every existing dispatch arm.
+        //
+        // Escape must be listed first since only a literal backslash can start that alternative, so it
+        // never shadows another branch; but a code span's match consumes its whole span atomically (the
+        // exec loop's lastIndex jumps past the entire matched span), so a backslash *inside* a code span
+        // is never independently offered to the escape branch regardless of listing order - CommonMark's
+        // "backslashes are not special inside code spans" rule holds by construction, not extra logic.
+        //
+        // Underscore emphasis has no CommonMark flanking-delimiter-run detection, so an intraword
+        // underscore (e.g. "foo_bar_baz") will incorrectly italicize - an accepted, documented
+        // simplification, not something this pass attempts to fix.
+        //
         // Inline math requires no whitespace right after the opening $ or right before the
         // closing $, the common heuristic (matching Pandoc/KaTeX) for avoiding false
         // positives on currency like "$5 and $10".
-        const regex = /(!?)\[(.*?)\]\((.*?)\)(?:\{([^}]*)\})?|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|<u>(.+?)<\/u>|<sub>(.+?)<\/sub>|<sup>(.+?)<\/sup>|\[\^([^\]]+)\]|\[@([a-zA-Z0-9_:.-]+)\]|\[\[([^\]|]+)(?:\|([^\]]+))?\]\]|\$(?!\s)([^$\n]+?)(?<!\s)\$/g;
+        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
         let lastIndex = 0;
         let match;
 
         while ((match = regex.exec(text)) !== null) {
             if (match.index > lastIndex) {
-                nodes.push({ type: 'text', text: text.substring(lastIndex, match.index), formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined });
+                nodes.push(plainText(text.substring(lastIndex, match.index)));
             }
+            const g = match.groups!;
 
-            if (match[2] !== undefined) { // Image or Link
-                const isImage = match[1] === '!';
-                const altText = match[2];
-                const url = match[3];
-                // Pandoc-style attribute list immediately after an image, e.g. {width=50% .centered}
-                const attrs = isImage && match[4] !== undefined ? parseAttributeList(match[4]) : undefined;
-                if (isImage) {
-                    if (url.startsWith('data:')) {
-                        const dataMatch = url.match(/^data:([^;]+);base64,(.*)$/);
-                        if (dataMatch && config.extractAttachments) {
-                            const mimeType = dataMatch[1] as any;
-                            const data = dataMatch[2];
-                            const name = `image_${attachments.length + 1}.${mimeType.split('/')[1]}`;
-                            attachments.push({
-                                type: 'image',
-                                mimeType,
-                                data,
-                                name,
-                                extension: mimeType.split('/')[1]
-                            });
-                            nodes.push({ type: 'image', metadata: { attachmentName: name, altText, ...attrs } as ImageMetadata });
-                        } else {
-                            nodes.push({ type: 'image', metadata: { url, altText, ...attrs } as ImageMetadata });
-                        }
-                    } else {
-                        nodes.push({ type: 'image', metadata: { url, altText, ...attrs } as ImageMetadata });
-                    }
-                } else {
-                    const linkNodes = parseInline(altText, currentFormatting);
-                    linkNodes.forEach(n => {
-                        if (n.type === 'text') {
-                            n.metadata = { link: url, linkType: 'external' } as TextMetadata;
-                        }
-                    });
-                    nodes.push(...linkNodes);
-                }
-            } else if (match[5]) { // Bold
-                nodes.push(...parseInline(match[5], { ...currentFormatting, bold: true }));
-            } else if (match[6]) { // Italic
-                nodes.push(...parseInline(match[6], { ...currentFormatting, italic: true }));
-            } else if (match[7]) { // Strikethrough
-                nodes.push(...parseInline(match[7], { ...currentFormatting, strikethrough: true }));
-            } else if (match[8]) { // Inline Code
-                nodes.push({ type: 'text', text: match[8], formatting: { ...currentFormatting, font: 'monospace' } });
-            } else if (match[9]) { // Underline
-                nodes.push(...parseInline(match[9], { ...currentFormatting, underline: true }));
-            } else if (match[10]) { // Subscript
-                nodes.push(...parseInline(match[10], { ...currentFormatting, subscript: true }));
-            } else if (match[11]) { // Superscript
-                nodes.push(...parseInline(match[11], { ...currentFormatting, superscript: true }));
-            } else if (match[12]) { // Footnote reference
-                const noteId = match[12];
+            if (g.esc !== undefined) { // Backslash-escaped punctuation
+                nodes.push(plainText(g.esc));
+            } else if (g.imgAlt !== undefined) { // Image or Link
+                nodes.push(...buildLinkOrImageNodes(g.imgBang === '!', g.imgAlt, g.imgUrl, g.imgAttrs));
+            } else if (g.boldStar !== undefined) { // Bold (**)
+                nodes.push(...parseInline(g.boldStar, { ...currentFormatting, bold: true }));
+            } else if (g.boldUnderscore !== undefined) { // Bold (__)
+                nodes.push(...parseInline(g.boldUnderscore, { ...currentFormatting, bold: true }));
+            } else if (g.italicStar !== undefined) { // Italic (*)
+                nodes.push(...parseInline(g.italicStar, { ...currentFormatting, italic: true }));
+            } else if (g.italicUnderscore !== undefined) { // Italic (_)
+                nodes.push(...parseInline(g.italicUnderscore, { ...currentFormatting, italic: true }));
+            } else if (g.strike !== undefined) { // Strikethrough
+                nodes.push(...parseInline(g.strike, { ...currentFormatting, strikethrough: true }));
+            } else if (g.codeContent !== undefined) { // Inline code (any matching backtick-run length)
+                nodes.push({ type: 'text', text: g.codeContent, formatting: { ...currentFormatting, font: 'monospace' } });
+            } else if (g.underline !== undefined) { // Underline
+                nodes.push(...parseInline(g.underline, { ...currentFormatting, underline: true }));
+            } else if (g.subscript !== undefined) { // Subscript
+                nodes.push(...parseInline(g.subscript, { ...currentFormatting, subscript: true }));
+            } else if (g.superscript !== undefined) { // Superscript
+                nodes.push(...parseInline(g.superscript, { ...currentFormatting, superscript: true }));
+            } else if (g.footnoteId !== undefined) { // Footnote reference
+                const noteId = g.footnoteId;
                 const definition = footnoteDefinitions.get(noteId);
                 const noteChildren = definition !== undefined ? parseInline(definition) : [];
                 const noteNode: OfficeContentNode = {
@@ -285,27 +327,79 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 } else {
                     nodes.push({ type: 'text', text: '', notes: [noteNode] });
                 }
-            } else if (match[13]) { // Citation reference
-                nodes.push({ type: 'text', text: match[13], metadata: { citationKey: match[13] } as TextMetadata });
-            } else if (match[14]) { // Wikilink
-                const page = match[14].trim();
-                const alias = match[15]?.trim();
+            } else if (g.citationKey !== undefined) { // Citation reference
+                nodes.push({ type: 'text', text: g.citationKey, metadata: { citationKey: g.citationKey } as TextMetadata });
+            } else if (g.wikiPage !== undefined) { // Wikilink
+                const page = g.wikiPage.trim();
+                const alias = g.wikiAlias?.trim();
                 nodes.push({ type: 'text', text: alias || page, metadata: { link: page, linkType: 'internal', wikilink: true } as TextMetadata });
-            } else if (match[16] !== undefined) { // Inline math
-                nodes.push({ type: 'code', text: match[16], metadata: { math: 'inline' } as CodeMetadata });
+            } else if (g.refText !== undefined) { // Explicit/collapsed reference link or image: [text][ref] / [text][]
+                const isImage = g.refBang === '!';
+                const label = g.refText;
+                const refId = (g.refId || label).trim().toLowerCase();
+                const def = linkDefinitions.get(refId);
+                if (def) {
+                    nodes.push(...buildLinkOrImageNodes(isImage, label, def.url));
+                } else {
+                    // Not a known reference - preserve the literal bracketed text unchanged.
+                    nodes.push(plainText(text.substring(match.index, match.index + match[0].length)));
+                }
+            } else if (g.shortText !== undefined) { // Shortcut reference: [text]
+                const isImage = g.shortBang === '!';
+                const label = g.shortText;
+                const def = linkDefinitions.get(label.trim().toLowerCase());
+                if (def) {
+                    nodes.push(...buildLinkOrImageNodes(isImage, label, def.url));
+                } else {
+                    // Not a known reference - ordinary bracketed prose, preserve unchanged.
+                    nodes.push(plainText(`${g.shortBang}[${label}]`));
+                }
+            } else if (g.autolinkUrl !== undefined) { // <url> autolink
+                const url = g.autolinkUrl;
+                nodes.push({ type: 'text', text: url, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined, metadata: { link: url, linkType: 'external' } as TextMetadata });
+            } else if (g.mathInline !== undefined) { // Inline math
+                nodes.push({ type: 'code', text: g.mathInline, metadata: { math: 'inline' } as CodeMetadata });
             }
 
             lastIndex = regex.lastIndex;
         }
 
         if (lastIndex < text.length) {
-            nodes.push({ type: 'text', text: text.substring(lastIndex), formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined });
+            nodes.push(plainText(text.substring(lastIndex)));
         }
 
-        return applyAbbreviations(nodes);
+        return applyAbbreviations(decodeHtmlEntities(nodes));
     };
 
     const escapeRegExpChars = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // A deliberately small, common-entity lookup (not the full HTML5 named-character-
+    // reference table) - keeps this a plain object rather than needing a dependency.
+    const NAMED_HTML_ENTITIES: Record<string, string> = {
+        amp: '&', lt: '<', gt: '>', quot: '"', apos: '\'', nbsp: ' ',
+        copy: '©', reg: '®', mdash: '—', ndash: '–', hellip: '…'
+    };
+
+    // Decodes HTML named entities and numeric/hex character references (&#NN;/&#xHH;)
+    // in plain text nodes, skipping monospace (inline code) nodes since CommonMark does
+    // not decode entities inside code spans. The regex only ever matches syntactically
+    // well-formed &name;/&#NN;/&#xHH; tokens to begin with, so ordinary text containing
+    // a bare "&" (e.g. "Q&A", "Fish & Chips") never matches at all; an unrecognized-but-
+    // well-formed token (e.g. "&foo;") is left untouched on a lookup miss - no risk of
+    // double-decoding or corrupting text that merely resembles an entity.
+    const decodeHtmlEntities = (nodes: OfficeContentNode[]): OfficeContentNode[] => {
+        return nodes.map(node => {
+            if (node.type !== 'text' || !node.text || node.formatting?.font === 'monospace') return node;
+            const text = node.text.replace(/&(#\d+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g, (full: string, ref: string) => {
+                if (ref[0] === '#') {
+                    const codePoint = ref[1].toLowerCase() === 'x' ? parseInt(ref.slice(2), 16) : parseInt(ref.slice(1), 10);
+                    return (isNaN(codePoint) || codePoint < 0 || codePoint > 0x10FFFF) ? full : String.fromCodePoint(codePoint);
+                }
+                return NAMED_HTML_ENTITIES[ref] ?? full;
+            });
+            return text === node.text ? node : { ...node, text };
+        });
+    };
 
     // Splits abbreviation occurrences out of plain text nodes so they carry
     // TextMetadata.abbreviationTitle, rendered as <abbr title> in HTML/editor output.
@@ -349,6 +443,28 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return result;
     };
 
+    // Splits a paragraph-shaped block's internal lines into inline-parsed content,
+    // inserting a real 'break' node for a hard line break (a line ending in 2+ trailing
+    // spaces or a trailing backslash) instead of collapsing it to a space. A plain single
+    // newline with no such marker is still a soft break and collapses to a space,
+    // unchanged from before - CommonMark itself renders a soft break as a space/newline.
+    const splitParagraphLines = (block: string): OfficeContentNode[] => {
+        const lines = block.split('\n');
+        const children: OfficeContentNode[] = [];
+        lines.forEach((line, i) => {
+            const hardBreak = /(?: {2,}|\\)$/.test(line);
+            children.push(...parseInline(line.replace(/(?: {2,}|\\)$/, '')));
+            if (i < lines.length - 1) {
+                if (hardBreak) {
+                    children.push({ type: 'break', metadata: { breakType: 'carriageReturn' } as BreakMetadata });
+                } else {
+                    children.push({ type: 'text', text: ' ' });
+                }
+            }
+        });
+        return children;
+    };
+
     // Builds an admonition node from its raw body text, splitting on blank lines into
     // paragraph children. v1 only supports inline content inside admonitions (no nested
     // lists/headings/code) - acceptable per the roadmap's first cut.
@@ -356,7 +472,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         const paragraphs = body.split(/\n\n+/).map(p => p.trim()).filter(Boolean);
         const children: OfficeContentNode[] = paragraphs.map(p => ({
             type: 'paragraph',
-            children: parseInline(p.replace(/\n/g, ' '))
+            children: splitParagraphLines(p)
         }));
         return {
             type: 'admonition',
@@ -375,28 +491,41 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Match headings or lists that might be joined with other text via single newline
         const lines = rawBlock.split('\n');
         let currentSubBlock: string[] = [];
+        // Tracks whether we're currently "inside" a list (a list-item line, or an
+        // indented continuation line right after one) so a continuation line doesn't
+        // itself get treated as the boundary that splits the list into a new block -
+        // see the "Lists" block dispatch below, which merges such a line into the
+        // previous item's content instead of dropping it.
+        let inList: boolean = false;
         for (const line of lines) {
             const isHeading = !!line.match(/^(?:<a[^>]*><\/a>)*\s*#{1,6}\s+/);
-            const isList = !!line.match(/^(\s*)([-*+]|\d+\.)\s+/);
+            const isList = !!line.match(/^(\s*)([-*+]|\d+[.)])\s+/);
             const isHtmlTag = !!line.match(/^<\/?div[^>]*>$/i);
-            const prevWasList = currentSubBlock.length > 0 && !!currentSubBlock[currentSubBlock.length - 1].match(/^(\s*)([-*+]|\d+\.)\s+/);
+            // A non-list, non-blank, indented (>=2 columns or a tab) line encountered
+            // while already inside a list is a continuation of the current item, not a
+            // new construct. Scoped to a single such line at a time (no nested
+            // code/blockquote/sub-list/multi-paragraph items - those require un-splitting
+            // already-separated raw blocks, out of scope here).
+            const isContinuation: boolean = !isList && inList && /^(?: {2,}|\t)/.test(line) && line.trim().length > 0;
+            const staysInListMode: boolean = isList || isContinuation;
 
             // Split if:
             // 1. Current line is a heading
-            // 2. Current line is a list item but previous was NOT
-            // 3. Current line is NOT a list item but previous WAS
-            // 4. Current line is an HTML tag (div)
-            if ((isHeading || isHtmlTag || (isList !== prevWasList)) && currentSubBlock.length > 0) {
+            // 2. Current line enters or leaves "list mode" relative to the previous line
+            // 3. Current line is an HTML tag (div)
+            if ((isHeading || isHtmlTag || (staysInListMode !== inList)) && currentSubBlock.length > 0) {
                 blocks.push(currentSubBlock.join('\n'));
                 currentSubBlock = [];
             }
 
             currentSubBlock.push(line);
+            inList = staysInListMode;
 
             // Headings and HTML tags are single-line blocks for our state machine
             if (isHeading || isHtmlTag) {
                 blocks.push(currentSubBlock.join('\n'));
                 currentSubBlock = [];
+                inList = false;
             }
         }
         if (currentSubBlock.length > 0) {
@@ -408,6 +537,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     let currentAlignment: 'left' | 'center' | 'right' | 'justify' | undefined = undefined;
 
     for (let block of blocks) {
+        // Preserved before the generic trim() below, which strips the first line's
+        // leading indentation - the indented-code-block check further down needs every
+        // line's original indentation, including the first.
+        const untrimmedBlock = block;
         block = block.trim();
         if (!block) continue;
 
@@ -531,12 +664,50 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             continue;
         }
 
+        // Setext heading (Text\n===  or  Text\n---): a line of text immediately followed
+        // by a lone `=`/`-` underline with no blank line between them. By the time a
+        // block reaches this point, the sub-splitter above has already separated out any
+        // genuinely blank-line-preceded thematic break into its own isolated block (which
+        // has no preceding text line to combine with here), so this only fires for the
+        // ambiguous "text directly above a dash/equals-only line" shape setext needs.
+        // Scoped to a single line immediately above the underline becoming the heading
+        // text; multi-line setext text (CommonMark's "Foo\nbar\n===" merging into one
+        // heading) is an explicitly out-of-scope simplification - any earlier lines in
+        // the block are pushed as a separate paragraph first.
+        const setextMatch = block.match(/^([\s\S]*)\n([=]+|-+)[ \t]*$/);
+        if (setextMatch) {
+            const lines = setextMatch[1].split('\n');
+            const headingLine = lines[lines.length - 1];
+            const earlierLines = lines.slice(0, -1).join('\n').trim();
+            if (earlierLines) {
+                content.push({
+                    type: 'paragraph',
+                    metadata: { alignment } as any,
+                    children: splitParagraphLines(earlierLines)
+                });
+            }
+            const children = parseInline(headingLine);
+            content.push({
+                type: 'heading',
+                text: children.map(c => c.text || '').join(''),
+                metadata: { level: setextMatch[2][0] === '=' ? 1 : 2, alignment } as HeadingMetadata,
+                children
+            });
+            continue;
+        }
+
         // Blockquote
         const quoteMatch = block.match(/^>\s+(.*)$/s);
         if (quoteMatch) {
             // [ \t]? (not \s+) so a bare ">" paragraph-separator line (used between
-            // multi-paragraph admonition bodies) also dequotes to an empty line.
-            const dequoted = quoteMatch[1].replace(/^>[ \t]?/gm, '');
+            // multi-paragraph admonition bodies) also dequotes to an empty line. Repeat
+            // until no line still starts with ">" so arbitrarily-nested blockquotes
+            // (`> > quoted`, `> > > quoted`, ...) are fully unwrapped rather than only
+            // stripping one level.
+            let dequoted = quoteMatch[1];
+            while (/^>/m.test(dequoted)) {
+                dequoted = dequoted.replace(/^>[ \t]?/gm, '');
+            }
 
             // GitHub-style admonition: `> [!NOTE]` on the first quoted line.
             const admonitionHeaderMatch = dequoted.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*\n?([\s\S]*)$/i);
@@ -573,29 +744,52 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
 
         // Lists
-        if (block.match(/^(\s*)([-*+]|\d+\.)\s+/)) {
+        if (block.match(/^(\s*)([-*+]|\d+[.)])\s+/)) {
             const lines = block.split('\n');
             const listId = `md-list-${listIdCounter++}`;
-            const listCounters: Record<number, number> = {};
+            const listCounters = new Map<number, number>();
+            // Relative indent stack (not a fixed-width divisor) so nesting level is
+            // computed from what indentation actually appeared in this block, rather
+            // than assuming a specific indent width. This makes the parser agnostic to
+            // 2-space (hand-written), 4-space (this generator's own output), or
+            // tab-indented (normalized to a 4-column stop) nested lists.
+            const indentStack: number[] = [];
+            // The most recently pushed list-item node, so a following indented
+            // continuation line (see the sub-splitter above) can be merged into it
+            // instead of being silently dropped.
+            let lastListNode: OfficeContentNode | undefined;
 
             for (const line of lines) {
-                const match = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+                const match = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
                 if (match) {
-                    const indent = match[1].length / 2;
-                    const level = Math.floor(indent);
+                    const rawIndent = match[1].replace(/\t/g, '    ').length;
+                    while (indentStack.length > 0 && rawIndent <= indentStack[indentStack.length - 1]) {
+                        indentStack.pop();
+                    }
+                    const level = indentStack.length;
+                    indentStack.push(rawIndent);
+
+                    // Purge any deeper levels' counters now that we're back at this
+                    // level - otherwise a nested sub-list under a later sibling item
+                    // would incorrectly continue a previous sibling's child numbering
+                    // instead of restarting at 0.
+                    for (const key of [...listCounters.keys()]) {
+                        if (key > level) listCounters.delete(key);
+                    }
+
                     const marker = match[2];
-                    const isOrdered = !!marker.match(/\d+\./);
+                    const isOrdered = !!marker.match(/\d+[.)]/);
                     const listType: 'ordered' | 'unordered' = isOrdered ? 'ordered' : 'unordered';
 
-                    if (listCounters[level] === undefined) {
+                    if (listCounters.get(level) === undefined) {
                         if (isOrdered) {
                             const startNum = parseInt(marker, 10);
-                            listCounters[level] = isNaN(startNum) ? 0 : startNum - 1;
+                            listCounters.set(level, isNaN(startNum) ? 0 : startNum - 1);
                         } else {
-                            listCounters[level] = 0;
+                            listCounters.set(level, 0);
                         }
                     } else {
-                        listCounters[level]++;
+                        listCounters.set(level, listCounters.get(level)! + 1);
                     }
 
                     let itemText = match[3];
@@ -609,7 +803,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     }
 
                     const children = parseInline(itemText);
-                    content.push({
+                    const listNode: OfficeContentNode = {
                         type: 'list',
                         text: children.map(c => c.text || '').join(''),
                         metadata: {
@@ -617,12 +811,21 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                             indentation: level,
                             alignment: alignment || 'left',
                             listId,
-                            itemIndex: listCounters[level],
+                            itemIndex: listCounters.get(level),
                             isTask,
                             checked
                         } as ListMetadata,
                         children
-                    });
+                    };
+                    content.push(listNode);
+                    lastListNode = listNode;
+                } else if (lastListNode && line.trim().length > 0 && /^(?: {2,}|\t)/.test(line)) {
+                    // Indented continuation line: merge its inline content into the
+                    // previous item rather than dropping it. Scoped to a single such
+                    // line (no nested code/blockquote/sub-list/multi-paragraph items).
+                    const continuationChildren = parseInline(line.trim());
+                    lastListNode.children = [...(lastListNode.children || []), { type: 'text', text: ' ' }, ...continuationChildren];
+                    lastListNode.text = (lastListNode.children || []).map(c => c.text || '').join('');
                 }
             }
             continue;
@@ -682,7 +885,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 const lines = block.trim().split('\n');
                 const rows: OfficeContentNode[] = [];
                 for (let i = 0; i < lines.length; i++) {
-                    if (lines[i].match(/^\|?[-:| ]*---[-:| ]*\|?$/)) continue; // Separator row (requires at least one triple-hyphen)
+                    if (lines[i].match(/^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/)) continue; // Separator row (per-cell `:?-+:?`, GFM-style; accepts short cells like `|-|-|`)
 
                     const cellsStr = lines[i].replace(/^\||\|$/g, '').split('|');
                     const cells: OfficeContentNode[] = cellsStr.map(c => {
@@ -712,8 +915,25 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
         }
 
+        // Indented code block (4-space or tab indent on every non-blank line). Only
+        // reaches this point once heading/blockquote/definition-list/list/table have
+        // already failed to claim the block; since list continuation lines are now
+        // handled inside the "Lists" branch above and the sub-splitter already isolates
+        // list/heading content into their own blocks, a block that's uniformly indented
+        // here is not a list by construction. A partially-indented block (some lines
+        // indented, some not) falls through to Paragraph unchanged.
+        {
+            const codeLines = untrimmedBlock.split('\n');
+            const nonBlankLines = codeLines.filter(l => l.trim().length > 0);
+            if (nonBlankLines.length > 0 && nonBlankLines.every(l => /^(?: {4}|\t)/.test(l))) {
+                const stripped = codeLines.map(l => l.replace(/^(?: {4}|\t)/, '')).join('\n');
+                content.push({ type: 'code', text: stripped });
+                continue;
+            }
+        }
+
         // Hr
-        if (block.match(/^---+|^\*\*\*+|___+$/)) {
+        if (block.match(/^---+$|^\*\*\*+$|^___+$/)) {
             content.push({ type: 'break', metadata: { breakType: 'page' } });
             continue;
         }
@@ -722,7 +942,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         content.push({
             type: 'paragraph',
             metadata: { alignment } as any,
-            children: parseInline(block.replace(/\n/g, ' '))
+            children: splitParagraphLines(block)
         });
     }
 
