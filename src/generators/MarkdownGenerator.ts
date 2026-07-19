@@ -6,6 +6,28 @@ type ResolvedMarkdownDialect = Required<Omit<MarkdownDialectConfig, 'extends'>>;
 type ResolvedFallbackToHtml = Required<FallbackToHtmlConfig>;
 
 /**
+ * Values accepted for an attribute-list `align=`. Matches what `MarkdownParser`'s own
+ * `parseAttributeList` allowlists on import (plus `justify`, which HTML sources can supply),
+ * so this is lossless for anything the parser produced.
+ */
+const MD_ALIGN_VALUES = new Set(['left', 'center', 'right', 'justify']);
+
+/** A CSS length or percentage - the only shape `width=` legitimately carries. */
+const MD_LENGTH_PATTERN = /^\d+(?:\.\d+)?(?:px|%|em|rem|pt|pc|in|cm|mm|ex|ch|vw|vh)?$/;
+
+/** Admonition kinds, mirroring the union declared on `AdmonitionMetadata` in types.ts. */
+const MD_ADMONITION_TYPES = new Set(['note', 'tip', 'important', 'warning', 'caution']);
+
+/**
+ * Folds line breaks to spaces.
+ *
+ * Used on values that sit inside a single-line construct (an abbreviation definition, an
+ * admonition's bold title). A raw newline there does not merely look wrong: it terminates the
+ * construct and exposes whatever follows as document-level Markdown.
+ */
+const foldLines = (value: unknown): string => String(value ?? '').replace(/[\r\n]+/g, ' ');
+
+/**
  * Named Markdown dialect presets. `extended` reproduces this library's historical output
  * exactly (every feature on, GitHub-style admonitions) - the backward-compatibility anchor.
  */
@@ -140,9 +162,23 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         if (!this.resolvedDialect.attributeLists) return '';
         if (!meta?.width && !meta?.align) return '';
         const parts: string[] = [];
-        // Strip characters that would break out of the `{...}` attribute list.
-        if (meta.width) parts.push(`width=${String(meta.width).replace(/[{}\s]+/g, '')}`);
-        if (meta.align) parts.push(`align=${String(meta.align).replace(/[{}\s]+/g, '')}`);
+        // Allowlist, not escape. These land in `metadata.width`/`align` on reparse, which the
+        // parser does NOT entity-decode, so encoding here would not round-trip - and stripping
+        // alone is not enough: the previous `[{}\s]+` guard removed whitespace, which stops
+        // `<img src=x onerror=…>` but not the slash-separated `<img/src=x/onerror=…>`.
+        // Both values have a small, fully-known shape, so matching that shape is both safer and
+        // lossless for anything a parser can produce.
+        //
+        // (`isValidContainerWidth` in utils/configUtils.ts is a near-identical regex, but it is a
+        // config validator that also accepts 'auto' and numbers; importing configUtils here for
+        // one pattern would be a worse coupling than this local constant.)
+        if (meta.width && MD_LENGTH_PATTERN.test(String(meta.width).trim())) {
+            parts.push(`width=${String(meta.width).trim()}`);
+        }
+        if (meta.align && MD_ALIGN_VALUES.has(String(meta.align).trim().toLowerCase())) {
+            parts.push(`align=${String(meta.align).trim().toLowerCase()}`);
+        }
+        if (parts.length === 0) return '';
         return `{${parts.join(' ')}}`;
     }
 
@@ -227,8 +263,16 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         // Obsidian syntax: bare page name, or page|alias when the display
                         // text differs from the page name. Strip the `[]|`/newline chars
                         // that would break out of the `[[...]]` wrapper.
-                        const page = (meta.link || '').replace(/[[\]|\r\n]+/g, '');
-                        const alias = (node.text || '').replace(/[[\]|\r\n]+/g, '');
+                        // The alias must be built from the ESCAPED text, not from raw node.text.
+                        // Rebuilding from the raw value here discarded the markdownEscapeText()
+                        // applied above, so a wikilink was the one place document text reached
+                        // the output unescaped. Escaping is lossless for the alias specifically,
+                        // because it lands back in a text node, which the parser entity-decodes.
+                        const alias = markdownEscapeText(node.text || '').replace(/[[\]|\r\n]+/g, '');
+                        // `page` lands in metadata.link, which is NOT entity-decoded on reparse,
+                        // so it gets `<` dropped rather than encoded - a page name is an
+                        // identifier, and `<` carries no meaning in one.
+                        const page = (meta.link || '').replace(/[[\]|<\r\n]+/g, '');
                         text = (node.text && node.text !== (meta.link || '')) ? `[[${page}|${alias}]]` : `[[${page}]]`;
                     } else if (meta?.link) {
                         const isInternal = meta.linkType !== 'external';
@@ -251,7 +295,13 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         this.collectedAbbreviations.set(node.text || '', meta.abbreviationTitle);
                     }
                     if (meta?.citationKey) {
-                        const key = String(meta.citationKey).replace(/[[\]\r\n]+/g, '');
+                        // Allowlist to exactly the character class MarkdownParser's own citation
+                        // recognizer accepts, so this is provably lossless for anything it
+                        // produced - while fully neutralizing a key arriving from HtmlParser's
+                        // `data-citation-key`, which accepts any string. Like the wikilink above,
+                        // this branch also replaces `text` wholesale, so a strip that left `<`
+                        // behind discarded the escaping applied earlier.
+                        const key = String(meta.citationKey).replace(/[^a-zA-Z0-9_:.-]/g, '');
                         text = this.resolvedDialect.citations ? `[@${key}]` : `[${key}]`;
                     }
                     return text;
@@ -370,15 +420,37 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
                 case 'code': {
                     const meta = node.metadata as CodeMetadata;
+                    // Math content reached the output completely raw, which mattered most under
+                    // `math: 'none'` (the commonmark preset), where there is no `$` wrapper at
+                    // all and the text lands directly in the document body.
+                    //
+                    // Encode rather than drop: `$a < b$` is ordinary LaTeX, and dropping `<`
+                    // would silently corrupt real formulae. markdownEscapeText only touches `<`
+                    // followed by a letter/`/`/`!`/`?`, which is not idiomatic math, and it is
+                    // idempotent - so output is stable across repeated round-trips even though
+                    // the first cycle shifts an anomalous `<img` to `&lt;img`. (Fully lossless
+                    // would mean teaching MarkdownParser.decodeHtmlEntities to cover math `code`
+                    // nodes; that is a parser behaviour change with its own baseline
+                    // consequences and must not gate a security fix.)
                     if (meta?.math === 'block') {
-                        return this.resolvedDialect.math === 'dollar' ? `\n$$\n${node.text || ''}\n$$\n\n` : `\n${node.text || ''}\n\n`;
+                        // A content line of exactly `$$` would close the block early.
+                        const mathBlock = markdownEscapeText(node.text || '')
+                            .split('\n').map(l => (l.trim() === '$$' ? ` ${l}` : l)).join('\n');
+                        return this.resolvedDialect.math === 'dollar' ? `\n$$\n${mathBlock}\n$$\n\n` : `\n${mathBlock}\n\n`;
                     }
                     if (meta?.math === 'inline') {
-                        return this.resolvedDialect.math === 'dollar' ? `$${node.text || ''}$` : (node.text || '');
+                        // Dropping `$` and newlines is lossless here: the parser's own inline-math
+                        // recognizer is `\$(?!\s)([^$\n]+?)(?<!\s)\$`, which can never capture either.
+                        const mathInline = markdownEscapeText(node.text || '').replace(/[$\r\n]+/g, '');
+                        return this.resolvedDialect.math === 'dollar' ? `$${mathInline}$` : mathInline;
                     }
                     const lang = (meta?.language || '').replace(/[\r\n`]+/g, '');
-                    // Block code if it contains newlines, else inline
-                    if (node.text && node.text.includes('\n')) {
+                    // Block code if it contains a line break, else inline. Testing only for `\n`
+                    // routed a CR-only string to the inline branch, where a renderer that
+                    // normalizes `\r` to a line ending sees a blank line, the span dies, and the
+                    // remainder is exposed as raw Markdown. The fence sizing below is correct and
+                    // needs no change; code content itself is not an HTML context.
+                    if (node.text && /[\r\n]/.test(node.text)) {
                         // Fence with one more backtick than the longest run inside the content
                         // so an embedded ``` can't close the block early and inject markup.
                         const longestRun = Math.max(0, ...(node.text.match(/`+/g) || []).map(s => s.length));
@@ -438,22 +510,31 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
                 case 'admonition': {
                     const meta = node.metadata as AdmonitionMetadata;
-                    const type = meta?.admonitionType || 'note';
+                    // `admonitionType` is a closed union in types.ts and both parsers already
+                    // allowlist on import, so enforcing it here is a no-op for any conforming
+                    // AST - it closes the gap for a programmatically-built one, where the type is
+                    // interpolated straight into `:::TYPE` / `::: {.TYPE}` / `[!TYPE]`.
+                    const rawType = String(meta?.admonitionType || 'note').toLowerCase();
+                    const type = MD_ADMONITION_TYPES.has(rawType) ? rawType : 'note';
                     const label = type.toUpperCase();
+                    // A newline in the title would close the `**...**` and, in the fenced-div
+                    // branches, could emit a stray `:::` line. `title` is never parser-set, so
+                    // there is no round-trip to preserve and escaping is free.
+                    const title = meta?.title ? markdownEscapeText(foldLines(meta.title)) : '';
                     const body = childrenOutput.trim();
 
                     switch (this.resolvedDialect.admonitions) {
                         case 'gitlab':
                             // GLFM fenced-div: no dedicated title syntax, so a custom title (if
                             // any) is folded into the body as a bold first line.
-                            return `:::${type}\n${meta?.title ? `**${meta.title}**\n\n` : ''}${body}\n:::\n\n`;
+                            return `:::${type}\n${title ? `**${title}**\n\n` : ''}${body}\n:::\n\n`;
                         case 'pandoc':
                             // Pandoc's own fenced-div-with-class syntax; same title handling as gitlab.
-                            return `::: {.${type}}\n${meta?.title ? `**${meta.title}**\n\n` : ''}${body}\n:::\n\n`;
+                            return `::: {.${type}}\n${title ? `**${title}**\n\n` : ''}${body}\n:::\n\n`;
                         case 'none': {
                             // Degrade to a plain bold-labeled blockquote, no special marker.
                             const quotedLines = body.split('\n').map(l => l.length > 0 ? `> ${l}` : '>').join('\n');
-                            const heading = meta?.title || label.charAt(0) + label.slice(1).toLowerCase();
+                            const heading = title || label.charAt(0) + label.slice(1).toLowerCase();
                             return `> **${heading}:**\n${quotedLines}\n\n`;
                         }
                         case 'github':
@@ -514,7 +595,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         if (this.collectedAbbreviations.size > 0) {
             output += '\n\n';
             for (const [abbr, title] of this.collectedAbbreviations) {
-                output += `*[${abbr}]: ${title}\n`;
+                output += `*[${markdownEscapeText(String(abbr).replace(/[[\]\r\n]+/g, ''))}]: ${markdownEscapeText(foldLines(title))}\n`;
             }
         }
 

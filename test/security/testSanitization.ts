@@ -7,8 +7,12 @@
  * CSS, a CSV formula, a Markdown link, an RTF group) in the generated output.
  */
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { strFromU8, unzipSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
+import { OfficeParser } from '../../src/OfficeParser';
 import { OfficeParserAST } from '../../src/types';
 import { resolveGeneratorConfig, resolveParserConfig } from '../../src/utils/configUtils';
 import {
@@ -188,6 +192,88 @@ async function markdownTests() {
     ]);
     const md2 = (await OfficeGenerator.generate(linkAst, 'md')).value as string;
     check('md: javascript link dropped', !md2.includes('javascript:'), 'javascript: survived markdown link');
+
+    // --- Sinks that emitted document text without escaping ---------------------------------
+    // Text nodes were escaped, but seven other constructs interpolated their content directly.
+    // Each has its own delimiter, so each needs its own treatment - which is why these are
+    // asserted individually rather than through one shared helper.
+    //
+    // The payload uses `/` as the attribute separator on purpose: a whitespace-stripping guard
+    // (which is what the attribute-list sink had) stops `<img src=x onerror=…>` but not this.
+    const PAYLOAD = '<img/src=x/onerror=alert(1)>';
+
+    // Document-reachable sinks: driven through the real parser from real Markdown source, not a
+    // hand-built AST, so the test proves the whole parse -> generate path and not just the
+    // generator half.
+    const viaDocument = async (source: string): Promise<string> => {
+        const tmp = path.join(os.tmpdir(), `op-sec-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+        fs.writeFileSync(tmp, source);
+        try {
+            const ast = await OfficeParser.parseOffice(tmp, {} as any);
+            return String((await ast.to('md')).value);
+        } finally { fs.unlinkSync(tmp); }
+    };
+
+    const docSinks: Array<[string, string, RegExp]> = [
+        // [name, source, a pattern proving the construct actually rendered]
+        ['inline math', `Text $${PAYLOAD}$ end.`, /\$/],
+        ['block math', `$$\n${PAYLOAD}\n$$`, /\$\$/],
+        ['wikilink', `[[Page${PAYLOAD}]]`, /\[\[/],
+        ['wikilink alias', `[[Page|Alias${PAYLOAD}]]`, /\[\[/],
+        ['abbreviation', `*[HTML]: Hyper ${PAYLOAD} Lang\n\nThe HTML spec.`, /\*\[HTML\]:/],
+        ['footnote key', `text[^${PAYLOAD}]\n\n[^${PAYLOAD}]: def`, /\[\^/],
+    ];
+    for (const [name, source, renderedPattern] of docSinks) {
+        const out = await viaDocument(source);
+        check(`md: ${name} actually rendered`, renderedPattern.test(out),
+            `construct absent from output, so the escape check below would be vacuous: ${JSON.stringify(out.slice(0, 120))}`);
+        check(`md: ${name} cannot carry a raw tag`, !out.includes(PAYLOAD),
+            `payload survived verbatim: ${JSON.stringify(out.slice(0, 160))}`);
+    }
+
+    // The attribute list is the one document-reachable sink whose correct behaviour is to DROP
+    // the value rather than encode it (it lands in metadata, which is not entity-decoded), so
+    // it gets a positive control instead of a "still rendered" guard: a legitimate width must
+    // survive, a hostile one must vanish entirely.
+    const attrHostile = await viaDocument(`![a](x.png){width=50%${PAYLOAD}}`);
+    check('md: attribute list cannot carry a raw tag', !attrHostile.includes(PAYLOAD),
+        `payload survived: ${JSON.stringify(attrHostile.slice(0, 160))}`);
+    const attrBenign = await viaDocument('![a](x.png){width=50%}');
+    check('md: attribute list still emits a legitimate width', attrBenign.includes('{width=50%}'),
+        `legitimate attribute list was dropped too: ${JSON.stringify(attrBenign.slice(0, 160))}`);
+
+    // Sinks reachable only from a programmatic AST (both parsers allowlist admonitionType, and
+    // no parser ever sets an admonition title or a non-conforming citation key). The generator
+    // has to stand alone against these - it is a public API.
+    for (const dialect of ['extended', 'gitlab', 'pandoc', 'commonmark']) {
+        const admAst = astWith([{ type: 'admonition',
+            metadata: { admonitionType: `note${PAYLOAD}`, title: `T${PAYLOAD}` },
+            children: [{ type: 'paragraph', children: [{ type: 'text', text: 'body' }] }] } as any]);
+        const out = (await OfficeGenerator.generate(admAst, 'md', { mdConfig: { dialect } } as any)).value as string;
+        check(`md: admonition (${dialect}) actually rendered`, out.includes('body'),
+            'admonition body absent, so the escape check below would be vacuous');
+        check(`md: admonition (${dialect}) cannot carry a raw tag`, !out.includes(PAYLOAD),
+            `payload survived: ${JSON.stringify(out.slice(0, 160))}`);
+    }
+
+    const citAst = astWith([{ type: 'paragraph', children: [
+        { type: 'text', text: 'c', metadata: { citationKey: `k${PAYLOAD}` } }] } as any]);
+    const citOut = (await OfficeGenerator.generate(citAst, 'md')).value as string;
+    check('md: citation actually rendered', /\[@/.test(citOut),
+        'no citation emitted, so the escape check below would be vacuous');
+    check('md: citation key cannot carry a raw tag', !citOut.includes(PAYLOAD), citOut);
+
+    // Under the commonmark preset math has NO delimiter at all - the text lands straight in the
+    // document body, which makes it the worst case rather than an edge case.
+    const mathAst = astWith([{ type: 'code', text: PAYLOAD, metadata: { math: 'inline' } } as any]);
+    const mathOut = (await OfficeGenerator.generate(mathAst, 'md', { mdConfig: { dialect: 'commonmark' } } as any)).value as string;
+    check('md: undelimited math cannot carry a raw tag', !mathOut.includes(PAYLOAD), mathOut);
+
+    // Fidelity half: the escaping must not destroy legitimate content. `$a < b$` is the case
+    // that rules out "just drop every <".
+    const latex = await viaDocument('Given $a < b$ and $E = mc^2$ here.');
+    check('md: legitimate LaTeX comparison survives', latex.includes('$a < b$'),
+        `real math was corrupted: ${JSON.stringify(latex.slice(0, 160))}`);
 }
 
 async function csvTests() {

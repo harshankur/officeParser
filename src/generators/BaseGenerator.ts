@@ -172,8 +172,15 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         if (cached) return cached;
 
         const preferred = (note.metadata as any)?.noteId;
+        // The id is document-supplied and lands inside `[^...]` in Markdown, where the parser's
+        // own recognizer accepts everything but `]` - so a note id carrying markup round-tripped
+        // into the output verbatim. Accept it only when it looks like a label; otherwise fall
+        // through to the sequential counter, which is always safe. Real ids are numeric (DOCX),
+        // `ftn1`-shaped (ODT) or short slugs (`fn1`), and a Markdown label like `[^my note]`
+        // still qualifies, so the fallback fires only for genuinely hostile input.
+        const isLabelLike = typeof preferred === 'string' && /^[A-Za-z0-9_.:-][A-Za-z0-9 _.:-]*$/.test(preferred);
         let key: string;
-        if (preferred && !this.usedFootnoteKeys.has(preferred)) {
+        if (preferred && isLabelLike && !this.usedFootnoteKeys.has(preferred)) {
             key = preferred;
         } else {
             do {

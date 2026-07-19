@@ -293,6 +293,18 @@ async function testMarkdown(): Promise<void> {
     assert.ok(mdOutput.includes('[[WikiPage]]'), 'MD roundtrip: wikilink');
     assert.ok(mdOutput.includes('[@smith2023]'), 'MD roundtrip: citation');
 
+    // Delimiter-adjacent constructs now escape or allowlist their content, so assert the
+    // *legitimate* forms survive intact. Each of these is a shape a naive guard would break:
+    // dropping `<` would corrupt the comparison, stripping the attribute list would lose the
+    // width, and validating the footnote id too tightly would renumber a real label.
+    assert.ok(mdOutput.includes('$E=mc^2$'), 'MD roundtrip: inline math preserved');
+    assert.ok(mdOutput.includes('$a < b$'), 'MD roundtrip: LaTeX comparison operator not escaped away');
+    assert.ok(mdOutput.includes('a^2 + b^2 = c^2'), 'MD roundtrip: block math content preserved');
+    assert.ok(mdOutput.includes('*[ABBR]: Abbreviation Full Title'), 'MD roundtrip: abbreviation definition preserved');
+    assert.ok(mdOutput.includes('{width=50px align=center}'), 'MD roundtrip: image attribute list preserved');
+    assert.ok(mdOutput.includes('[^fn1]'), 'MD roundtrip: label-shaped footnote id preserved, not renumbered');
+    assert.ok(mdOutput.includes('[[WikiPage|Alias Text]]'), 'MD roundtrip: wikilink alias preserved');
+
     // ── Roundtrip: the bug-fix-pass additions survive generate() ────────────
     assert.ok(mdOutput.includes('  \n'), 'MD roundtrip: hard line break emits two trailing spaces');
     assert.ok(mdOutput.includes('https://example.com/reference'), 'MD roundtrip: resolved reference-link URL preserved');

@@ -89,7 +89,7 @@ def hello():
     print("world")
 ```
 
-Inline math: $E=mc^2$
+Inline math: $E=mc^2$ and a comparison $a < b$
 
 Block math:
 
