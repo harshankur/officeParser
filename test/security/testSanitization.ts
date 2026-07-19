@@ -50,6 +50,25 @@ function unitTests() {
     // Obfuscated url() must not reassemble once control chars / comments are stripped.
     check('css newline-obfuscated url dropped', !/url\s*\(/i.test(sanitizeCssValue('u\nrl(http://evil)')));
     check('css comment-obfuscated url dropped', !/url\s*\(/i.test(sanitizeCssValue('url/*x*/(http://evil)')));
+    // CSS backslash escapes are resolved away by the browser, so `u\rl(` IS `url(` to a
+    // renderer. These were the gap: the strip ran downstream of the denylist test, so the
+    // sanitizer returned a live url() it had just declared safe.
+    check('css escape-obfuscated url dropped', !/url\s*\(/i.test(sanitizeCssValue('u\\rl(http://evil/x)')));
+    check('css escape-obfuscated expression dropped', !/expression\s*\(/i.test(sanitizeCssValue('expr\\ession(alert(1))')));
+    check('css escape-obfuscated image-set dropped', !/image-set\s*\(/i.test(sanitizeCssValue('image\\-set(x)')));
+    // Contract-level, not payload-level: every denylisted construct must stay dropped under an
+    // escaped spelling. This is what catches the next variant rather than the last one.
+    for (const construct of ['url', 'expression', 'image-set', 'element', '-moz-binding']) {
+        const escaped = construct[0] + '\\' + construct.slice(1) + '(http://evil/x)';
+        check(`css escaped "${construct}(" dropped`, sanitizeCssValue(escaped) === '',
+            `sanitizeCssValue(${JSON.stringify(escaped)}) = ${JSON.stringify(sanitizeCssValue(escaped))}`);
+    }
+    // A legitimate value that merely contains a backslash still survives (minus the backslash).
+    check('css plain value survives escape strip', sanitizeCssValue('12\\px') === '12px');
+
+    // Formula guard must not be bypassable by leading whitespace.
+    check('csv leading-space formula guarded', csvSafeCell(' =1+1', ',').includes(`'`));
+    check('csv leading-space at guarded', csvSafeCell('  @SUM(1)', ',').includes(`'`));
 
     // URL sanitizer: block script schemes (incl. control-char obfuscation), keep http/relative.
     check('url javascript blocked', sanitizeUrl('javascript:alert(1)') === '');
@@ -111,19 +130,36 @@ async function htmlTests() {
 
     // Image width flows into a style="" attribute — it must be CSS-sanitized so it can't
     // break out with a quote (event-handler injection) or smuggle a url() resource fetch.
+    // `url` is the real ImageMetadata field; `src` is not one, so an AST using it renders
+    // src="" and exercises far less of the path than it appears to.
     const imgAst = astWith([
-        { type: 'image', text: 'alt', metadata: { width: '1px" onerror="alert(4)', src: 'data:image/png;base64,AAAA' } } as any
+        { type: 'image', text: 'alt', metadata: { width: '1px" onerror="alert(4)', url: 'data:image/png;base64,AAAA' } } as any
     ]);
     const imgHtml = (await OfficeGenerator.generate(imgAst, 'html', { includeFormatting: true })).value as string;
     // The escaped data-width attribute legitimately echoes the text; the breakout signature
     // is a REAL `onerror="` attribute (quote closed the style early), which must be absent.
     check('html: image width no attr breakout', !/onerror\s*=\s*"/.test(imgHtml), `width broke out: ${imgHtml}`);
+    // A width the sanitizer fully rejects emits NO style attribute at all, so asserting
+    // "no url() in the style" against it matches nothing and passes vacuously - that is exactly
+    // how this test sat green while the escape-obfuscation bypass went unnoticed. Use a value
+    // with a legitimate leading length so a style attribute is genuinely produced, assert it
+    // rendered, and only then assert the payload did not survive inside it.
     const imgUrlAst = astWith([
-        { type: 'image', text: 'alt', metadata: { width: '1px;background:url(http://evil/x)', src: 'data:image/png;base64,AAAA' } } as any
+        { type: 'image', text: 'alt', metadata: { width: '50px', url: 'data:image/png;base64,AAAA' } } as any
     ]);
     const imgUrlHtml = (await OfficeGenerator.generate(imgUrlAst, 'html', { includeFormatting: true })).value as string;
     const imgStyle = imgUrlHtml.match(/\sstyle="([^"]*)"/)?.[1] || '';
+    check('html: image style attribute is actually emitted', imgStyle.length > 0,
+        `no style attribute, so the url() check below would be vacuous: ${imgUrlHtml}`);
     check('html: image width no url() fetch', !/url\(/i.test(imgStyle), `width injected url() into style: ${imgStyle}`);
+    // And the hostile widths - both plain and escape-obfuscated - must yield no style at all.
+    for (const hostile of ['1px;background:url(http://evil/x)', '1px;background:u\\rl(http://evil/x)']) {
+        const ast = astWith([{ type: 'image', text: 'alt', metadata: { width: hostile, url: 'data:image/png;base64,AAAA' } } as any]);
+        const out = (await OfficeGenerator.generate(ast, 'html', { includeFormatting: true })).value as string;
+        const style = out.match(/\sstyle="([^"]*)"/)?.[1] || '';
+        check(`html: hostile width ${JSON.stringify(hostile)} emits no url()`, !/url\(/i.test(style),
+            `style="${style}"`);
+    }
 
     const linkAst = astWith([
         { type: 'paragraph', children: [

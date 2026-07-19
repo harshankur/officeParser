@@ -53,16 +53,24 @@ export function escapeXml(text: string): string {
  */
 export function sanitizeCssValue(value: string): string {
     if (typeof value !== 'string') return '';
-    // Strip control chars and CSS comments FIRST, then test for dangerous constructs.
-    // Order matters: a payload like "u\nrl(" or "url/*x*/(" would survive the test if
+    // Strip every form of intra-token noise FIRST, then test for dangerous constructs.
+    // Order matters: a payload like "u\nrl(", "url/*x*/(" or "u\rl(" would survive the test if
     // tested before removal, then reassemble into "url(" once the noise is stripped.
+    //
+    // The backslash strip belongs here, not after the test. CSS treats `\` as an escape a
+    // browser resolves away, so `u\rl(http://evil)` IS `url(http://evil)` to a renderer -
+    // stripping it downstream of the test meant the sanitizer handed back a live `url()` it
+    // had just declared safe. Every construct in the denylist is reachable this way
+    // (`expr\ession(`, `image\-set(`), so the fix is the ordering, not another pattern.
     const cleaned = value
         .replace(/[\x00-\x1F\x7F]/g, '')          // control chars (incl. newlines/tabs)
-        .replace(/\/\*[\s\S]*?\*\//g, '');        // CSS comments used to obfuscate
+        .replace(/\/\*[\s\S]*?\*\//g, '')         // CSS comments used to obfuscate
+        .replace(/\\/g, '');                      // CSS escapes; see above
     if (/(?:url|expression|image-set|element|-moz-binding)\s*\(|@import|javascript:|[<>]/i.test(cleaned)) {
         return '';
     }
-    return cleaned.replace(/[;{}"'`\\]/g, '').trim();
+    // Backslash is already gone above; the rest still have work to do here.
+    return cleaned.replace(/[;{}"'`]/g, '').trim();
 }
 
 /**
@@ -141,7 +149,12 @@ export function csvSafeCell(value: string, delimiter: string): string {
     // otherwise numeric columns get quoted as text. Anything else starting with a formula
     // trigger (including "+1+1", "-1+cmd", "=", "@") is prefixed with a quote.
     const isNumber = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(v.trim());
-    if (!isNumber && /^[=+\-@\t\r]/.test(v)) {
+    // Test the trimmed value: the numeric exemption above already trims, so testing the raw
+    // string here meant a leading space slipped a trigger past the guard (" =1+1" was emitted
+    // unprefixed). Most spreadsheet apps treat a leading-space cell as text and would not
+    // evaluate it, so this is defence in depth rather than a demonstrated bypass - but the
+    // asymmetry between the two tests was an accident, not a decision.
+    if (!isNumber && /^[=+\-@\t\r]/.test(v.trim())) {
         v = `'${v}`;
     }
     if (v.includes(delimiter) || v.includes('"') || v.includes('\n') || v.includes('\r')) {
