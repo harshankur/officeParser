@@ -3,6 +3,13 @@ import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { isSafeHtmlAttributeName } from '../utils/sanitize.js';
 
+/**
+ * Maximum element nesting depth accepted from an HTML/XHTML source before the parser gives up
+ * with a typed error rather than letting the recursion overflow the call stack. See the guard in
+ * `parseNode` for why this value and not a larger one.
+ */
+const MAX_HTML_NESTING_DEPTH = 256;
+
 interface HtmlNode {
     type: 'element' | 'text';
     tagName?: string;
@@ -366,10 +373,20 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
     };
 
     const parseNode = (node: HtmlNode, currentFormatting: TextFormatting = {}, listContext?: ListContext, depth: number = 0): OfficeContentNode | OfficeContentNode[] | null => {
-        // Guard against a maliciously deep element tree (e.g. tens of thousands of
-        // nested <div>) recursing until the call stack overflows. Real documents
-        // nest only a few dozen levels; this trips well before a RangeError.
-        if (depth > 1000) {
+        // Guard against a maliciously deep element tree (e.g. tens of thousands of nested
+        // <div>) recursing until the call stack overflows.
+        //
+        // The previous limit of 1000 could never fire: measured overflow is around 800 and
+        // varies run to run (796/862/796 on three identical runs), so the RangeError always
+        // arrived first and the typed error this guard exists to produce never did. Failure was
+        // still graceful - it surfaces as a wrapped Error, not a crash - which is why this was a
+        // dead guard rather than a denial of service.
+        //
+        // 256 is chosen to hold across engines rather than tuned to one. It is far below the
+        // lowest overflow observed here and leaves room for a smaller frame budget on older V8
+        // (the supported floor is Node 18), while sitting orders of magnitude above real
+        // content: the bundled HTML and EPUB fixtures reach an AST depth of 8.
+        if (depth > MAX_HTML_NESTING_DEPTH) {
             throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED);
         }
         if (node.type === 'text') {
