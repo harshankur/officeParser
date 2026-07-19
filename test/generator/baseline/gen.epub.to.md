@@ -2,6 +2,7 @@
 title: "DOCX Demo"
 author: "Kovid Goyal"
 description: "Demonstration of DOCX support in calibre"
+subject: "calibre"
 ---
 
 <a id="id-toc581531977"></a>Demonstration of DOCX support in calibre

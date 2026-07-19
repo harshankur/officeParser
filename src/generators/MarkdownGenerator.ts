@@ -213,6 +213,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             const modifiedIso = this.toIsoDate(meta.modified);
             if (modifiedIso) output += `modified: ${modifiedIso}\n`;
             if (meta.description) output += `description: ${JSON.stringify(meta.description)}\n`;
+            if (meta.subject) output += `subject: ${JSON.stringify(meta.subject)}\n`;
+            if (meta.keywords) output += `keywords: ${JSON.stringify(meta.keywords)}\n`;
 
             if (meta.customProperties) {
                 for (const [key, val] of Object.entries(meta.customProperties)) {

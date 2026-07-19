@@ -237,6 +237,9 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
         const title = meta.title || 'Untitled';
         const author = meta.author;
         const description = meta.description;
+        // dc:subject is the OPF's only vocabulary slot for either of these; both are repeatable.
+        const subject = meta.subject;
+        const keywords = meta.keywords;
         const nativeProps = (meta.nativeProperties || {}) as Record<string, any>;
         const language = nativeProps.language || 'en';
         // OPF metadata is a closed Dublin Core vocabulary: a caller-defined key has no valid
@@ -260,13 +263,23 @@ ${xhtmlBody}
 </body>
 </html>`;
 
+        // Built as a list rather than inline ternaries so an absent field contributes nothing at
+        // all. Inline `${x ? ... : ''}` leaves the surrounding indentation and newline behind, so
+        // every optional field the document lacks used to emit a stray blank line into the OPF.
+        const optionalDcElements = [
+            author ? `<dc:creator>${escapeXml(author)}</dc:creator>` : '',
+            description ? `<dc:description>${escapeXml(description)}</dc:description>` : '',
+            // dc:subject is repeatable and is the OPF's only slot for either of these.
+            subject ? `<dc:subject>${escapeXml(subject)}</dc:subject>` : '',
+            keywords ? `<dc:subject>${escapeXml(keywords)}</dc:subject>` : '',
+        ].filter(Boolean).map(el => `    ${el}`).join('\n');
+
         const opf = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="pub-id">${escapeXml(identifier)}</dc:identifier>
     <dc:title>${escapeXml(title)}</dc:title>
-    ${author ? `<dc:creator>${escapeXml(author)}</dc:creator>` : ''}
-    ${description ? `<dc:description>${escapeXml(description)}</dc:description>` : ''}
+${optionalDcElements}
     <dc:language>${escapeXml(language)}</dc:language>
     <meta property="dcterms:modified">${modified}</meta>
   </metadata>

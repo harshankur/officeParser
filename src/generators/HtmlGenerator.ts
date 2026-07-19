@@ -395,6 +395,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         if (created) tags.push(`<meta name="dcterms.created" content="${created}">`);
         if (modified) tags.push(`<meta name="dcterms.modified" content="${modified}">`);
         if (m.lastModifiedBy) tags.push(`<meta name="lastModifiedBy" content="${this.escape(m.lastModifiedBy)}">`);
+        // Both are parsed from every OOXML/ODF core-properties block but had no output sink at
+        // all, so they were silently dropped on every conversion. `keywords` is the standard HTML
+        // meta name; `subject` has no standard equivalent, so it uses its Dublin Core name.
+        if (m.keywords) tags.push(`<meta name="keywords" content="${this.escape(m.keywords)}">`);
+        if (m.subject) tags.push(`<meta name="DC.subject" content="${this.escape(m.subject)}">`);
 
         if (m.customProperties) {
             for (const [key, val] of Object.entries(m.customProperties)) {

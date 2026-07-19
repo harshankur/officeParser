@@ -30,6 +30,10 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             if (meta.title) output += `{\\title ${this.escapeRtf(meta.title)}}`;
             if (meta.author) output += `{\\author ${this.escapeRtf(meta.author)}}`;
             if (meta.description) output += `{\\comm ${this.escapeRtf(meta.description)}}`;
+            // \subject and \keywords are standard \info destinations, so unlike a caller's
+            // arbitrary custom keys these DO have a home in RTF.
+            if (meta.subject) output += `{\\subject ${this.escapeRtf(meta.subject)}}`;
+            if (meta.keywords) output += `{\\keywords ${this.escapeRtf(meta.keywords)}}`;
             output += '}\n';
         }
 

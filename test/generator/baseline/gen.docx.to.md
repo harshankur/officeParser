@@ -4,6 +4,7 @@ author: "Kovid Goyal"
 created: 2013-06-05T07:56:00.000Z
 modified: 2025-11-25T20:13:45.823Z
 description: "Demonstration of DOCX support in calibre"
+keywords: "calibre, docs, ebook, conversion"
 TestString: "Hello from custom props"
 TestNumber: 42
 TestBool: true

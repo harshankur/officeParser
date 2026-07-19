@@ -4,6 +4,7 @@ author: "Harsh Ankur"
 created: 2025-11-29T07:48:00.000Z
 modified: 2025-11-29T07:48:00.000Z
 description: "Demonstration of DOCX support in calibre"
+keywords: "calibre,  docs,  ebook,  conversion"
 TestString: "Hello from custom props"
 TestNumber: 42
 TestBool: true
