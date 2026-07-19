@@ -74,6 +74,7 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     decompressionLimits: {
         maxUncompressedBytes: 512 * 1024 * 1024,
         maxZipEntries: 10000,
+        maxTableCells: 1000000,
     },
     htmlParserConfig: DEFAULT_HTML_PARSER_CONFIG,
 };

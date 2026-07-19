@@ -498,6 +498,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // previous item's content instead of dropping it.
         let inList: boolean = false;
         for (const line of lines) {
+            checkAbortSignal(config.abortSignal);
             const isHeading = !!line.match(/^(?:<a[^>]*><\/a>)*\s*#{1,6}\s+/);
             const isList = !!line.match(/^(\s*)([-*+]|\d+[.)])\s+/);
             const isHtmlTag = !!line.match(/^<\/?div[^>]*>$/i);

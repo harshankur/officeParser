@@ -386,6 +386,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
         // lowest overflow observed here and leaves room for a smaller frame budget on older V8
         // (the supported floor is Node 18), while sitting orders of magnitude above real
         // content: the bundled HTML and EPUB fixtures reach an AST depth of 8.
+        // Per node, alongside the depth guard: the two together are what make a hostile
+        // document both bounded and cancellable rather than only bounded.
+        checkAbortSignal(config.abortSignal);
         if (depth > MAX_HTML_NESTING_DEPTH) {
             throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED);
         }

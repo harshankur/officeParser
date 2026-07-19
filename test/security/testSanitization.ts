@@ -10,7 +10,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8, unzipSync, zipSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
 import { OfficeParserAST, OfficeWarningType } from '../../src/types';
@@ -669,6 +669,186 @@ async function rtfUrlTests() {
         !/HYPERLINK "[^"]*"\}\{\\b/.test(quoted), quoted.match(/HYPERLINK "[^"]*"/)?.[0] ?? '');
 }
 
+/**
+ * ODF encodes runs of identical cells/rows with `table:number-columns-repeated` /
+ * `table:number-rows-repeated` instead of repeating markup, so a few hundred bytes of XML can ask
+ * the parser to materialize an arbitrary number of nodes, and the two multiply. The ZIP limits do
+ * not help: the XML is tiny before decompression and the expansion happens afterwards.
+ *
+ * These assert the bound holds without breaking real documents, which legitimately carry very
+ * large repeat counts (LibreOffice writes `number-rows-repeated="1048566"` for trailing empties).
+ */
+async function odfRepeatExpansionTests() {
+    console.log('- OpenOfficeParser (repeated-cell expansion)...');
+
+    const enc = (t: string) => new TextEncoder().encode(t);
+    const doc = (inner: string) => `<?xml version="1.0" encoding="UTF-8"?><office:document-content ` +
+        `xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" ` +
+        `xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" ` +
+        `xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">` +
+        `<office:body>${inner}</office:body></office:document-content>`;
+    const build = (mime: string, inner: string) =>
+        Buffer.from(zipSync({ mimetype: enc(mime), 'content.xml': enc(doc(inner)) }));
+    const ODS = 'application/vnd.oasis.opendocument.spreadsheet';
+    const ODT = 'application/vnd.oasis.opendocument.text';
+
+    const countCells = (ast: any) => {
+        let n = 0; const walk = (x: any) => { if (x.type === 'cell') n++; (x.children || []).forEach(walk); };
+        ast.content.forEach(walk); return n;
+    };
+    const parse = async (buf: Buffer, fileType: string, limit?: number) => {
+        const warns: any[] = [];
+        const cfg: any = { fileType, onWarning: (w: any) => warns.push(w) };
+        if (limit !== undefined) cfg.decompressionLimits = { maxTableCells: limit };
+        const ast = await OfficeParser.parseOffice(buf, cfg);
+        return { cells: countCells(ast), warned: warns.some(w => w.code === OfficeWarningType.TABLE_CELL_LIMIT_EXCEEDED) };
+    };
+
+    const LIMIT = 5000;
+
+    // Single axis: a huge column repeat on a non-empty cell.
+    const cols = build(ODS, `<office:spreadsheet><table:table table:name="S"><table:table-row>` +
+        `<table:table-cell table:number-columns-repeated="5000000"><text:p>X</text:p></table:table-cell>` +
+        `</table:table-row></table:table></office:spreadsheet>`);
+    const rc = await parse(cols, 'ods', LIMIT);
+    check('odf: column repeat is bounded', rc.cells <= LIMIT, `materialized ${rc.cells} cells against a limit of ${LIMIT}`);
+    check('odf: column clamp warns', rc.warned, 'truncation must not be silent');
+
+    // Both axes: this is the combination that exhausted memory, since each row repetition
+    // deep-copies the whole cell array.
+    const both = build(ODS, `<office:spreadsheet><table:table table:name="S">` +
+        `<table:table-row table:number-rows-repeated="10000">` +
+        `<table:table-cell table:number-columns-repeated="10000"><text:p>X</text:p></table:table-cell>` +
+        `</table:table-row></table:table></office:spreadsheet>`);
+    const rb = await parse(both, 'ods', LIMIT);
+    check('odf: rows x cols product is bounded', rb.cells <= LIMIT, `materialized ${rb.cells} cells against a limit of ${LIMIT}`);
+
+    // ODT/ODP keep empty cells on purpose (the grid is structural), so they have no empty-cell
+    // skip and the budget is the only thing bounding them.
+    const odt = build(ODT, `<office:text><table:table table:name="T"><table:table-row>` +
+        `<table:table-cell table:number-columns-repeated="5000000"/>` +
+        `</table:table-row></table:table></office:text>`);
+    const ro = await parse(odt, 'odt', LIMIT);
+    check('odf: ODT empty-cell repeat is bounded', ro.cells <= LIMIT, `materialized ${ro.cells} cells`);
+
+    // MANY tables, each with a huge repeat. The budget is per document, so splitting the
+    // expansion across tables must not multiply past the cap - the earlier single-table tests
+    // would pass even with a per-table budget, which is exactly the hole this covers.
+    const manyTables = build(ODT, '<office:text>' +
+        (`<table:table table:name="T"><table:table-row><table:table-cell ` +
+         `table:number-columns-repeated="1000000"><text:p>X</text:p></table:table-cell>` +
+         `</table:table-row></table:table>`).repeat(20) + '</office:text>');
+    const rm = await parse(manyTables, 'odt', LIMIT);
+    check('odf: budget is per-document, not per-table', rm.cells <= LIMIT,
+        `20 tables materialized ${rm.cells} cells against a per-document limit of ${LIMIT}`);
+
+    // A garbage (non-numeric) repeat must render the cell once, not drain the whole budget and
+    // silently drop every legitimate cell that follows it.
+    const garbage = build(ODS, `<office:spreadsheet>` +
+        `<table:table table:name="A"><table:table-row><table:table-cell ` +
+        `table:number-columns-repeated="abc"><text:p>GARBAGE</text:p></table:table-cell></table:table-row></table:table>` +
+        `<table:table table:name="B"><table:table-row><table:table-cell><text:p>LEGIT</text:p></table:table-cell></table:table-row></table:table>` +
+        `</office:spreadsheet>`);
+    const gWarns: any[] = [];
+    const gAst = await OfficeParser.parseOffice(garbage, { fileType: 'ods', onWarning: (w: any) => gWarns.push(w), decompressionLimits: { maxTableCells: LIMIT } } as any);
+    const gText = gAst.toText();
+    check('odf: a garbage repeat does not drain the budget', gText.includes('LEGIT'),
+        'a non-numeric repeat count consumed the budget and dropped a later legitimate cell');
+    check('odf: a garbage repeat does not spuriously warn',
+        !gWarns.some(w => w.code === OfficeWarningType.TABLE_CELL_LIMIT_EXCEEDED),
+        'a non-numeric repeat count tripped the limit warning on a tiny document');
+
+    // A huge repeat on an EMPTY spreadsheet cell (the normal ODF way to mark a trailing empty
+    // run) must be skipped in O(1), not spun once per column. 2e8 would take ~1.4s as a loop.
+    const emptyRun = build(ODS, `<office:spreadsheet><table:table table:name="S"><table:table-row>` +
+        `<table:table-cell table:number-columns-repeated="200000000"/></table:table-row></table:table></office:spreadsheet>`);
+    const t0 = Date.now();
+    const eAst = await OfficeParser.parseOffice(emptyRun, { fileType: 'ods' } as any);
+    const eMs = Date.now() - t0;
+    check('odf: an empty repeated run is skipped, not spun', eMs < 200 && countCells(eAst) === 0,
+        `empty run of 2e8 columns took ${eMs}ms and produced ${countCells(eAst)} cells`);
+
+    // The bound must not fire on ordinary documents. A real .ods carries repeat counts in the
+    // millions on empty runs; those cost nothing because empty spreadsheet cells are skipped.
+    const realOds = path.join(__dirname, '..', 'files', 'test.ods');
+    if (fs.existsSync(realOds)) {
+        const warns: any[] = [];
+        const ast = await OfficeParser.parseOffice(realOds, { onWarning: (w: any) => warns.push(w) } as any);
+        const n = countCells(ast);
+        check('odf: a real spreadsheet still parses fully', n > 0 && n < 10000, `${n} cells`);
+        check('odf: a real spreadsheet is not clamped',
+            !warns.some(w => w.code === OfficeWarningType.TABLE_CELL_LIMIT_EXCEEDED),
+            'the bound fired on a legitimate document');
+    }
+}
+
+/**
+ * `abortSignal` is one of the escape hatches a consumer relies on for adversarial input, so it
+ * has to actually interrupt work rather than only decline to start it. It previously did the
+ * latter: parsers read it once before parsing and never again, and every generator except
+ * ChunkingGenerator ignored it entirely.
+ *
+ * The generator cases matter individually because three generators *override*
+ * `processNodeRecursive`, so a check in the base class alone leaves them inert - which is
+ * precisely how HtmlGenerator and MarkdownGenerator were missed on the first pass.
+ */
+async function abortSignalTests() {
+    console.log('- abortSignal (parser + generators)...');
+
+    const enc = (t: string) => new TextEncoder().encode(t);
+    const ods = Buffer.from(zipSync({
+        mimetype: enc('application/vnd.oasis.opendocument.spreadsheet'),
+        'content.xml': enc(`<?xml version="1.0" encoding="UTF-8"?><office:document-content ` +
+            `xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" ` +
+            `xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" ` +
+            `xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body>` +
+            `<office:spreadsheet><table:table table:name="S"><table:table-row>` +
+            `<table:table-cell table:number-columns-repeated="1000000"><text:p>X</text:p></table:table-cell>` +
+            `</table:table-row></table:table></office:spreadsheet></office:body></office:document-content>`),
+    }));
+
+    // Parser: an aborted signal makes parseOffice reject rather than returning a parsed AST.
+    //
+    // This asserts only the honest guarantee, and deliberately does NOT claim to prove the
+    // in-loop parser checks specifically. In a single thread that claim would be a lie: the
+    // parser reads the signal at the top of parseOpenOffice, before the synchronous
+    // parseContentXml loop, and nothing can flip the signal DURING that synchronous loop - no
+    // callback, timer or microtask runs until the loop yields, and it does not. So any signal
+    // this test could set is caught either by the top check (if set before it) or not at all (if
+    // it could only be set mid-loop). The in-loop checks earn their place in two cases this test
+    // cannot pin deterministically: an abort landing during the async archive extraction, and a
+    // signal driven from another thread/worker. They are cheap, so they stay; the point here is
+    // simply that an aborted parse does not silently succeed.
+    const preAborted = new AbortController();
+    preAborted.abort();
+    let parserAborted = false;
+    try { await OfficeParser.parseOffice(ods, { fileType: 'ods', abortSignal: preAborted.signal } as any); }
+    catch (e: any) { parserAborted = /abort/i.test(String(e?.message)); }
+    check('abort: an aborted parse rejects rather than succeeding', parserAborted,
+        'parseOffice returned a parsed AST despite an aborted signal');
+
+    // Generators: every text-based one, since three of them override the shared traversal.
+    const src = path.join(__dirname, '..', 'files', 'test.docx');
+    if (!fs.existsSync(src)) { check('abort: docx fixture present', false, 'missing test.docx'); return; }
+    const ast = await OfficeParser.parseOffice(src, { extractAttachments: true } as any);
+
+    for (const fmt of ['html', 'md', 'text', 'rtf', 'csv']) {
+        const aborted = new AbortController();
+        aborted.abort();
+        let threw = false;
+        try { await OfficeGenerator.generate(ast as any, fmt as any, { abortSignal: aborted.signal } as any); }
+        catch (e: any) { threw = /abort/i.test(String(e?.message)); }
+        check(`abort: ${fmt} generator honours the signal`, threw,
+            'generation completed despite an already-aborted signal');
+    }
+
+    // Positive control: an un-aborted signal must not interfere with normal generation.
+    const live = new AbortController();
+    const { value } = await OfficeGenerator.generate(ast as any, 'md', { abortSignal: live.signal } as any);
+    check('abort: an un-aborted signal does not block generation', String(value).length > 0,
+        'a live signal suppressed output');
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
@@ -680,6 +860,8 @@ async function main() {
     await metadataOverrideTests();
     await styleMapTests();
     await rtfUrlTests();
+    await odfRepeatExpansionTests();
+    await abortSignalTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

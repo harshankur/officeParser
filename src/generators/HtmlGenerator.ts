@@ -1,5 +1,6 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 
 type ResolvedStandalone = Required<StandaloneConfig>;
@@ -525,6 +526,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         processor: (node: OfficeContentNode, childrenOutput: string) => string | Promise<string>,
         override?: string | boolean | void
     ): Promise<string> {
+        // Mirrors the check in BaseGenerator.processNodeRecursive. This override replaces that
+        // method entirely, so without repeating the check here the signal would be silently
+        // inert for this generator - which is exactly how it was missed.
+        checkAbortSignal(this.config.abortSignal);
         // Use pre-evaluated override if provided, otherwise call handleOnNode
         const actualOverride = override !== undefined ? override : await this.handleOnNode(node);
 

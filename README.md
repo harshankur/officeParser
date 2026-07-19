@@ -1325,23 +1325,30 @@ For a full debugging guide, visit the [Live Documentation](https://harshankur.gi
 
 ## Security & Trust Boundary
 
-`officeParser` is a **parser, generator, and converter** — by design, it opens and processes files
-handed to it, which may originate from an untrusted source (a user upload, an inbox attachment, a
-scraped document, etc.). I treat every input as potentially adversarial and actively harden the
-library against it: output sanitization against injection (HTML/CSS/URL/script/CSV/RTF/Markdown),
-zip-bomb protection, resource/recursion limits against denial-of-service payloads, SSRF protection
-during PDF rendering, and more — see [CHANGELOG.md](CHANGELOG.md) for the ongoing history of these
-fixes and [SECURITY.md](SECURITY.md) for how to report a vulnerability.
+`officeParser` is a **parsing, generation, and conversion** library. Like any parser, its whole job
+is to open and interpret files it is handed, and those files may come from an untrusted source (a
+user upload, an email attachment, a scraped document). A parser that accepts arbitrary documents
+has a large and inherently open attack surface.
 
-That said: **no parser can be guaranteed 100% free of vulnerabilities**, and I'm the sole
-maintainer of this project — there is no dedicated security team behind it. I'm committed to
-fixing legitimate reports promptly, but I cannot promise the library is impervious to a
-sufficiently novel attack, and I make no warranty to that effect (see the [LICENSE](LICENSE)'s
-"AS IS" clause, under which this software is provided). **Responsibility for how a compromised or
-malicious input file affects your system ultimately rests with you, the consumer of the library**
-— if you process files from untrusted sources, apply the isolation appropriate to your threat
-model regardless (sandboxing/containerization, resource limits, running as a low-privilege
-process, etc.) rather than treating any single library's hardening as a complete solution.
+I do sanitize output and apply hardening where I can: injection escaping across the
+HTML/CSS/URL/script/CSV/RTF/Markdown sinks, decompression limits, some resource and recursion
+bounds, and SSRF precautions during PDF rendering. I fix issues as I learn of them (see
+[CHANGELOG.md](CHANGELOG.md)). But this is **best-effort, not a guarantee.** A document parser of
+this size will have attack vectors I have not found or have not yet addressed, and no amount of
+internal hardening makes it safe to feed fully untrusted input without your own precautions.
+
+**Treat this as garbage in, garbage out.** The library does its best with what you give it, but
+responsibility for what you feed it, and for the effect a malicious file has on your system, rests
+with you. If you process files from untrusted sources, sanitize and validate them at your own
+boundary, and run the parsing in isolation appropriate to your threat model: sandboxing or
+containerization, memory and time limits, a low-privilege process, and the `abortSignal` and
+`decompressionLimits` options this library exposes. Do not rely on any single library's hardening
+as a complete defense.
+
+I am the sole maintainer, with no security team behind me. I take legitimate reports seriously and
+will fix what I reasonably can, but I cannot commit to a response or resolution timeline. The
+software is provided "AS IS" without warranty of any kind (see [LICENSE](LICENSE)). To report an
+issue privately, see [SECURITY.md](SECURITY.md).
 
 ---
 

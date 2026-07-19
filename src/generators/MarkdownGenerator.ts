@@ -1,6 +1,7 @@
 import { AdmonitionMetadata, BreakMetadata, CodeMetadata, ConversionResult, EmbedMetadata, FallbackToHtmlConfig, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, TableMetadata, TextMetadata } from '../types.js';
 import { escapeHtml, markdownEscapeText, sanitizeCssValue, sanitizeMarkdownUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { checkAbortSignal } from '../utils/errorUtils.js';
 
 type ResolvedMarkdownDialect = Required<Omit<MarkdownDialectConfig, 'extends'>>;
 type ResolvedFallbackToHtml = Required<FallbackToHtmlConfig>;
@@ -625,6 +626,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         node: OfficeContentNode,
         processor: (node: OfficeContentNode, childrenOutput: string) => string | Promise<string>
     ): Promise<string> {
+        // Mirrors the check in BaseGenerator.processNodeRecursive. This override replaces that
+        // method entirely, so without repeating the check here the signal would be silently
+        // inert for this generator - which is exactly how it was missed.
+        checkAbortSignal(this.config.abortSignal);
         // Allow user to completely override rendering or skip via onNode
         const override = await this.handleOnNode(node);
         if (override === false) {

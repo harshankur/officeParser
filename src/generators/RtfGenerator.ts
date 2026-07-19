@@ -1,6 +1,7 @@
 import { ConversionResult, GeneratorConfig, HeadingMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, TextMetadata } from '../types.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { checkAbortSignal } from '../utils/errorUtils.js';
 
 /**
  * Generates high-fidelity RTF (Rich Text Format) from an AST.
@@ -64,6 +65,10 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     }
 
     protected override async processNodeRecursive(node: OfficeContentNode, processor: (node: OfficeContentNode, childrenOutput: string) => Promise<string>): Promise<string> {
+        // Mirrors the check in BaseGenerator.processNodeRecursive. This override replaces that
+        // method entirely, so without repeating the check here the signal would be silently
+        // inert for this generator - which is exactly how it was missed.
+        checkAbortSignal(this.config.abortSignal);
         const wasInTable = this.inTable;
         if (node.type === 'table') this.inTable = true;
         const result = await super.processNodeRecursive(node, processor);

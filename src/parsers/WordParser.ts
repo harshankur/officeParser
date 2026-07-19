@@ -1127,6 +1127,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             let pendingAnchorIds: string[] = [];
 
             for (const child of bodyChildren) {
+                checkAbortSignal(config.abortSignal);
                 if (isElement(child)) {
                     if (child.nodeName === 'w:p') {
                         content.push(parseParagraph(child, documentContent, pendingAnchorIds));

@@ -75,7 +75,8 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     abortSignal: null,
     decompressionLimits: {
         maxUncompressedBytes: 512 * 1024 * 1024,
-        maxZipEntries: 10000
+        maxZipEntries: 10000,
+        maxTableCells: 1000000
     },
     htmlParserConfig: { preserveAttributes: false }
 };

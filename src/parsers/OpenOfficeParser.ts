@@ -25,6 +25,63 @@ import { CellMetadata, ChartData, ChartMetadata, FullOfficeParserConfig, Heading
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
+
+/**
+ * Tracks how many table cells a single document has been allowed to materialize.
+ *
+ * ODF encodes runs of identical cells/rows as `table:number-columns-repeated` and
+ * `table:number-rows-repeated` rather than repeating markup, so a few hundred bytes of XML can ask
+ * for an arbitrary number of nodes - and the two multiply, so a row repeat times a column repeat
+ * compounds it. The ZIP limits cannot catch this: the XML is tiny before decompression and the
+ * expansion happens afterwards, while building the AST.
+ *
+ * The budget bounds what gets *materialized*, never the attribute itself. Capping the attribute
+ * would break ordinary documents - LibreOffice routinely writes `number-rows-repeated="1048566"`
+ * to mean "the rest of the sheet is empty", and those runs are legitimate.
+ *
+ * Warns once per document rather than per clamp, so a wide sheet doesn't emit thousands of
+ * identical warnings.
+ */
+class CellBudget {
+    private remaining: number;
+    private warned = false;
+    constructor(private limit: number, private config: OfficeParserConfig) {
+        this.remaining = limit;
+    }
+    /** How many of `wanted` may be created; 0 once exhausted. */
+    take(wanted: number): number {
+        // `!(wanted > 0)` rather than `wanted <= 0` so a NaN is rejected too: `NaN <= 0` is
+        // false, so a garbage repeat attribute (`parseInt("abc")`) would otherwise fall through
+        // and drain the entire remaining budget, dropping every legitimate cell that followed.
+        if (!(wanted > 0)) return 0;
+        if (this.remaining <= 0) { this.warn(); return 0; }
+        if (wanted <= this.remaining) { this.remaining -= wanted; return wanted; }
+        const granted = this.remaining;
+        this.remaining = 0;
+        this.warn();
+        return granted;
+    }
+    get exhausted(): boolean { return this.remaining <= 0; }
+    private warn(): void {
+        if (this.warned) return;
+        this.warned = true;
+        logWarning(OfficeWarningType.TABLE_CELL_LIMIT_EXCEEDED, this.config, this.limit);
+    }
+}
+
+/** Resolves the configured cell budget, falling back to the documented default. */
+const createCellBudget = (config: OfficeParserConfig): CellBudget =>
+    new CellBudget(config.decompressionLimits?.maxTableCells ?? 1000000, config);
+
+/**
+ * Coerces a `table:number-*-repeated` attribute to a usable repeat count. A missing, zero,
+ * negative or non-numeric value becomes 1 (the element renders once), so a garbage attribute
+ * can neither drop a cell nor poison arithmetic downstream (`colIndex += NaN`).
+ */
+const toRepeatCount = (attr: string | null): number => {
+    const n = parseInt(attr || "1");
+    return Number.isFinite(n) && n > 0 ? n : 1;
+};
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
 import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
@@ -653,7 +710,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         paraStyleMap: Record<string, { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean }>,
         styleMap: Record<string, TextFormatting>,
         config: OfficeParserConfig,
-        sourceXml: string
+        sourceXml: string,
+        cellBudget: CellBudget
     ): OfficeContentNode => {
         const rows: OfficeContentNode[] = [];
         // Use getDirectChildren to avoid nested table rows
@@ -661,17 +719,18 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         let rowIndex = 0;
 
         for (const row of tableRows) {
+            checkAbortSignal(config.abortSignal);
             const cells: OfficeContentNode[] = [];
             // Use getDirectChildren to avoid nested table cells
             const tableCells = getDirectChildren(row, "table:table-cell");
-            const rowsRepeated = parseInt(row.getAttribute("table:number-rows-repeated") || "1");
+            const rowsRepeated = toRepeatCount(row.getAttribute("table:number-rows-repeated"));
 
             let colIndex = 0;
 
             for (const cell of tableCells) {
                 const cellChildren: OfficeContentNode[] = [];
                 let cellTextRef = { value: '' };
-                const colsRepeated = parseInt(cell.getAttribute("table:number-columns-repeated") || "1");
+                const colsRepeated = toRepeatCount(cell.getAttribute("table:number-columns-repeated"));
                 const colSpan = parseInt(cell.getAttribute("table:number-columns-spanned") || "1");
                 const rowSpan = parseInt(cell.getAttribute("table:number-rows-spanned") || "1");
 
@@ -727,7 +786,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 }
                             } else if (element.tagName === "table:table") {
                                 // Recursive call for nested table
-                                const nestedTableNode = parseTable(element, paraStyleMap, styleMap, config, sourceXml);
+                                const nestedTableNode = parseTable(element, paraStyleMap, styleMap, config, sourceXml, cellBudget);
                                 cellChildren.push(nestedTableNode);
                             } else if (element.tagName === "draw:frame" || element.tagName === "draw:text-box") {
                                 // Recursively process container content (common in ODP)
@@ -746,7 +805,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 }
 
                 // Add cell(s) for repeated columns
-                for (let k = 0; k < colsRepeated; k++) {
+                // Bounded by the document's cell budget, not by the attribute: the repeat count
+                // is attacker-influenced and this path materializes a node per iteration.
+                const allowedCols = cellBudget.take(colsRepeated);
+                for (let k = 0; k < allowedCols; k++) {
+                    // Repeat expansion is the one place a small document produces a long loop,
+                    // so it is also the one place a caller most needs to be able to cancel.
+                    if ((k & 1023) === 0) checkAbortSignal(config.abortSignal);
                     // Apply cell background color if defined in styleMap
                     const cellStyleName = cell.getAttribute("table:style-name");
                     const cellBgColor = cellStyleName && styleMap[cellStyleName]?.backgroundColor;
@@ -775,8 +840,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 }
             }
 
-            // Add row(s) for repeated rows
-            for (let k = 0; k < rowsRepeated; k++) {
+            // Add row(s) for repeated rows. Every repetition past the first deep-copies the
+            // whole cell array, so rows x cols is what actually exhausts memory; charge those
+            // copies against the same budget.
+            const allowedRows = cells.length === 0
+                ? rowsRepeated
+                : Math.min(rowsRepeated,
+                    1 + Math.floor(cellBudget.take(Math.max(0, (rowsRepeated - 1) * cells.length)) / cells.length));
+            for (let k = 0; k < allowedRows; k++) {
+                if ((k & 255) === 0) checkAbortSignal(config.abortSignal);
                 const rowNode: OfficeContentNode = {
                     type: 'row',
                     children: k === 0 ? cells : JSON.parse(JSON.stringify(cells))
@@ -811,6 +883,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         const xml = parseXmlString(xmlString, { locator: config.includeRawContent });
         const body = getFirstElementByTagName(xml, "office:body");
         if (!body) return;
+        // One budget for the entire document. It has to span every table - spreadsheet sheets,
+        // ODT/ODP body tables, and nested tables alike - or a file sidesteps the cap simply by
+        // splitting a huge repeat expansion across many small tables. `traverse` and the
+        // spreadsheet branch below both close over this; `parseTable` receives it explicitly.
+        const cellBudget = createCellBudget(config);
         // Parse automatic styles (local to content.xml)
         const automaticStyles = getFirstElementByTagName(xml, "office:automatic-styles");
         if (automaticStyles) {
@@ -978,7 +1055,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 lastWasList = false;
             } else if (node.tagName === "table:table") {
                 // Parse table with proper structure
-                const tableNode = parseTable(node, paragraphStyleMap, styleMap, config, sourceXml);
+                const tableNode = parseTable(node, paragraphStyleMap, styleMap, config, sourceXml, cellBudget);
 
                 if (asSheet) {
                     tableNode.type = 'sheet';
@@ -1207,7 +1284,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 if (textBox) {
                     traverse(textBox, targetArray, isHeading || forceHeading, sourceXml);
                 } else if (table) {
-                    const tableNode = parseTable(table, paragraphStyleMap, styleMap, config, sourceXml);
+                    const tableNode = parseTable(table, paragraphStyleMap, styleMap, config, sourceXml, cellBudget);
                     if (config.includeRawContent) tableNode.rawContent = getRawContent(table, sourceXml, config);
                     targetArray.push(tableNode);
                 } else if (image) {
@@ -1327,16 +1404,17 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     let rowIndex = 0;
 
                     for (let r = 0; r < tableRows.length; r++) {
+                        checkAbortSignal(config.abortSignal);
                         const row = tableRows[r];
                         const cells: OfficeContentNode[] = [];
                         const tableCells = getElementsByTagName(row, "table:table-cell");
 
                         let colIndex = 0;
-                        const rowsRepeated = parseInt(row.getAttribute("table:number-rows-repeated") || "1");
+                        const rowsRepeated = toRepeatCount(row.getAttribute("table:number-rows-repeated"));
 
                         for (let c = 0; c < tableCells.length; c++) {
                             const cell = tableCells[c];
-                            const colsRepeated = parseInt(cell.getAttribute("table:number-columns-repeated") || "1");
+                            const colsRepeated = toRepeatCount(cell.getAttribute("table:number-columns-repeated"));
 
                             // Extract text from cell (paragraphs inside cell)
                             let cellText = "";
@@ -1465,12 +1543,24 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 }
                             }
 
-                            // Add cell(s)
-                            for (let k = 0; k < colsRepeated; k++) {
-                                // For ODS (spreadsheets), we skip empty cells to avoid massive ASTs (millions of cells)
-                                // but for ODP/ODT (presentation/text), cells are part of a defined table grid
-                                // Also include cells that have children (e.g., image nodes) even if no text
-                                if (cellText || children.length > 0 || fileType !== 'ods') {
+                            // Add cell(s). The repeat count is attacker-influenced, so the loop
+                            // is bounded by the document's remaining cell budget rather than by
+                            // the attribute. An empty ODS cell creates nothing, so it costs no
+                            // budget - which is what keeps the huge trailing-empty runs real
+                            // files carry (number-columns-repeated="16384") free.
+                            // For ODS an empty cell materializes nothing, so a huge
+                            // number-columns-repeated on a blank cell (the normal way ODF marks a
+                            // trailing empty run) is skipped in O(1) by advancing the column index
+                            // rather than spinning the loop colsRepeated times for zero output -
+                            // that spin was itself a CPU denial-of-service, unbounded by the cell
+                            // budget because it created no cells to charge against.
+                            const willMaterialize = (cellText || children.length > 0 || fileType !== 'ods');
+                            if (!willMaterialize) {
+                                colIndex += colsRepeated;
+                            } else {
+                                const allowedCols = cellBudget.take(colsRepeated);
+                                for (let k = 0; k < allowedCols; k++) {
+                                    if ((k & 1023) === 0) checkAbortSignal(config.abortSignal);
                                     const cellNode: OfficeContentNode = {
                                         type: 'cell',
                                         text: cellText,
@@ -1481,14 +1571,23 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         cellNode.rawContent = getRawContent(cell, xmlString, config);
                                     }
                                     cells.push(cellNode);
+                                    colIndex++;
                                 }
-                                colIndex++;
                             }
                         }
 
-                        // Add row(s)
+                        // Add row(s). This is where the two repeats multiply: each repetition
+                        // deep-copies the whole cell array, so rows x cols is what actually
+                        // exhausts memory. Charge the copies against the same budget.
                         if (cells.length > 0) {
-                            for (let k = 0; k < rowsRepeated; k++) {
+                            const allowedRows = Math.min(
+                                rowsRepeated,
+                                // The first row reuses `cells` rather than copying, so only the
+                                // repeats beyond it cost budget.
+                                1 + Math.floor(cellBudget.take(Math.max(0, (rowsRepeated - 1) * cells.length)) / cells.length)
+                            );
+                            for (let k = 0; k < allowedRows; k++) {
+                                if ((k & 255) === 0) checkAbortSignal(config.abortSignal);
                                 const rowNode: OfficeContentNode = {
                                     type: 'row',
                                     children: JSON.parse(JSON.stringify(cells)), // Deep copy for repeated rows

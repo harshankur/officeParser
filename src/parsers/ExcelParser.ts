@@ -419,6 +419,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         const sheets = getElementsByTagName(workbookXml, "sheet");
 
         for (const sheet of sheets) {
+            checkAbortSignal(config.abortSignal);
             const name = sheet.getAttribute("name");
             const rId = sheet.getAttribute("r:id");
             if (name && rId && rIdToFile[rId]) {
@@ -518,6 +519,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             let lastRowIndex = -1;
 
             for (const rowMatch of rowMatches) {
+                checkAbortSignal(config.abortSignal);
                 const rowXml = rowMatch[0];
                 const rowAttrs = rowMatch[1];
                 const isSelfClosing = !!rowMatch[2];

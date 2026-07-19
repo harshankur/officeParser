@@ -84,6 +84,8 @@ export enum OfficeWarningType {
     WHITESPACE_NODE_SKIPPED = 'WHITESPACE_NODE_SKIPPED',
     /** The HTML generator containerWidth option is invalid */
     INVALID_CONTAINER_WIDTH = 'INVALID_CONTAINER_WIDTH',
+    /** A document's repeated-cell expansion hit the configured cell limit and was truncated */
+    TABLE_CELL_LIMIT_EXCEEDED = 'TABLE_CELL_LIMIT_EXCEEDED',
     /** A metadata override could not be represented in the destination format's vocabulary */
     METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE',
     /** A styleMap output.tag was not an allowed element name and was ignored */
@@ -428,6 +430,28 @@ export interface DecompressionLimits {
      * Default is 10000.
      */
     maxZipEntries?: number;
+    /**
+     * Maximum number of table cells materialized from a single document.
+     *
+     * ODF encodes runs of identical cells and rows with `table:number-columns-repeated` and
+     * `table:number-rows-repeated` rather than repeating the markup, so a few hundred bytes of XML
+     * can ask the parser to build an arbitrary number of nodes - and because the two multiply, a
+     * row repeat times a column repeat compounds it. The ZIP limits above cannot catch this: the
+     * XML is tiny before decompression and the expansion happens afterwards, while building the
+     * AST.
+     *
+     * Real documents are nowhere near this. The repeat counts LibreOffice writes are large
+     * (`number-rows-repeated="1048566"` is routine) but they sit on *empty* trailing runs, which
+     * are skipped for spreadsheets; the bundled fixtures top out around 350 cells.
+     *
+     * On reaching the limit the parser stops materializing further cells, emits a
+     * `TABLE_CELL_LIMIT_EXCEEDED` warning, and returns what it has rather than throwing, so a
+     * genuinely enormous sheet still yields usable output. Raise it if you routinely process
+     * spreadsheets larger than this; note the memory cost scales with it.
+     *
+     * Default is 1000000.
+     */
+    maxTableCells?: number;
 }
 
 /**

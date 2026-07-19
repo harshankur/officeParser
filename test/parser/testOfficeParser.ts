@@ -87,7 +87,8 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
     ignoreSlideMasters: false,
     decompressionLimits: {
         maxUncompressedBytes: 512 * 1024 * 1024,
-        maxZipEntries: 10000
+        maxZipEntries: 10000,
+        maxTableCells: 1000000
     },
     htmlParserConfig: { preserveAttributes: false }
 };

@@ -34,7 +34,8 @@
     "ignoreSlideMasters": false,
     "decompressionLimits": {
       "maxUncompressedBytes": 536870912,
-      "maxZipEntries": 10000
+      "maxZipEntries": 10000,
+      "maxTableCells": 1000000
     },
     "htmlParserConfig": {
       "preserveAttributes": false

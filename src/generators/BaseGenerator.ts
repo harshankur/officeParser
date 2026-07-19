@@ -1,6 +1,6 @@
 import { OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
 import { resolveGeneratorConfig } from '../utils/configUtils.js';
-import { getWarningMessage } from '../utils/errorUtils.js';
+import { checkAbortSignal, getWarningMessage } from '../utils/errorUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
 
 /**
@@ -116,6 +116,13 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         node: OfficeContentNode,
         processor: (node: OfficeContentNode, childrenOutput: string) => string | Promise<string>
     ): Promise<string> {
+        // Every text-based generator funnels its whole traversal through here, so one check
+        // makes `abortSignal` effective for all of them. Previously the signal was read once
+        // before generation began and never again, which meant it could decline to start work
+        // but could not stop work already underway - not much use against a document large
+        // enough to be worth aborting. The check is a property read on an optional signal, so
+        // the per-node cost is negligible.
+        checkAbortSignal(this.config.abortSignal);
         const override = await this.handleOnNode(node);
 
         if (override === false) return '';

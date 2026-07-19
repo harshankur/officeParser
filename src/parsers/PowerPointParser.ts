@@ -780,6 +780,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
     // Now for processing all the other files - slides and notes.
     for (const file of files) {
+        checkAbortSignal(config.abortSignal);
         if (file.path.match(mediaFileRegex)) continue;
         if (file.path.match(chartFileRegex)) continue;
         if (file.path.match(slideRelsRegex)) continue;

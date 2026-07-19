@@ -1,6 +1,6 @@
 # Security Policy
 
-I am committed to the security and privacy of the users of this library. As a library that processes documents containing potentially sensitive information, I treat all vulnerability reports with the highest priority.
+`officeParser` processes documents that may contain sensitive information and often come from untrusted sources. I welcome vulnerability reports and will address legitimate ones as best I can. Please read the security posture and disclaimer below before assuming any particular guarantee, and note that, as a single maintainer, I make best-effort commitments rather than promises.
 
 ## Supported Versions
 
@@ -27,35 +27,33 @@ To facilitate a safe disclosure, please use my private GitHub reporting channel:
 3.  Click the **Report a vulnerability** button.
     *   *Note: This creates a secure, private thread between you and the maintainer to collaborate on a fix.*
 
-### My Security Commitment
+### On Receiving a Report
 
-Upon receiving a valid report, I will:
-*   Acknowledge receipt within **48 hours**.
-*   Perform a thorough triage and impact assessment within **5 business days**.
-*   Work with the reporter to validate and test the fix.
-*   Credit the researcher in the release notes (optional, at your discretion).
+I am a single maintainer with no dedicated security team, so I cannot commit to a fixed response or resolution timeline. When I receive a valid report I will do my best to:
+*   Acknowledge it when I am able to.
+*   Triage it, assess its impact, and validate it with you.
+*   Work with you on a fix and ship it once it is ready.
+*   Credit you in the release notes (optional, at your discretion).
 
-I ask that you follow **coordinated disclosure** practices and allow a reasonable window to release a patch before sharing technical details publicly.
+I ask that you follow **coordinated disclosure** practices and allow a reasonable window for a patch before sharing technical details publicly.
 
 ## Security Posture & Disclaimer
 
-`officeParser` is a parser, generator, and converter for office documents — it is often used to
-process files from untrusted sources (user uploads, email attachments, scraped content, etc.), so
-I treat every input as potentially adversarial. I actively invest in hardening the library against
-malicious input — output sanitization against injection, zip-bomb and decompression limits,
-recursion/resource limits against denial-of-service payloads, SSRF protection during PDF
-rendering, and more — and I will keep shipping security fixes for as long as I actively maintain
-this project (see CHANGELOG.md for the ongoing history).
+`officeParser` is a parser, generator, and converter for office documents, and is often used on
+files from untrusted sources (user uploads, email attachments, scraped content). Like any parser
+that accepts arbitrary input, it has a large attack surface. I do sanitize output and apply
+hardening where I can (injection escaping, decompression limits, some resource and recursion
+bounds, SSRF precautions during PDF rendering) and I fix issues as I find them, but this is
+best-effort, not a guarantee: a library of this size will have vectors I have not found or have
+not yet addressed.
 
-That said, I am the sole maintainer of this project, with no dedicated security team behind it,
-and **no software can be guaranteed free of vulnerabilities**. I make no warranty that
-`officeParser` is or will remain impervious to a sufficiently novel attack — the library is
-provided "AS IS", without warranty of any kind, per the [LICENSE](LICENSE). **Final responsibility
-for the impact of a compromised or malicious input file on your system rests with you, the
-consumer of the library.** If you process files from untrusted sources, apply isolation
-appropriate to your own threat model (sandboxing/containerization, resource limits, a
-low-privilege execution context, etc.) rather than relying on any single library's hardening as a
-complete solution.
+Treat it as garbage in, garbage out. Sanitize and validate untrusted files at your own boundary,
+and run parsing in isolation appropriate to your threat model (sandboxing or containerization,
+memory and time limits, a low-privilege process, and the `abortSignal` and `decompressionLimits`
+options this library exposes) rather than relying on the library's hardening alone. No software
+can be guaranteed free of vulnerabilities; `officeParser` is provided "AS IS", without warranty of
+any kind, per the [LICENSE](LICENSE). Final responsibility for the impact of a malicious file on
+your system rests with you, the consumer of the library.
 
 ## Out of Scope
 - **Third-Party Dependencies**: Vulnerabilities in upstream libraries (e.g., `tesseract.js`, `pdfjs-dist`, `fflate`) should be reported directly to their respective maintainers.
