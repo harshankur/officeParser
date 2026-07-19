@@ -6,14 +6,31 @@ body:
     id: component
     attributes:
       label: Library Component
-      description: Which internal parser or component is likely causing the issue?
+      description: >-
+        Which internal parser(s)/generator(s) are likely involved? Select every component you
+        suspect - many bugs span more than one (e.g. a shared AST/config helper affecting several
+        formats at once), so don't force a single guess if you're not sure which one is at fault.
+      multiple: true
       options:
         - Word Parser (DOCX)
         - PowerPoint Parser (PPTX)
         - Excel Parser (XLSX)
         - OpenOffice Parser (ODT, ODS, ODP)
-        - EPUB Parser / Generator
         - PDF Parser
+        - RTF Parser
+        - CSV Parser
+        - Markdown Parser
+        - HTML Parser
+        - EPUB Parser
+        - HTML Generator
+        - Markdown Generator
+        - PDF Generator
+        - RTF Generator
+        - CSV Generator
+        - Text Generator
+        - EPUB Generator
+        - Chunking / RAG Generator
+        - Core / Shared (AST, types, config resolution - not specific to one format)
         - OCR Scheduler & Infrastructure
         - CLI / Tooling
         - Other / Not Sure

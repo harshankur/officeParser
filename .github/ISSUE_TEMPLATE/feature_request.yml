@@ -6,14 +6,30 @@ body:
     id: component
     attributes:
       label: Library Component
-      description: Which part of officeParser does this feature target?
+      description: >-
+        Which part(s) of officeParser does this feature target? Select every component that
+        applies - a feature can span multiple parsers/generators, or the shared AST/config layer.
+      multiple: true
       options:
         - Word Parser (DOCX)
         - PowerPoint Parser (PPTX)
         - Excel Parser (XLSX)
         - OpenOffice Parser (ODT, ODS, ODP)
-        - EPUB Parser / Generator
         - PDF Parser
+        - RTF Parser
+        - CSV Parser
+        - Markdown Parser
+        - HTML Parser
+        - EPUB Parser
+        - HTML Generator
+        - Markdown Generator
+        - PDF Generator
+        - RTF Generator
+        - CSV Generator
+        - Text Generator
+        - EPUB Generator
+        - Chunking / RAG Generator
+        - Core / Shared (AST, types, config resolution - not specific to one format)
         - OCR Scheduler & Infrastructure
         - CLI / Tooling
         - General / Other

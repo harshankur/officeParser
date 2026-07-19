@@ -125,19 +125,19 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
-    "@typescript-eslint/eslint-plugin": "^8.59.3",
-    "@typescript-eslint/parser": "^8.59.3",
+    "@types/node": "^26.1.1",
+    "@typescript-eslint/eslint-plugin": "^8.64.0",
+    "@typescript-eslint/parser": "^8.64.0",
     "buffer": "^6.0.3",
     "dts-bundle-generator": "^9.5.1",
     "esbuild": "^0.28.1",
     "esbuild-plugins-node-modules-polyfill": "^1.8.2",
-    "eslint": "^10.3.0",
+    "eslint": "^10.7.0",
     "husky": "^9.1.7",
     "postject": "^1.0.0-alpha.6",
     "process": "^0.11.10",
-    "puppeteer": "^22.15.0",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.2"
+    "puppeteer": "^24.43.1",
+    "tsx": "^4.23.1",
+    "typescript": "^6.0.3"
   }
 }
