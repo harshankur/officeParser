@@ -30,9 +30,21 @@ export class TextGenerator extends BaseGenerator<'text'> {
         // Add Metadata Header
         const meta = this.effectiveMetadata;
         if (this.config.renderMetadata && meta) {
-            if (meta.title) output += `Title: ${meta.title}${newline}`;
-            if (meta.author) output += `Author: ${meta.author}${newline}`;
-            if (meta.created) output += `Created: ${new Date(meta.created).toLocaleString()}${newline}`;
+            // The header is a structured `Key: value` block terminated by a rule, and consumers
+            // parse it as such. A value containing a line break would forge extra fields - a title
+            // of "Real\nAuthor: Attacker" renders an Author line the document never had - so line
+            // breaks are folded to spaces, matching how CsvGenerator guards its `#` comment block.
+            // Plain text has no code-execution context, but fabricated structure is still a lie
+            // about the document, and every AST string is treated as attacker-controlled.
+            const oneLine = (value: unknown): string => String(value ?? '').replace(/[\r\n]+/g, ' ');
+            if (meta.title) output += `Title: ${oneLine(meta.title)}${newline}`;
+            if (meta.author) output += `Author: ${oneLine(meta.author)}${newline}`;
+            // Guarded like HtmlGenerator's toIsoDate: a malformed date must not render the literal
+            // "Invalid Date" into the header as if it were the document's creation time.
+            if (meta.created) {
+                const created = new Date(meta.created as any);
+                if (!isNaN(created.getTime())) output += `Created: ${oneLine(created.toLocaleString())}${newline}`;
+            }
             output += `-------------------${newline}${newline}`;
         }
 

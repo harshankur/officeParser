@@ -290,6 +290,41 @@ async function metadataOverrideTests() {
         csvText.split('\n').filter(l => l.trim() !== '').slice(0, 3).every(l => l.startsWith('#') || l === 'a'),
         'a newline in a metadata value broke out of the comment prefix');
 
+    // Plain text renders metadata as a structured `Key: value` block closed by a rule. A line
+    // break in a value would forge fields the document never had - no code execution, but a lie
+    // about the document's provenance, which consumers parsing that block would believe.
+    const { value: textOut } = await OfficeGenerator.generate(ast, 'text', {
+        renderMetadata: true,
+        metadataOverrides: { title: 'Real\nAuthor: Attacker\n-------------------' },
+    } as any);
+    const headerLines = String(textOut).split('\n');
+    check('text: metadata header is rendered', headerLines[0].startsWith('Title: '),
+        'renderMetadata produced no header, so the check below would be vacuous');
+    check('text: newline in a metadata value cannot forge a field',
+        !headerLines.some(l => l.startsWith('Author: ')),
+        `forged an Author line the document never had: ${JSON.stringify(headerLines.slice(0, 4))}`);
+
+    // A malformed date must not render literal "Invalid Date" as if it were real provenance.
+    const { value: badDate } = await OfficeGenerator.generate(ast, 'text', {
+        renderMetadata: true, metadataOverrides: { created: 'not-a-date' },
+    } as any);
+    check('text: malformed date is omitted, not printed as "Invalid Date"',
+        !String(badDate).includes('Invalid Date'), 'literal Invalid Date reached the header');
+
+    // The EPUB timestamp is interpolated into the OPF without escaping, which is only safe
+    // because it is normalised through toISOString(). Asserting it directly so that a future
+    // change reintroducing a verbatim passthrough fails here rather than silently allowing
+    // markup into the package document.
+    const hostileDate = (await OfficeGenerator.generate(ast, 'epub', {
+        metadataOverrides: { modified: '2024-01-01T00:00:00Z"/><script>alert(3)</script><meta x="' as any },
+    } as any)).value as Uint8Array;
+    const hostileOpf = strFromU8(unzipSync(hostileDate)['OEBPS/content.opf']);
+    check('epub: dcterms:modified cannot carry markup', !hostileOpf.includes('<script>'),
+        'an unnormalised timestamp injected markup into the OPF');
+    check('epub: dcterms:modified is a well-formed instant',
+        /<meta property="dcterms:modified">\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z<\/meta>/.test(hostileOpf),
+        `timestamp not normalised: ${hostileOpf.match(/dcterms:modified">[^<]*/)?.[0]}`);
+
     // RTF: a brace or backslash in a value would otherwise close the \info group early.
     const { value: rtf } = await OfficeGenerator.generate(ast, 'rtf', {
         renderMetadata: true,

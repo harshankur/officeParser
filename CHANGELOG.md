@@ -67,6 +67,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   representable 1980-2099 window clamps instead of throwing. This also un-masks real diffs: while
   every `gen.*.to.epub.epub` baseline churned on each run, genuine EPUB content changes were
   indistinguishable from timestamp noise and got reverted along with it.
+- **The `renderMetadata` header in plain-text output could be forged.** Metadata values were
+  interpolated into the `Key: value` block verbatim, so a line break in a document's title rendered
+  as additional fields - a title of `Real\nAuthor: Attacker` produced an `Author:` line the document
+  never had, plus a second separator rule. No code execution, but consumers parsing that block would
+  believe it. Line breaks are now folded to spaces, matching how `CsvGenerator` already guarded its
+  `#` comment block, and a malformed `created` date is omitted rather than rendered as the literal
+  `Invalid Date`.
 - **`.to('text')` silently dropped chart data and CSV comments.** `TextGenerator` rendered only a
   node's children, so any node carrying its content in `text` with no children vanished entirely:
   `chart` nodes (ODP/ODS/PPTX/XLSX), whose whole data series lives in `text`, and CSV `comment`
