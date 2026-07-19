@@ -1,6 +1,6 @@
 import { OfficeGenerator } from './OfficeGenerator.js';
 import { OfficeParser } from './OfficeParser.js';
-import { ConversionResult, OfficeConverterConfig, OfficeParserConfig, SupportedDestination, SupportedFileType } from './types.js';
+import { ConversionResult, GeneratorConfig, OfficeConverterConfig, OfficeParserConfig, SupportedDestination, SupportedFileType } from './types.js';
 
 /**
  * Utility type to infer the file type from a file path string literal.
@@ -50,12 +50,13 @@ export class OfficeConverter {
      */
     public static async convert<
         F extends string | Buffer | ArrayBuffer | Uint8Array,
-        T extends SupportedFileType = InferFileTypeFromPath<F>
+        T extends SupportedFileType = InferFileTypeFromPath<F>,
+        D extends SupportedDestination<T> = SupportedDestination<T>
     >(
         file: F,
-        destination: SupportedDestination<T>,
-        config?: OfficeConverterConfig<SupportedDestination<T>, T>
-    ): Promise<ConversionResult<SupportedDestination<T>>> {
+        destination: D,
+        config?: OfficeConverterConfig<D, T>
+    ): Promise<ConversionResult<D>> {
         // 1. Prepare Parser Configuration
         // We prioritize the top-level onWarning if provided.
         const parserConfig: OfficeParserConfig = {
@@ -86,7 +87,10 @@ export class OfficeConverter {
             onWarning: config?.onWarning || config?.generatorConfig?.onWarning,
         };
 
-        const result = await OfficeGenerator.generate(ast, destination, generatorConfig);
+        // The spread widens the object to an inferred literal; it is a `GeneratorConfig<D>` by
+        // construction (config.generatorConfig is already typed for D, and onWarning is common to
+        // every destination), so the cast restates what the types otherwise lose.
+        const result = await OfficeGenerator.generate(ast, destination, generatorConfig as GeneratorConfig<D>);
         result.messages = [...(ast.warnings || []), ...result.messages];
         return result;
     }

@@ -226,7 +226,7 @@ async function testMarkdown(): Promise<void> {
     assertExists(tables, n => (n.children || []).some((row: any) => (row.children || []).some((cell: any) => (cell.children || []).some((c: any) => c.text === 'C1'))), 'MD: short-cell-separator table parsed');
 
     // ── Tilde-fenced code block ───────────────────────────────────────────────
-    assertExists(codeNodes, n => (n.metadata as any)?.language === 'javascript' && n.text?.includes('tilde fence'), 'MD: tilde-fenced code block');
+    assertExists(codeNodes, n => (n.metadata as any)?.language === 'javascript' && n.text?.includes('tilde fence') === true, 'MD: tilde-fenced code block');
 
     // ── HR-anchoring edge case (trailing text after hyphens is NOT an Hr) ────
     assert.ok(paragraphs.some(n => (n.children || []).some((c: any) => c.text?.includes('not actually a horizontal rule'))), 'MD: "----- trailing text" parsed as paragraph, not Hr');
