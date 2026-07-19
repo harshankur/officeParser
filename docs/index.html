@@ -2847,6 +2847,7 @@
                 { id: 'cfg_ignoreNotes', label: 'Ignore Notes', type: 'switch', default: false },
                 { id: 'cfg_putNotesAtLast', label: '<del>Notes At Last</del> <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'switch', default: false },
                 { id: 'cfg_includeBreakNodes', label: 'Include Break Nodes', type: 'switch', default: true },
+                { id: 'cfg_preserveAttributes', label: 'Preserve HTML Attributes', type: 'switch', default: false },
                 { id: 'cfg_outputErrorToConsole', label: '<del>Verbose Errors</del> <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'switch', default: false },
                 { id: 'cfg_ocrLanguage', label: '<del>OCR Lang</del> <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'text', default: 'eng', width: '80px' },
                 { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: ',', width: '60px' },
@@ -2864,7 +2865,10 @@
                 { id: 'cfg_includeImages', label: 'Include Images', type: 'switch', default: true },
                 { id: 'cfg_includeCharts', label: 'Include Charts', type: 'switch', default: true },
                 { id: 'cfg_ignoreInternalLinks_generator', label: 'Ignore Internal Links', type: 'switch', default: false },
-                { id: 'cfg_ignoreDefaultStyleMap', label: 'Ignore Default Style Map', type: 'switch', default: false }
+                { id: 'cfg_ignoreDefaultStyleMap', label: 'Ignore Default Style Map', type: 'switch', default: false },
+                { id: 'cfg_meta_title', label: 'Override Title', type: 'text', default: '', placeholder: 'leave blank to keep', width: '150px' },
+                { id: 'cfg_meta_author', label: 'Override Author', type: 'text', default: '', placeholder: 'leave blank to keep', width: '150px' },
+                { id: 'cfg_meta_modified', label: 'Override Modified', type: 'text', default: '', placeholder: '2024-01-01T00:00:00Z', width: '170px' }
             ],
             html: [
                 { id: 'cfg_html_containerWidth', label: 'Width', type: 'inline-text', default: 'auto', width: '100px' },
@@ -2876,6 +2880,7 @@
                 { id: 'cfg_html_inj_bodyEnd', label: 'Inj Body End', type: 'inline-popover-textarea', default: '', height: '100px' }
             ],
             md: [
+                { id: 'cfg_md_dialect', label: 'Dialect', type: 'inline-select', options: ['extended', 'github', 'gitlab', 'obsidian', 'pandoc', 'commonmark'], names: ['Extended', 'GitHub', 'GitLab', 'Obsidian', 'Pandoc', 'CommonMark'], default: 'extended' },
                 { id: 'cfg_md_fallbackToHtml', label: 'HTML Fallback', type: 'inline-switch', default: true }
             ],
             chunks: [
@@ -2892,6 +2897,7 @@
             ],
             text: [
                 { id: 'cfg_text_preserveLayout', label: 'Layout', type: 'inline-switch', default: true },
+                { id: 'cfg_text_renderNotes', label: 'Notes', type: 'inline-switch', default: true },
                 { id: 'cfg_text_newlineDelimiter', label: 'Newline', type: 'inline-text', default: '\\n', width: '60px' }
             ]
         };
@@ -4510,6 +4516,23 @@
             // Config change detection for reparse button
             let lastConfigJson = "";
 
+            /**
+             * Builds `metadataOverrides` from the three override inputs, omitting any left blank.
+             * Blank must mean "keep the parsed value", not "set it to empty" - the config merges
+             * per field, so sending '' would blank a title the document legitimately has.
+             */
+            function getMetadataOverrides() {
+                const overrides = {};
+                const title = document.getElementById('cfg_meta_title').value.trim();
+                const author = document.getElementById('cfg_meta_author').value.trim();
+                const modified = document.getElementById('cfg_meta_modified').value.trim();
+                if (title) overrides.title = title;
+                if (author) overrides.author = author;
+                // Only send a parseable date; an in-progress value must not blow up generation.
+                if (modified && !isNaN(new Date(modified).getTime())) overrides.modified = new Date(modified);
+                return overrides;
+            }
+
             function getGeneratorConfig() {
                 let styleMap = [];
                 try {
@@ -4529,6 +4552,7 @@
                     includeImages: document.getElementById('cfg_includeImages').checked,
                     includeCharts: document.getElementById('cfg_includeCharts').checked,
                     ignoreDefaultStyleMap: document.getElementById('cfg_ignoreDefaultStyleMap').checked,
+                    metadataOverrides: getMetadataOverrides(),
                     styleMap: styleMap
                 };
             }
@@ -4549,6 +4573,7 @@
                     ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
                     putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
                     includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
+                    htmlParserConfig: { preserveAttributes: document.getElementById('cfg_preserveAttributes').checked },
                     outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
                     ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
                     csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
@@ -4863,6 +4888,7 @@
                         ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
                         putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
                         includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
+                    htmlParserConfig: { preserveAttributes: document.getElementById('cfg_preserveAttributes').checked },
                         outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
                         ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
                         csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
@@ -4953,7 +4979,7 @@
             };
             document.getElementById('cfg_html_standalone_all_on').addEventListener('click', () => setAllStandaloneOptions(true));
             document.getElementById('cfg_html_standalone_all_off').addEventListener('click', () => setAllStandaloneOptions(false));
-            ['cfg_md_fallbackToHtml'].forEach(id => {
+            ['cfg_md_dialect', 'cfg_md_fallbackToHtml'].forEach(id => {
                 document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('md'));
             });
             ['cfg_chunks_strategy', 'cfg_chunks_maxChunkSize', 'cfg_chunks_chunkOverlap', 'cfg_chunks_splitBy', 'cfg_chunks_tableSplitStrategy'].forEach(id => {
@@ -4968,7 +4994,7 @@
                     document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('csv'));
                 }
             });
-            ['cfg_text_preserveLayout', 'cfg_text_newlineDelimiter'].forEach(id => {
+            ['cfg_text_preserveLayout', 'cfg_text_renderNotes', 'cfg_text_newlineDelimiter'].forEach(id => {
                 document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('text'));
                 if (document.getElementById(id).type === 'text') {
                     document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('text'));
@@ -4993,6 +5019,7 @@
                             genConfig.htmlConfig = readHtmlPanelConfigInputs();
                         } else if (format === 'md') {
                             genConfig.mdConfig = {
+                                dialect: document.getElementById('cfg_md_dialect').value,
                                 fallbackToHtml: document.getElementById('cfg_md_fallbackToHtml').checked
                             };
                         } else if (format === 'chunks') {
@@ -5012,6 +5039,7 @@
                         } else if (format === 'text') {
                             genConfig.textConfig = {
                                 preserveLayout: document.getElementById('cfg_text_preserveLayout').checked,
+                                renderNotes: document.getElementById('cfg_text_renderNotes').checked,
                                 newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n')
                             };
                         }
@@ -5515,6 +5543,7 @@
                         ...getGeneratorConfig(),
                         ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
                         mdConfig: {
+                            dialect: document.getElementById('cfg_md_dialect').value,
                             fallbackToHtml: document.getElementById('cfg_md_fallbackToHtml').checked
                         }
                     };
@@ -5553,6 +5582,7 @@
                         ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
                         textConfig: {
                             preserveLayout: document.getElementById('cfg_text_preserveLayout').checked,
+                            renderNotes: document.getElementById('cfg_text_renderNotes').checked,
                             newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n')
                         }
                     };

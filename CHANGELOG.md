@@ -6,161 +6,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [7.4.0] - 2026-07-16
 ### Added
-- **Markdown output dialect**: `MdGeneratorConfig.dialect` targets a specific real-world Markdown
-  flavor - `'github'`, `'gitlab'`, `'obsidian'`, `'pandoc'`, strict `'commonmark'`, or officeParser's
-  own kitchen-sink `'extended'` (the default, byte-identical to this library's prior output). Each
-  preset picks the right native syntax per feature: admonitions (`> [!NOTE]` on GitHub/Obsidian,
-  `:::note` on GitLab, `::: {.note}` on Pandoc, plain blockquote elsewhere), definition lists,
-  footnotes, citations, wikilinks, math delimiters, attribute lists, strikethrough, and forces HTML
-  `<table>` under `commonmark` (which has no native table syntax). Pass an object instead of a
-  preset name for granular control over any of the above, or to override bullet/ordered-list
-  markers and emphasis style (`*`/`_`) independently of dialect - see `MarkdownDialectConfig`.
-- **`MdGeneratorConfig.fallbackToHtml` now also accepts a `FallbackToHtmlConfig` object**, splitting
-  the single flag into independently-controllable parts: text formatting (underline/sub/sup),
-  alignment, anchors, tables (nested/merged-cell), embeds, and cell line breaks. The boolean form is
-  unchanged and still applies uniformly to every part.
-- **Footnotes now degrade gracefully when disabled** (`dialect: { footnotes: false }`, or under the
-  `commonmark` preset): instead of the `[^id]` syntax, note content is inlined as a parenthetical
-  right at the reference point, so it's never silently dropped.
-- **Per-input-format parser configuration** (`OfficeParserConfig.mdParserConfig`), mirroring the
-  generator side's existing per-destination-format config sub-objects. Currently reserved for
-  future use.
-- **Admonition source-syntax provenance**: `AdmonitionMetadata.sourceSyntax` (`'github' | 'gitlab'`)
-  now records which concrete syntax produced the node, always populated by the parser - useful for
-  round-trip-aware tooling that wants to preserve a document's original dialect on re-save.
-- **`GeneratorConfig.metadataOverrides`** sets the metadata embedded in generated output without
-  mutating the parsed AST. Named fields mirror `OfficeMetadata` (`title`, `author`, `description`,
-  `subject`, `keywords`, `lastModifiedBy`, `created`, `modified`, `language`) plus a `custom` bucket
-  for caller-defined key/value pairs; `custom` is kept separate from the named fields so a typo like
-  `titel` is a compile error rather than a silently-created custom entry. Merged **per field** over
-  `ast.metadata`, so overriding one field leaves the rest of the parsed metadata intact, and applied
-  uniformly across every generator that embeds metadata (HTML `<meta>`, EPUB OPF, Markdown
-  frontmatter, RTF `\info`, and the `renderMetadata` header in text/CSV).
-  - **`modified` is what makes generation reproducible.** EPUB embeds it as both the required
-    `dcterms:modified` property and each zip entry's mtime, so pinning it yields byte-identical
-    archives across runs. When unset it falls back to the source document's own
-    `ast.metadata.modified` before the current time, so most documents are now reproducible with no
-    configuration at all.
-  - EPUB's OPF and RTF's `\info` have fixed metadata vocabularies with no place for caller-defined
-    keys; those generators report unrepresentable `custom` entries through `onWarning`
-    (`OfficeWarningType.METADATA_NOT_REPRESENTABLE`) rather than dropping them silently.
+- **Markdown output dialect**: `MdGeneratorConfig.dialect` targets a specific real-world Markdown flavor: `'github'`, `'gitlab'`, `'obsidian'`, `'pandoc'`, strict `'commonmark'`, or officeParser's own kitchen-sink `'extended'` (the default, byte-identical to this library's prior output). Each preset picks the right native syntax per feature: admonitions (`> [!NOTE]` on GitHub/Obsidian, `:::note` on GitLab, `::: {.note}` on Pandoc, plain blockquote elsewhere), definition lists, footnotes, citations, wikilinks, math delimiters, attribute lists, strikethrough, and forces HTML `<table>` under `commonmark` (which has no native table syntax). Pass an object instead of a preset name for granular control over any of the above, or to override bullet/ordered-list markers and emphasis style (`*`/`_`) independently of dialect; see `MarkdownDialectConfig`.
+- **`MdGeneratorConfig.fallbackToHtml` now also accepts a `FallbackToHtmlConfig` object**, splitting the single flag into independently-controllable parts: text formatting (underline/sub/sup), alignment, anchors, tables (nested/merged-cell), embeds, and cell line breaks. The boolean form is unchanged and still applies uniformly to every part.
+- **`GeneratorConfig.metadataOverrides`** sets the metadata embedded in generated output without mutating the parsed AST. Named fields mirror `OfficeMetadata` (`title`, `author`, `description`, `subject`, `keywords`, `lastModifiedBy`, `created`, `modified`, `language`) plus a `custom` bucket for caller-defined key/value pairs, kept separate so a typo like `titel` is a compile error rather than a silently-created custom entry. Merged per field over `ast.metadata`, so overriding one field leaves the rest intact, and applied uniformly across every generator that embeds metadata (HTML `<meta>`, EPUB OPF, Markdown frontmatter, RTF `\info`, and the `renderMetadata` header in text/CSV).
+  - Setting `modified` is what makes generation reproducible: EPUB embeds it as both the required `dcterms:modified` property and each zip entry's mtime, so pinning it yields byte-identical archives across runs. When unset it now falls back to the source document's own `ast.metadata.modified` before the current time, so most documents are reproducible with no configuration at all.
+  - EPUB's OPF and RTF's `\info` have fixed metadata vocabularies with no place for caller-defined keys, so those generators report unrepresentable `custom` entries through `onWarning` (`METADATA_NOT_REPRESENTABLE`) rather than dropping them silently.
+- **Opt-in HTML attribute pass-through** (`OfficeParserConfig.htmlParserConfig.preserveAttributes`, default off) preserves generic attributes on `BaseContentNode.htmlAttributes` that previously vanished on an HTML save/reload cycle. Off by default so the AST is unchanged for existing callers; event handlers, `srcdoc`, `style` and `id` are never carried, and attribute names are validated at both the parser and generator layers.
+- **Footnotes now degrade gracefully when disabled** (`dialect: { footnotes: false }`, or under the `commonmark` preset): instead of the `[^id]` syntax, note content is inlined as a parenthetical right at the reference point, so it's never silently dropped.
+- **Per-input-format parser configuration** (`OfficeParserConfig.mdParserConfig`), mirroring the generator side's existing per-destination-format config sub-objects. Currently reserved for future use.
+- **Admonition source-syntax provenance**: `AdmonitionMetadata.sourceSyntax` (`'github' | 'gitlab'`) now records which concrete syntax produced the node, always populated by the parser, which is useful for round-trip-aware tooling that wants to preserve a document's original dialect on re-save.
 
 ### Fixed
-- **Markdown generation could carry an unescaped HTML tag out of a hostile document.** Text nodes
-  were escaped, but seven other constructs interpolated their content directly: inline and block
-  math, wikilink page/alias, citation keys, footnote ids, abbreviation definitions, image
-  attribute lists, and admonition types/titles. A payload correctly neutralized in a paragraph
-  survived a full parse to generate cycle verbatim in any of them. Each sink now escapes or
-  allowlists according to what round-trips for that specific value: entity-encoding where the
-  value returns to a text node (which the parser entity-decodes), and a character allowlist where
-  it returns to `metadata.*` or a `code` node (which it does not). The `[^id]` fix lives in
-  `BaseGenerator.getFootnoteKey`, so it covers HTML output too. Also routes CR-only code text to
-  the fenced-block branch, where a renderer normalizing `\r` would otherwise kill an inline span
-  and expose the remainder as raw Markdown.
-- **`styleMap` class lists and attribute names were emitted without escaping or validation.** The
-  spreadsheet row and sheet paths rebuilt their `class` attribute from the raw mapping array
-  rather than the escaped value every other node type uses, and both `styleMap` attribute loops
-  escaped the value while interpolating the *name* unchecked - which no amount of value escaping
-  can compensate for, since a name containing a quote closes the attribute and opens another. The
-  attribute-name check is now a shared `isSafeHtmlAttributeName` rather than a literal repeated at
-  each site.
-- **Config resolution could be used to poison `Object.prototype`.** The recursive generator-config
-  merge walked caller input with an unguarded `for...in`, so a config that arrived via
-  `JSON.parse` (an object literal cannot express this; JSON can) reached `Object.prototype` and
-  corrupted every object in the process. The two `Object.assign` sites had a narrower form of the
-  same problem: they cannot pollute globally, but the `__proto__` setter replaced the returned
-  config's prototype, so it silently inherited attacker-chosen properties.
-- **`sanitizeCssValue` could be bypassed with CSS backslash escapes.** Control characters and CSS
-  comments were stripped before the `url()`/`expression()` denylist test, but backslash escapes
-  were stripped after it, so `u\rl(http://evil)` was validated as safe and then reassembled into a
-  live `url()`. Inert in practice only because every call site pairs the value with a property
-  where `url()` does nothing - it would have become a live SSRF the moment anyone used
-  `background-image`, `cursor` or `mask`. The regression test covering this path was itself
-  vacuous: it asserted against an empty string, because the payload it used caused no `style`
-  attribute to be emitted at all.
-- **RTF hyperlinks had no scheme allowlist.** `escapeRtf` neutralizes the field metacharacters but
-  says nothing about the target, so RTF was the only generator that would emit
-  `HYPERLINK "javascript:..."`, `file:///...` or a UNC `\\host\share` - the latter two being
-  phishing and NTLM-credential-leak vectors in Word rather than rendering quirks. **This changes
-  behaviour for non-hostile input:** an RTF document generated from content with intranet
-  `file://` or UNC links loses those links. The link *text* is preserved (rejection degrades to
-  bare text, matching how HTML and Markdown already degrade), so no content disappears - only the
-  clickable target.
-- **The HTML parser's nesting-depth guard could never fire.** It tripped at depth > 1000, but the
-  call stack overflows at roughly 800 (and nondeterministically), so the typed
-  `MAX_NESTING_DEPTH_EXCEEDED` error was never produced. Failure was already graceful, so this was
-  a dead guard rather than a denial of service. Lowered to 256, chosen to hold across engines
-  rather than tuned to one measurement; real documents nest orders of magnitude shallower.
-- **`csvSafeCell` tested its formula trigger against the untrimmed value** while the numeric
-  exemption tested the trimmed one, so `" =1+1"` was emitted unprefixed. Most spreadsheet
-  applications treat a leading-space cell as text, so this is defence in depth rather than a
-  demonstrated bypass.
-- **`.to('text')`/`.to('md')` silently stripped genuine document whitespace.** Both generators
-  unconditionally called `.trim()` on the entire accumulated output before returning, which not
-  only cleaned up the generator's own trailing-newline join artifacts (its original purpose) but
-  also destroyed real content: an intentionally-indented opening line, or trailing spaces on the
-  document's last line. This meant migrating from the deprecated synchronous `ast.toText()` (which
-  never trimmed) to its documented replacement `ast.to('text')` could silently change output.
-  Fixed by stripping only a run of the exact block-separator sequence at either end - the one
-  demonstrable generator artifact - and nothing else. This also fixed a related, previously-latent
-  leading-newline artifact: a document consisting of only a table (`.to('text')` with
-  `preserveLayout`, or `.to('md')` under a dialect that forces tables to HTML, e.g. `commonmark`)
-  would leak a spurious leading blank line, since the table renderer's own separator convention had
-  nothing to separate from.
-- **EPUB generation was not reproducible.** Generating the same AST twice produced archives that
-  differed byte-for-byte, from two independent wall-clock sources: `dcterms:modified` in the OPF,
-  and the mtime `fflate` stamps onto every zip entry when none is supplied. The second source is
-  easy to miss, because DOS zip timestamps have two-second granularity - back-to-back generation
-  looks stable and only a longer gap reveals it. Both are now derived from a single resolved
-  instant (`metadataOverrides.modified`, else `ast.metadata.modified`, else now), and a date outside zip's
-  representable 1980-2099 window clamps instead of throwing. This also un-masks real diffs: while
-  every `gen.*.to.epub.epub` baseline churned on each run, genuine EPUB content changes were
-  indistinguishable from timestamp noise and got reverted along with it.
-- **The `renderMetadata` header in plain-text output could be forged.** Metadata values were
-  interpolated into the `Key: value` block verbatim, so a line break in a document's title rendered
-  as additional fields - a title of `Real\nAuthor: Attacker` produced an `Author:` line the document
-  never had, plus a second separator rule. No code execution, but consumers parsing that block would
-  believe it. Line breaks are now folded to spaces, matching how `CsvGenerator` already guarded its
-  `#` comment block, and a malformed `created` date is omitted rather than rendered as the literal
-  `Invalid Date`.
-- **`.to('text')` silently dropped chart data and CSV comments.** `TextGenerator` rendered only a
-  node's children, so any node carrying its content in `text` with no children vanished entirely:
-  `chart` nodes (ODP/ODS/PPTX/XLSX), whose whole data series lives in `text`, and CSV `comment`
-  nodes. The deprecated `ast.toText()` kept both, making this a regression for anyone following the
-  documented migration. Fixed generically - the fallback now prefers rendered children but falls
-  back to the node's own `text`, matching what every parser's own `toTextSync` already does, so it
-  covers any future node of the same shape rather than just the two known today.
-- **`.to('text')` concatenated adjacent table cells with no separator.** `ITEM` + `NEEDED` rendered
-  as `ITEMNEEDED`, destroying the cell boundary, on every path that doesn't draw an aligned grid
-  (`preserveLayout: false`, and `sheet`/`row`/`cell`, which never route through the table renderer).
-  This was masked for XLSX/ODS only because their cell values happen to carry a trailing
-  non-breaking space *in the source data* - the delimiter came from the document, not the generator
-  - so formats without it (MD, HTML) collided outright. Cells are now tab-separated, but only when
-  the cell doesn't already end in a line break, since DOCX/ODT/RTF wrap cell content in a paragraph
-  that emits its own newline.
+- **Markdown generation could carry an unescaped HTML tag out of a hostile document.** Text nodes were escaped, but seven other constructs interpolated their content directly: inline and block math, wikilink page/alias, citation keys, footnote ids, abbreviation definitions, image attribute lists, and admonition types/titles. A payload correctly neutralized in a paragraph survived a full parse→generate cycle verbatim in any of them. Each sink now escapes or allowlists according to what round-trips for that value: entity-encoding where it returns to a text node (which the parser entity-decodes), and a character allowlist where it returns to `metadata.*` or a `code` node (which it does not). The `[^id]` fix lives in `BaseGenerator.getFootnoteKey`, so it covers HTML output too.
+- **`styleMap` class lists and attribute names were emitted without escaping or validation.** The spreadsheet row and sheet paths rebuilt their `class` attribute from the raw mapping array rather than the escaped value every other node type uses, and both `styleMap` attribute loops escaped the value while interpolating the *name* unchecked, which no amount of value escaping can compensate for, since a name containing a quote closes the attribute and opens another.
+- **Config resolution could be used to poison `Object.prototype`.** The recursive generator-config merge walked caller input with an unguarded `for...in`, so a config that arrived via `JSON.parse` (an object literal cannot express this; JSON can) reached `Object.prototype` and corrupted every object in the process. The two `Object.assign` sites had a narrower form of the same problem: they cannot pollute globally, but the `__proto__` setter replaced the returned config's prototype, so it silently inherited attacker-chosen properties.
+- **`sanitizeCssValue` could be bypassed with CSS backslash escapes.** Control characters and CSS comments were stripped before the `url()`/`expression()` denylist test, but backslash escapes were stripped after it, so `u\rl(http://evil)` was validated as safe and then reassembled into a live `url()`. Inert in practice only because every call site pairs the value with a property where `url()` does nothing; it would have become a live SSRF the moment anyone used `background-image`, `cursor` or `mask`. The regression test covering this path was itself vacuous: it asserted against an empty string, because the payload it used caused no `style` attribute to be emitted at all.
+- **RTF hyperlinks had no scheme allowlist.** `escapeRtf` neutralizes the field metacharacters but says nothing about the target, so RTF was the only generator that would emit `HYPERLINK "javascript:..."`, `file:///...` or a UNC `\\host\share`, the latter two being phishing and NTLM-credential-leak vectors in Word rather than rendering quirks. **This changes behaviour for non-hostile input:** an RTF document generated from content with intranet `file://` or UNC links loses those links, though the link *text* is preserved (rejection degrades to bare text, matching how HTML and Markdown already degrade), so no content disappears, only the clickable target.
+- **The HTML parser's nesting-depth guard could never fire.** It tripped at depth > 1000, but the call stack overflows at roughly 800 and nondeterministically, so the typed `MAX_NESTING_DEPTH_EXCEEDED` error was never produced. Failure was already graceful, so this was a dead guard rather than a denial of service. Lowered to 256, chosen to hold across engines rather than tuned to one measurement; real documents nest orders of magnitude shallower.
+- **`.to('text')`/`.to('md')` silently stripped genuine document whitespace.** Both generators unconditionally called `.trim()` on the entire accumulated output before returning, which not only cleaned up the generator's own trailing-newline join artifacts (its original purpose) but also destroyed real content: an intentionally-indented opening line, or trailing spaces on the document's last line. This meant migrating from the deprecated synchronous `ast.toText()` (which never trimmed) to its documented replacement `ast.to('text')` could silently change output. Fixed by stripping only a run of the exact block-separator sequence at either end (the one demonstrable generator artifact) and nothing else. This also fixed a related, previously-latent leading-newline artifact: a document consisting of only a table (`.to('text')` with `preserveLayout`, or `.to('md')` under a dialect that forces tables to HTML, e.g. `commonmark`) would leak a spurious leading blank line, since the table renderer's own separator convention had nothing to separate from.
+- **EPUB generation was not reproducible.** Generating the same AST twice produced archives that differed byte-for-byte, from two independent wall-clock sources: `dcterms:modified` in the OPF, and the mtime `fflate` stamps onto every zip entry when none is supplied. The second source is easy to miss, because DOS zip timestamps have two-second granularity, so back-to-back generation looks stable and only a longer gap reveals it. Both are now derived from a single resolved instant, and a date outside zip's representable 1980-2099 window clamps instead of throwing. This also un-masks real diffs: while every `gen.*.to.epub.epub` baseline churned on each run, genuine EPUB content changes were indistinguishable from timestamp noise and got reverted along with it.
+- **`.to('text')` silently dropped chart data and CSV comments.** `TextGenerator` rendered only a node's children, so any node carrying its content in `text` with no children vanished entirely: `chart` nodes (ODP/ODS/PPTX/XLSX), whose whole data series lives in `text`, and CSV `comment` nodes. The deprecated `ast.toText()` kept both, making this a regression for anyone following the documented migration. Fixed generically: the fallback now prefers rendered children but falls back to the node's own `text`, matching what every parser's own `toTextSync` already does, so it covers any future node of the same shape rather than just the two known today.
+- **`.to('text')` concatenated adjacent table cells with no separator.** `ITEM` + `NEEDED` rendered as `ITEMNEEDED`, destroying the cell boundary, on every path that doesn't draw an aligned grid (`preserveLayout: false`, and `sheet`/`row`/`cell`, which never route through the table renderer). This was masked for XLSX/ODS only because their cell values happen to carry a trailing non-breaking space *in the source data*, so the delimiter came from the document rather than the generator, and formats without it (MD, HTML) collided outright. Cells are now tab-separated, but only when the cell doesn't already end in a line break, since DOCX/ODT/RTF wrap cell content in a paragraph that emits its own newline.
+- **The `renderMetadata` header in plain-text output could be forged.** Metadata values were interpolated into the `Key: value` block verbatim, so a line break in a document's title rendered as additional fields; a title of `Real\nAuthor: Attacker` produced an `Author:` line the document never had, plus a second separator rule. No code execution, but consumers parsing that block would believe it. Line breaks are now folded to spaces, matching how `CsvGenerator` already guarded its `#` comment block, and a malformed `created` date is omitted rather than rendered as the literal `Invalid Date`.
+- **Inline styles were matched by substring**, so `color:` matched inside `background-color:` (yielding the wrong value, not merely a spurious one) and `max-width: 100%` was read as an explicit width, while `font-weight:bold` without a space and `font-weight: 700` were missed entirely. Replaced with a real declaration parser (quote- and paren-aware splitting, `!important` stripped, vendor-prefix fallbacks) plus a quote-aware `font-family` splitter that was returning `Fira` for `"Fira, A;B"`.
+- **`csvSafeCell` tested its formula trigger against the untrimmed value** while the numeric exemption tested the trimmed one, so `" =1+1"` was emitted unprefixed. Most spreadsheet applications treat a leading-space cell as text, so this is defence in depth rather than a demonstrated bypass.
 
 ### Changed
-- **`styleMap`'s `output.tag` now takes effect in HTML output.** It was written and then shadowed
-  in every branch of `HtmlGenerator`, so it was silently ignored - while `MarkdownGenerator` and
-  `RtfGenerator` both honoured it and the README documented it as working. A mapping of
-  `{ tag: 'blockquote' }` produced a plain `<p>`. Restoring it required validation in the same
-  change, because that shadowing was the only thing making a hostile tag inert: a tag name is
-  interpolated into both the opening and closing tag, where no escaping applies. Only a known-safe
-  set of block, heading and inline elements is accepted; anything else falls back to the node's
-  default tag and emits an `INVALID_STYLE_MAP_TAG` warning. This also makes the built-in default
-  style mappings live for HTML, so a paragraph carrying a `Heading N`/`Quote`/`Title` style name
-  now maps to the corresponding element instead of remaining a `<p>`.
-- **Node.js 18 and 20 caveat.** Some of the hardening above is calibrated against current Node.
-  The clearest case is the parser's nesting-depth threshold, which is derived from stack-overflow
-  behaviour measured on a modern runtime; on Node 18/20 the exact boundary may differ, though
-  failure remains graceful in every case. Node 18 and 20 stay in the supported set for now and
-  will be dropped at the next major version, along with the other deprecations already batched
-  for it.
-- **`TextGeneratorConfig.renderNotes`** (default `true`) controls whether the collected
-  footnote/endnote section is appended to `.to('text')` output. Set it to `false`, alongside
-  `includeImages: false`, for the leaner rendering the deprecated `ast.toText()` produced.
-- **Documentation fix**: `TextGeneratorConfig.preserveLayout` was documented as defaulting to
-  `false`; the actual default is and always was `true`. Only the doc comment was wrong.
+- **`styleMap`'s `output.tag` now takes effect in HTML output.** It was written and then shadowed in every branch of `HtmlGenerator`, so it was silently ignored, while `MarkdownGenerator` and `RtfGenerator` both honoured it and the README documented it as working. A mapping of `{ tag: 'blockquote' }` produced a plain `<p>`. Restoring it required validation in the same change, because that shadowing was the only thing making a hostile tag inert: a tag name is interpolated into both the opening and closing tag, where no escaping applies. Only a known-safe set of block, heading and inline elements is accepted; anything else falls back to the node's default tag and emits an `INVALID_STYLE_MAP_TAG` warning. This also makes the built-in default style mappings live for HTML, so a paragraph carrying a `Heading N`/`Quote`/`Title` style name now maps to the corresponding element instead of remaining a `<p>`.
+- **`TextGeneratorConfig.renderNotes`** (default `true`) controls whether the collected footnote/endnote section is appended to `.to('text')` output. Set it to `false`, alongside `includeImages: false`, for the leaner rendering the deprecated `ast.toText()` produced.
+- **Node.js 18 and 20 caveat.** Some of the hardening above is calibrated against current Node, most visibly the parser's nesting-depth threshold, which is derived from stack-overflow behaviour measured on a modern runtime, so on Node 18/20 the exact boundary may differ, though failure remains graceful in every case. Both stay in the supported set for now and will be dropped at the next major version, along with the other deprecations already batched for it.
+- **Documentation fix**: `TextGeneratorConfig.preserveLayout` was documented as defaulting to `false`; the actual default is and always was `true`. Only the doc comment was wrong.
 
 ## [7.3.1] - 2026-07-14
 ### Fixed
