@@ -2865,10 +2865,7 @@
                 { id: 'cfg_includeImages', label: 'Include Images', type: 'switch', default: true },
                 { id: 'cfg_includeCharts', label: 'Include Charts', type: 'switch', default: true },
                 { id: 'cfg_ignoreInternalLinks_generator', label: 'Ignore Internal Links', type: 'switch', default: false },
-                { id: 'cfg_ignoreDefaultStyleMap', label: 'Ignore Default Style Map', type: 'switch', default: false },
-                { id: 'cfg_meta_title', label: 'Override Title', type: 'text', default: '', placeholder: 'leave blank to keep', width: '150px' },
-                { id: 'cfg_meta_author', label: 'Override Author', type: 'text', default: '', placeholder: 'leave blank to keep', width: '150px' },
-                { id: 'cfg_meta_modified', label: 'Override Modified', type: 'text', default: '', placeholder: '2024-01-01T00:00:00Z', width: '170px' }
+                { id: 'cfg_ignoreDefaultStyleMap', label: 'Ignore Default Style Map', type: 'switch', default: false }
             ],
             html: [
                 { id: 'cfg_html_containerWidth', label: 'Width', type: 'inline-text', default: 'auto', width: '100px' },
@@ -2881,7 +2878,9 @@
             ],
             md: [
                 { id: 'cfg_md_dialect', label: 'Dialect', type: 'inline-select', options: ['extended', 'github', 'gitlab', 'obsidian', 'pandoc', 'commonmark'], names: ['Extended', 'GitHub', 'GitLab', 'Obsidian', 'Pandoc', 'CommonMark'], default: 'extended' },
-                { id: 'cfg_md_fallbackToHtml', label: 'HTML Fallback', type: 'inline-switch', default: true }
+                { id: 'cfg_md_fallbackToHtml', label: 'HTML Fallback', type: 'inline-switch', default: true },
+                { id: 'cfg_md_dialectOverrides', label: 'Dialect Detail', type: 'popover-panel', inline: true, panelId: 'cfg_md_dialect_popover' },
+                { id: 'cfg_md_fallbackDetail', label: 'Fallback Detail', type: 'popover-panel', inline: true, panelId: 'cfg_md_fallback_popover' }
             ],
             chunks: [
                 { id: 'cfg_chunks_strategy', label: 'Strategy', type: 'inline-select', options: ['document-structure', 'fixed-size', 'semantic'], names: ['Structure', 'Fixed Size', 'Semantic (External Only)'], disabledOptions: ['semantic'], default: 'document-structure' },
@@ -2928,6 +2927,19 @@
                             <select id="${item.id}" class="btn btn-outline" style="padding: ${isInline ? '0.2rem' : '0.4rem'}; font-size: 0.8rem; width: ${item.width || 'auto'};">
                                 ${item.options.map((opt, i) => `<option value="${opt}" ${opt === value ? 'selected' : ''} ${item.disabledOptions && item.disabledOptions.includes(opt) ? 'disabled' : ''}>${item.names[i]}</option>`).join('')}
                             </select>
+                        </div>
+                    `;
+                } else if (item.type === 'popover-panel') {
+                    // A trigger for a hand-written panel elsewhere in the markup. Used where a
+                    // config field is an OBJECT with many members (metadataOverrides, the
+                    // MarkdownDialectConfig / FallbackToHtmlConfig object forms) and a single
+                    // control cannot represent it. Mirrors the existing `standalone` popover.
+                    html += `
+                        <div class="${item.inline ? 'window-config-item' : 'config-item'}">
+                            <button class="btn btn-outline" style="padding: ${item.inline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; font-size: ${item.inline ? '0.75rem' : '0.8rem'}; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);" onclick="window.toggleConfigPopover('${item.panelId}', this)">
+                                ${item.label}
+                                <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                            </button>
                         </div>
                     `;
                 } else if (item.type.includes('popover-textarea')) {
@@ -3515,6 +3527,29 @@
 ]'></textarea>
                     </div>
                 </div>
+                <div class="config-group">
+                    <div class="config-group-title">Metadata Overrides</div>
+                    <div class="config-items-container full-width">
+                        <div class="config-item full-width" style="flex-direction: column; align-items: stretch; gap: 0.5rem;">
+                            <div style="font-size: 0.75rem; color: var(--text-dim); line-height: 1.5;">
+                                Overrides the metadata embedded in generated output, merged <strong>per field</strong> over
+                                <code>ast.metadata</code> without mutating it. Named fields: <code>title</code>,
+                                <code>author</code>, <code>description</code>, <code>subject</code>, <code>keywords</code>,
+                                <code>lastModifiedBy</code>, <code>created</code>, <code>modified</code>,
+                                <code>language</code>. <code>custom</code> takes any key/value pairs. Setting
+                                <code>modified</code> makes EPUB output byte-reproducible.
+                            </div>
+                            <textarea id="cfg_metadataOverrides" class="btn btn-outline"
+                                style="padding: 0.6rem; width: 100%; min-height: 120px; font-size: 0.75rem; font-family: 'Ubuntu Mono', monospace; resize: vertical;"
+                                placeholder='{
+  "title": "Q4 Report",
+  "author": "Acme Inc",
+  "modified": "2024-01-01T00:00:00Z",
+  "custom": { "department": "Finance", "reviewed": true }
+}'></textarea>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div
                 style="padding: 1.5rem 0; display: flex; flex-direction: column; gap: 0.75rem; border-top: 1px solid var(--border); margin-top: 1.5rem; width: 100%; max-width: 600px; margin-left: auto; margin-right: auto;">
@@ -3704,6 +3739,19 @@
                 <div class="panel-sub-header">
                     <div class="window-config-group">
                         <script>renderConfigItems('md');</script>
+                    
+                            <div id="cfg_md_dialect_popover" class="config-popover" style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 280px;">
+                                <div style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">Dialect Detail<button class="modal-close-btn" style="font-size: 0.8rem;" onclick="window.toggleConfigPopover('cfg_md_dialect_popover')">✕</button></div>
+                                <div style="font-size: 0.65rem; color: var(--text-dim); margin-bottom: 0.5rem; line-height: 1.4;">Per-feature overrides on top of the selected preset, which acts as <code>extends</code>. Anything left on "from preset" is omitted, so the preset decides it.</div>
+                                <button id="cfg_md_d_reset" class="btn btn-outline" style="width: 100%; padding: 0.3rem; font-size: 0.7rem; margin-bottom: 0.6rem;">Reset all to preset</button>
+                                <div style="display: flex; flex-direction: column; gap: 0.4rem;"><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Admonitions</span><select id="cfg_md_d_admonitions" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="github">GitHub</option><option value="gitlab">GitLab</option><option value="pandoc">Pandoc</option><option value="none">None</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Math</span><select id="cfg_md_d_math" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="dollar">Dollar $</option><option value="none">None</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Tables</span><select id="cfg_md_d_tables" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="native">Native |</option><option value="html">HTML &lt;table&gt;</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Bullet Marker</span><select id="cfg_md_d_bulletListMarker" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="-">-</option><option value="*">*</option><option value="+">+</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Ordered Marker</span><select id="cfg_md_d_orderedListMarker" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value=".">1.</option><option value=")">1)</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Emphasis</span><select id="cfg_md_d_emphasisMarker" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="asterisk">*asterisk*</option><option value="underscore">_underscore_</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Definition Lists</span><select id="cfg_md_d_definitionLists" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Footnotes</span><select id="cfg_md_d_footnotes" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Citations</span><select id="cfg_md_d_citations" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Wikilinks</span><select id="cfg_md_d_wikilinks" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Attribute Lists</span><select id="cfg_md_d_attributeLists" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Strikethrough</span><select id="cfg_md_d_strikethrough" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div></div>
+                            </div>
+                            <div id="cfg_md_fallback_popover" class="config-popover" style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 260px;">
+                                <div style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">HTML Fallback Detail<button class="modal-close-btn" style="font-size: 0.8rem;" onclick="window.toggleConfigPopover('cfg_md_fallback_popover')">✕</button></div>
+                                <div style="font-size: 0.65rem; color: var(--text-dim); margin-bottom: 0.5rem; line-height: 1.4;">Splits the single HTML Fallback switch into its parts. Anything left on "from switch" follows the switch above.</div>
+                                <button id="cfg_md_f_reset" class="btn btn-outline" style="width: 100%; padding: 0.3rem; font-size: 0.7rem; margin-bottom: 0.6rem;">Reset all to switch</button>
+                                <div style="display: flex; flex-direction: column; gap: 0.4rem;"><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Text Formatting</span><select id="cfg_md_f_textFormatting" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Alignment</span><select id="cfg_md_f_alignment" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Anchors</span><select id="cfg_md_f_anchors" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Tables</span><select id="cfg_md_f_tables" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Embeds</span><select id="cfg_md_f_embeds" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Cell Line Breaks</span><select id="cfg_md_f_cellLineBreaks" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div></div>
+                            </div>
                     </div>
                 </div>
                 <div class="panel-body" id="visual-md" style="position: relative; padding: 0;"></div>
@@ -4517,20 +4565,68 @@
             let lastConfigJson = "";
 
             /**
-             * Builds `metadataOverrides` from the three override inputs, omitting any left blank.
-             * Blank must mean "keep the parsed value", not "set it to empty" - the config merges
-             * per field, so sending '' would blank a title the document legitimately has.
+             * Reads `metadataOverrides` from its JSON textarea.
+             *
+             * A freeform textarea rather than a grid of inputs because the shape is open-ended:
+             * nine named fields plus a `custom` map with caller-chosen keys. That is the same
+             * problem `styleMap` has, and it is solved the same way here for consistency.
+             *
+             * `created`/`modified` are revived into real Dates, since JSON has no date type and
+             * the generators check `instanceof Date`. Invalid JSON yields `{}` rather than
+             * throwing, so a half-typed value cannot break the live preview on every keystroke.
              */
             function getMetadataOverrides() {
+                const raw = (document.getElementById('cfg_metadataOverrides')?.value || '').trim();
+                if (!raw) return {};
+                let parsed;
+                try { parsed = JSON.parse(raw); } catch (e) { return {}; }
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+                ['created', 'modified'].forEach(f => {
+                    if (typeof parsed[f] === 'string' && !isNaN(new Date(parsed[f]).getTime())) {
+                        parsed[f] = new Date(parsed[f]);
+                    } else if (parsed[f] !== undefined && !(parsed[f] instanceof Date)) {
+                        delete parsed[f];
+                    }
+                });
+                return parsed;
+            }
+
+            /**
+             * Builds `mdConfig.dialect`. Returns the bare preset string when no per-feature
+             * override is set, so the common case still shows the simple form in copied config;
+             * otherwise an object with `extends` naming the preset the overrides layer onto.
+             */
+            const MD_DIALECT_BOOL_FIELDS = ['definitionLists', 'footnotes', 'citations', 'wikilinks', 'attributeLists', 'strikethrough'];
+            const MD_DIALECT_ENUM_FIELDS = ['admonitions', 'math', 'tables', 'bulletListMarker', 'orderedListMarker', 'emphasisMarker'];
+            function getMdDialect() {
+                const preset = document.getElementById('cfg_md_dialect').value;
                 const overrides = {};
-                const title = document.getElementById('cfg_meta_title').value.trim();
-                const author = document.getElementById('cfg_meta_author').value.trim();
-                const modified = document.getElementById('cfg_meta_modified').value.trim();
-                if (title) overrides.title = title;
-                if (author) overrides.author = author;
-                // Only send a parseable date; an in-progress value must not blow up generation.
-                if (modified && !isNaN(new Date(modified).getTime())) overrides.modified = new Date(modified);
-                return overrides;
+                MD_DIALECT_ENUM_FIELDS.forEach(f => {
+                    const el = document.getElementById('cfg_md_d_' + f);
+                    if (el && el.value) overrides[f] = el.value;
+                });
+                MD_DIALECT_BOOL_FIELDS.forEach(f => {
+                    const el = document.getElementById('cfg_md_d_' + f);
+                    if (el && el.value) overrides[f] = el.value === 'true';
+                });
+                if (Object.keys(overrides).length === 0) return preset;
+                return { extends: preset, ...overrides };
+            }
+
+            /** Builds `mdConfig.fallbackToHtml`: the plain boolean unless a part is overridden. */
+            const MD_FALLBACK_FIELDS = ['textFormatting', 'alignment', 'anchors', 'tables', 'embeds', 'cellLineBreaks'];
+            function getMdFallbackToHtml() {
+                const base = document.getElementById('cfg_md_fallbackToHtml').checked;
+                const overrides = {};
+                MD_FALLBACK_FIELDS.forEach(f => {
+                    const el = document.getElementById('cfg_md_f_' + f);
+                    if (el && el.value) overrides[f] = el.value === 'true';
+                });
+                if (Object.keys(overrides).length === 0) return base;
+                // Omitted parts follow the switch, matching resolveFallbackToHtml's own semantics.
+                const resolved = {};
+                MD_FALLBACK_FIELDS.forEach(f => { resolved[f] = f in overrides ? overrides[f] : base; });
+                return resolved;
             }
 
             function getGeneratorConfig() {
@@ -4942,6 +5038,44 @@
             }
 
             // Window-specific generator config listeners
+            // Controls inside the md object-form popovers. Not schema-driven, so they need the
+            // same manual persistence and listener wiring the standalone popover uses.
+            const MD_DIALECT_POPOVER_IDS = [...MD_DIALECT_ENUM_FIELDS, ...MD_DIALECT_BOOL_FIELDS].map(f => 'cfg_md_d_' + f);
+            const MD_FALLBACK_POPOVER_IDS = MD_FALLBACK_FIELDS.map(f => 'cfg_md_f_' + f);
+
+            [...MD_DIALECT_POPOVER_IDS, ...MD_FALLBACK_POPOVER_IDS].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                const saved = localStorage.getItem(id);
+                if (saved !== null) el.value = saved;
+                el.addEventListener('change', () => {
+                    localStorage.setItem(id, el.value);
+                    window.renderFormatWindow('md');
+                });
+            });
+            document.getElementById('cfg_md_d_reset')?.addEventListener('click', () => {
+                MD_DIALECT_POPOVER_IDS.forEach(id => { const el = document.getElementById(id); if (el) { el.value = ''; localStorage.removeItem(id); } });
+                window.renderFormatWindow('md');
+            });
+            document.getElementById('cfg_md_f_reset')?.addEventListener('click', () => {
+                MD_FALLBACK_POPOVER_IDS.forEach(id => { const el = document.getElementById(id); if (el) { el.value = ''; localStorage.removeItem(id); } });
+                window.renderFormatWindow('md');
+            });
+
+            // Persist and re-render on edit, mirroring cfg_styleMap. Metadata reaches every
+            // format that embeds it, so every open output window is refreshed.
+            const metaTextarea = document.getElementById('cfg_metadataOverrides');
+            if (metaTextarea) {
+                const savedMeta = localStorage.getItem('cfg_metadataOverrides');
+                if (savedMeta !== null) metaTextarea.value = savedMeta;
+                metaTextarea.addEventListener('input', () => {
+                    localStorage.setItem('cfg_metadataOverrides', metaTextarea.value);
+                    ['html', 'md', 'text', 'csv', 'rtf'].forEach(f => {
+                        if (document.getElementById('visual-' + f)) window.renderFormatWindow(f);
+                    });
+                });
+            }
+
             const STANDALONE_POPOVER_IDS = ['cfg_html_standalone_document', 'cfg_html_standalone_metaTags', 'cfg_html_standalone_styles', 'cfg_html_standalone_scripts', 'cfg_html_standalone_headInjections', 'cfg_html_standalone_bodyInjections'];
 
             // Restore persisted values (each control defaults to "on"/'full', matching standalone:true)
@@ -5018,10 +5152,7 @@
                         if (format === 'html') {
                             genConfig.htmlConfig = readHtmlPanelConfigInputs();
                         } else if (format === 'md') {
-                            genConfig.mdConfig = {
-                                dialect: document.getElementById('cfg_md_dialect').value,
-                                fallbackToHtml: document.getElementById('cfg_md_fallbackToHtml').checked
-                            };
+                            genConfig.mdConfig = { dialect: getMdDialect(), fallbackToHtml: getMdFallbackToHtml() };
                         } else if (format === 'chunks') {
                             genConfig.chunksConfig = {
                                 strategy: document.getElementById('cfg_chunks_strategy').value,
@@ -5542,10 +5673,7 @@
                     const genConfig = {
                         ...getGeneratorConfig(),
                         ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
-                        mdConfig: {
-                            dialect: document.getElementById('cfg_md_dialect').value,
-                            fallbackToHtml: document.getElementById('cfg_md_fallbackToHtml').checked
-                        }
+                        mdConfig: { dialect: getMdDialect(), fallbackToHtml: getMdFallbackToHtml() }
                     };
                     return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'md', genConfig)).value;
                 },

@@ -2,6 +2,12 @@
     <h1>Generator Configuration Specification</h1>
     <p>The <code>GeneratorConfig</code> object controls how the AST is transformed into final output formats like HTML,
         Markdown, or PDF. It consists of common options and specialized sub-configurations.</p>
+    <p style="font-size: 0.9em; opacity: 0.85;"><strong>Related:</strong>
+        <a href="#spec/generator">OfficeGenerator &amp; <code>ast.to()</code></a> &middot;
+        <a href="#spec/config">OfficeParserConfig</a> (the parse side) &middot;
+        <a href="#spec/ast">AST structure</a> &middot;
+        <a href="#spec/converter">OfficeConverter</a> &middot;
+        <a href="#spec/cli">CLI flags</a></p>
 
     <h2>CommonGeneratorConfig</h2>
     <p>These settings apply to every generator unless specifically overridden in a sub-config.</p>
@@ -38,7 +44,7 @@
             </tr>
             <tr>
                 <td><code>metadataOverrides</code></td>
-                <td><code>MetadataOverrides</code></td>
+                <td><code><a href="#metadataoverrides">MetadataOverrides</a></code></td>
                 <td><code>{}</code></td>
                 <td><strong>Output Metadata</strong>: Overrides the metadata embedded in the generated file, merged per
                     field over <code>ast.metadata</code> without mutating it. Set <code>modified</code> here to make
@@ -106,7 +112,7 @@
     <h2>Specialized Sub-Configurations</h2>
     <p>Format-specific settings nested under keys like <code>htmlConfig</code>, <code>mdConfig</code>, etc.</p>
 
-    <h3>HtmlGeneratorConfig (<code>htmlConfig</code>)</h3>
+    <h3 id="htmlgeneratorconfig">HtmlGeneratorConfig (<code>htmlConfig</code>)</h3>
     <table>
         <thead>
             <tr>
@@ -119,7 +125,7 @@
         <tbody>
             <tr>
                 <td><code>standalone</code></td>
-                <td><code>boolean | StandaloneConfig</code></td>
+                <td><code>boolean | <a href="#standaloneconfig">StandaloneConfig</a></code></td>
                 <td><code>true</code></td>
                 <td>Controls the HTML "document envelope". <code>true</code>/omitted turns every part on (a full
                     <code>&lt;html&gt;</code> shell with CSS/scripts/metadata); <code>false</code> turns every part
@@ -150,7 +156,7 @@
             </tr>
             <tr>
                 <td><code>injections</code></td>
-                <td><code>HtmlInjectionConfig</code></td>
+                <td><code><a href="#htmlinjectionconfig">HtmlInjectionConfig</a></code></td>
                 <td><code>{}</code></td>
                 <td>Granular raw HTML injection points:
                     <ul>
@@ -260,7 +266,7 @@
         </div>
     </div>
 
-    <h3>MdGeneratorConfig (<code>mdConfig</code>)</h3>
+    <h3 id="mdgeneratorconfig">MdGeneratorConfig (<code>mdConfig</code>)</h3>
     <table>
         <thead>
             <tr>
@@ -272,15 +278,98 @@
         </thead>
         <tbody>
             <tr>
+                <td><code>dialect</code></td>
+                <td><code>MarkdownDialectPreset | <a href="#markdowndialectconfig">MarkdownDialectConfig</a></code></td>
+                <td><code>'extended'</code></td>
+                <td>Which real-world Markdown flavor to emit. A preset name picks a whole set of behaviours at once;
+                    an object overrides individual features on top of one. See
+                    <a href="#markdowndialectconfig">MarkdownDialectConfig</a> below.</td>
+            </tr>
+            <tr>
                 <td><code>fallbackToHtml</code></td>
-                <td><code>boolean</code></td>
+                <td><code>boolean | <a href="#fallbacktohtmlconfig">FallbackToHtmlConfig</a></code></td>
                 <td><code>true</code></td>
-                <td>Uses raw HTML tags for features Markdown cannot express (underlines, alignment).</td>
+                <td>Uses raw HTML tags for features Markdown cannot express (underline, alignment, merged cells). The
+                    boolean applies uniformly; an object controls each part independently. See
+                    <a href="#fallbacktohtmlconfig">FallbackToHtmlConfig</a> below.</td>
             </tr>
         </tbody>
     </table>
 
-    <h3>PdfGeneratorConfig (<code>pdfConfig</code>)</h3>
+    <h4 id="markdowndialectconfig">MarkdownDialectConfig</h4>
+    <p><code>dialect</code> accepts either a <strong>preset name</strong> or an <strong>object</strong>. The presets:</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Preset</th>
+                <th>Behaviour</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td><code>'extended'</code> <em>(default)</em></td><td>Every feature on, GitHub-style admonitions. Byte-identical to this library's output before dialects existed, so it is the backward-compatibility anchor.</td></tr>
+            <tr><td><code>'github'</code></td><td>GFM: <code>&gt; [!NOTE]</code> admonitions, footnotes, strikethrough, native tables. No definition lists, citations, wikilinks or attribute lists.</td></tr>
+            <tr><td><code>'gitlab'</code></td><td>GLFM: <code>:::note</code> fenced-div admonitions, otherwise as GitHub.</td></tr>
+            <tr><td><code>'obsidian'</code></td><td>As GitHub, plus <code>[[wikilinks]]</code>.</td></tr>
+            <tr><td><code>'pandoc'</code></td><td><code>::: {.note}</code> admonitions, definition lists, citations and attribute lists on.</td></tr>
+            <tr><td><code>'commonmark'</code></td><td>Strict CommonMark: no admonition syntax (plain blockquote), no footnote references (inlined as parentheticals), no strikethrough, and tables forced to HTML, since CommonMark has no table syntax.</td></tr>
+        </tbody>
+    </table>
+    <p>Passing an object instead overrides individual features. Every field is optional; <code>extends</code> names the
+        preset that any omitted field falls back to.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td><code>extends</code></td><td><code><a href="#markdowndialectconfig">MarkdownDialectPreset</a></code></td><td>Base preset for every field left unset. Defaults to <code>'extended'</code>. Note this is the base for <em>this object</em>, not "whatever preset was configured before" &mdash; config merging replaces the whole <code>dialect</code> field rather than layering onto a prior string.</td></tr>
+            <tr><td><code>admonitions</code></td><td><code>'github' | 'gitlab' | 'pandoc' | 'none'</code></td><td>Which admonition syntax to emit. <code>'none'</code> degrades to a bold-labelled blockquote.</td></tr>
+            <tr><td><code>math</code></td><td><code>'dollar' | 'none'</code></td><td><code>$inline$</code> / <code>$$block$$</code> delimiters, or none (content emitted bare).</td></tr>
+            <tr><td><code>tables</code></td><td><code>'native' | 'html'</code></td><td>Pipe tables, or an HTML <code>&lt;table&gt;</code>. Forced to <code>'html'</code> under <code>commonmark</code>.</td></tr>
+            <tr><td><code>bulletListMarker</code></td><td><code>'-' | '*' | '+'</code></td><td>Marker for unordered list items.</td></tr>
+            <tr><td><code>orderedListMarker</code></td><td><code>'.' | ')'</code></td><td><code>1.</code> or <code>1)</code> for ordered list items.</td></tr>
+            <tr><td><code>emphasisMarker</code></td><td><code>'asterisk' | 'underscore'</code></td><td><code>*em*</code>/<code>**strong**</code> or <code>_em_</code>/<code>__strong__</code>.</td></tr>
+            <tr><td><code>definitionLists</code></td><td><code>boolean</code></td><td>Markdown&nbsp;Extra <code>Term\n: Definition</code> syntax. When off, definition lists degrade to plain paragraphs.</td></tr>
+            <tr><td><code>footnotes</code></td><td><code>boolean</code></td><td><code>[^id]</code> references with a definition block. When off, note content is inlined as a parenthetical at the reference point rather than being dropped.</td></tr>
+            <tr><td><code>citations</code></td><td><code>boolean</code></td><td>Pandoc <code>[@citekey]</code> syntax. When off, the key is emitted as plain <code>[key]</code>.</td></tr>
+            <tr><td><code>wikilinks</code></td><td><code>boolean</code></td><td>Obsidian <code>[[Page]]</code> / <code>[[Page|Alias]]</code> syntax. When off, wikilinks become ordinary links.</td></tr>
+            <tr><td><code>attributeLists</code></td><td><code>boolean</code></td><td>Pandoc-style <code>{width=50% align=center}</code> after an image or table.</td></tr>
+            <tr><td><code>strikethrough</code></td><td><code>boolean</code></td><td><code>~~struck~~</code>. When off, the formatting is dropped.</td></tr>
+        </tbody>
+    </table>
+    <pre><code>// A preset by name
+await ast.to('md', { mdConfig: { dialect: 'github' } });
+
+// GitHub, but with wikilinks and asterisk bullets
+await ast.to('md', {
+    mdConfig: { dialect: { extends: 'github', wikilinks: true, bulletListMarker: '*' } },
+});</code></pre>
+
+    <h4 id="fallbacktohtmlconfig">FallbackToHtmlConfig</h4>
+    <p><code>fallbackToHtml</code> accepts a boolean, which applies uniformly, or an object controlling each part
+        independently. Omitted fields default to on.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Controls</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td><code>textFormatting</code></td><td><code>boolean</code></td><td><code>&lt;u&gt;</code>, <code>&lt;sub&gt;</code>, <code>&lt;sup&gt;</code> for underline/subscript/superscript.</td></tr>
+            <tr><td><code>alignment</code></td><td><code>boolean</code></td><td><code>&lt;div align&gt;</code> wrappers for paragraph and image alignment.</td></tr>
+            <tr><td><code>anchors</code></td><td><code>boolean</code></td><td><code>&lt;a id&gt;</code> anchors for internal link targets.</td></tr>
+            <tr><td><code>tables</code></td><td><code>boolean</code></td><td><code>&lt;table&gt;</code> for nested or merged-cell tables a pipe table cannot express. When off, nested tables are hoisted out and rendered sequentially.</td></tr>
+            <tr><td><code>embeds</code></td><td><code>boolean</code></td><td>Raw HTML for video/embed nodes. When off, they degrade to a plain link.</td></tr>
+            <tr><td><code>cellLineBreaks</code></td><td><code>boolean</code></td><td><code>&lt;br&gt;</code> inside a table cell, which a pipe table cannot otherwise contain.</td></tr>
+        </tbody>
+    </table>
+
+    <h3 id="pdfgeneratorconfig">PdfGeneratorConfig (<code>pdfConfig</code>)</h3>
     <blockquote>
         [!IMPORTANT]
         PDF generation uses Puppeteer (Node.js) and supports full page layout options.
@@ -366,7 +455,7 @@
         </tbody>
     </table>
 
-    <h3>CsvGeneratorConfig (<code>csvConfig</code>)</h3>
+    <h3 id="csvgeneratorconfig">CsvGeneratorConfig (<code>csvConfig</code>)</h3>
     <table>
         <thead>
             <tr>
@@ -398,7 +487,7 @@
         </tbody>
     </table>
 
-    <h3>TextGeneratorConfig (<code>textConfig</code>)</h3>
+    <h3 id="textgeneratorconfig">TextGeneratorConfig (<code>textConfig</code>)</h3>
     <table>
         <thead>
             <tr>
@@ -430,62 +519,51 @@
         </tbody>
     </table>
 
-    <h3>metadataOverrides <span style="font-weight:normal">(common config, not format-specific)</span></h3>
+    <h3 id="metadataoverrides">MetadataOverrides (<code>metadataOverrides</code>)</h3>
     <p>Overrides the metadata embedded in generated output, applied <strong>per field</strong> on top of
-        <code>ast.metadata</code>, so setting one field leaves the rest of the parsed metadata intact.
-        <code>ast.metadata</code> itself is never mutated, so the same AST can be generated repeatedly with different
-        metadata.</p>
+        <code>ast.metadata</code> (see <a href="#spec/ast">the AST spec</a> for the parsed shape), so setting one field
+        leaves the rest of the parsed metadata intact. <code>ast.metadata</code> itself is never mutated, so the same
+        AST can be generated repeatedly with different metadata.</p>
+    <p>Every field is optional. Field names mirror <code>OfficeMetadata</code> so the same vocabulary describes what was
+        parsed and what gets written.</p>
     <table>
         <thead>
             <tr>
-                <th>Field</th>
+                <th>Property</th>
                 <th>Type</th>
                 <th>Written as</th>
             </tr>
         </thead>
         <tbody>
-            <tr>
-                <td><code>title</code></td>
-                <td><code>string</code></td>
-                <td>HTML <code>&lt;title&gt;</code>, EPUB <code>dc:title</code>, Markdown frontmatter, RTF
-                    <code>\title</code></td>
-            </tr>
-            <tr>
-                <td><code>author</code></td>
-                <td><code>string</code></td>
-                <td>HTML <code>&lt;meta name="author"&gt;</code>, EPUB <code>dc:creator</code>, frontmatter, RTF
-                    <code>\author</code></td>
-            </tr>
-            <tr>
-                <td><code>description</code>, <code>subject</code>, <code>keywords</code>,
-                    <code>lastModifiedBy</code></td>
-                <td><code>string</code></td>
-                <td>Wherever the destination format has a slot for it</td>
-            </tr>
-            <tr>
-                <td><code>created</code>, <code>modified</code></td>
-                <td><code>Date</code></td>
-                <td>HTML <code>dcterms.*</code>, EPUB <code>dcterms:modified</code>, frontmatter</td>
-            </tr>
-            <tr>
-                <td><code>language</code></td>
-                <td><code>string</code></td>
-                <td>EPUB <code>dc:language</code></td>
-            </tr>
-            <tr>
-                <td><code>custom</code></td>
-                <td><code>Record&lt;string, string | number | boolean | Date&gt;</code></td>
-                <td>HTML <code>&lt;meta name="custom:KEY"&gt;</code>, Markdown frontmatter</td>
-            </tr>
+            <tr><td><code>title</code></td><td><code>string</code></td><td>HTML <code>&lt;title&gt;</code>; EPUB <code>dc:title</code>; Markdown <code>title:</code>; RTF <code>\title</code>; the <code>renderMetadata</code> header in text/CSV</td></tr>
+            <tr><td><code>author</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="author"&gt;</code>; EPUB <code>dc:creator</code>; Markdown <code>author:</code>; RTF <code>\author</code></td></tr>
+            <tr><td><code>description</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="description"&gt;</code>; EPUB <code>dc:description</code>; Markdown <code>description:</code>; RTF <code>\comm</code></td></tr>
+            <tr><td><code>subject</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="DC.subject"&gt;</code>; EPUB <code>dc:subject</code>; Markdown <code>subject:</code>; RTF <code>\subject</code></td></tr>
+            <tr><td><code>keywords</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="keywords"&gt;</code>; EPUB <code>dc:subject</code>; Markdown <code>keywords:</code>; RTF <code>\keywords</code></td></tr>
+            <tr><td><code>lastModifiedBy</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="lastModifiedBy"&gt;</code></td></tr>
+            <tr><td><code>created</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.created"&gt;</code>; Markdown <code>created:</code>; the <code>renderMetadata</code> header in text/CSV</td></tr>
+            <tr><td><code>modified</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.modified"&gt;</code>; EPUB <code>dcterms:modified</code> <em>and every zip entry's mtime</em>; Markdown <code>modified:</code></td></tr>
+            <tr><td><code>language</code></td><td><code>string</code></td><td>EPUB <code>dc:language</code>. Stored on <code>nativeProperties.language</code>, where parsers already surface it.</td></tr>
+            <tr><td><code>custom</code></td><td><code>Record&lt;string, string | number | boolean | Date&gt;</code></td><td>Any caller-defined key/value pairs. HTML <code>&lt;meta name="custom:KEY"&gt;</code>; Markdown frontmatter. <strong>Not representable in EPUB or RTF</strong> &mdash; see below.</td></tr>
         </tbody>
     </table>
+    <p><code>custom</code> is kept in its own bucket rather than mixed in beside the named fields on purpose: with a bare
+        index signature a typo such as <code>titel</code> would silently become a custom entry instead of a compile
+        error.</p>
+    <pre><code>await ast.to('html', {
+    metadataOverrides: {
+        title: 'Q4 Report',
+        author: 'Acme Inc',
+        custom: { department: 'Finance', reviewed: true },
+    },
+});</code></pre>
 
-    <h4>Reproducible output</h4>
+    <h4 id="reproducible-output">Reproducible output</h4>
     <p><code>modified</code> is what makes generation deterministic. EPUB embeds it both as the required
         <code>dcterms:modified</code> property and as the mtime on every zip entry, so leaving it to default to the
         current time makes each generated archive differ byte-for-byte from the last even when the content is
-        identical &mdash; which defeats content-addressed caching and makes a real content change indistinguishable
-        from timestamp noise when diffing two artifacts.</p>
+        identical. That defeats content-addressed caching and makes a real content change indistinguishable from
+        timestamp noise when diffing two artifacts.</p>
     <pre><code>// Byte-identical on every run for the same AST
 const { value } = await ast.to('epub', {
     metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') },
@@ -494,14 +572,15 @@ const { value } = await ast.to('epub', {
         current time only if the document has none. Dates outside the 1980&ndash;2099 range a ZIP timestamp can
         represent are clamped for entry mtimes.</p>
 
-    <h4>Not every format can represent every field</h4>
-    <p>HTML <code>&lt;meta&gt;</code> tags and Markdown frontmatter are open vocabularies and accept anything. EPUB's
-        OPF is a closed Dublin Core vocabulary and RTF's <code>\info</code> group has a fixed set of control words, so
-        a <code>custom</code> entry has nowhere to go in either. Rather than dropping it silently, those generators
-        report it through <code>onWarning</code> (<code>OfficeWarningType.METADATA_NOT_REPRESENTABLE</code>) and
-        continue; the named fields still apply.</p>
+    <h4 id="metadata-representability">Not every format can represent every field</h4>
+    <p>HTML <code>&lt;meta&gt;</code> tags and Markdown frontmatter are open vocabularies and accept anything. EPUB's OPF
+        is a closed Dublin Core vocabulary and RTF's <code>\info</code> group has a fixed set of control words, so a
+        <code>custom</code> entry has nowhere to go in either. Rather than dropping it silently, those generators report
+        it through <code>onWarning</code> (<code>OfficeWarningType.METADATA_NOT_REPRESENTABLE</code>) and continue; the
+        named fields still apply. Plain text and CSV only emit metadata at all when
+        <code>renderMetadata</code> is on.</p>
 
-    <h2>Style Mapping (The Semantic Bridge)</h2>
+    <h2 id="stylemap">Style Mapping (The Semantic Bridge)</h2>
     <p>Style mapping allows you to define the <strong>semantic meaning</strong> of arbitrary document styles.</p>
 
     <h3>Legacy String DSL</h3>
@@ -524,7 +603,7 @@ const { value } = await ast.to('epub', {
         Without it, consecutive paragraphs mapped to <code>blockquote</code> would be combined into a single element.
     </p>
 
-    <h2>ChunkingConfig Reference</h2>
+    <h2 id="chunkingconfig">ChunkingConfig Reference</h2>
     <p><code>ChunkingConfig</code> is a <strong>discriminated union</strong>; available options depend on the
         <code>strategy</code> field. Default strategy is <code>'document-structure'</code>.
     </p>
