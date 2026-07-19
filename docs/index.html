@@ -3529,24 +3529,68 @@
                 </div>
                 <div class="config-group">
                     <div class="config-group-title">Metadata Overrides</div>
-                    <div class="config-items-container full-width">
-                        <div class="config-item full-width" style="flex-direction: column; align-items: stretch; gap: 0.5rem;">
-                            <div style="font-size: 0.75rem; color: var(--text-dim); line-height: 1.5;">
-                                Overrides the metadata embedded in generated output, merged <strong>per field</strong> over
-                                <code>ast.metadata</code> without mutating it. Named fields: <code>title</code>,
-                                <code>author</code>, <code>description</code>, <code>subject</code>, <code>keywords</code>,
-                                <code>lastModifiedBy</code>, <code>created</code>, <code>modified</code>,
-                                <code>language</code>. <code>custom</code> takes any key/value pairs. Setting
-                                <code>modified</code> makes EPUB output byte-reproducible.
+                    <div class="config-items-container">
+                            <div class="config-item">
+                                <span class="config-label">Title</span>
+                                <input type="text" id="cfg_meta_title" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
                             </div>
-                            <textarea id="cfg_metadataOverrides" class="btn btn-outline"
-                                style="padding: 0.6rem; width: 100%; min-height: 120px; font-size: 0.75rem; font-family: 'Ubuntu Mono', monospace; resize: vertical;"
-                                placeholder='{
-  "title": "Q4 Report",
-  "author": "Acme Inc",
-  "modified": "2024-01-01T00:00:00Z",
-  "custom": { "department": "Finance", "reviewed": true }
-}'></textarea>
+                            <div class="config-item">
+                                <span class="config-label">Author</span>
+                                <input type="text" id="cfg_meta_author" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Description</span>
+                                <input type="text" id="cfg_meta_description" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Subject</span>
+                                <input type="text" id="cfg_meta_subject" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Keywords</span>
+                                <input type="text" id="cfg_meta_keywords" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="comma, separated">
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Last Modified By</span>
+                                <input type="text" id="cfg_meta_lastModifiedBy" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Language</span>
+                                <input type="text" id="cfg_meta_language" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="en, de-DE">
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Created</span>
+                                <input type="text" id="cfg_meta_created" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="2024-01-01T00:00:00Z">
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Modified</span>
+                                <input type="text" id="cfg_meta_modified" class="btn btn-outline"
+                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="2024-01-01T00:00:00Z">
+                            </div>
+                    </div>
+                    <div class="config-item full-width" style="flex-direction: column; align-items: stretch; gap: 0.5rem; margin-top: 0.75rem;">
+                        <div style="font-size: 0.75rem; color: var(--text-dim); line-height: 1.5;">
+                            Applied <strong>per field</strong> on top of <code>ast.metadata</code> without mutating it.
+                            A blank field keeps the parsed value rather than blanking it. Setting <code>Modified</code>
+                            makes EPUB output byte-reproducible.
+                        </div>
+                        <div style="border-top: 1px solid var(--border); padding-top: 0.6rem;">
+                            <div style="font-size: 0.75rem; color: var(--text-dim); margin-bottom: 0.5rem; line-height: 1.5;">
+                                <code>custom</code> &mdash; any key/value pairs. Written where the format allows it
+                                (HTML <code>&lt;meta name="custom:KEY"&gt;</code>, Markdown frontmatter); EPUB and RTF
+                                have fixed metadata vocabularies and report a warning instead.
+                            </div>
+                            <div id="cfg_meta_custom_rows" style="display: flex; flex-direction: column; gap: 0.4rem;"></div>
+                            <button id="cfg_meta_custom_add" class="btn btn-outline"
+                                style="margin-top: 0.5rem; padding: 0.35rem 0.7rem; font-size: 0.75rem;">+ Add custom entry</button>
                         </div>
                     </div>
                 </div>
@@ -4564,31 +4608,81 @@
             // Config change detection for reparse button
             let lastConfigJson = "";
 
+            /** The named `MetadataOverrides` fields that are plain strings. */
+            const META_TEXT_FIELDS = ['title', 'author', 'description', 'subject', 'keywords', 'lastModifiedBy', 'language'];
+            /** The named fields typed as `Date`. */
+            const META_DATE_FIELDS = ['created', 'modified'];
+
             /**
-             * Reads `metadataOverrides` from its JSON textarea.
+             * Rows backing the open-ended `custom` map. Held as an array and re-rendered wholesale
+             * so adding and removing a row needs no index bookkeeping in the DOM.
+             */
+            window.metaCustomRows = [];
+
+            function persistMetaCustom() {
+                localStorage.setItem('cfg_meta_custom', JSON.stringify(window.metaCustomRows));
+            }
+
+            function renderMetaCustomRows() {
+                const host = document.getElementById('cfg_meta_custom_rows');
+                if (!host) return;
+                host.innerHTML = window.metaCustomRows.map((pair, i) => `
+                    <div style="display: flex; gap: 0.4rem; align-items: center;">
+                        <input type="text" class="btn btn-outline meta-custom-key" data-i="${i}"
+                            value="${String(pair.k || '').replace(/"/g, '&quot;')}" placeholder="key"
+                            style="padding: 0.35rem 0.5rem; font-size: 0.75rem; width: 150px;">
+                        <input type="text" class="btn btn-outline meta-custom-val" data-i="${i}"
+                            value="${String(pair.v || '').replace(/"/g, '&quot;')}" placeholder="value"
+                            style="padding: 0.35rem 0.5rem; font-size: 0.75rem; flex: 1; min-width: 150px;">
+                        <button class="btn btn-outline meta-custom-del" data-i="${i}" title="Remove"
+                            style="padding: 0.3rem 0.55rem; font-size: 0.75rem;">✕</button>
+                    </div>`).join('');
+                host.querySelectorAll('.meta-custom-key, .meta-custom-val').forEach(el => {
+                    el.addEventListener('input', e => {
+                        const t = e.target;
+                        window.metaCustomRows[+t.dataset.i][t.classList.contains('meta-custom-key') ? 'k' : 'v'] = t.value;
+                        persistMetaCustom();
+                        refreshMetadataDependentWindows();
+                    });
+                });
+                host.querySelectorAll('.meta-custom-del').forEach(el => el.addEventListener('click', e => {
+                    window.metaCustomRows.splice(+e.currentTarget.dataset.i, 1);
+                    persistMetaCustom();
+                    renderMetaCustomRows();
+                    refreshMetadataDependentWindows();
+                }));
+            }
+
+            /** Metadata reaches every format that embeds it, so refresh each open output window. */
+            function refreshMetadataDependentWindows() {
+                ['html', 'md', 'text', 'csv', 'rtf'].forEach(f => {
+                    if (document.getElementById('visual-' + f)) window.renderFormatWindow(f);
+                });
+            }
+
+            /**
+             * Builds `metadataOverrides` from the typed controls plus the `custom` rows.
              *
-             * A freeform textarea rather than a grid of inputs because the shape is open-ended:
-             * nine named fields plus a `custom` map with caller-chosen keys. That is the same
-             * problem `styleMap` has, and it is solved the same way here for consistency.
-             *
-             * `created`/`modified` are revived into real Dates, since JSON has no date type and
-             * the generators check `instanceof Date`. Invalid JSON yields `{}` rather than
-             * throwing, so a half-typed value cannot break the live preview on every keystroke.
+             * A blank field means "keep the parsed value", not "set it to empty" - the config
+             * merges per field, so sending '' would blank a title the document legitimately has.
+             * Dates are only sent once they parse, so a half-typed value cannot break the preview
+             * on every keystroke.
              */
             function getMetadataOverrides() {
-                const raw = (document.getElementById('cfg_metadataOverrides')?.value || '').trim();
-                if (!raw) return {};
-                let parsed;
-                try { parsed = JSON.parse(raw); } catch (e) { return {}; }
-                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-                ['created', 'modified'].forEach(f => {
-                    if (typeof parsed[f] === 'string' && !isNaN(new Date(parsed[f]).getTime())) {
-                        parsed[f] = new Date(parsed[f]);
-                    } else if (parsed[f] !== undefined && !(parsed[f] instanceof Date)) {
-                        delete parsed[f];
-                    }
+                const overrides = {};
+                META_TEXT_FIELDS.forEach(f => {
+                    const el = document.getElementById('cfg_meta_' + f);
+                    if (el && el.value.trim()) overrides[f] = el.value.trim();
                 });
-                return parsed;
+                META_DATE_FIELDS.forEach(f => {
+                    const el = document.getElementById('cfg_meta_' + f);
+                    const raw = el && el.value.trim();
+                    if (raw && !isNaN(new Date(raw).getTime())) overrides[f] = new Date(raw);
+                });
+                const custom = {};
+                (window.metaCustomRows || []).forEach(({ k, v }) => { if (k && k.trim()) custom[k.trim()] = v; });
+                if (Object.keys(custom).length > 0) overrides.custom = custom;
+                return overrides;
             }
 
             /**
@@ -5062,19 +5156,27 @@
                 window.renderFormatWindow('md');
             });
 
-            // Persist and re-render on edit, mirroring cfg_styleMap. Metadata reaches every
-            // format that embeds it, so every open output window is refreshed.
-            const metaTextarea = document.getElementById('cfg_metadataOverrides');
-            if (metaTextarea) {
-                const savedMeta = localStorage.getItem('cfg_metadataOverrides');
-                if (savedMeta !== null) metaTextarea.value = savedMeta;
-                metaTextarea.addEventListener('input', () => {
-                    localStorage.setItem('cfg_metadataOverrides', metaTextarea.value);
-                    ['html', 'md', 'text', 'csv', 'rtf'].forEach(f => {
-                        if (document.getElementById('visual-' + f)) window.renderFormatWindow(f);
-                    });
+            // Typed metadata controls: persisted individually and re-rendered on edit.
+            [...META_TEXT_FIELDS, ...META_DATE_FIELDS].map(f => 'cfg_meta_' + f).forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                const saved = localStorage.getItem(id);
+                if (saved !== null) el.value = saved;
+                el.addEventListener('input', () => {
+                    localStorage.setItem(id, el.value);
+                    refreshMetadataDependentWindows();
                 });
-            }
+            });
+
+            try { window.metaCustomRows = JSON.parse(localStorage.getItem('cfg_meta_custom') || '[]'); }
+            catch (e) { window.metaCustomRows = []; }
+            if (!Array.isArray(window.metaCustomRows)) window.metaCustomRows = [];
+            renderMetaCustomRows();
+            document.getElementById('cfg_meta_custom_add')?.addEventListener('click', () => {
+                window.metaCustomRows.push({ k: '', v: '' });
+                persistMetaCustom();
+                renderMetaCustomRows();
+            });
 
             const STANDALONE_POPOVER_IDS = ['cfg_html_standalone_document', 'cfg_html_standalone_metaTags', 'cfg_html_standalone_styles', 'cfg_html_standalone_scripts', 'cfg_html_standalone_headInjections', 'cfg_html_standalone_bodyInjections'];
 
