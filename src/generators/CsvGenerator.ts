@@ -239,9 +239,11 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
     /**
      * Renders metadata as comments.
      */
-    private renderMetadata(ast: OfficeParserAST, delimiter: string): string {
-        if (!ast.metadata) return '';
-        const m = ast.metadata;
+    private renderMetadata(_ast: OfficeParserAST, delimiter: string): string {
+        // Via effectiveMetadata rather than the passed AST so `metadataOverrides` applies here
+        // as it does in every other generator.
+        const m = this.effectiveMetadata;
+        if (!m || Object.keys(m).length === 0) return '';
         let output = '';
         if (m.title) output += `# Title: ${this.sanitizeComment(m.title, delimiter)}\n`;
         if (m.author) output += `# Author: ${this.sanitizeComment(m.author, delimiter)}\n`;

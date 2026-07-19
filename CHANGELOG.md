@@ -28,6 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Admonition source-syntax provenance**: `AdmonitionMetadata.sourceSyntax` (`'github' | 'gitlab'`)
   now records which concrete syntax produced the node, always populated by the parser - useful for
   round-trip-aware tooling that wants to preserve a document's original dialect on re-save.
+- **`GeneratorConfig.metadataOverrides`** sets the metadata embedded in generated output without
+  mutating the parsed AST. Named fields mirror `OfficeMetadata` (`title`, `author`, `description`,
+  `subject`, `keywords`, `lastModifiedBy`, `created`, `modified`, `language`) plus a `custom` bucket
+  for caller-defined key/value pairs; `custom` is kept separate from the named fields so a typo like
+  `titel` is a compile error rather than a silently-created custom entry. Merged **per field** over
+  `ast.metadata`, so overriding one field leaves the rest of the parsed metadata intact, and applied
+  uniformly across every generator that embeds metadata (HTML `<meta>`, EPUB OPF, Markdown
+  frontmatter, RTF `\info`, and the `renderMetadata` header in text/CSV).
+  - **`modified` is what makes generation reproducible.** EPUB embeds it as both the required
+    `dcterms:modified` property and each zip entry's mtime, so pinning it yields byte-identical
+    archives across runs. When unset it falls back to the source document's own
+    `ast.metadata.modified` before the current time, so most documents are now reproducible with no
+    configuration at all.
+  - EPUB's OPF and RTF's `\info` have fixed metadata vocabularies with no place for caller-defined
+    keys; those generators report unrepresentable `custom` entries through `onWarning`
+    (`OfficeWarningType.METADATA_NOT_REPRESENTABLE`) rather than dropping them silently.
 
 ### Fixed
 - **`.to('text')`/`.to('md')` silently stripped genuine document whitespace.** Both generators
@@ -42,6 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `preserveLayout`, or `.to('md')` under a dialect that forces tables to HTML, e.g. `commonmark`)
   would leak a spurious leading blank line, since the table renderer's own separator convention had
   nothing to separate from.
+- **EPUB generation was not reproducible.** Generating the same AST twice produced archives that
+  differed byte-for-byte, from two independent wall-clock sources: `dcterms:modified` in the OPF,
+  and the mtime `fflate` stamps onto every zip entry when none is supplied. The second source is
+  easy to miss, because DOS zip timestamps have two-second granularity - back-to-back generation
+  looks stable and only a longer gap reveals it. Both are now derived from a single resolved
+  instant (`metadataOverrides.modified`, else `ast.metadata.modified`, else now), and a date outside zip's
+  representable 1980-2099 window clamps instead of throwing. This also un-masks real diffs: while
+  every `gen.*.to.epub.epub` baseline churned on each run, genuine EPUB content changes were
+  indistinguishable from timestamp noise and got reverted along with it.
 - **`.to('text')` silently dropped chart data and CSV comments.** `TextGenerator` rendered only a
   node's children, so any node carrying its content in `text` with no children vanished entirely:
   `chart` nodes (ODP/ODS/PPTX/XLSX), whose whole data series lives in `text`, and CSV `comment`

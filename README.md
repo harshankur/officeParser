@@ -56,6 +56,7 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
   - [PdfGeneratorConfig](#pdfgeneratorconfig)
   - [CsvGeneratorConfig](#csvgeneratorconfig)
   - [TextGeneratorConfig](#textgeneratorconfig)
+  - [metadataOverrides](#metadataoverrides)
   - [OfficeConverterConfig](#officeconverterconfig)
   - [ChunkingConfig](#chunkingconfig)
 - [OCR Scheduler & Resource Management](#ocr-scheduler--resource-management)
@@ -908,6 +909,7 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 | `includeFormatting` | `boolean` | `true` | Include bold/italic/colors/sizes in output |
 | `generateIds` | `boolean` | `true` | Add slug-based `id` attributes to headings |
 | `renderMetadata` | `boolean` | `false` | Render title/author as visible header block |
+| `metadataOverrides` | `MetadataOverrides` | `{}` | Override the metadata embedded in the output, merged per field over `ast.metadata` |
 | `includeImages` | `boolean` | `true` | Include image nodes in output |
 | `includeCharts` | `boolean` | `true` | Include interactive charts (HTML only) |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal anchors from output |
@@ -1089,6 +1091,58 @@ Pass as `textConfig` inside `GeneratorConfig`.
 |--------|------|---------|-------------|
 | `newlineDelimiter` | `string` | `'\n'` | String inserted between structural blocks |
 | `preserveLayout` | `boolean` | `true` | Render tables with aligned columns using whitespace |
+| `renderNotes` | `boolean` | `true` | Append the collected footnote/endnote section |
+
+### metadataOverrides
+
+Part of the common `GeneratorConfig` (not format-specific). Overrides the metadata embedded in
+generated output, applied **per field** on top of `ast.metadata`, so setting one field leaves the
+rest of the parsed metadata intact. `ast.metadata` itself is never mutated, so the same AST can be
+generated repeatedly with different metadata.
+
+| Field | Type | Written as |
+|-------|------|-----------|
+| `title` | `string` | HTML `<title>`/`<meta>`, EPUB `dc:title`, Markdown frontmatter, RTF `\title` |
+| `author` | `string` | HTML `<meta name="author">`, EPUB `dc:creator`, frontmatter, RTF `\author` |
+| `description` | `string` | HTML `<meta name="description">`, EPUB `dc:description`, frontmatter |
+| `subject` / `keywords` / `lastModifiedBy` | `string` | Where the destination format has a slot |
+| `created` / `modified` | `Date` | HTML `dcterms.*`, EPUB `dcterms:modified`, frontmatter |
+| `language` | `string` | EPUB `dc:language` |
+| `custom` | `Record<string, string \| number \| boolean \| Date>` | HTML `<meta name="custom:KEY">`, Markdown frontmatter |
+
+```js
+// Rebrand the output without touching the parsed document
+const { value } = await ast.to('html', {
+    metadataOverrides: { title: 'Q4 Report', author: 'Acme Inc', custom: { department: 'Finance' } },
+});
+```
+
+#### Reproducible output
+
+`modified` is what makes generation deterministic. EPUB embeds it both as the required
+`dcterms:modified` property and as the mtime on every zip entry, so leaving it to default to the
+current time makes each generated archive differ byte-for-byte from the last even when the content
+is identical, which defeats content-addressed caching and makes a real content change
+indistinguishable from timestamp noise when diffing two artifacts:
+
+```js
+// Byte-identical on every run for the same AST
+const { value } = await ast.to('epub', {
+    metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') },
+});
+```
+
+When unset, officeParser uses the source document's own `ast.metadata.modified`, falling back to
+the current time only if the document has none. Dates outside the 1980-2099 range representable in
+a ZIP timestamp are clamped for entry mtimes.
+
+#### Not every format can represent every field
+
+HTML `<meta>` tags and Markdown frontmatter are open vocabularies and accept anything. EPUB's OPF
+is a closed Dublin Core vocabulary and RTF's `\info` group has a fixed set of control words, so a
+`custom` entry has nowhere to go in either. Rather than dropping it silently, those generators
+report it through `onWarning` (`OfficeWarningType.METADATA_NOT_REPRESENTABLE`) and continue; the
+named fields still apply.
 
 ---
 

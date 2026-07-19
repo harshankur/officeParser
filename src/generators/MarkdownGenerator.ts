@@ -163,22 +163,23 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         let output = '';
 
         // Add Metadata (YAML Front Matter)
-        if (this.ast.metadata) {
+        const meta = this.effectiveMetadata;
+        if (meta) {
             output += '---\n';
             // JSON-encode scalar values so a title/author/description containing a
             // quote or newline can't break out of the YAML string and inject
             // arbitrary front-matter keys. (JSON.stringify of a benign value yields
             // the same `"..."` form as before, so normal output is unchanged.)
-            if (this.ast.metadata.title) output += `title: ${JSON.stringify(this.ast.metadata.title)}\n`;
-            if (this.ast.metadata.author) output += `author: ${JSON.stringify(this.ast.metadata.author)}\n`;
-            const createdIso = this.toIsoDate(this.ast.metadata.created);
+            if (meta.title) output += `title: ${JSON.stringify(meta.title)}\n`;
+            if (meta.author) output += `author: ${JSON.stringify(meta.author)}\n`;
+            const createdIso = this.toIsoDate(meta.created);
             if (createdIso) output += `created: ${createdIso}\n`;
-            const modifiedIso = this.toIsoDate(this.ast.metadata.modified);
+            const modifiedIso = this.toIsoDate(meta.modified);
             if (modifiedIso) output += `modified: ${modifiedIso}\n`;
-            if (this.ast.metadata.description) output += `description: ${JSON.stringify(this.ast.metadata.description)}\n`;
+            if (meta.description) output += `description: ${JSON.stringify(meta.description)}\n`;
 
-            if (this.ast.metadata.customProperties) {
-                for (const [key, val] of Object.entries(this.ast.metadata.customProperties)) {
+            if (meta.customProperties) {
+                for (const [key, val] of Object.entries(meta.customProperties)) {
                     // Strip newlines/colons from the key so it can't inject a new mapping.
                     const safeKey = String(key).replace(/[\r\n:]+/g, ' ').trim();
                     output += `${safeKey}: ${Array.isArray(val) ? this.serializeFrontmatterArray(val) : JSON.stringify(val)}\n`;

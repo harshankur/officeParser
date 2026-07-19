@@ -28,10 +28,11 @@ export class TextGenerator extends BaseGenerator<'text'> {
         const newline = this.config.textConfig.newlineDelimiter;
 
         // Add Metadata Header
-        if (this.config.renderMetadata && this.ast.metadata) {
-            if (this.ast.metadata.title) output += `Title: ${this.ast.metadata.title}${newline}`;
-            if (this.ast.metadata.author) output += `Author: ${this.ast.metadata.author}${newline}`;
-            if (this.ast.metadata.created) output += `Created: ${new Date(this.ast.metadata.created).toLocaleString()}${newline}`;
+        const meta = this.effectiveMetadata;
+        if (this.config.renderMetadata && meta) {
+            if (meta.title) output += `Title: ${meta.title}${newline}`;
+            if (meta.author) output += `Author: ${meta.author}${newline}`;
+            if (meta.created) output += `Created: ${new Date(meta.created).toLocaleString()}${newline}`;
             output += `-------------------${newline}${newline}`;
         }
 

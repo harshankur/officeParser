@@ -18,6 +18,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { strFromU8, unzipSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
 import {
@@ -26,6 +27,7 @@ import {
     OfficeContentNode,
     OfficeContentNodeType,
     OfficeParserAST,
+    OfficeWarningType,
     OfficeParserConfig,
 } from '../../src/types';
 import { resolveGeneratorConfig } from '../../src/utils/configUtils.js';
@@ -77,6 +79,27 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     },
     htmlParserConfig: { preserveAttributes: false }
 };
+
+/**
+ * Fixed modification instant for every generation in this suite.
+ *
+ * EPUB embeds a timestamp in two places - `dcterms:modified` in the OPF, and each zip entry's
+ * mtime - and both default to the wall clock. Left unpinned, every `gen.*.to.epub.epub` baseline
+ * differs on each run even when nothing changed, so the real signal (a content regression) is
+ * indistinguishable from the noise and gets reverted along with it. Pinning makes the artifact
+ * reproducible, which is what lets a byte diff of these baselines mean something.
+ */
+const BASELINE_MODIFIED = new Date('2024-01-01T00:00:00Z');
+
+/**
+ * Applied only to EPUB generation. Other formats embed `ast.metadata.modified` straight from the
+ * fixture, which is already stable run to run, so pinning them too would rewrite their baselines
+ * with a synthetic date and make the snapshots less faithful to real output for no gain. EPUB is
+ * the one that needs it: fixtures without a modification date of their own (CSV, HTML) otherwise
+ * fall through to the current time, and the zip entry mtimes follow the same instant.
+ */
+const deterministicConfigFor = (destFmt: string): GeneratorConfig =>
+    (destFmt === 'epub' ? { metadataOverrides: { modified: BASELINE_MODIFIED } } : {}) as GeneratorConfig;
 
 /** Generator config permutations */
 const GENERATOR_CONFIG_TESTS = [
@@ -531,7 +554,7 @@ async function testGeneration(
     }
 
     try {
-        const result = await OfficeGenerator.generate(ast as any, destFmt as any);
+        const result = await OfficeGenerator.generate(ast as any, destFmt as any, deterministicConfigFor(destFmt) as any);
 
         // CSV generator returns a ZIP Uint8Array for multi-sheet sources.
         // Detect this and unpack the first CSV file for metric extraction.
@@ -1316,6 +1339,200 @@ async function runMarkdownDialectTests(): Promise<GenFeatureTest[]> {
 }
 
 /**
+ * Tests for `metadataOverrides`, the common-config way to set the metadata embedded in generated
+ * output without mutating the parsed AST.
+ *
+ * Covers the three properties that make it safe to use: it merges per field rather than replacing
+ * wholesale, it leaves `ast.metadata` untouched so one generation can't leak into the next, and it
+ * reaches every generator that embeds metadata rather than only the one it was built for.
+ */
+async function runMetadataOverrideTests(): Promise<GenFeatureTest[]> {
+    const results: GenFeatureTest[] = [];
+    const category = 'Metadata Overrides';
+    const mk = (destFormat: string, feature: string, exp: any, act: any, ok: boolean, details: string): GenFeatureTest => ({
+        category, feature, sourceFormat: 'synthetic', destFormat,
+        result: { status: ok ? 'PASS' : 'FAIL', expected: exp, actual: act, details, duration: 0 }
+    });
+
+    const parserConfig = { ...PARSER_CONFIG };
+    const sourceMeta = { title: 'Original Title', author: 'Original Author', description: 'Original Description' };
+    const content: OfficeContentNode[] = [
+        { type: 'paragraph', children: [{ type: 'text', text: 'Body' }] } as OfficeContentNode,
+    ];
+    const makeAst = () => createAST('docx', { ...sourceMeta }, content, [], parserConfig, undefined, () => 'Body');
+
+    // --- Per-field merge: overriding one field must not blank the others ---
+    const astMerge = makeAst();
+    const { value: mergedHtml } = await astMerge.to('html', {
+        metadataOverrides: { author: 'Override Author' },
+    } as any);
+    results.push(mk('html', 'overriding one field preserves the others',
+        'title "Original Title" kept, author replaced', String(mergedHtml).match(/<meta name="author"[^>]*>/)?.[0] ?? '(none)',
+        mergedHtml.includes('Original Title') && mergedHtml.includes('Override Author') && !mergedHtml.includes('Original Author'),
+        'a partial override that blanked unset fields would make it unusable for a single-field change like a pinned timestamp'));
+
+    // --- The AST must not be mutated: overrides are an output concern ---
+    const astPure = makeAst();
+    await astPure.to('html', { metadataOverrides: { title: 'Temporary' } } as any);
+    results.push(mk('html', 'ast.metadata is not mutated by an override',
+        sourceMeta.title, astPure.metadata?.title,
+        astPure.metadata?.title === sourceMeta.title,
+        'mutating the AST would leak one generation\'s metadata into every later use of the same AST'));
+
+    // A second generation with no overrides must see the original values again.
+    const { value: secondPass } = await astPure.to('html');
+    results.push(mk('html', 'a later generation is unaffected by an earlier override',
+        'Original Title', secondPass.includes('Original Title') ? 'Original Title' : '(missing)',
+        secondPass.includes('Original Title') && !secondPass.includes('Temporary'),
+        'the practical consequence of AST mutation, asserted directly'));
+
+    // --- Reaches every generator that embeds metadata ---
+    const overrides = { metadataOverrides: { title: 'Pinned Title', author: 'Pinned Author' } } as any;
+    const { value: mdOut } = await makeAst().to('md', overrides);
+    results.push(mk('md', 'override reaches YAML frontmatter',
+        'title: "Pinned Title"', mdOut.split('\n').find((l: string) => l.startsWith('title:')) ?? '(none)',
+        mdOut.includes('"Pinned Title"'),
+        'Markdown embeds metadata as frontmatter'));
+
+    const { value: rtfOut } = await makeAst().to('rtf', { ...overrides, renderMetadata: true });
+    results.push(mk('rtf', 'override reaches the \\info group',
+        '\\title Pinned Title', rtfOut.includes('Pinned Title') ? 'present' : '(missing)',
+        rtfOut.includes('Pinned Title'),
+        'RTF embeds metadata in \\info'));
+
+    const { value: textOut } = await makeAst().to('text', { ...overrides, renderMetadata: true });
+    results.push(mk('text', 'override reaches rendered metadata header',
+        'Title: Pinned Title', textOut.split('\n')[0],
+        textOut.includes('Pinned Title'),
+        'renderMetadata writes metadata as visible content; it must reflect overrides too'));
+
+    const epubBytes = (await makeAst().to('epub', overrides)).value as Uint8Array;
+    const opf = strFromU8(unzipSync(epubBytes)['OEBPS/content.opf']);
+    results.push(mk('epub', 'override reaches the OPF Dublin Core metadata',
+        '<dc:title>Pinned Title</dc:title>', opf.match(/<dc:title>[^<]*<\/dc:title>/)?.[0] ?? '(none)',
+        opf.includes('<dc:title>Pinned Title</dc:title>'),
+        'EPUB embeds metadata in the OPF package document'));
+
+    // --- language is representable in EPUB even though OfficeMetadata has no such field ---
+    const epubLang = (await makeAst().to('epub', { metadataOverrides: { language: 'de-DE' } } as any)).value as Uint8Array;
+    const langOpf = strFromU8(unzipSync(epubLang)['OEBPS/content.opf']);
+    results.push(mk('epub', 'language override reaches dc:language',
+        '<dc:language>de-DE</dc:language>', langOpf.match(/<dc:language>[^<]*<\/dc:language>/)?.[0] ?? '(none)',
+        langOpf.includes('<dc:language>de-DE</dc:language>'),
+        'language lives in nativeProperties rather than on OfficeMetadata; the override must still land'));
+
+    // --- custom entries: written where representable ---
+    const customCfg = { metadataOverrides: { custom: { department: 'Finance' } } } as any;
+    const { value: customHtml } = await makeAst().to('html', customCfg);
+    results.push(mk('html', 'custom entries are written as meta tags',
+        'custom:department', customHtml.match(/<meta name="custom:department"[^>]*>/)?.[0] ?? '(none)',
+        customHtml.includes('custom:department') && customHtml.includes('Finance'),
+        'HTML meta tags are an open vocabulary'));
+
+    // --- ...and reported, not silently dropped, where they are not ---
+    for (const [fmt, label] of [['epub', 'EPUB'], ['rtf', 'RTF']] as const) {
+        const warnings: any[] = [];
+        await makeAst().to(fmt as any, { ...customCfg, renderMetadata: true, onWarning: (w: any) => warnings.push(w) });
+        const warned = warnings.some(w => w.code === OfficeWarningType.METADATA_NOT_REPRESENTABLE);
+        results.push(mk(fmt, `unrepresentable custom entries warn instead of vanishing`,
+            'METADATA_NOT_REPRESENTABLE warning', warned ? 'warned' : `no such warning (got ${warnings.length})`,
+            warned,
+            `${label} has a fixed metadata vocabulary; a caller whose metadata silently never appears has no way to find out`));
+    }
+
+    // A caller who set no custom entries must not be warned at.
+    const quietWarnings: any[] = [];
+    await makeAst().to('epub', { metadataOverrides: { title: 'X' }, onWarning: (w: any) => quietWarnings.push(w) } as any);
+    results.push(mk('epub', 'named-only overrides produce no warning',
+        'no METADATA_NOT_REPRESENTABLE', quietWarnings.filter(w => w.code === OfficeWarningType.METADATA_NOT_REPRESENTABLE).length,
+        !quietWarnings.some(w => w.code === OfficeWarningType.METADATA_NOT_REPRESENTABLE),
+        'named fields map onto every metadata-bearing format, so warning about them would be noise'));
+
+    return results;
+}
+
+/**
+ * Regression tests for EPUB reproducibility.
+ *
+ * Generating the same AST twice used to produce archives that differed byte-for-byte, from two
+ * independent wall-clock sources: `dcterms:modified` in the OPF, and - less obviously - the mtime
+ * fflate stamps on every zip entry when none is supplied. Because DOS zip timestamps have
+ * two-second granularity, back-to-back generation *looks* stable, so these tests deliberately
+ * assert across a gap wider than that; a naive same-second test passes even when fully broken.
+ *
+ * This matters beyond tidiness: while the baselines churned on every run they were reverted
+ * wholesale during review, which meant a real EPUB content regression would have been thrown out
+ * with the noise.
+ */
+async function runEpubDeterminismTests(): Promise<GenFeatureTest[]> {
+    const results: GenFeatureTest[] = [];
+    const category = 'EPUB Determinism';
+    const mk = (feature: string, exp: any, act: any, ok: boolean, details: string): GenFeatureTest => ({
+        category, feature, sourceFormat: 'docx', destFormat: 'epub',
+        result: { status: ok ? 'PASS' : 'FAIL', expected: exp, actual: act, details, duration: 0 }
+    });
+    const bytesEqual = (a: Uint8Array, b: Uint8Array) =>
+        a.length === b.length && a.every((v, i) => v === b[i]);
+    /** Longer than the two-second DOS timestamp quantum, or the assertion proves nothing. */
+    const overOneZipTick = () => new Promise(r => setTimeout(r, 2500));
+
+    const srcPath = getSourcePath('docx');
+    if (!fs.existsSync(srcPath)) {
+        return [{
+            category, feature: 'byte-identical across runs', sourceFormat: 'docx', destFormat: 'epub',
+            result: { status: 'SKIP', expected: '', actual: '', details: 'no docx source file', duration: 0 }
+        }];
+    }
+    const ast = await OfficeParser.parseOffice(srcPath, PARSER_CONFIG);
+
+    // Explicitly pinned: the reproducible-build contract callers rely on.
+    const pinned = { metadataOverrides: { modified: BASELINE_MODIFIED } } as any;
+    const p1 = (await OfficeGenerator.generate(ast as any, 'epub', pinned)).value as Uint8Array;
+    await overOneZipTick();
+    const p2 = (await OfficeGenerator.generate(ast as any, 'epub', pinned)).value as Uint8Array;
+    results.push(mk('pinned metadataOverrides.modified is byte-identical across runs',
+        'identical bytes', bytesEqual(p1, p2) ? 'identical' : `differ (${p1.length} vs ${p2.length} bytes)`,
+        bytesEqual(p1, p2),
+        'an explicit modified timestamp must fully determine the archive, including zip entry mtimes'));
+
+    // Unpinned but the document carries its own modification date: must also be reproducible,
+    // since that is what every baseline regeneration relies on.
+    const d1 = (await OfficeGenerator.generate(ast as any, 'epub')).value as Uint8Array;
+    await overOneZipTick();
+    const d2 = (await OfficeGenerator.generate(ast as any, 'epub')).value as Uint8Array;
+    results.push(mk('ast.metadata.modified makes output reproducible without config',
+        'identical bytes', bytesEqual(d1, d2) ? 'identical' : `differ (${d1.length} vs ${d2.length} bytes)`,
+        bytesEqual(d1, d2),
+        'a document with its own modification date should not need generator config to be reproducible'));
+
+    // The pinned value must actually reach the OPF, not merely be accepted and ignored.
+    const opf = strFromU8(unzipSync(p1)['OEBPS/content.opf']);
+    const expectedIso = '2024-01-01T00:00:00Z';
+    results.push(mk('pinned timestamp is written to dcterms:modified',
+        expectedIso, opf.match(/dcterms:modified">([^<]*)</)?.[1] ?? '(absent)',
+        opf.includes(`<meta property="dcterms:modified">${expectedIso}</meta>`),
+        'EPUB 3 requires dcterms:modified; a config that silently failed to apply would still look deterministic'));
+
+    // A date outside zip's representable 1980-2099 window must clamp, not throw: fflate rejects
+    // it outright, and an epoch-zero mtime on a source document is an ordinary occurrence.
+    let outOfRangeOk = true;
+    let outOfRangeDetail = 'generated without throwing';
+    try {
+        const ancient = { metadataOverrides: { modified: new Date('1601-01-01T00:00:00Z') } } as any;
+        const bytes = (await OfficeGenerator.generate(ast as any, 'epub', ancient)).value as Uint8Array;
+        outOfRangeOk = bytes.length > 0;
+    } catch (err: any) {
+        outOfRangeOk = false;
+        outOfRangeDetail = `threw: ${err?.message}`;
+    }
+    results.push(mk('a pre-1980 modified date clamps instead of throwing',
+        'generates successfully', outOfRangeDetail, outOfRangeOk,
+        'zip DOS timestamps cannot represent dates outside 1980-2099 and fflate throws rather than clamping'));
+
+    return results;
+}
+
+/**
  * Regression tests for a reported bug: `.to('text')`/`.to('md')` stripped a document's genuine
  * leading whitespace via an unconditional `.trim()` on the whole accumulated output, while the
  * deprecated synchronous `.toText()` (each parser's hand-rolled toTextSync) never trimmed at all -
@@ -1568,6 +1785,18 @@ async function runAllTests(): Promise<void> {
     allResults.push(...whitespaceResults);
     console.log(whitespaceResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
 
+    // Metadata overrides (common generator config)
+    process.stdout.write('  metadata overrides...');
+    const metaResults = await runMetadataOverrideTests();
+    allResults.push(...metaResults);
+    console.log(metaResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
+
+    // EPUB reproducibility (deliberately slow: asserts across the 2s zip-timestamp quantum)
+    process.stdout.write('  epub determinism...');
+    const epubDetResults = await runEpubDeterminismTests();
+    allResults.push(...epubDetResults);
+    console.log(epubDetResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
+
     // 3. Report
     console.log('\n');
     const logger = new DualLogger();
@@ -1606,7 +1835,7 @@ async function generateBaselines(): Promise<void> {
             if (destFmt === 'rtf' && ['xlsx', 'ods', 'csv', 'pptx', 'odp'].includes(srcFmt)) continue;
 
             try {
-                const result = await OfficeGenerator.generate(ast as any, destFmt as any);
+                const result = await OfficeGenerator.generate(ast as any, destFmt as any, deterministicConfigFor(destFmt) as any);
                 let metrics: GeneratedMetrics;
                 if (result.value instanceof Uint8Array) {
                     // ZIP archive (multi-sheet CSV)

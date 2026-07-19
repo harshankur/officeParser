@@ -137,6 +137,7 @@ const DEFAULT_MD_GENERATOR_CONFIG: DeepRequired<MdGeneratorConfig> = {
     dialect: 'extended',
 };
 
+
 /**
  * Default configuration for plain text generation.
  */
@@ -212,6 +213,7 @@ export const DEFAULT_GENERATOR_CONFIG: FullGeneratorConfig = {
     includeFormatting: true,
     generateIds: true,
     renderMetadata: false,
+    metadataOverrides: {},
     ignoreDefaultStyleMap: false,
     includeImages: true,
     includeCharts: true,

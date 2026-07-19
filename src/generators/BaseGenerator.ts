@@ -1,4 +1,4 @@
-import { OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
+import { OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
 import { resolveGeneratorConfig } from '../utils/configUtils.js';
 import { getWarningMessage } from '../utils/errorUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
@@ -18,6 +18,59 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         this.config = resolveGeneratorConfig(destination, ast.config, config);
         this.ast = ast;
         this.styleMapper = new StyleMapper(this.config.styleMap, this.config.ignoreDefaultStyleMap);
+    }
+
+    /**
+     * The document metadata a generator should write out: `ast.metadata` with
+     * `config.metadataOverrides` applied on top, per field.
+     *
+     * Every generator must read metadata through here rather than touching `this.ast.metadata`
+     * directly, so an override reaches all of them uniformly instead of one format at a time.
+     *
+     * Merged rather than replaced, so overriding one field doesn't blank the rest, and computed
+     * fresh rather than cached on the AST: overrides are an output concern, and mutating
+     * `ast.metadata` would leak one generation's settings into the next use of the same AST.
+     * `custom` merges into `customProperties` so callers see one bucket regardless of origin.
+     */
+    protected get effectiveMetadata(): OfficeMetadata {
+        const base = this.ast.metadata || {};
+        const overrides = this.config.metadataOverrides;
+        if (!overrides) return base;
+
+        const { custom, language, ...named } = overrides;
+        const merged: OfficeMetadata = { ...base };
+        // Assign only the fields actually supplied - spreading `named` wholesale would write
+        // `undefined` over parsed values for every field the caller left out.
+        for (const [key, value] of Object.entries(named)) {
+            if (value !== undefined) (merged as any)[key] = value;
+        }
+        // `language` has no slot on OfficeMetadata; parsers already surface it through
+        // nativeProperties, so an override belongs in the same place rather than widening the
+        // parser-side type for a generator concern. Generators reading `nativeProperties.language`
+        // then pick it up with no change.
+        if (language !== undefined) {
+            merged.nativeProperties = { ...(base.nativeProperties || {}), language };
+        }
+        if (custom && Object.keys(custom).length > 0) {
+            merged.customProperties = { ...(base.customProperties || {}), ...custom };
+        }
+        return merged;
+    }
+
+    /**
+     * Reports caller-supplied `metadataOverrides.custom` entries that the destination format has
+     * no way to represent (EPUB's OPF and RTF's `\info` both have fixed vocabularies).
+     *
+     * Warning rather than dropping silently: a caller who sets metadata and never sees it in the
+     * output otherwise has no way to find out. Only `custom` keys are reported - the named fields
+     * map onto something in every format that carries metadata at all.
+     */
+    protected warnUnrepresentableCustomMetadata(format: string): void {
+        const custom = this.config.metadataOverrides?.custom;
+        if (!custom) return;
+        const keys = Object.keys(custom);
+        if (keys.length === 0) return;
+        this.warn(OfficeWarningType.METADATA_NOT_REPRESENTABLE, { keys, format });
     }
 
     /**

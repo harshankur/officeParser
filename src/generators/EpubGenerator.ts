@@ -143,6 +143,56 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
         super('epub', ast, config);
     }
 
+    /**
+     * Resolves the modification instant used for both the EPUB 3 `dcterms:modified` property
+     * (which the specification requires) and every zip entry's mtime.
+     *
+     * Takes the value from `effectiveMetadata`, i.e. `metadataOverrides.modified` if the caller
+     * set one, otherwise the source document's own `metadata.modified`, and only falls back to
+     * the current time when neither exists. That last fallback is the sole non-reproducible
+     * option, so it is the last resort rather than the default.
+     *
+     * **Both outputs matter for reproducibility.** `dcterms:modified` is the visible one, but
+     * `zipSync` defaults each entry's mtime to `Date.now()`, so pinning only the OPF still
+     * yields archives that differ byte-for-byte on every run. That second source is easy to
+     * miss because DOS zip timestamps have two-second granularity - back-to-back generation
+     * looks stable and only a gap longer than that reveals it.
+     *
+     * `iso` is `YYYY-MM-DDThh:mm:ssZ` (UTC, whole seconds) as EPUB requires; `toISOString()`
+     * emits milliseconds, so they are stripped.
+     */
+    private resolveModified(): { iso: string; mtime: Date } {
+        const raw: unknown = this.effectiveMetadata.modified;
+        let resolved: Date | null = null;
+        if (raw instanceof Date && !isNaN(raw.getTime())) {
+            resolved = raw;
+        } else if (typeof raw === 'string' && raw !== '') {
+            // A parser may hand back a date-like string rather than a Date.
+            const parsed = new Date(raw);
+            if (!isNaN(parsed.getTime())) resolved = parsed;
+        }
+        resolved ??= new Date();
+
+        return {
+            iso: resolved.toISOString().replace(/\.\d+Z$/, 'Z'),
+            mtime: this.clampToZipRange(resolved),
+        };
+    }
+
+    /**
+     * Zip's DOS timestamp field cannot represent dates outside 1980-2099, and fflate throws
+     * rather than clamping. A document legitimately carrying a date outside that window (an
+     * unset/epoch-zero mtime is the common case) must not take EPUB generation down with it.
+     */
+    private clampToZipRange(date: Date): Date {
+        const MIN = Date.UTC(1980, 0, 1);
+        const MAX = Date.UTC(2099, 11, 31, 23, 59, 59);
+        const t = date.getTime();
+        if (t < MIN) return new Date(MIN);
+        if (t > MAX) return new Date(MAX);
+        return date;
+    }
+
     async generate(): Promise<ConversionResult<'epub'>> {
         const htmlGenerator = new HtmlGenerator(this.ast, {
             ...this.config,
@@ -182,13 +232,18 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
 
         const xhtmlBody = toXhtml(bodyHtml);
 
-        const title = this.ast.metadata?.title || 'Untitled';
-        const author = this.ast.metadata?.author;
-        const description = this.ast.metadata?.description;
-        const nativeProps = (this.ast.metadata?.nativeProperties || {}) as Record<string, any>;
+        // Via effectiveMetadata so `metadataOverrides` applies here as it does everywhere else.
+        const meta = this.effectiveMetadata;
+        const title = meta.title || 'Untitled';
+        const author = meta.author;
+        const description = meta.description;
+        const nativeProps = (meta.nativeProperties || {}) as Record<string, any>;
         const language = nativeProps.language || 'en';
+        // OPF metadata is a closed Dublin Core vocabulary: a caller-defined key has no valid
+        // element to live in, and inventing one risks failing EPUB validation outright.
+        this.warnUnrepresentableCustomMetadata('EPUB');
         const identifier = nativeProps.identifier || `urn:x-officeparser:${this.slugify(title)}-${xhtmlBody.length}`;
-        const modified = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+        const { iso: modified, mtime } = this.resolveModified();
 
         const chapterXhtml = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
@@ -258,7 +313,9 @@ ${xhtmlBody}
         };
 
         return {
-            value: zipSync(zipFiles),
+            // An explicit mtime is what makes the archive reproducible; fflate would otherwise
+            // stamp every entry with Date.now(). See resolveModified().
+            value: zipSync(zipFiles, { mtime }),
             messages: this.messages,
         };
     }

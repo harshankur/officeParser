@@ -329,7 +329,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const sa = resolveStandalone(this.config.htmlConfig.standalone);
 
         if (sa.document && sa.metaTags) {
-            title = this.ast.metadata?.title || 'Document';
+            title = this.effectiveMetadata.title || 'Document';
             metaTags = this.renderMetaTags();
         }
 
@@ -386,7 +386,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
     private renderMetaTags(): string {
         if (!this.ast?.metadata) return '';
-        const m = this.ast.metadata;
+        const m = this.effectiveMetadata;
         const tags: string[] = [];
         if (m.author) tags.push(`<meta name="author" content="${this.escape(m.author)}">`);
         if (m.description) tags.push(`<meta name="description" content="${this.escape(m.description)}">`);
@@ -406,7 +406,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
     private renderMetadataSummary(): string {
         if (!this.ast?.metadata) return '';
-        const m = this.ast.metadata;
+        const m = this.effectiveMetadata;
 
         let customPropsHtml = '';
         if (m.customProperties && Object.keys(m.customProperties).length > 0) {

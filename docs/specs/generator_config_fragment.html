@@ -37,6 +37,14 @@
                     a visible header block.</td>
             </tr>
             <tr>
+                <td><code>metadataOverrides</code></td>
+                <td><code>MetadataOverrides</code></td>
+                <td><code>{}</code></td>
+                <td><strong>Output Metadata</strong>: Overrides the metadata embedded in the generated file, merged per
+                    field over <code>ast.metadata</code> without mutating it. Set <code>modified</code> here to make
+                    generation reproducible &mdash; see the section below.</td>
+            </tr>
+            <tr>
                 <td><code>includeImages</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
@@ -413,8 +421,85 @@
                 <td><code>true</code></td>
                 <td>Attempts to align table columns using spaces.</td>
             </tr>
+            <tr>
+                <td><code>renderNotes</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Appends the collected footnote/endnote section to the output.</td>
+            </tr>
         </tbody>
     </table>
+
+    <h3>metadataOverrides <span style="font-weight:normal">(common config, not format-specific)</span></h3>
+    <p>Overrides the metadata embedded in generated output, applied <strong>per field</strong> on top of
+        <code>ast.metadata</code>, so setting one field leaves the rest of the parsed metadata intact.
+        <code>ast.metadata</code> itself is never mutated, so the same AST can be generated repeatedly with different
+        metadata.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Field</th>
+                <th>Type</th>
+                <th>Written as</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>title</code></td>
+                <td><code>string</code></td>
+                <td>HTML <code>&lt;title&gt;</code>, EPUB <code>dc:title</code>, Markdown frontmatter, RTF
+                    <code>\title</code></td>
+            </tr>
+            <tr>
+                <td><code>author</code></td>
+                <td><code>string</code></td>
+                <td>HTML <code>&lt;meta name="author"&gt;</code>, EPUB <code>dc:creator</code>, frontmatter, RTF
+                    <code>\author</code></td>
+            </tr>
+            <tr>
+                <td><code>description</code>, <code>subject</code>, <code>keywords</code>,
+                    <code>lastModifiedBy</code></td>
+                <td><code>string</code></td>
+                <td>Wherever the destination format has a slot for it</td>
+            </tr>
+            <tr>
+                <td><code>created</code>, <code>modified</code></td>
+                <td><code>Date</code></td>
+                <td>HTML <code>dcterms.*</code>, EPUB <code>dcterms:modified</code>, frontmatter</td>
+            </tr>
+            <tr>
+                <td><code>language</code></td>
+                <td><code>string</code></td>
+                <td>EPUB <code>dc:language</code></td>
+            </tr>
+            <tr>
+                <td><code>custom</code></td>
+                <td><code>Record&lt;string, string | number | boolean | Date&gt;</code></td>
+                <td>HTML <code>&lt;meta name="custom:KEY"&gt;</code>, Markdown frontmatter</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h4>Reproducible output</h4>
+    <p><code>modified</code> is what makes generation deterministic. EPUB embeds it both as the required
+        <code>dcterms:modified</code> property and as the mtime on every zip entry, so leaving it to default to the
+        current time makes each generated archive differ byte-for-byte from the last even when the content is
+        identical &mdash; which defeats content-addressed caching and makes a real content change indistinguishable
+        from timestamp noise when diffing two artifacts.</p>
+    <pre><code>// Byte-identical on every run for the same AST
+const { value } = await ast.to('epub', {
+    metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') },
+});</code></pre>
+    <p>When unset, officeParser uses the source document's own <code>ast.metadata.modified</code>, falling back to the
+        current time only if the document has none. Dates outside the 1980&ndash;2099 range a ZIP timestamp can
+        represent are clamped for entry mtimes.</p>
+
+    <h4>Not every format can represent every field</h4>
+    <p>HTML <code>&lt;meta&gt;</code> tags and Markdown frontmatter are open vocabularies and accept anything. EPUB's
+        OPF is a closed Dublin Core vocabulary and RTF's <code>\info</code> group has a fixed set of control words, so
+        a <code>custom</code> entry has nowhere to go in either. Rather than dropping it silently, those generators
+        report it through <code>onWarning</code> (<code>OfficeWarningType.METADATA_NOT_REPRESENTABLE</code>) and
+        continue; the named fields still apply.</p>
 
     <h2>Style Mapping (The Semantic Bridge)</h2>
     <p>Style mapping allows you to define the <strong>semantic meaning</strong> of arbitrary document styles.</p>

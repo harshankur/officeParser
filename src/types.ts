@@ -83,7 +83,9 @@ export enum OfficeWarningType {
     /** A node was skipped because it only contained whitespace */
     WHITESPACE_NODE_SKIPPED = 'WHITESPACE_NODE_SKIPPED',
     /** The HTML generator containerWidth option is invalid */
-    INVALID_CONTAINER_WIDTH = 'INVALID_CONTAINER_WIDTH'
+    INVALID_CONTAINER_WIDTH = 'INVALID_CONTAINER_WIDTH',
+    /** A metadata override could not be represented in the destination format's vocabulary */
+    METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE'
 }
 
 /**
@@ -483,6 +485,58 @@ export type SupportedDestination<_T extends SupportedFileType = SupportedFileTyp
 /**
  * Common configuration options for all generators.
  */
+/**
+ * Per-field overrides for the metadata written into generated output.
+ *
+ * Field names mirror `OfficeMetadata` so the same vocabulary describes what was parsed and what
+ * gets written. Only the fields generators can actually represent are listed; arbitrary
+ * caller-defined entries go in `custom`.
+ *
+ * **Not every format can represent every field.** HTML (`<meta>`) and Markdown (YAML frontmatter)
+ * accept anything; EPUB's OPF is a closed Dublin Core vocabulary and RTF's `\info` group has a
+ * fixed set of control words, so a `custom` entry has nowhere to go in those. Rather than
+ * silently dropping it, generators report the loss through `onWarning`
+ * (`OfficeWarningType.MetadataNotRepresentable`) and continue.
+ */
+export interface MetadataOverrides {
+    /** Document title. */
+    title?: string;
+    /** Document author. */
+    author?: string;
+    /** Description/comments. */
+    description?: string;
+    /** Subject/topic. */
+    subject?: string;
+    /** Keywords. */
+    keywords?: string;
+    /** User who last modified the document. */
+    lastModifiedBy?: string;
+    /** Creation date. */
+    created?: Date;
+    /**
+     * Last modification date.
+     *
+     * Beyond the obvious use, this is the field that makes output **reproducible**: EPUB embeds it
+     * both as the required `dcterms:modified` property and as the mtime on every zip entry, so
+     * leaving it to default to the current time makes each generated archive differ byte-for-byte
+     * from the last even when the content is identical.
+     */
+    modified?: Date;
+    /**
+     * Language tag (e.g. `'en'`, `'de-DE'`). Written as EPUB `dc:language` and HTML `lang`.
+     */
+    language?: string;
+    /**
+     * Arbitrary caller-defined key/value pairs, kept in their own bucket rather than mixed in
+     * beside the named fields above: with a bare index signature a typo like `titel` would
+     * silently become a custom entry instead of a compile error.
+     *
+     * Written where the format allows it (HTML `<meta name="custom:KEY">`, Markdown frontmatter);
+     * reported via `onWarning` where it does not (EPUB, RTF).
+     */
+    custom?: Record<string, string | number | boolean | Date>;
+}
+
 export interface CommonGeneratorConfig {
     /**
      * Callback called for every node during generation.
@@ -551,6 +605,29 @@ export interface CommonGeneratorConfig {
      * Defaults to false.
      */
     renderMetadata?: boolean;
+    /**
+     * Overrides for the document metadata written into the generated output, applied on top of
+     * `ast.metadata`.
+     *
+     * Merged **per field**, so setting only `modified` leaves the parsed title, author, and
+     * everything else intact. Every field is optional; an omitted field keeps the source
+     * document's value.
+     *
+     * These are output overrides only - `ast.metadata` itself is never mutated, so the same AST
+     * can be generated repeatedly with different metadata.
+     *
+     * @example Reproducible builds - pin the timestamp so output is byte-identical across runs
+     * ```typescript
+     * await ast.to('epub', { metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') } });
+     * ```
+     * @example Rebrand the output without touching the parsed document
+     * ```typescript
+     * await ast.to('html', {
+     *     metadataOverrides: { title: 'Q4 Report', author: 'Acme Inc', custom: { department: 'Finance' } },
+     * });
+     * ```
+     */
+    metadataOverrides?: MetadataOverrides;
     /**
      * Whether to ignore the built-in default style mappings (e.g. "Heading 1" -> h1).
      * Set to true if you want full control over style mapping.
@@ -668,7 +745,7 @@ export type DeepRequired<T> = T extends Function | Date | Buffer | RegExp
  * `chunksConfig` is typed as `ChunkingConfig` directly (not DeepRequired) because
  * it is a discriminated union whose members cannot be uniformly deep-required.
  */
-export type FullGeneratorConfig = DeepRequired<CommonGeneratorConfig & {
+export type FullGeneratorConfig = DeepRequired<Omit<CommonGeneratorConfig, 'metadataOverrides'> & {
     htmlConfig: HtmlGeneratorConfig;
     mdConfig: MdGeneratorConfig;
     pdfConfig: PdfGeneratorConfig;
@@ -677,6 +754,9 @@ export type FullGeneratorConfig = DeepRequired<CommonGeneratorConfig & {
     rtfConfig: RtfGeneratorConfig;
 }> & {
     chunksConfig: ChunkingConfig;
+    // Deliberately not DeepRequired: every field is meant to stay optional, since the whole
+    // point is overriding individual fields without having to supply the rest.
+    metadataOverrides: MetadataOverrides;
 };
 
 
@@ -906,6 +986,7 @@ export interface StructuredStyleMapping {
 export interface RtfGeneratorConfig {
     // Reserved for future RTF-specific options like page size or font embedding
 }
+
 
 /**
  * Configuration options for CSV generation.

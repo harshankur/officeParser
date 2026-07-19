@@ -7,6 +7,7 @@
  * CSS, a CSV formula, a Markdown link, an RTF group) in the generated output.
  */
 import * as assert from 'assert';
+import { strFromU8, unzipSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParserAST } from '../../src/types';
 import {
@@ -225,6 +226,80 @@ async function htmlAttributeBagTests() {
     }
 }
 
+/**
+ * `metadataOverrides` is the first path where a caller supplies metadata *keys*, not just values.
+ * Every prior metadata key came from a fixed vocabulary in our own code, so the key side was never
+ * an injection surface; `custom` makes it one. Both halves need escaping in every destination.
+ */
+async function metadataOverrideTests() {
+    console.log('- metadataOverrides (keys and values)...');
+
+    const ast = astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'Body' }] }]);
+    const hostileKey = 'x"><script>alert(1)</script><meta name="y';
+    const hostileValue = '"><script>alert(2)</script>';
+
+    // HTML: both key and value land inside a double-quoted attribute.
+    const { value: html } = await OfficeGenerator.generate(ast, 'html', {
+        metadataOverrides: { title: hostileValue, custom: { [hostileKey]: hostileValue } },
+    } as any);
+    check('html: injected key cannot open a tag', !/<script>alert\(1\)/.test(html as string),
+        'custom metadata key escaped out of the meta attribute');
+    check('html: injected value cannot open a tag', !/<script>alert\(2\)/.test(html as string),
+        'metadata value escaped out of the meta attribute');
+
+    // EPUB renders through the same HTML path and then into XML, where an unescaped value is
+    // not merely an injection but makes the whole package fail to parse.
+    const epub = (await OfficeGenerator.generate(ast, 'epub', {
+        metadataOverrides: { title: hostileValue },
+    } as any)).value as Uint8Array;
+    const opf = strFromU8(unzipSync(epub)['OEBPS/content.opf']);
+    check('epub: hostile title is escaped in the OPF', !opf.includes('<script>'),
+        'raw markup reached the OPF package document');
+    check('epub: OPF remains well-formed XML', !/<dc:title>[^<]*[<>][^<]*<\/dc:title>/.test(
+        opf.replace(/<dc:title>|<\/dc:title>/g, m => m)) || opf.includes('&lt;'),
+        'unescaped angle bracket inside dc:title');
+
+    // Markdown frontmatter: a value containing a newline could otherwise close the `---` block
+    // early and inject document content, or forge additional frontmatter keys.
+    const { value: md } = await OfficeGenerator.generate(ast, 'md', {
+        metadataOverrides: { title: 'a\n---\ninjected: true' },
+    } as any);
+    const frontmatter = String(md).split('---')[1] ?? '';
+    check('md: newline in a metadata value cannot forge frontmatter keys',
+        !/^injected:/m.test(frontmatter), 'value broke out of the frontmatter block');
+
+    // CSV renders metadata as comments; a delimiter or newline must not fabricate rows/columns.
+    // Needs a sheet-bearing AST: a paragraph-only document produces no CSV at all, so asserting
+    // against it would pass without ever exercising the metadata path.
+    const sheetAst = astWith([
+        { type: 'sheet', metadata: { sheetName: 'S1' }, children: [
+            { type: 'row', children: [{ type: 'cell', children: [{ type: 'text', text: 'a' }] }] }
+        ] } as any
+    ]);
+    const { value: csv } = await OfficeGenerator.generate(sheetAst, 'csv', {
+        renderMetadata: true,
+        metadataOverrides: { title: 'a,b\n=cmd|calc', custom: { 'k\n=HYPERLINK(1)': 'v' } },
+    } as any);
+    const csvText = typeof csv === 'string' ? csv : '';
+    check('csv: metadata override is actually rendered', csvText.includes('# Title:'),
+        `metadata comments absent, so the checks below would be vacuous: ${JSON.stringify(csvText.slice(0, 80))}`);
+    check('csv: metadata comment cannot spawn a new line',
+        !csvText.split('\n').some(l => l.trim().startsWith('=')),
+        'a formula escaped onto its own line from a metadata comment');
+    check('csv: every metadata line stays a comment',
+        csvText.split('\n').filter(l => l.trim() !== '').slice(0, 3).every(l => l.startsWith('#') || l === 'a'),
+        'a newline in a metadata value broke out of the comment prefix');
+
+    // RTF: a brace or backslash in a value would otherwise close the \info group early.
+    const { value: rtf } = await OfficeGenerator.generate(ast, 'rtf', {
+        renderMetadata: true,
+        metadataOverrides: { title: '}\\b evil{' },
+    } as any);
+    const info = String(rtf).slice(String(rtf).indexOf('{\\info'));
+    check('rtf: braces in a metadata value are escaped',
+        info.includes('\\}') || info.includes('\\{'), 'unescaped brace inside the \\info group');
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
@@ -232,6 +307,7 @@ async function main() {
     await htmlAttributeBagTests();
     await markdownTests();
     await csvTests();
+    await metadataOverrideTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

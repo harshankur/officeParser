@@ -22,11 +22,14 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         let output = '{\\rtf1\\ansi\\uc1\\deff0\n';
 
         // 1. Info Group (Metadata)
-        if (this.config.renderMetadata && this.ast.metadata) {
+        const meta = this.effectiveMetadata;
+        if (this.config.renderMetadata && meta) {
+            // RTF's \info group is a fixed set of control words with no slot for caller-defined keys.
+            this.warnUnrepresentableCustomMetadata('RTF');
             output += '{\\info';
-            if (this.ast.metadata.title) output += `{\\title ${this.escapeRtf(this.ast.metadata.title)}}`;
-            if (this.ast.metadata.author) output += `{\\author ${this.escapeRtf(this.ast.metadata.author)}}`;
-            if (this.ast.metadata.description) output += `{\\comm ${this.escapeRtf(this.ast.metadata.description)}}`;
+            if (meta.title) output += `{\\title ${this.escapeRtf(meta.title)}}`;
+            if (meta.author) output += `{\\author ${this.escapeRtf(meta.author)}}`;
+            if (meta.description) output += `{\\comm ${this.escapeRtf(meta.description)}}`;
             output += '}\n';
         }
 
