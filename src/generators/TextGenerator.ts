@@ -1,6 +1,8 @@
 import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
+const escapeRegExpChars = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
  * Generates plain text from an AST.
  */
@@ -87,8 +89,20 @@ export class TextGenerator extends BaseGenerator<'text'> {
             }
         }
 
+        // Every block-level node above unconditionally appends its own trailing `newline` as a
+        // separator from whatever sibling follows - including, unavoidably, the very last one,
+        // which has no sibling to separate from - and renderTable below unconditionally *prepends*
+        // one too, as a separator from whatever precedes it (also unavoidably applied when a table
+        // is the very first/only node). Both are pure generator artifacts, never part of the
+        // document's actual content, so a run of exactly this delimiter at either end is the only
+        // thing safe to strip. Nothing else is: not leading/trailing spaces or tabs (e.g. an
+        // intentionally-indented opening line, or trailing spaces on the last line - both real
+        // content), and not any whitespace that isn't composed of this exact repeated delimiter. A
+        // blanket trim()/trimEnd() would silently destroy all of those.
+        const d = escapeRegExpChars(newline);
+        const leadingOrTrailingArtifact = new RegExp(`^(?:${d})+|(?:${d})+$`, 'g');
         return {
-            value: output.trim(),
+            value: output.replace(leadingOrTrailingArtifact, ''),
             messages: this.messages
         };
     }

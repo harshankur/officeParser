@@ -468,7 +468,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // Builds an admonition node from its raw body text, splitting on blank lines into
     // paragraph children. v1 only supports inline content inside admonitions (no nested
     // lists/headings/code) - acceptable per the roadmap's first cut.
-    const buildAdmonitionNode = (admonitionType: AdmonitionMetadata['admonitionType'], body: string): OfficeContentNode => {
+    const buildAdmonitionNode = (admonitionType: AdmonitionMetadata['admonitionType'], body: string, sourceSyntax: 'github' | 'gitlab'): OfficeContentNode => {
         const paragraphs = body.split(/\n\n+/).map(p => p.trim()).filter(Boolean);
         const children: OfficeContentNode[] = paragraphs.map(p => ({
             type: 'paragraph',
@@ -476,7 +476,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }));
         return {
             type: 'admonition',
-            metadata: { admonitionType } as AdmonitionMetadata,
+            metadata: { admonitionType, sourceSyntax } as AdmonitionMetadata,
             children
         };
     };
@@ -621,7 +621,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         const admonitionBlockMatch = block.match(/^__ADMONITION_(\d+)__$/);
         if (admonitionBlockMatch) {
             const data = JSON.parse(admonitionBlocks[parseInt(admonitionBlockMatch[1])]);
-            content.push(buildAdmonitionNode(data.admonitionType, data.body));
+            content.push(buildAdmonitionNode(data.admonitionType, data.body, 'gitlab'));
             continue;
         }
 
@@ -713,7 +713,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const admonitionHeaderMatch = dequoted.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*\n?([\s\S]*)$/i);
             if (admonitionHeaderMatch) {
                 const admonitionType = admonitionHeaderMatch[1].toLowerCase() as AdmonitionMetadata['admonitionType'];
-                content.push(buildAdmonitionNode(admonitionType, admonitionHeaderMatch[2]));
+                content.push(buildAdmonitionNode(admonitionType, admonitionHeaderMatch[2], 'github'));
                 continue;
             }
 

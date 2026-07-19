@@ -4,6 +4,45 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.4.0] - 2026-07-16
+### Added
+- **Markdown output dialect**: `MdGeneratorConfig.dialect` targets a specific real-world Markdown
+  flavor - `'github'`, `'gitlab'`, `'obsidian'`, `'pandoc'`, strict `'commonmark'`, or officeParser's
+  own kitchen-sink `'extended'` (the default, byte-identical to this library's prior output). Each
+  preset picks the right native syntax per feature: admonitions (`> [!NOTE]` on GitHub/Obsidian,
+  `:::note` on GitLab, `::: {.note}` on Pandoc, plain blockquote elsewhere), definition lists,
+  footnotes, citations, wikilinks, math delimiters, attribute lists, strikethrough, and forces HTML
+  `<table>` under `commonmark` (which has no native table syntax). Pass an object instead of a
+  preset name for granular control over any of the above, or to override bullet/ordered-list
+  markers and emphasis style (`*`/`_`) independently of dialect - see `MarkdownDialectConfig`.
+- **`MdGeneratorConfig.fallbackToHtml` now also accepts a `FallbackToHtmlConfig` object**, splitting
+  the single flag into independently-controllable parts: text formatting (underline/sub/sup),
+  alignment, anchors, tables (nested/merged-cell), embeds, and cell line breaks. The boolean form is
+  unchanged and still applies uniformly to every part.
+- **Footnotes now degrade gracefully when disabled** (`dialect: { footnotes: false }`, or under the
+  `commonmark` preset): instead of the `[^id]` syntax, note content is inlined as a parenthetical
+  right at the reference point, so it's never silently dropped.
+- **Per-input-format parser configuration** (`OfficeParserConfig.mdParserConfig`), mirroring the
+  generator side's existing per-destination-format config sub-objects. Currently reserved for
+  future use.
+- **Admonition source-syntax provenance**: `AdmonitionMetadata.sourceSyntax` (`'github' | 'gitlab'`)
+  now records which concrete syntax produced the node, always populated by the parser - useful for
+  round-trip-aware tooling that wants to preserve a document's original dialect on re-save.
+
+### Fixed
+- **`.to('text')`/`.to('md')` silently stripped genuine document whitespace.** Both generators
+  unconditionally called `.trim()` on the entire accumulated output before returning, which not
+  only cleaned up the generator's own trailing-newline join artifacts (its original purpose) but
+  also destroyed real content: an intentionally-indented opening line, or trailing spaces on the
+  document's last line. This meant migrating from the deprecated synchronous `ast.toText()` (which
+  never trimmed) to its documented replacement `ast.to('text')` could silently change output.
+  Fixed by stripping only a run of the exact block-separator sequence at either end - the one
+  demonstrable generator artifact - and nothing else. This also fixed a related, previously-latent
+  leading-newline artifact: a document consisting of only a table (`.to('text')` with
+  `preserveLayout`, or `.to('md')` under a dialect that forces tables to HTML, e.g. `commonmark`)
+  would leak a spurious leading blank line, since the table renderer's own separator convention had
+  nothing to separate from.
+
 ## [7.3.1] - 2026-07-14
 ### Fixed
 - Nested-list item numbering could leak across siblings (a second top-level item's nested children could continue a previous sibling's child numbering instead of restarting at 0).

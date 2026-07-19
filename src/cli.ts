@@ -325,6 +325,8 @@ if (fileArg && !showHelp) {
     console.log('Advanced Nested Config Examples:');
     console.log('  --pdfConfig.format=Letter                   Configure Puppeteer PDF format (A4 | Letter | Legal etc.)');
     console.log('  --chunksConfig.strategy=fixed-size          Chunking strategy (fixed-size | document-structure | semantic)');
+    console.log('  --mdConfig.dialect=github                   Markdown dialect (extended | github | gitlab | obsidian | pandoc | commonmark)');
+    console.log('  --mdConfig.fallbackToHtml=false              Disable HTML fallback for unsupported Markdown features (default: true)');
     console.log('');
     console.log('Format Syntax:');
     console.log('  Flags can be written as --flag (presence implies true), --no-flag (negation),');

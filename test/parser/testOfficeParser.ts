@@ -88,7 +88,8 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
     decompressionLimits: {
         maxUncompressedBytes: 512 * 1024 * 1024,
         maxZipEntries: 10000
-    }
+    },
+    mdParserConfig: {}
 };
 
 /** Config permutations to test */

@@ -138,6 +138,9 @@ async function testMarkdown(): Promise<void> {
     // GLFM :::danger maps to 'caution' - we should have at least 2 'caution' entries
     const cautionCount = admonitions.filter(n => (n.metadata as any)?.admonitionType === 'caution').length;
     assert.ok(cautionCount >= 2, `MD: At least 2 'caution' admonitions (one GH, one GLFM danger), got ${cautionCount}`);
+    // sourceSyntax provenance: GitHub `> [!TYPE]` vs GLFM `:::type` must be distinguishable
+    assertExists(admonitions, n => (n.metadata as any)?.admonitionType === 'note' && (n.metadata as any)?.sourceSyntax === 'github', 'MD: GitHub admonition has sourceSyntax "github"');
+    assertExists(admonitions, n => (n.metadata as any)?.admonitionType === 'caution' && (n.metadata as any)?.sourceSyntax === 'gitlab', 'MD: GLFM :::danger admonition has sourceSyntax "gitlab"');
 
     // ── Code blocks ───────────────────────────────────────────────────────────
     const codeNodes = nodes.filter(n => n.type === 'code');

@@ -213,9 +213,9 @@ export interface OcrConfig {
 }
 
 /**
- * Configuration options for the OfficeParser.
+ * Configuration options shared across every input format.
  */
-export interface OfficeParserConfig {
+export interface CommonOfficeParserConfig {
     /**
      * @deprecated Use `onWarning` instead.
      * Flag to show all the logs to console in case of an error irrespective of your own handling.
@@ -368,6 +368,29 @@ export interface OfficeParserConfig {
      */
     decompressionLimits?: DecompressionLimits;
 }
+
+/**
+ * Reserved for future Markdown-parsing options. Currently empty - the parser always populates
+ * dialect-provenance metadata (e.g. `AdmonitionMetadata.sourceSyntax`) unconditionally, since doing
+ * so costs nothing and doesn't change any existing field's value.
+ */
+export interface MdParserConfig {
+}
+
+/**
+ * Maps an input format string to its corresponding format-specific parser configuration, mirroring
+ * `GeneratorSpecificConfig<D>` on the generator side. Unlike the generator side, the input format is
+ * usually runtime-detected rather than known statically at the `parseOffice()` call site, so this
+ * mainly exists for internal typing/extensibility rather than compile-time narrowing per call.
+ */
+type ParserSpecificConfig<F extends string> =
+    F extends 'md' ? { mdParserConfig?: MdParserConfig } :
+    Partial<{ mdParserConfig: MdParserConfig }>;
+
+/**
+ * Configuration options for the OfficeParser.
+ */
+export type OfficeParserConfig<F extends string = string> = CommonOfficeParserConfig & ParserSpecificConfig<F>;
 
 /**
  * Limits applied to ZIP archive decompression.
@@ -893,30 +916,110 @@ export interface CsvGeneratorConfig {
 }
 
 /**
+ * Named Markdown dialect presets for `MarkdownDialectConfig`/`MdGeneratorConfig.dialect`.
+ * `'extended'` is officeParser's own kitchen-sink default and reproduces this library's
+ * historical output exactly (every feature on, GitHub-style admonitions).
+ */
+export type MarkdownDialectPreset = 'extended' | 'github' | 'gitlab' | 'obsidian' | 'pandoc' | 'commonmark';
+
+/**
+ * Granular control over which native Markdown syntax the generator emits for constructs that
+ * differ across real-world dialects (e.g. GitHub's `> [!NOTE]` vs GitLab's `:::note` vs Pandoc's
+ * `::: {.note}` admonitions). Shorthand: pass a `MarkdownDialectPreset` string for a named target;
+ * pass an object for granular control. Any field you omit from the object form falls back to the
+ * preset named by `extends` (default `'extended'`) - **not** to whatever preset may have been
+ * ambient before, since config merging replaces the whole field rather than layering on top of it.
+ */
+export interface MarkdownDialectConfig {
+    /** Base preset any omitted field inherits from. Defaults to 'extended'. */
+    extends?: MarkdownDialectPreset;
+    /** Admonition syntax: GitHub `> [!NOTE]`, GitLab `:::note`, Pandoc `::: {.note}`, or `'none'`
+     *  to degrade to a plain bold-labeled blockquote with no special marker. */
+    admonitions?: 'github' | 'gitlab' | 'pandoc' | 'none';
+    /** Markdown Extra/Pandoc-style `Term\n: Description` definition lists. */
+    definitionLists?: boolean;
+    /** `[^id]` footnote references/definitions. When false, note content is inlined as a
+     *  parenthetical right at the reference point instead of using footnote syntax. */
+    footnotes?: boolean;
+    /** Pandoc-style `[@citekey]` citations. When false, emits `[citekey]` (brackets, no `@`). */
+    citations?: boolean;
+    /** Obsidian-style `[[Page]]`/`[[Page|Alias]]` wikilinks. When false, falls back to a plain
+     *  `[text](url)` link using the same target. */
+    wikilinks?: boolean;
+    /** Inline `$...$`/block `$$...$$` math delimiters, or `'none'` for bare LaTeX text. */
+    math?: 'dollar' | 'none';
+    /** Pandoc-style `{width=50% .centered}` attribute lists after images/tables. */
+    attributeLists?: boolean;
+    /** GFM `~~text~~` strikethrough (not part of base CommonMark). */
+    strikethrough?: boolean;
+    /** Unordered list bullet character. */
+    bulletListMarker?: '-' | '*' | '+';
+    /** Ordered list marker punctuation. */
+    orderedListMarker?: '.' | ')';
+    /** Emphasis delimiter style for bold/italic. */
+    emphasisMarker?: 'asterisk' | 'underscore';
+    /** Table syntax: native GFM pipe tables, or forced HTML `<table>` (required for strict
+     *  CommonMark, which has no table syntax of its own). */
+    tables?: 'native' | 'html';
+}
+
+/**
+ * Granular control over when the Markdown generator falls back to raw HTML tags for features
+ * standard Markdown can't express natively. Shorthand: `true`/`false` (via
+ * `MdGeneratorConfig.fallbackToHtml`) turns every part on/off at once; pass an object instead to
+ * control them independently. Omitted object fields default to on, matching the boolean shorthand.
+ */
+export interface FallbackToHtmlConfig {
+    /** Underline/subscript/superscript via `<u>`/`<sub>`/`<sup>`. */
+    textFormatting?: boolean;
+    /** Heading/paragraph text alignment via `<div style="text-align:...">`. */
+    alignment?: boolean;
+    /** Internal-link/heading `<a id>`/`<a name>` anchor tags. */
+    anchors?: boolean;
+    /** Nested-table and merged-cell (colspan/rowspan) HTML `<table>` fallback. */
+    tables?: boolean;
+    /** YouTube embed `<div data-youtube-video>` vs. a plain link. */
+    embeds?: boolean;
+    /** Multi-line table cell content joined with `<br>` instead of a space. */
+    cellLineBreaks?: boolean;
+}
+
+/**
  * Configuration options for Markdown generation.
  */
 export interface MdGeneratorConfig {
     /**
      * Whether to fallback to HTML tags for features not supported by standard Markdown.
-     * 
-     * Markdown has limited support for complex document structures. This flag controls how 
+     * Pass an object instead of a boolean for granular control over individual parts (text
+     * formatting, alignment, anchors, tables, embeds, cell line breaks) - see
+     * `FallbackToHtmlConfig`. Omitted object fields default to on, matching `true`.
+     *
+     * Markdown has limited support for complex document structures. This flag controls how
      * the generator handles features that cannot be represented in pure Markdown:
-     * 
+     *
      * 1. If a feature is NOT supported natively by Markdown (e.g., nested tables, text alignment,
      *    underline, subscript/superscript):
-     *    - If true: The generator will use HTML tags (<u>, <sub>, <div>, <table>, etc.) to 
+     *    - If true: The generator will use HTML tags (<u>, <sub>, <div>, <table>, etc.) to
      *      maintain high fidelity.
      *    - If false: The generator will skip or simplify the feature (e.g., ignoring alignment,
      *      skipping underline, or hoisting nested tables out of their cells).
-     * 
-     * 2. If a feature IS supported by Markdown but a higher quality version is possible 
+     *
+     * 2. If a feature IS supported by Markdown but a higher quality version is possible
      *    via HTML (e.g., tables with merged cells):
      *    - If true: Use HTML for better fidelity.
      *    - If false: Use native Markdown syntax (e.g., a standard GFM table grid).
-     * 
+     *
      * Defaults to true.
      */
-    fallbackToHtml?: boolean;
+    fallbackToHtml?: boolean | FallbackToHtmlConfig;
+
+    /**
+     * Target Markdown dialect for generation - which native syntax to emit for constructs that
+     * differ across real-world targets (GitHub/GitLab/Obsidian/Pandoc/strict CommonMark). See
+     * `MarkdownDialectConfig` for the full per-feature field list. Defaults to `'extended'`
+     * (officeParser's own historical kitchen-sink behavior, unchanged from prior versions).
+     */
+    dialect?: MarkdownDialectPreset | MarkdownDialectConfig;
 }
 
 /**
@@ -1540,13 +1643,16 @@ export interface EmbedMetadata {
 
 /**
  * Metadata for an admonition/alert node (e.g. GitHub's `> [!NOTE]` or GLFM's `:::note`).
- * `MarkdownParser` accepts both syntaxes; `MarkdownGenerator` only ever writes the
- * blockquote form. Children are block content (paragraphs) wrapped by the admonition.
+ * `MarkdownParser` accepts both syntaxes (and generates either, plus Pandoc's `::: {.note}`,
+ * depending on `MdGeneratorConfig.dialect`). Children are block content (paragraphs) wrapped by
+ * the admonition.
  */
 export interface AdmonitionMetadata {
     admonitionType: 'note' | 'tip' | 'important' | 'warning' | 'caution';
     /** Optional custom title; falls back to the type label. */
     title?: string;
+    /** Which concrete input syntax produced this node. Always populated by the parser. */
+    sourceSyntax?: 'github' | 'gitlab';
 }
 
 /**

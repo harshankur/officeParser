@@ -28,6 +28,7 @@ import {
     OfficeParserConfig,
 } from '../../src/types';
 import { resolveGeneratorConfig } from '../../src/utils/configUtils.js';
+import { createAST } from '../../src/utils/astUtils.js';
 
 // ============================================================================
 // CONSTANTS & CONFIGURATION
@@ -72,7 +73,8 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     decompressionLimits: {
         maxUncompressedBytes: 512 * 1024 * 1024,
         maxZipEntries: 10000
-    }
+    },
+    mdParserConfig: {}
 };
 
 /** Generator config permutations */
@@ -1191,6 +1193,166 @@ function runConfigValidationTests(): GenFeatureTest[] {
     return results;
 }
 
+/**
+ * Tests for the Markdown dialect/fallbackToHtml config system: dialect presets, the `extends`
+ * composition rule, the merge-erasure gotcha, and the `fallbackToHtml: boolean |
+ * FallbackToHtmlConfig` shorthand-object pattern. Driven off `test/files/exhaustive/markdown.md`,
+ * which covers every construct these options gate.
+ */
+async function runMarkdownDialectTests(): Promise<GenFeatureTest[]> {
+    const results: GenFeatureTest[] = [];
+    const category = 'Markdown Dialect';
+    const sourceFormat = 'md';
+    const destFormat = 'md';
+
+    const mk = (feature: string, exp: any, act: any, ok: boolean, details: string): GenFeatureTest => ({
+        category, feature, sourceFormat, destFormat,
+        result: { status: ok ? 'PASS' : 'FAIL', expected: exp, actual: act, details, duration: 0 }
+    });
+
+    const fixturePath = path.join(__dirname, '..', 'files', 'exhaustive', 'markdown.md');
+    const ast = await OfficeParser.parseOffice(fixturePath);
+
+    const genMdConfig = async (mdConfig: any, onWarning?: (issue: any) => void): Promise<string> => {
+        const result = await OfficeGenerator.generate(ast as any, 'md' as any, { mdConfig, onWarning } as any);
+        return typeof result.value === 'string' ? result.value : '';
+    };
+    const genDialect = (dialect: any) => genMdConfig({ dialect });
+
+    // --- Preset assertions ---
+    const extended = await genDialect('extended');
+    results.push(mk('extended: GitHub admonitions (default, backward-compatible)', 'contains "> [!"', extended.includes('> [!'), extended.includes('> [!'), 'omitting dialect entirely must reproduce historical GitHub-admonition output'));
+    results.push(mk('extended: wikilinks native', 'contains "[["', extended.includes('[['), extended.includes('[['), 'extended preset keeps wikilinks native'));
+    results.push(mk('extended: citations native', 'contains "[@"', extended.includes('[@'), extended.includes('[@'), 'extended preset keeps citations native'));
+    results.push(mk('extended: definition lists native', 'contains ": Description"', extended.includes(': Description'), extended.includes(': Description'), 'extended preset keeps definition lists native'));
+
+    const github = await genDialect('github');
+    results.push(mk('github: admonitions', 'contains "> [!"', github.includes('> [!'), github.includes('> [!'), 'github dialect uses GitHub admonition syntax'));
+    results.push(mk('github: wikilinks degrade to plain link', 'no "[[", has plain link to WikiPage', !github.includes('[[') && github.includes('(WikiPage)'), !github.includes('[[') && github.includes('(WikiPage)'), 'github dialect has no wikilinks - falls back to a plain link using the same target'));
+    results.push(mk('github: citations degrade (no @)', 'no "[@", has "[smith2023]"', !github.includes('[@') && github.includes('[smith2023]'), !github.includes('[@') && github.includes('[smith2023]'), 'github dialect drops the @ but keeps the key'));
+
+    const gitlab = await genDialect('gitlab');
+    results.push(mk('gitlab: admonitions fenced-div', 'contains ":::note"', gitlab.includes(':::note'), gitlab.includes(':::note'), 'gitlab dialect uses :::type fenced-div admonitions'));
+    results.push(mk('gitlab: not pandoc-style', 'no "::: {."', !gitlab.includes('::: {.'), !gitlab.includes('::: {.'), 'gitlab fenced-div has no class syntax'));
+
+    const obsidian = await genDialect('obsidian');
+    results.push(mk('obsidian: wikilinks native', 'contains "[["', obsidian.includes('[['), obsidian.includes('[['), 'obsidian dialect keeps wikilinks native'));
+    results.push(mk('obsidian: admonitions github-style', 'contains "> [!"', obsidian.includes('> [!'), obsidian.includes('> [!'), 'obsidian callouts use the same > [!type] form as GitHub'));
+
+    const pandoc = await genDialect('pandoc');
+    results.push(mk('pandoc: admonitions fenced-div-with-class', 'contains "::: {.note}"', pandoc.includes('::: {.note}'), pandoc.includes('::: {.note}'), 'pandoc dialect uses its own ::: {.type} native fenced-div-with-class syntax'));
+    results.push(mk('pandoc: citations native', 'contains "[@"', pandoc.includes('[@'), pandoc.includes('[@'), 'pandoc dialect keeps citations native'));
+    results.push(mk('pandoc: definition lists native', 'contains ": Description"', pandoc.includes(': Description'), pandoc.includes(': Description'), 'pandoc dialect keeps definition lists native (its own signature feature)'));
+    results.push(mk('pandoc: wikilinks degrade', 'no "[["', !pandoc.includes('[['), !pandoc.includes('[['), 'pandoc dialect has no wikilinks'));
+
+    const commonmark = await genDialect('commonmark');
+    results.push(mk('commonmark: tables forced HTML', 'contains "<table"', commonmark.includes('<table'), commonmark.includes('<table'), 'strict CommonMark has no table syntax of its own'));
+    results.push(mk('commonmark: no admonition marker', 'no "> [!" and no ":::"', !commonmark.includes('> [!') && !commonmark.includes(':::'), !commonmark.includes('> [!') && !commonmark.includes(':::'), 'admonitions degrade to a plain blockquote'));
+    results.push(mk('commonmark: no strikethrough marker', 'no "~~"', !commonmark.includes('~~'), !commonmark.includes('~~'), 'strikethrough is a GFM-only extension'));
+    results.push(mk('commonmark: no citations/wikilinks', 'no "[@" and no "[["', !commonmark.includes('[@') && !commonmark.includes('[['), !commonmark.includes('[@') && !commonmark.includes('[['), 'citations/wikilinks are not part of base CommonMark'));
+    results.push(mk('commonmark: no bare $ math', 'no "$E=mc"', !commonmark.includes('$E=mc'), !commonmark.includes('$E=mc'), 'math delimiters are not part of base CommonMark'));
+    results.push(mk('commonmark: footnote inlined, not [^id]', 'no "[^fn1]", has inline "(Note: This is the footnote"', !commonmark.includes('[^fn1]') && commonmark.includes('(Note: This is the footnote'), !commonmark.includes('[^fn1]') && commonmark.includes('(Note: This is the footnote'), 'footnotes:false inlines the note body as a parenthetical instead of dropping it'));
+
+    // --- extends composition: object form composes a named base preset with explicit overrides ---
+    const extendsGithub = await genDialect({ extends: 'github', bulletListMarker: '*' });
+    const usesStarBullets = /\n\* Unordered item A/.test('\n' + extendsGithub);
+    results.push(mk('extends: github base + bulletListMarker override', 'contains "> [!" (github base) and "* " bullets (override)', extendsGithub.includes('> [!') && usesStarBullets, extendsGithub.includes('> [!') && usesStarBullets, 'object form composes a named base preset with explicit field overrides'));
+    results.push(mk('extends: github base keeps other github fields', 'no "[[" (github has no wikilinks)', !extendsGithub.includes('[['), !extendsGithub.includes('[['), 'fields not explicitly overridden still come from the named base preset'));
+
+    // --- merge-erasure gotcha: an object override with no `extends` must default to 'extended',
+    // not silently drop to some other ambient default ---
+    const noExtendsOverride = await genDialect({ bulletListMarker: '*' });
+    results.push(mk('no extends: defaults to extended base', 'contains "> [!" and "[[" (extended defaults)', noExtendsOverride.includes('> [!') && noExtendsOverride.includes('[['), noExtendsOverride.includes('> [!') && noExtendsOverride.includes('[['), 'omitting extends must default to extended, not silently drop other features'));
+
+    // --- fallbackToHtml: boolean | FallbackToHtmlConfig (same shorthand-object pattern as
+    // HtmlGeneratorConfig.standalone/StandaloneConfig - no separate successor field) ---
+    const fallbackFalse = await genMdConfig({ fallbackToHtml: false });
+    results.push(mk('fallbackToHtml:false turns every part off', 'no "<u>"', !fallbackFalse.includes('<u>'), !fallbackFalse.includes('<u>'), 'the boolean shorthand still applies uniformly to every part'));
+
+    const onlyTextFormattingOff = await genMdConfig({ fallbackToHtml: { textFormatting: false } });
+    results.push(mk('fallbackToHtml:{textFormatting:false} only disables that part', 'no "<u>" but still has "<table"', !onlyTextFormattingOff.includes('<u>') && onlyTextFormattingOff.includes('<table'), !onlyTextFormattingOff.includes('<u>') && onlyTextFormattingOff.includes('<table'), 'omitted object fields (tables) still default to on'));
+
+    const onlyTablesOff = await genMdConfig({ fallbackToHtml: { tables: false } });
+    results.push(mk('fallbackToHtml:{tables:false} only disables that part', 'has "<u>" but no merged-cell "<table"', onlyTablesOff.includes('<u>') && !onlyTablesOff.includes('<table'), onlyTablesOff.includes('<u>') && !onlyTablesOff.includes('<table'), 'omitted object fields (textFormatting) still default to on'));
+
+    return results;
+}
+
+/**
+ * Regression tests for a reported bug: `.to('text')`/`.to('md')` stripped a document's genuine
+ * leading whitespace via an unconditional `.trim()` on the whole accumulated output, while the
+ * deprecated synchronous `.toText()` (each parser's hand-rolled toTextSync) never trimmed at all -
+ * so migrating from `toText()` to `.to('text')` (the documented replacement) silently changed
+ * content. Fixed by trimming only the trailing-newline artifact the block-joining logic produces
+ * (TextGenerator.ts / MarkdownGenerator.ts), not the whole string.
+ */
+async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
+    const results: GenFeatureTest[] = [];
+    const category = 'Whitespace Fidelity';
+
+    const mk = (destFormat: string, feature: string, exp: any, act: any, ok: boolean, details: string): GenFeatureTest => ({
+        category, feature, sourceFormat: 'synthetic', destFormat,
+        result: { status: ok ? 'PASS' : 'FAIL', expected: exp, actual: act, details, duration: 0 }
+    });
+
+    const leadingWhitespaceText = '   Leading spaces from an intentionally-indented opening line';
+    const content: OfficeContentNode[] = [
+        { type: 'paragraph', children: [{ type: 'text', text: leadingWhitespaceText }] } as OfficeContentNode,
+    ];
+    const parserConfig: OfficeParserConfig = { newlineDelimiter: '\n' };
+    const toTextSync = () => leadingWhitespaceText;
+    const ast = createAST('docx', {}, content, [], parserConfig, undefined, toTextSync);
+
+    // --- .to('text') must match the deprecated toText() exactly ---
+    const legacyText = ast.toText();
+    const { value: newText } = await ast.to('text');
+    results.push(mk('text', 'toText() vs .to(text) leading whitespace parity', JSON.stringify(legacyText), JSON.stringify(newText), newText === legacyText, '.to(text) is documented as the replacement for toText() and must produce the same content'));
+    results.push(mk('text', '.to(text) preserves leading whitespace', 'starts with "   "', newText.startsWith('   '), newText.startsWith('   '), 'a full trim() would silently strip this as if it were a generation artifact'));
+
+    // --- .to('md') must not strip genuine leading whitespace either (defense in depth - see the
+    // comment at MarkdownGenerator.ts's return statement for why this is currently also masked by
+    // frontmatter in the default case; render without metadata truthiness assumptions by directly
+    // checking the body content survives the trailing '\n\n' + hoistedContent join unharmed) ---
+    const { value: mdValue } = await ast.to('md', { renderMetadata: false } as any);
+    results.push(mk('md', '.to(md) preserves leading whitespace in body text', 'contains the untrimmed opening text', typeof mdValue === 'string' && mdValue.includes(leadingWhitespaceText), typeof mdValue === 'string' && mdValue.includes(leadingWhitespaceText), 'the paragraph text node itself must survive byte-for-byte, whether or not frontmatter happens to precede it'));
+
+    // --- Trailing-newline cleanup must still work (the actual original purpose of the trim) ---
+    const noTrailingJunkContent: OfficeContentNode[] = [
+        { type: 'paragraph', children: [{ type: 'text', text: 'No trailing junk please' }] } as OfficeContentNode,
+    ];
+    const cleanAst = createAST('docx', {}, noTrailingJunkContent, [], parserConfig, undefined, () => '');
+    const { value: cleanText } = await cleanAst.to('text');
+    results.push(mk('text', '.to(text) still strips the block-joiner\'s trailing newline', 'no trailing newline', !cleanText.endsWith('\n'), !cleanText.endsWith('\n'), 'trimEnd() must still clean up the artifact trim() was originally added for'));
+
+    // --- Genuine trailing whitespace that ISN'T the delimiter (e.g. authored trailing spaces) is
+    // real content and must survive too - only a run of the exact delimiter is a safe strip ---
+    const trailingSpacesContent: OfficeContentNode[] = [
+        { type: 'paragraph', children: [{ type: 'text', text: 'Trailing spaces are content   ' }] } as OfficeContentNode,
+    ];
+    const trailingSpacesAst = createAST('docx', {}, trailingSpacesContent, [], parserConfig, undefined, () => '');
+    const { value: trailingSpacesValue } = await trailingSpacesAst.to('text');
+    results.push(mk('text', '.to(text) preserves genuine trailing spaces', 'ends with "   "', trailingSpacesValue.endsWith('   '), trailingSpacesValue.endsWith('   '), 'only a run of the exact newline delimiter is a generator artifact - other trailing whitespace is real content'));
+
+    // --- A table as the only/first top-level node: renderTable (text) and the HTML-fallback path
+    // of renderMarkdownTable (md) both unconditionally wrap in a leading+trailing newline as
+    // separators from siblings - with no preceding/following sibling, that leaks as a spurious
+    // leading AND trailing artifact unless stripped from both ends, not just the end ---
+    const tableOnlyContent: OfficeContentNode[] = [
+        {
+            type: 'table',
+            children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'text', text: 'Cell' }] }] } as OfficeContentNode],
+        } as OfficeContentNode,
+    ];
+    const tableOnlyAst = createAST('docx', undefined as any, tableOnlyContent, [], parserConfig, undefined, () => '');
+    const { value: tableOnlyText } = await tableOnlyAst.to('text', { textConfig: { preserveLayout: true } } as any);
+    results.push(mk('text', '.to(text) strips renderTable\'s leading separator artifact too', 'does not start with "\\n"', !tableOnlyText.startsWith('\n'), !tableOnlyText.startsWith('\n'), 'renderTable seeds a leading newline as a separator from a preceding sibling - with none, it must not leak through'));
+
+    const { value: tableOnlyMd } = await tableOnlyAst.to('md', { mdConfig: { dialect: 'commonmark' } } as any);
+    results.push(mk('md', '.to(md) strips the HTML-fallback table\'s leading separator artifact too', 'does not start with "\\n"', typeof tableOnlyMd === 'string' && !tableOnlyMd.startsWith('\n'), typeof tableOnlyMd === 'string' && !tableOnlyMd.startsWith('\n'), 'commonmark forces tables through the HTML-fallback branch, which has the same leading-separator convention as TextGenerator\'s renderTable'));
+
+    return results;
+}
+
 // ============================================================================
 // MAIN RUNNERS
 // ============================================================================
@@ -1258,6 +1420,18 @@ async function runAllTests(): Promise<void> {
     const validationFails = runConfigValidationTests();
     allResults.push(...validationFails);
     console.log(validationFails.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
+
+    // Markdown dialect/fallbackToHtml config tests
+    process.stdout.write('  markdown dialect config...');
+    const dialectResults = await runMarkdownDialectTests();
+    allResults.push(...dialectResults);
+    console.log(dialectResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
+
+    // Whitespace fidelity tests (toText() vs .to('text')/.to('md') parity)
+    process.stdout.write('  whitespace fidelity...');
+    const whitespaceResults = await runWhitespaceFidelityTests();
+    allResults.push(...whitespaceResults);
+    console.log(whitespaceResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' ✗' : ' ✓');
 
     // 3. Report
     console.log('\n');

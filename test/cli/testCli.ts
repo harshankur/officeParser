@@ -574,6 +574,24 @@ async function runTests() {
         }
     }
 
+    // 39. Markdown dialect flag (--mdConfig.dialect=commonmark)
+    console.log('Test 39: Markdown dialect flag --mdConfig.dialect=commonmark');
+    const t39 = Date.now();
+    const res39 = runCli(['--to', 'md', '--mdConfig.dialect=commonmark']);
+    const d39 = Date.now() - t39;
+    assertContains(res39.stdout, '<table', 'Config: --mdConfig.dialect=commonmark forces HTML tables', d39);
+
+    // 40. Markdown fallbackToHtml flag (--mdConfig.fallbackToHtml=false)
+    console.log('Test 40: Markdown fallbackToHtml flag --mdConfig.fallbackToHtml=false');
+    const t40 = Date.now();
+    const res40 = runCli(['--to', 'md', '--mdConfig.fallbackToHtml=false']);
+    const d40 = Date.now() - t40;
+    if (!res40.stdout.includes('<u>')) {
+        results.push({ name: 'Config: --mdConfig.fallbackToHtml=false disables HTML fallback', status: 'PASS', details: 'No <u> tag in output', duration: d40 });
+    } else {
+        results.push({ name: 'Config: --mdConfig.fallbackToHtml=false disables HTML fallback', status: 'FAIL', details: 'Found <u> tag despite fallbackToHtml=false', duration: d40 });
+    }
+
     // Print summary report
     const logger = new DualLogger();
     const failedCount = generateReport(results, logger);

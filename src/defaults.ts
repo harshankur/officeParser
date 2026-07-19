@@ -1,4 +1,4 @@
-import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OfficeParserConfig, PdfGeneratorConfig, SemanticChunkingConfig, TextGeneratorConfig } from './types.js';
+import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, MdGeneratorConfig, MdParserConfig, OcrConfig, OcrTimeoutConfig, OfficeParserConfig, PdfGeneratorConfig, SemanticChunkingConfig, TextGeneratorConfig } from './types.js';
 
 const PDFJS_VERSION = '6.1.200';
 const DEFAULT_PDF_WORKER_SRC = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
@@ -39,6 +39,11 @@ const DEFAULT_OCR_CONFIG: DeepRequired<OcrConfig> = {
 };
 
 /**
+ * Default configuration for Markdown parsing. Currently empty - see `MdParserConfig`.
+ */
+const DEFAULT_MD_PARSER_CONFIG: DeepRequired<MdParserConfig> = {};
+
+/**
  * Default configuration for the OfficeParser.
  */
 export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
@@ -67,6 +72,7 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
         maxUncompressedBytes: 512 * 1024 * 1024,
         maxZipEntries: 10000,
     },
+    mdParserConfig: DEFAULT_MD_PARSER_CONFIG,
 };
 
 /**
@@ -125,6 +131,7 @@ const DEFAULT_CSV_GENERATOR_CONFIG: DeepRequired<CsvGeneratorConfig> = {
  */
 const DEFAULT_MD_GENERATOR_CONFIG: DeepRequired<MdGeneratorConfig> = {
     fallbackToHtml: true,
+    dialect: 'extended',
 };
 
 /**
