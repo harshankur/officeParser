@@ -3,6 +3,38 @@ import { FullGeneratorConfig, FullOfficeParserConfig, GeneratorConfig, OfficePar
 import { logWarning } from './errorUtils.js';
 
 /**
+ * Keys that must never be copied from a caller-supplied config onto one of our objects.
+ *
+ * A config that arrived via `JSON.parse` can carry `__proto__` as a genuine **own enumerable**
+ * property (an object *literal* cannot - there `__proto__` invokes the setter at parse time),
+ * which is exactly the shape of a host application accepting a JSON config blob. Copying that
+ * key reaches `Object.prototype` and corrupts every object in the process.
+ *
+ * `constructor` and `prototype` are included because they are the other two names that reach a
+ * prototype through an ordinary property write.
+ */
+const PROTOTYPE_POLLUTION_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Returns a copy of `source` with prototype-reaching keys removed.
+ *
+ * Needed before `Object.assign`, which does **not** pollute `Object.prototype` (it writes via
+ * `[[Set]]`, so `__proto__` invokes the inherited setter rather than creating an own property) -
+ * but that setter is not inert: it **replaces the target's prototype**, so the returned config
+ * silently inherits attacker-chosen properties for every field the defaults don't set as an own
+ * property. Narrower than global pollution, still wrong. Do not "simplify" this away on the
+ * grounds that `Object.assign` is safe; it is safe only against the *global* variant.
+ */
+function withoutPrototypeKeys<T extends object>(source: T): T {
+    const safe: any = {};
+    for (const key of Object.keys(source)) {
+        if (PROTOTYPE_POLLUTION_KEYS.has(key)) continue;
+        safe[key] = (source as any)[key];
+    }
+    return safe;
+}
+
+/**
  * Deep clones an object, specifically handling arrays and plain objects.
  */
 function deepClone<T>(obj: T): T {
@@ -78,7 +110,7 @@ export function resolveParserConfig(
     // We handle ocrConfig, decompressionLimits, and htmlParserConfig specially to avoid
     // shallow-overwriting the whole nested objects
     const { ocrConfig, decompressionLimits, htmlParserConfig, ...rest } = userConfig;
-    Object.assign(config, rest);
+    Object.assign(config, withoutPrototypeKeys(rest));
 
     if (decompressionLimits) {
         config.decompressionLimits = {
@@ -148,12 +180,20 @@ export function resolveGeneratorConfig<D extends string>(
     if (userConfig) {
         // Extract sub-configs to avoid shallow-overwriting the whole sub-config objects
         const { htmlConfig, mdConfig, pdfConfig, csvConfig, textConfig, chunksConfig, ...commonProps } = userConfig as any;
-        Object.assign(config, commonProps);
+        Object.assign(config, withoutPrototypeKeys(commonProps));
 
         // Merge sub-configs individually, ignoring undefined properties to preserve defaults
         const mergeSubConfig = (target: any, source: any) => {
             if (!source) return;
             for (const key in source) {
+                // Both guards are load-bearing and neither subsumes the other. The own-property
+                // check (matching deepClone above) stops inherited enumerable properties, which
+                // matters once anything else in the process has already polluted a prototype. It
+                // does NOT stop this attack on its own: `JSON.parse('{"__proto__":{...}}')` yields
+                // `__proto__` as an own enumerable key, so it passes hasOwnProperty and would be
+                // written straight through to Object.prototype by the recursion below.
+                if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+                if (PROTOTYPE_POLLUTION_KEYS.has(key)) continue;
                 if (source[key] !== undefined) {
                     // Deep merge plain objects (like injections or margin)
                     if (

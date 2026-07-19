@@ -10,6 +10,7 @@ import * as assert from 'assert';
 import { strFromU8, unzipSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParserAST } from '../../src/types';
+import { resolveGeneratorConfig, resolveParserConfig } from '../../src/utils/configUtils';
 import {
     escapeHtml, escapeXml, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl,
     serializeForInlineScript, csvSafeCell, escapeRtf, markdownEscapeText, sanitizeMarkdownUrl
@@ -335,9 +336,87 @@ async function metadataOverrideTests() {
         info.includes('\\}') || info.includes('\\{'), 'unescaped brace inside the \\info group');
 }
 
+/**
+ * Config resolution is an attack surface distinct from document content: a host application that
+ * accepts a JSON config blob hands us an object whose keys the caller did not choose. A config
+ * parsed from JSON can carry `__proto__` as a genuine own enumerable key (an object literal
+ * cannot), so a recursive merge writes it straight onto `Object.prototype` and corrupts every
+ * object in the process - not just our output.
+ */
+function configPollutionTests() {
+    console.log('- Config resolution (prototype pollution)...');
+
+    const clean = () => {
+        for (const k of ['polluted', 'pollutedNested', 'pollutedParser', 'pollutedCtor']) {
+            delete (Object.prototype as any)[k];
+        }
+    };
+    clean(); // start from a known state so an earlier failure can't cascade into a false pass
+
+    // Every sub-config goes through the same merge, so every one is a route in. The probe value
+    // must be one the config's own validation accepts - a rejected value falls back to the
+    // default, which would make the "merge applied" guard fail even though the merge ran.
+    const subConfigs: Array<[string, string, string]> = [
+        ['htmlConfig', 'containerWidth', '640px'], ['mdConfig', 'dialect', 'github'],
+        ['pdfConfig', 'format', 'Letter'], ['csvConfig', 'columnDelimiter', ';'],
+        ['textConfig', 'newlineDelimiter', '\\r\\n'], ['chunksConfig', 'strategy', 'fixed-size'],
+    ];
+    for (const [sub, probeKey, probeValue] of subConfigs) {
+        const raw = JSON.parse(`{"${sub}":{"${probeKey}":"${probeValue}","__proto__":{"polluted":"YES"}}}`);
+        const cfg: any = resolveGeneratorConfig('html' as any, undefined as any, raw);
+        const expected = JSON.parse(`"${probeValue}"`);
+        // Guard first: if the merge silently did nothing, the pollution assertion below would
+        // pass for the wrong reason. This is the failure mode that let an earlier vacuous test
+        // in this very file sit green while the defect it named went unnoticed.
+        check(`config: ${sub} merge actually applied`, cfg[sub]?.[probeKey] === expected,
+            `nothing merged into ${sub}, so the pollution check below would be vacuous`);
+        check(`config: __proto__ in ${sub} cannot reach Object.prototype`,
+            ({} as any).polluted === undefined, `Object.prototype.polluted = ${({} as any).polluted}`);
+        check(`config: ${sub} merge returns a clean prototype`,
+            Object.getPrototypeOf(cfg) === Object.prototype, 'returned config inherits an attacker-chosen prototype');
+        clean();
+    }
+
+    // Nested depth: the recursion must carry the guard down, not just check the top level.
+    const nested = JSON.parse('{"htmlConfig":{"injections":{"headEnd":"__PROBE__","__proto__":{"pollutedNested":"YES"}}}}');
+    const nestedCfg: any = resolveGeneratorConfig('html' as any, undefined as any, nested);
+    check('config: nested merge actually applied', nestedCfg.htmlConfig?.injections?.headEnd === '__PROBE__',
+        'nothing merged, so the nested pollution check would be vacuous');
+    check('config: nested __proto__ cannot reach Object.prototype', ({} as any).pollutedNested === undefined);
+    clean();
+
+    // `constructor` is the other name that reaches a prototype through an ordinary write.
+    const ctor = JSON.parse('{"htmlConfig":{"containerWidth":"720px","constructor":{"prototype":{"pollutedCtor":"YES"}}}}');
+    const ctorCfg: any = resolveGeneratorConfig('html' as any, undefined as any, ctor);
+    check('config: constructor-route merge actually applied', ctorCfg.htmlConfig?.containerWidth === '720px',
+        'nothing merged, so the constructor check would be vacuous');
+    check('config: constructor route cannot reach Object.prototype', ({} as any).pollutedCtor === undefined);
+    check('config: constructor is not shadowed on the sub-config',
+        !Object.prototype.hasOwnProperty.call(ctorCfg.htmlConfig, 'constructor'),
+        'attacker-supplied constructor landed as an own property');
+    clean();
+
+    // Parser config takes a different path (Object.assign, not the recursive merge). Object.assign
+    // does not pollute Object.prototype - it writes via [[Set]], so `__proto__` hits the inherited
+    // setter - but that setter REPLACES the target's prototype, so the returned config silently
+    // inherits attacker properties. Assert the returned object's prototype directly.
+    const parserRaw = JSON.parse('{"newlineDelimiter":"__PROBE__","__proto__":{"pollutedParser":"YES"}}');
+    const parserCfg: any = resolveParserConfig(parserRaw);
+    check('config: parser merge actually applied', parserCfg.newlineDelimiter === '__PROBE__',
+        'nothing merged, so the parser checks below would be vacuous');
+    check('config: parser __proto__ cannot reach Object.prototype', ({} as any).pollutedParser === undefined);
+    check('config: parser config keeps a clean prototype',
+        Object.getPrototypeOf(parserCfg) === Object.prototype,
+        'Object.assign invoked the __proto__ setter and replaced the config prototype');
+    check('config: parser config did not inherit attacker properties',
+        parserCfg.pollutedParser === undefined, `inherited pollutedParser = ${parserCfg.pollutedParser}`);
+    clean();
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
+    configPollutionTests();
     await htmlTests();
     await htmlAttributeBagTests();
     await markdownTests();
