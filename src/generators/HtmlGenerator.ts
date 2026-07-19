@@ -1,6 +1,6 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { escapeHtml, isSafeHtmlAttributeName, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
+import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 
 type ResolvedStandalone = Required<StandaloneConfig>;
 
@@ -581,7 +581,16 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         // Handle Style Mapping using the semantic mapping helper
         const mapping = this.getSemanticMapping(node);
 
-        let tag = mapping?.tag || this.getDefaultTag(node);
+        // A styleMap's `output.tag` was previously written here and then shadowed by a `const tag`
+        // in every switch branch, so HtmlGenerator silently ignored it - while MarkdownGenerator
+        // and RtfGenerator both honoured it and the README documented it as working. Honoured now,
+        // but only through the allowlist: the tag is interpolated into both `<TAG>` and `</TAG>`,
+        // and the shadowing bug was the sole reason a hostile value could not inject. A rejected
+        // tag falls back to the default rather than being emitted.
+        const mappedTag = isSafeStyleMapTag(mapping?.tag) ? mapping!.tag.toLowerCase() : undefined;
+        if (mapping?.tag && !mappedTag) {
+            this.warn(OfficeWarningType.INVALID_STYLE_MAP_TAG, mapping.tag, node);
+        }
 
         // Handle Attributes from mapping
         let mappedAttrs = '';
@@ -1044,7 +1053,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
             case 'paragraph':
             case 'heading': {
-                const tag = node.type === 'heading' ? `h${(node.metadata as HeadingMetadata)?.level || 1}` : 'p';
+                // The styleMap tag wins over the structural default; that is the whole point of
+                // mapping "Heading 1"/"Intense Quote" onto a semantic element.
+                const tag = mappedTag ?? (node.type === 'heading' ? `h${(node.metadata as HeadingMetadata)?.level || 1}` : 'p');
 
                 // Normalize empty paragraphs so DOCX and PPTX empty cells render with consistent height
                 // Strip tags to check if it's purely empty or just contains non-breaking spaces (like PPTX)

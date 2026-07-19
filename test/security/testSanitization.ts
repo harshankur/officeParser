@@ -13,7 +13,7 @@ import * as path from 'path';
 import { strFromU8, unzipSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
-import { OfficeParserAST } from '../../src/types';
+import { OfficeParserAST, OfficeWarningType } from '../../src/types';
 import { resolveGeneratorConfig, resolveParserConfig } from '../../src/utils/configUtils';
 import {
     escapeHtml, escapeXml, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl,
@@ -589,6 +589,37 @@ async function styleMapTests() {
         if (dupes.length > 0) { check('styleMap: no duplicate attribute names', false, `${dupes.join(',')} in ${tag}`); return; }
     }
     check('styleMap: no duplicate attribute names', true);
+
+    // --- output.tag ---------------------------------------------------------------------
+    // HtmlGenerator now honours styleMap output.tag (it previously wrote the value and then
+    // shadowed it in every switch branch, so it was silently ignored). The shadowing was the
+    // only thing stopping a hostile tag from injecting, so honouring it REQUIRES the allowlist:
+    // a tag name is interpolated into both `<TAG>` and `</TAG>`, where no escaping applies.
+    const fragment = { htmlConfig: { standalone: false } };
+    const tagOut = async (tag: string, warns?: any[]) => String((await OfficeGenerator.generate(pAst, 'html', {
+        ...fragment, ...(warns ? { onWarning: (w: any) => warns.push(w) } : {}),
+        styleMap: [{ selector: { nodeType: 'paragraph', attributes: { style: 'Custom' } }, output: { tag } }],
+    } as any)).value);
+
+    // Honoured for the semantic elements a style mapping exists to express.
+    for (const tag of ['h2', 'blockquote', 'section', 'em']) {
+        const out = await tagOut(tag);
+        check(`styleMap: output.tag "${tag}" is honoured`, out.includes(`<${tag}>`) && out.includes(`</${tag}>`),
+            `mapping ignored: ${JSON.stringify(out.slice(0, 120))}`);
+    }
+    // Rejected, with a fallback to the default tag and a warning - never emitted.
+    for (const tag of ['script', 'iframe', 'style', 'object', 'p><script>alert(1)</script><p']) {
+        const warns: any[] = [];
+        const out = await tagOut(tag, warns);
+        check(`styleMap: output.tag ${JSON.stringify(tag.slice(0, 24))} is rejected`, !out.includes(`<${tag}`),
+            `hostile tag reached output: ${JSON.stringify(out.slice(0, 160))}`);
+        check(`styleMap: rejected tag falls back to the default`, /<p[\s>]/.test(out),
+            `no fallback element emitted: ${JSON.stringify(out.slice(0, 160))}`);
+        check(`styleMap: rejected tag warns`, warns.some(w => w.code === OfficeWarningType.INVALID_STYLE_MAP_TAG),
+            'silently ignoring a caller-supplied tag gives them no way to find out');
+    }
+    check('styleMap: no script element from a hostile tag',
+        !(await tagOut('p><script>alert(1)</script><p')).includes('<script'), 'script element emitted');
 }
 
 async function main() {

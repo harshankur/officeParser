@@ -60,7 +60,8 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.EMPTY_CHUNK_GENERATED]: (strategy: string) => `No chunks generated for document. Check if the document content is compatible with the '${strategy}' strategy.`,
     [OfficeWarningType.WHITESPACE_NODE_SKIPPED]: (nodeType: string) => `Skipped whitespace-only node of type: ${nodeType}`,
     [OfficeWarningType.INVALID_CONTAINER_WIDTH]: (val: any) => `Invalid HTML containerWidth: ${JSON.stringify(val)}. Falling back to "auto". Width must be a positive number, a valid CSS length string (e.g., "900px", "100%", "50vw"), or "auto".`,
-    [OfficeWarningType.METADATA_NOT_REPRESENTABLE]: (info: { keys: string[], format: string }) => `Custom metadata ${info.keys.map(k => `'${k}'`).join(', ')} could not be written to ${info.format} output: the format has a fixed metadata vocabulary with no place for caller-defined keys. The named metadata fields (title, author, etc.) were still applied.`
+    [OfficeWarningType.METADATA_NOT_REPRESENTABLE]: (info: { keys: string[], format: string }) => `Custom metadata ${info.keys.map(k => `'${k}'`).join(', ')} could not be written to ${info.format} output: the format has a fixed metadata vocabulary with no place for caller-defined keys. The named metadata fields (title, author, etc.) were still applied.`,
+    [OfficeWarningType.INVALID_STYLE_MAP_TAG]: (tag: string) => `styleMap output.tag ${JSON.stringify(tag)} is not an allowed element name and was ignored; the node's default tag was used instead. A tag name is written into both the opening and closing tag, so only a known-safe set of block, heading and inline elements is accepted.`
 };
 
 /**

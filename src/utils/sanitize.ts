@@ -27,6 +27,32 @@ export function isSafeHtmlAttributeName(name: string): boolean {
 }
 
 /**
+ * Element names a `styleMap` may map a node onto.
+ *
+ * An allowlist rather than a pattern: a tag name is interpolated into both `<TAG …>` and
+ * `</TAG>`, so it is not enough for it to *look* like a name - `script`, `style`, `iframe` and
+ * friends are perfectly well-formed names that would introduce an active context the rest of the
+ * generator's escaping assumes does not exist. This is the semantic set a style mapping is for:
+ * block containers, headings, and the inline emphasis elements.
+ */
+const SAFE_STYLE_MAP_TAGS = new Set([
+    'p', 'div', 'span', 'section', 'article', 'aside', 'header', 'footer', 'main', 'figure', 'figcaption',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'blockquote', 'pre', 'code', 'q', 'cite', 'address',
+    'ul', 'ol', 'li', 'dl', 'dt', 'dd',
+    'b', 'strong', 'i', 'em', 'u', 'ins', 'del', 's', 'strike', 'mark', 'small', 'sub', 'sup', 'kbd', 'samp', 'var', 'abbr',
+]);
+
+/**
+ * Whether a `styleMap` `output.tag` may be emitted as an element name.
+ *
+ * Callers must fall back to their default tag when this returns false, never emit the value.
+ */
+export function isSafeStyleMapTag(tag: unknown): tag is string {
+    return typeof tag === 'string' && SAFE_STYLE_MAP_TAGS.has(tag.toLowerCase());
+}
+
+/**
  * Escapes text for an HTML text node or a double-quoted attribute value.
  * Includes the single quote so the result is also safe inside single-quoted
  * attributes.

@@ -85,7 +85,9 @@ export enum OfficeWarningType {
     /** The HTML generator containerWidth option is invalid */
     INVALID_CONTAINER_WIDTH = 'INVALID_CONTAINER_WIDTH',
     /** A metadata override could not be represented in the destination format's vocabulary */
-    METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE'
+    METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE',
+    /** A styleMap output.tag was not an allowed element name and was ignored */
+    INVALID_STYLE_MAP_TAG = 'INVALID_STYLE_MAP_TAG'
 }
 
 /**
