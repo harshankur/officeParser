@@ -518,10 +518,9 @@ export interface MetadataOverrides {
     /**
      * Last modification date.
      *
-     * Beyond the obvious use, this is the field that makes output **reproducible**: EPUB embeds it
-     * both as the required `dcterms:modified` property and as the mtime on every zip entry, so
-     * leaving it to default to the current time makes each generated archive differ byte-for-byte
-     * from the last even when the content is identical.
+     * EPUB writes it as the required `dcterms:modified` property and as the mtime on every zip
+     * entry. When unset, the source document's own `metadata.modified` is used, falling back to
+     * the current time only if the document has none.
      */
     modified?: Date;
     /**
@@ -618,7 +617,7 @@ export interface CommonGeneratorConfig {
      * These are output overrides only - `ast.metadata` itself is never mutated, so the same AST
      * can be generated repeatedly with different metadata.
      *
-     * @example Reproducible builds - pin the timestamp so output is byte-identical across runs
+     * @example Set the modification date written into the output
      * ```typescript
      * await ast.to('epub', { metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') } });
      * ```

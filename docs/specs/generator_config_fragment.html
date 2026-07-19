@@ -47,8 +47,8 @@
                 <td><code><a href="#metadataoverrides">MetadataOverrides</a></code></td>
                 <td><code>{}</code></td>
                 <td><strong>Output Metadata</strong>: Overrides the metadata embedded in the generated file, merged per
-                    field over <code>ast.metadata</code> without mutating it. Set <code>modified</code> here to make
-                    generation reproducible &mdash; see the section below.</td>
+                    field over <code>ast.metadata</code> without mutating it. See
+                    <a href="#metadataoverrides">MetadataOverrides</a> for the full field list.</td>
             </tr>
             <tr>
                 <td><code>includeImages</code></td>
@@ -558,19 +558,11 @@ await ast.to('md', {
     },
 });</code></pre>
 
-    <h4 id="reproducible-output">Reproducible output</h4>
-    <p><code>modified</code> is what makes generation deterministic. EPUB embeds it both as the required
-        <code>dcterms:modified</code> property and as the mtime on every zip entry, so leaving it to default to the
-        current time makes each generated archive differ byte-for-byte from the last even when the content is
-        identical. That defeats content-addressed caching and makes a real content change indistinguishable from
-        timestamp noise when diffing two artifacts.</p>
-    <pre><code>// Byte-identical on every run for the same AST
-const { value } = await ast.to('epub', {
-    metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') },
-});</code></pre>
-    <p>When unset, officeParser uses the source document's own <code>ast.metadata.modified</code>, falling back to the
-        current time only if the document has none. Dates outside the 1980&ndash;2099 range a ZIP timestamp can
-        represent are clamped for entry mtimes.</p>
+    <h4 id="metadata-dates">Dates</h4>
+    <p><code>created</code> and <code>modified</code> take a <code>Date</code>. When <code>modified</code> is unset,
+        officeParser uses the source document's own <code>ast.metadata.modified</code>, falling back to the current time
+        only if the document has none. Dates outside the 1980&ndash;2099 range a ZIP timestamp can represent are clamped
+        where EPUB writes them onto zip entries.</p>
 
     <h4 id="metadata-representability">Not every format can represent every field</h4>
     <p>HTML <code>&lt;meta&gt;</code> tags and Markdown frontmatter are open vocabularies and accept anything. EPUB's OPF

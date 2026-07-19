@@ -1117,24 +1117,18 @@ const { value } = await ast.to('html', {
 });
 ```
 
-#### Reproducible output
+#### Dates
 
-`modified` is what makes generation deterministic. EPUB embeds it both as the required
-`dcterms:modified` property and as the mtime on every zip entry, so leaving it to default to the
-current time makes each generated archive differ byte-for-byte from the last even when the content
-is identical, which defeats content-addressed caching and makes a real content change
-indistinguishable from timestamp noise when diffing two artifacts:
+`created` and `modified` take a `Date`. When `modified` is unset, officeParser uses the source
+document's own `ast.metadata.modified`, falling back to the current time only if the document has
+none. Dates outside the 1980-2099 range representable in a ZIP timestamp are clamped where EPUB
+writes them onto zip entries.
 
 ```js
-// Byte-identical on every run for the same AST
 const { value } = await ast.to('epub', {
     metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') },
 });
 ```
-
-When unset, officeParser uses the source document's own `ast.metadata.modified`, falling back to
-the current time only if the document has none. Dates outside the 1980-2099 range representable in
-a ZIP timestamp are clamped for entry mtimes.
 
 #### Not every format can represent every field
 
