@@ -1,6 +1,6 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
-import { escapeHtml, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
+import { escapeHtml, isSafeHtmlAttributeName, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 
 type ResolvedStandalone = Required<StandaloneConfig>;
 
@@ -37,7 +37,7 @@ function renderHtmlAttributeBag(
         // Same policy as the parser, restated here because this path is independently reachable.
         if (/^on/i.test(key)) continue;
         if (key === 'srcdoc' || key === 'style' || key === 'id') continue;
-        if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(key)) continue;
+        if (!isSafeHtmlAttributeName(key)) continue;
         if (taken.has(key)) continue;
 
         if (key === 'class') {
@@ -587,6 +587,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let mappedAttrs = '';
         if (mapping?.attributes) {
             for (const [key, val] of Object.entries(mapping.attributes)) {
+                // The value is escaped, but the NAME needs validating too: a key containing a
+                // quote closes the attribute and opens another, so `x" onmouseover="alert(1)" z`
+                // yields a live event handler however carefully the value is escaped. The
+                // attribute bag and the parser already apply this policy; this path did not.
+                if (!isSafeHtmlAttributeName(key)) continue;
                 mappedAttrs += ` ${key}="${this.escape(val)}"`;
             }
         }
@@ -970,9 +975,13 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                             const mapping = this.getSemanticMapping(rowNode);
                             const rClasses = ['excel-row'];
                             if (mapping?.classes) rClasses.push(...mapping.classes);
-                            trAttrs += ` class="${rClasses.join(' ')}"`;
+                            // Escaped like the `className` built for every other node type. This
+                            // path rebuilds the class attribute from the raw mapping array rather
+                            // than reusing that value, and was the only place it went out unescaped.
+                            trAttrs += ` class="${this.escape(rClasses.join(' '))}"`;
                             if (mapping?.attributes) {
                                 for (const [key, val] of Object.entries(mapping.attributes)) {
+                                    if (!isSafeHtmlAttributeName(key)) continue;
                                     trAttrs += ` ${key}="${this.escape(val)}"`;
                                 }
                             }
@@ -1023,7 +1032,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const mergedClasses = ['spreadsheet-sheet'];
                 if (isActive) mergedClasses.push('active');
                 if (classes.length > 0) mergedClasses.push(...classes);
-                const classAttr = ` class="${mergedClasses.join(' ')}"`;
+                // Escaped for the same reason as the row above; `classes` here also carries the
+                // attribute bag's raw className, so escaping at the join covers both sources.
+                const classAttr = ` class="${this.escape(mergedClasses.join(' '))}"`;
 
                 // Ensure we don't have duplicate IDs
                 const finalIdAttr = ` id="${sheetId}"`;

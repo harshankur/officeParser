@@ -535,6 +535,62 @@ function configPollutionTests() {
     clean();
 }
 
+/**
+ * `styleMap` is caller config, not document content, but it is public API and a host app may
+ * build one from user-influenced values. Two of its emission paths bypassed the escaping every
+ * other node type gets: the spreadsheet row and sheet rebuild the class attribute from the raw
+ * mapping array instead of reusing the escaped `className`, and both styleMap attribute loops
+ * escaped the value while interpolating the NAME unchecked.
+ */
+async function styleMapTests() {
+    console.log('- HtmlGenerator styleMap (integration)...');
+
+    const xlsx = path.join(__dirname, '..', 'files', 'test.xlsx');
+    if (!fs.existsSync(xlsx)) { check('styleMap: xlsx fixture present', false, 'missing test.xlsx'); return; }
+    const sheetAst = await OfficeParser.parseOffice(xlsx, {} as any);
+
+    // Spreadsheet row: hostile class AND hostile attribute name.
+    const rowOut = String((await sheetAst.to('html', { styleMap: [{ selector: { nodeType: 'row' },
+        output: { tag: 'tr', classes: ['r" onmouseover="alert(1)'], attributes: { 'q" onfocus="alert(2)" w': 'v' } } }] } as any)).value);
+    const tr = rowOut.match(/<tr[^>]*excel-row[^>]*>/)?.[0] ?? '';
+    check('styleMap: spreadsheet row actually rendered', tr.length > 0,
+        'no excel-row <tr> emitted, so the checks below would be vacuous');
+    check('styleMap: row class cannot break out', !/onmouseover\s*=\s*"/.test(tr), tr);
+    check('styleMap: row attribute name cannot break out', !/onfocus\s*=\s*"/.test(tr), tr);
+
+    // Sheet container.
+    const sheetOut = String((await sheetAst.to('html', { styleMap: [{ selector: { nodeType: 'sheet' },
+        output: { tag: 'div', classes: ['s" onmouseover="alert(3)'] } }] } as any)).value);
+    const div = sheetOut.match(/<div[^>]*spreadsheet-sheet[^>]*>/)?.[0] ?? '';
+    check('styleMap: sheet container actually rendered', div.length > 0,
+        'no spreadsheet-sheet <div> emitted, so the check below would be vacuous');
+    check('styleMap: sheet class cannot break out', !/onmouseover\s*=\s*"/.test(div), div);
+
+    // Paragraph path: attribute name only (its class path was already escaped).
+    const pAst = astWith([{ type: 'paragraph', metadata: { style: 'Custom' },
+        children: [{ type: 'text', text: 'hi' }] } as any]);
+    const sm = (output: any) => ({ styleMap: [{ selector: { nodeType: 'paragraph', attributes: { style: 'Custom' } }, output }] } as any);
+    const pOut = String((await OfficeGenerator.generate(pAst, 'html', sm({ tag: 'p', attributes: { 'x" onmouseover="alert(4)" z': 'y' } }))).value);
+    check('styleMap: paragraph actually rendered', /<p[^>]*>hi/.test(pOut),
+        'no paragraph emitted, so the check below would be vacuous');
+    check('styleMap: paragraph attribute name cannot break out', !/onmouseover\s*=\s*"/.test(pOut), pOut);
+
+    // Positive control: rejecting hostile names must not also drop legitimate ones, or the
+    // "fix" would be silently breaking styleMap for every real user.
+    const benign = String((await OfficeGenerator.generate(pAst, 'html', sm({ tag: 'p', classes: ['lead'], attributes: { 'data-role': 'intro' } }))).value);
+    check('styleMap: legitimate class still emitted', /class="[^"]*lead/.test(benign), benign);
+    check('styleMap: legitimate data- attribute still emitted', /data-role="intro"/.test(benign), benign);
+
+    // Duplicate attribute names are merely invalid in HTML but FATAL in EpubGenerator's XHTML,
+    // so scan every emitted tag - the sheet <div> is the one that reaches the EPUB path.
+    for (const tag of sheetOut.match(/<[a-zA-Z][^>]*>/g) || []) {
+        const names = (tag.match(/\s([a-zA-Z-]+)=/g) || []).map(a => a.trim().slice(0, -1).toLowerCase());
+        const dupes = names.filter((n, i) => names.indexOf(n) !== i);
+        if (dupes.length > 0) { check('styleMap: no duplicate attribute names', false, `${dupes.join(',')} in ${tag}`); return; }
+    }
+    check('styleMap: no duplicate attribute names', true);
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
@@ -544,6 +600,7 @@ async function main() {
     await markdownTests();
     await csvTests();
     await metadataOverrideTests();
+    await styleMapTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

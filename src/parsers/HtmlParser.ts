@@ -1,6 +1,7 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
+import { isSafeHtmlAttributeName } from '../utils/sanitize.js';
 
 interface HtmlNode {
     type: 'element' | 'text';
@@ -358,7 +359,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             if (key === 'srcdoc') continue;
             // Reject anything that isn't a plain attribute name outright - a key containing a
             // quote or '=' is the shape an attribute-injection payload takes.
-            if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(key)) continue;
+            if (!isSafeHtmlAttributeName(key)) continue;
             bag[key] = value;
         }
         return Object.keys(bag).length > 0 ? bag : undefined;

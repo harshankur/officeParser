@@ -9,6 +9,24 @@
  */
 
 /**
+ * Whether a string is a plain HTML attribute *name*, safe to interpolate before `="..."`.
+ *
+ * Escaping the value is not enough on its own: a key containing a quote or `=` closes the
+ * attribute and opens another, so `x" onmouseover="alert(1)" z` yields a real event handler no
+ * matter how carefully the value is escaped. This is the shape an attribute-injection payload
+ * takes, and rejecting it outright is simpler and safer than trying to escape a name.
+ *
+ * The predicate is shared rather than restated because it is now applied at four independent
+ * points (the parser's attribute collection, the generator's attribute bag, and two
+ * styleMap-driven paths). Each of those still keeps its own skip-list inline: the lists are the
+ * same policy expressed for different layers, and collapsing them would erase the defence in
+ * depth the surrounding comments describe.
+ */
+export function isSafeHtmlAttributeName(name: string): boolean {
+    return typeof name === 'string' && /^[a-zA-Z][a-zA-Z0-9-]*$/.test(name);
+}
+
+/**
  * Escapes text for an HTML text node or a double-quoted attribute value.
  * Includes the single quote so the result is also safe inside single-quoted
  * attributes.
