@@ -1,5 +1,5 @@
 import { ConversionResult, GeneratorConfig, HeadingMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, TextMetadata } from '../types.js';
-import { escapeRtf as escapeRtfShared } from '../utils/sanitize.js';
+import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -135,7 +135,16 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     if (meta?.link) {
                         const isInternal = meta.linkType !== 'external';
                         if (!this.config.ignoreInternalLinks || !isInternal) {
-                            return `{\\field{\\*\\fldinst{HYPERLINK "${this.escapeRtf(meta.link)}"}}{\\fldrslt ${text}}}`;
+                            // Scheme-checked, not merely escaped. escapeRtf neutralizes the field
+                            // metacharacters but says nothing about where the link points, so RTF
+                            // was the one generator that would emit `javascript:` or a `file://`
+                            // /UNC target that HTML and Markdown both reject. On rejection, fall
+                            // through to the bare link text - the same degradation as HTML's
+                            // href="" and Markdown's [text]().
+                            const safeLink = sanitizeRtfUrl(meta.link);
+                            if (safeLink) {
+                                return `{\\field{\\*\\fldinst{HYPERLINK "${safeLink}"}}{\\fldrslt ${text}}}`;
+                            }
                         }
                     }
 
@@ -227,8 +236,12 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // silently dropping the node (it has no children to fall back to).
                     const meta = node.metadata as any;
                     if (!meta?.url) return '';
+                    // Rendered as visible text rather than a field, but still a URL a reader may
+                    // copy, so it gets the same scheme policy.
+                    const safeUrl = sanitizeRtfUrl(meta.url);
+                    if (!safeUrl) return '';
                     const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
-                    return `${pPr}\\sa120 ${this.escapeRtf(meta.url)}\\par\n`;
+                    return `${pPr}\\sa120 ${safeUrl}\\par\n`;
                 }
 
                 default:

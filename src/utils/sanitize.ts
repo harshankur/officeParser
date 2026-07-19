@@ -208,6 +208,38 @@ export function csvSafeCell(value: string, delimiter: string): string {
 }
 
 /**
+ * Validates and escapes a document-supplied URL for an RTF `HYPERLINK` field argument.
+ *
+ * Mirrors `sanitizeUrl`'s contract (validate the scheme, then encode for the destination, else
+ * return `''`) but cannot reuse it: `sanitizeUrl` returns `escapeHtml(...)`, which would emit
+ * `&amp;` into an RTF field. The scheme allowlist is deliberately identical to `sanitizeUrl`'s
+ * and `sanitizeMarkdownUrl`'s, so all three text generators agree on what a hyperlink may point at.
+ *
+ * **Additionally rejects UNC paths (`\\host\share`), which the HTML allowlist does not.** In a
+ * browser `\\evil.com\share` is an inert relative path; in Word it is a live UNC reference that
+ * triggers an SMB fetch and an NTLM handshake on click, which is a credential-leak vector rather
+ * than a rendering quirk. That asymmetry is why this is a separate function and not a flag on
+ * `sanitizeUrl` - the HTML helper must NOT gain this behaviour, since there the path is harmless
+ * and rejecting it would break legitimate relative links.
+ *
+ * Returns `''` for a rejected URL; callers emit the link text without the field wrapper, matching
+ * how HTML degrades to `href=""` and Markdown to `[text]()`.
+ */
+export function sanitizeRtfUrl(url: string): string {
+    if (typeof url !== 'string') return '';
+    const trimmed = url.trim();
+    // Control characters are stripped before scheme matching for the same reason as sanitizeUrl:
+    // they are ignored when the target application parses the scheme.
+    const stripped = trimmed.replace(/[\x00-\x1F\x7F]+/g, '');
+    if (/^[\\/]{2}[^\\/]/.test(stripped)) return '';   // UNC (\\host\share, //host\share)
+    const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(stripped);
+    if (schemeMatch && !/^(https?|mailto|tel)$/i.test(schemeMatch[1])) {
+        return '';
+    }
+    return escapeRtf(stripped);
+}
+
+/**
  * Escapes text for RTF: neutralizes the control/group metacharacters `\ { }`
  * (which would otherwise inject RTF control words or groups), encodes the double
  * quote (so a hyperlink field argument can't be terminated early), and hex/unicode

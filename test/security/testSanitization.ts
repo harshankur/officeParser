@@ -17,7 +17,7 @@ import { OfficeParserAST, OfficeWarningType } from '../../src/types';
 import { resolveGeneratorConfig, resolveParserConfig } from '../../src/utils/configUtils';
 import {
     escapeHtml, escapeXml, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl,
-    serializeForInlineScript, csvSafeCell, escapeRtf, markdownEscapeText, sanitizeMarkdownUrl
+    serializeForInlineScript, csvSafeCell, escapeRtf, markdownEscapeText, sanitizeMarkdownUrl, sanitizeRtfUrl
 } from '../../src/utils/sanitize';
 
 let passed = 0;
@@ -103,6 +103,11 @@ function unitTests() {
     // RTF control-char / quote escaping.
     check('rtf braces escaped', escapeRtf('a{b}\\c') === 'a\\{b\\}\\\\c');
     check('rtf quote escaped', escapeRtf('"') === "\\'22");
+    check('rtf url javascript blocked', sanitizeRtfUrl('javascript:alert(1)') === '');
+    check('rtf url file blocked', sanitizeRtfUrl('file:///etc/passwd') === '');
+    check('rtf url UNC blocked', sanitizeRtfUrl('\\\\host\\share') === '');
+    check('rtf url https allowed', sanitizeRtfUrl('https://example.com/a') === 'https://example.com/a');
+    check('rtf url relative allowed', sanitizeRtfUrl('a/b.html') === 'a/b.html');
 
     // Markdown: only tag-opening "<" is encoded; bare "<" is preserved for round-trip.
     check('md tag < encoded', markdownEscapeText('<img onerror=x>') === '&lt;img onerror=x>');
@@ -622,6 +627,48 @@ async function styleMapTests() {
         !(await tagOut('p><script>alert(1)</script><p')).includes('<script'), 'script element emitted');
 }
 
+/**
+ * RTF was the only generator with no URL scheme allowlist - `escapeRtf` neutralizes the field
+ * metacharacters but says nothing about where the link points. A `file://` or UNC HYPERLINK in
+ * Word is a phishing / NTLM-credential-leak vector, not just a rendering quirk.
+ */
+async function rtfUrlTests() {
+    console.log('- RtfGenerator (URL schemes)...');
+
+    const linkAst = (url: string) => astWith([{ type: 'paragraph', children: [
+        { type: 'text', text: 'clickme', metadata: { link: url, linkType: 'external' } }] } as any]);
+    const rtfFor = async (url: string) => String((await OfficeGenerator.generate(linkAst(url), 'rtf')).value);
+
+    for (const url of ['javascript:alert(1)', 'vbscript:msgbox(1)', 'data:text/html,<script>',
+                       'file:///C:/Windows/System32/calc.exe', '\\\\evil.com\\share\\x', '//evil.com/share']) {
+        const rtf = await rtfFor(url);
+        check(`rtf: ${JSON.stringify(url).slice(0, 40)} emits no HYPERLINK field`,
+            !/HYPERLINK/.test(rtf), rtf.match(/HYPERLINK "[^"]*"/)?.[0] ?? rtf.slice(0, 120));
+        // Degrade, don't delete: the link text is document content and must survive.
+        check(`rtf: rejected link keeps its text`, rtf.includes('clickme'),
+            `link text was dropped along with the URL: ${rtf.slice(0, 120)}`);
+    }
+
+    // Positive control. Without these the allowlist could be "reject everything" and still pass.
+    for (const url of ['https://example.com/a?b=1', 'http://x.test/p', 'mailto:a@b.test', 'tel:+123', '#anchor', 'relative/path.html']) {
+        const rtf = await rtfFor(url);
+        check(`rtf: ${url} still emits a HYPERLINK field`, /HYPERLINK "/.test(rtf),
+            `legitimate URL was dropped: ${rtf.slice(0, 140)}`);
+    }
+
+    // UNC is rejected for RTF specifically and must NOT become a global policy: in a browser
+    // `//host/share` is an ordinary protocol-relative URL and blocking it there would break
+    // legitimate links from older HTML sources.
+    check('rtf: UNC rejection is RTF-only, HTML still allows protocol-relative',
+        sanitizeUrl('//example.com/x') === '//example.com/x',
+        `sanitizeUrl unexpectedly rejected a protocol-relative URL: ${JSON.stringify(sanitizeUrl('//example.com/x'))}`);
+
+    // Field metacharacters must still be neutralized on an otherwise-allowed URL.
+    const quoted = await rtfFor('https://example.com/a"}{\\b evil');
+    check('rtf: quotes/braces in an allowed URL are escaped',
+        !/HYPERLINK "[^"]*"\}\{\\b/.test(quoted), quoted.match(/HYPERLINK "[^"]*"/)?.[0] ?? '');
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
@@ -632,6 +679,7 @@ async function main() {
     await csvTests();
     await metadataOverrideTests();
     await styleMapTests();
+    await rtfUrlTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);
