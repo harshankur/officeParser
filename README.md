@@ -133,7 +133,7 @@ npx officeparser my_document --fileType=docx --to=json
 | `--renderMetadata` | boolean | `false` | Render metadata as visible content in the generated output |
 | `--htmlConfig.containerWidth` | string \| number | `auto` | HTML output container width (e.g. `900px`, `100%`) |
 | ~~`--format`~~ | `json\|text\|md\|html\|csv\|rtf\|pdf\|epub\|chunks` | `json` | **Deprecated.** Use `--to` |
-| ~~`--toText`~~ | `true\|false` | `false` | **Deprecated.** Use `--to=text` |
+| ~~`--toText`~~ | `true\|false` | `false` | **Deprecated.** Use `--to=text`, which keeps footnote text and image placeholders by default (both switchable); this flag drops them unconditionally |
 | ~~`--ocrLanguage`~~ | string | `eng` | **Deprecated.** Use `--ocrConfig.language` |
 | ~~`--putNotesAtLast`~~ | `true\|false` | `false` | **Deprecated and ignored.** Notes are attached structurally to their nodes. |
 | ~~`--outputErrorToConsole`~~ | `true\|false` | `false` | **Deprecated.** Use `--verbose` |
@@ -275,13 +275,56 @@ const { value: pdfBytes }           = await ast.to('pdf'); // Uint8Array
 
 ### `ast.toText()`: Quick Text Extraction
 
-> [!NOTE]
-> `toText()` is **synchronous** and deprecated in favour of the async `ast.to('text')`.
-> It remains available for backward compatibility.
+> [!WARNING]
+> `toText()` is **synchronous** and deprecated in favour of the async `ast.to('text')`. It remains
+> available for backward compatibility, but it is the older, less capable renderer: it has no
+> configuration at all, so footnote/endnote text and image placeholders are **unconditionally
+> dropped** rather than being something you can ask for. Prefer `.to('text')` for new code.
 
 ```js
 const text = ast.toText(); // synchronous, returns plain string
 ```
+
+#### Migrating to `.to('text')`
+
+`.to('text')` is asynchronous and configurable. Its defaults render tables as aligned grids, lists
+with markers/indentation, and include notes and image placeholders:
+
+```js
+// Default: aligned table grids, list markers, notes, image placeholders
+const { value } = await ast.to('text');
+
+// Deliberate opt-out: the combination closest to toText()'s shape
+const { value } = await ast.to('text', {
+    includeImages: false,
+    textConfig: { preserveLayout: false, renderNotes: false },
+});
+```
+
+**At its default configuration, `.to('text')` emits everything `toText()` emits.** Verified across
+every bundled fixture in all 12 supported formats, in both layout modes: no word `toText()` produces
+is missing from `.to('text')`. It additionally emits notes and image placeholders, which `toText()`
+never produces, and it renders merged table cells correctly (`toText()` glues a two-cell row into
+`OneThree`, where `.to('text')` gives `One Three`).
+
+Notes and images are **configuration, not intrinsic behavior**. They are on by default and you can
+turn them off. The real difference from `toText()` is that they are a choice at all:
+
+| | `toText()` | `.to('text')` | governed by |
+|---|---|---|---|
+| Tables | one cell per line | aligned grid, or tab-separated | `textConfig.preserveLayout` (default `true`) |
+| Lists | plain text | markers + indentation, or plain | `textConfig.preserveLayout` (default `true`) |
+| Footnotes/endnotes | never emitted | emitted by default | `textConfig.renderNotes` (default `true`) |
+| Image placeholders | never emitted | emitted by default | `includeImages` (default `true`) |
+| Chart data series | emitted | emitted | n/a |
+
+Nothing about `.to('text')` forces the richer output on you. The defaults simply start from the more
+complete document, and the opt-out above gets you back to `toText()`'s shape deliberately rather
+than by having no alternative.
+
+Spreadsheets (CSV/ODS/XLSX) are unaffected by `preserveLayout`: it governs `table`/`list` nodes,
+while spreadsheet content is `sheet`/`row`/`cell`. There the default aligned grid is the most
+faithful rendering.
 
 ---
 
@@ -472,7 +515,7 @@ OfficeParserAST
 │   └── chartData?: { title, dataSets, labels }
 ├── warnings: OfficeIssue[]  (non-fatal issues from the parsing phase)
 ├── to(format, config?)  (format: 'html'|'md'|'text'|'csv'|'rtf'|'pdf'|'chunks', returns { value, messages })
-└── ~~toText()~~             (Deprecated: use .to('text') instead)
+└── ~~toText()~~             (Deprecated: use .to('text'); drops footnotes + image placeholders)
 ```
 
 ### `OfficeIssue`: Warning / Error Object
@@ -1168,7 +1211,7 @@ const handleFile = async (event) => {
     const file = event.target.files[0];
     const buffer = await file.arrayBuffer();
     const ast = await OfficeParser.parseOffice(new Uint8Array(buffer));
-    console.log(ast.toText());
+    console.log((await ast.to('text')).value);
 };
 ```
 
@@ -1181,7 +1224,7 @@ const handleFile = async (event) => {
         const file = event.target.files[0];
         const buffer = await file.arrayBuffer();
         const ast = await officeParser.parseOffice(new Uint8Array(buffer));
-        console.log(ast.toText());
+        console.log((await ast.to('text')).value);
     }
 </script>
 ```
@@ -1216,7 +1259,7 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer, {
 | Node.js process stays alive after finishing | Call `await officeParser.terminateOcr()` at end of script when OCR was used |
 | `"Worker not found"` in browser for PDF | Verify `pdfWorkerSrc` points to `pdf.worker.min.mjs` matching version `6.1.200` |
 | Low OCR accuracy | Verify `ocrConfig.language` matches the document language; quality depends on image resolution |
-| Out of memory on large Excel files | Call `ast.toText()` early and discard the AST object to allow garbage collection |
+| Out of memory on large Excel files | Call `await ast.to('text')` early and discard the AST object to allow garbage collection |
 | `md`/`html`/`csv` buffer not detected | Add `fileType: 'md'` (or `'html'`, `'csv'`) to config (these formats have no magic bytes) |
 | `IMPROPER_BUFFERS` error | Usually means no file extension and no `fileType` hint was provided for a buffer input |
 | PDF generation fails | Install the optional peer dependency: `npm install puppeteer` |

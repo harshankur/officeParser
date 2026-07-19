@@ -42,6 +42,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `preserveLayout`, or `.to('md')` under a dialect that forces tables to HTML, e.g. `commonmark`)
   would leak a spurious leading blank line, since the table renderer's own separator convention had
   nothing to separate from.
+- **`.to('text')` silently dropped chart data and CSV comments.** `TextGenerator` rendered only a
+  node's children, so any node carrying its content in `text` with no children vanished entirely:
+  `chart` nodes (ODP/ODS/PPTX/XLSX), whose whole data series lives in `text`, and CSV `comment`
+  nodes. The deprecated `ast.toText()` kept both, making this a regression for anyone following the
+  documented migration. Fixed generically - the fallback now prefers rendered children but falls
+  back to the node's own `text`, matching what every parser's own `toTextSync` already does, so it
+  covers any future node of the same shape rather than just the two known today.
+- **`.to('text')` concatenated adjacent table cells with no separator.** `ITEM` + `NEEDED` rendered
+  as `ITEMNEEDED`, destroying the cell boundary, on every path that doesn't draw an aligned grid
+  (`preserveLayout: false`, and `sheet`/`row`/`cell`, which never route through the table renderer).
+  This was masked for XLSX/ODS only because their cell values happen to carry a trailing
+  non-breaking space *in the source data* - the delimiter came from the document, not the generator
+  - so formats without it (MD, HTML) collided outright. Cells are now tab-separated, but only when
+  the cell doesn't already end in a line break, since DOCX/ODT/RTF wrap cell content in a paragraph
+  that emits its own newline.
+
+### Changed
+- **`TextGeneratorConfig.renderNotes`** (default `true`) controls whether the collected
+  footnote/endnote section is appended to `.to('text')` output. Set it to `false`, alongside
+  `includeImages: false`, for the leaner rendering the deprecated `ast.toText()` produced.
+- **Documentation fix**: `TextGeneratorConfig.preserveLayout` was documented as defaulting to
+  `false`; the actual default is and always was `true`. Only the doc comment was wrong.
 
 ## [7.3.1] - 2026-07-14
 ### Fixed

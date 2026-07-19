@@ -370,11 +370,27 @@ export interface CommonOfficeParserConfig {
 }
 
 /**
- * Reserved for future Markdown-parsing options. Currently empty - the parser always populates
- * dialect-provenance metadata (e.g. `AdmonitionMetadata.sourceSyntax`) unconditionally, since doing
- * so costs nothing and doesn't change any existing field's value.
+ * Format-specific options for HTML (and XHTML/EPUB, which parse through the same code path).
+ *
+ * Note there is deliberately no `MdParserConfig`: the Markdown parser populates its
+ * dialect-provenance metadata (e.g. `AdmonitionMetadata.sourceSyntax`) unconditionally because
+ * doing so costs nothing and changes no existing field's value, so it has nothing to configure.
+ * An empty placeholder interface would be worse than useless here - `interface X {}` accepts any
+ * non-nullish value in TypeScript, so `mdParserConfig: 5` would type-check.
  */
-export interface MdParserConfig {
+export interface HtmlParserConfig {
+    /**
+     * Preserve source HTML attributes that no typed metadata field consumed, on
+     * `OfficeContentNode.htmlAttributes`, so they can be replayed on generation.
+     *
+     * Off by default: with it off nothing is populated, so the AST is byte-identical to previous
+     * releases, and the attribute-replay surface stays something a consumer opts into rather than
+     * something switched on for every existing caller. Captured values are sanitized on the way in
+     * *and* on the way out - see `BaseContentNode.htmlAttributes`.
+     *
+     * Defaults to false.
+     */
+    preserveAttributes?: boolean;
 }
 
 /**
@@ -384,8 +400,8 @@ export interface MdParserConfig {
  * mainly exists for internal typing/extensibility rather than compile-time narrowing per call.
  */
 type ParserSpecificConfig<F extends string> =
-    F extends 'md' ? { mdParserConfig?: MdParserConfig } :
-    Partial<{ mdParserConfig: MdParserConfig }>;
+    F extends 'html' | 'epub' ? { htmlParserConfig?: HtmlParserConfig } :
+    Partial<{ htmlParserConfig: HtmlParserConfig }>;
 
 /**
  * Configuration options for the OfficeParser.
@@ -1033,11 +1049,24 @@ export interface TextGeneratorConfig {
     newlineDelimiter?: string;
     /**
      * Whether to attempt to preserve the original document layout.
-     * If true, tables will be rendered with separators and aligned columns.
-     * If false, output will be a flat stream of text nodes.
-     * Defaults to false.
+     * If true, tables are rendered with separators and aligned columns, and list items get their
+     * markers and indentation.
+     * If false, output is a flat stream of text nodes (cells are tab-separated).
+     * Defaults to **true**.
      */
     preserveLayout?: boolean;
+    /**
+     * Whether to append the collected footnotes/endnotes as a trailing `--- Notes ---` section.
+     * Set false to omit it when you want only the document body; the notes are still parsed and
+     * remain available on the AST, they are simply not rendered into the text output.
+     *
+     * Note this differs from the parser's `ignoreNotes`, which discards notes at parse time so they
+     * never reach the AST at all. Use this when you want the AST to keep them but the text output
+     * to leave them out.
+     *
+     * Defaults to true.
+     */
+    renderNotes?: boolean;
 }
 
 
@@ -1877,6 +1906,24 @@ export interface BaseContentNode {
      * @example "<w:p><w:r><w:t>Hello</w:t></w:r></w:p>" for DOCX
      */
     rawContent?: string;
+
+    /**
+     * Source HTML attributes that no typed metadata field consumed, preserved for round-trip
+     * fidelity (e.g. a `data-*` attribute an editor round-trips through officeParser).
+     *
+     * Only populated by the HTML/XHTML parser, only for elements it recognises, and only when
+     * `htmlParserConfig.preserveAttributes` is enabled - so by default this is always absent.
+     *
+     * Sanitized on both legs, since an AST can also be constructed programmatically rather than
+     * parsed: event handlers (`on*`) and `srcdoc` are never carried, URL-bearing attributes go
+     * through the same URL sanitizer as typed fields, and every value is escaped on output. A
+     * typed field always wins over a same-named entry here.
+     *
+     * Ignored by the non-HTML generators (Markdown, RTF, CSV, text, chunking) by design - these
+     * are HTML attributes and have no meaning in those targets.
+     * @example { 'data-tracking-id': 'abc123', 'class': 'lead' }
+     */
+    htmlAttributes?: Record<string, string>;
 }
 
 /**
@@ -2197,15 +2244,37 @@ export interface OfficeParserAST {
     warnings: OfficeIssue[];
 
     /**
-     * @deprecated Use `.to('text')` instead.
-     * Note: This method is synchronous, while the new `.to()` method is asynchronous.
-     * 
-     * Converts the entire AST to plain text.
-     * This method flattens the document structure and returns just the text content,
-     * stripping out all formatting, metadata, and structure.
-     * 
-     * The text is concatenated using the delimiter specified in `config.newlineDelimiter` (default: '\n').
-     * 
+     * @deprecated Use `.to('text')` instead. This method is the older renderer and takes no
+     * configuration; `.to('text')` produces the same content and lets you configure the rest.
+     *
+     * Converts the entire AST to plain text, flattening the document structure and stripping all
+     * formatting, metadata, and structure. Text is joined using `config.newlineDelimiter`
+     * (default: `'\n'`).
+     *
+     * **Migrating.** `.to('text')` is asynchronous and configurable. At its defaults it emits
+     * everything this method emits, verified across every bundled fixture in all 12 supported
+     * formats in both layout modes: no word produced here is missing there. It also renders merged
+     * table cells correctly, where this method glues them (`OneThree` vs `One Three`).
+     *
+     * Where the two differ is configuration, not capability. Notes and image placeholders are
+     * emitted by default but are switchable; this method emits neither and offers no way to ask
+     * for them. Layout is likewise a knob rather than a fixed behavior:
+     *
+     * ```typescript
+     * // Default: aligned table grids, list markers, notes, image placeholders.
+     * const { value } = await ast.to('text');
+     *
+     * // Deliberate opt-out - closest to this method's shape.
+     * const { value } = await ast.to('text', {
+     *     includeImages: false,
+     *     textConfig: { preserveLayout: false, renderNotes: false },
+     * });
+     * ```
+     *
+     * Spreadsheets (CSV/ODS/XLSX) are unaffected by `preserveLayout`, since it governs
+     * `table`/`list` nodes rather than `sheet`/`row`/`cell`; there the default aligned grid is the
+     * most faithful rendering.
+     *
      * @returns A plain text representation of the document
      * @example
      * ```typescript

@@ -35,6 +35,9 @@
     "decompressionLimits": {
       "maxUncompressedBytes": 536870912,
       "maxZipEntries": 10000
+    },
+    "htmlParserConfig": {
+      "preserveAttributes": false
     }
   },
   "type": "md",

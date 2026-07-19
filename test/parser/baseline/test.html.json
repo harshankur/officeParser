@@ -35,6 +35,9 @@
     "decompressionLimits": {
       "maxUncompressedBytes": 536870912,
       "maxZipEntries": 10000
+    },
+    "htmlParserConfig": {
+      "preserveAttributes": false
     }
   },
   "type": "html",
@@ -353,7 +356,6 @@
           "type": "text",
           "text": "yellow highlight",
           "formatting": {
-            "color": "#FFFF00",
             "backgroundColor": "#FFFF00"
           },
           "rawContent": "yellow highlight"
@@ -517,7 +519,6 @@
           "text": "You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.",
           "formatting": {
             "alignment": "right",
-            "color": "#DDDDDD",
             "backgroundColor": "#DDDDDD"
           },
           "rawContent": "You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background."

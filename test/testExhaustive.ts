@@ -446,6 +446,65 @@ async function testHtml(): Promise<void> {
     assert.ok(noteNodes.length >= 1, 'HTML: Has note nodes');
     assertExists(noteNodes, n => (n.metadata as any)?.noteType === 'footnote', 'HTML: footnote note node');
 
+    // ── Inline-style declaration parsing ─────────────────────────────────────
+    // Assert the ABSENCE of the spurious field, not just the presence of the right one: the bug
+    // was that `color:` matched inside `background-color:`, so a passing `backgroundColor` check
+    // alone would not have caught it.
+    const bgOnly = assertExists(textNodes, n => n.formatting?.backgroundColor === 'yellow',
+        'HTML: background-color parsed');
+    assert.strictEqual(bgOnly.formatting?.color, undefined,
+        'HTML: background-color does not leak into color');
+    // The wrong-value case: an unanchored regex matched the substring inside background-color and
+    // returned red for a run whose text colour is blue.
+    assertExists(textNodes, n => n.formatting?.backgroundColor === 'red' && n.formatting?.color === 'blue',
+        'HTML: color reads the real declaration, not one nested in another property name');
+
+    // Regression guards - substring matching caught these by accident, exact matching must not lose them.
+    assert.ok(textNodes.some(n => n.formatting?.bold === true), 'HTML: font-weight bold variants detected');
+    assertExists(textNodes, n => n.formatting?.underline === true, 'HTML: vendor-prefixed text-decoration detected');
+    // text-decoration is a shorthand: both keywords have to land, not just the first.
+    assertExists(textNodes, n => n.formatting?.underline === true && n.formatting?.strikethrough === true,
+        'HTML: combined text-decoration sets both flags');
+    // Quote-aware splitting: a semicolon inside a quoted font stack must not split the declaration.
+    assertExists(textNodes, n => n.formatting?.font === 'Fira, A;B',
+        'HTML: semicolon inside a quoted font-family survives splitting');
+
+    const htmlImages = nodes.filter(n => n.type === 'image');
+    // max-width constrains rendering; it is not an author-declared width.
+    assertExists(htmlImages, n => (n.metadata as any)?.altText === 'Responsive image' && (n.metadata as any)?.width === undefined,
+        'HTML: max-width is not read as an explicit width');
+    assertExists(htmlImages, n => (n.metadata as any)?.altText === 'Centered image' && (n.metadata as any)?.align === 'center',
+        'HTML: margin shorthand centering is recognised');
+    // A 0.5rem left margin is not "left aligned" - the old check substring-matched "margin-left: 0".
+    assertExists(htmlImages, n => (n.metadata as any)?.altText === 'Indented image' && (n.metadata as any)?.align === undefined,
+        'HTML: a non-zero left margin is not read as left alignment');
+
+    // ── Attribute pass-through (htmlParserConfig.preserveAttributes) ─────────
+    // Default OFF is a compatibility guarantee, not a preference: with the flag unset the AST must
+    // be byte-identical to previous releases, so assert absence before asserting capture.
+    assert.ok(nodes.every(n => n.htmlAttributes === undefined),
+        'HTML: htmlAttributes absent by default (no observable AST change)');
+
+    const preserved = await OfficeParser.parseOffice(filePath, { htmlParserConfig: { preserveAttributes: true } } as any);
+    const preservedNodes = collectAllNodes(preserved);
+
+    const bagged = assertExists(preservedNodes, n => n.htmlAttributes?.['data-custom'] === 'kept',
+        'HTML: preserveAttributes captures an unconsumed data-* attribute');
+    assert.strictEqual(bagged.htmlAttributes?.['data-tracking-id'], 'abc123', 'HTML: captures every unconsumed attribute');
+    // `class` is deliberately carried (the generator builds its class attribute from style-mapping
+    // only, so without this a plain class="lead" is lost outright).
+    assert.strictEqual(bagged.htmlAttributes?.['class'], 'lead', 'HTML: class is carried, not dropped');
+    // `style` and `id` are consumed into formatting/anchorIds, so they must NOT be duplicated here.
+    assert.ok(!('style' in (bagged.htmlAttributes || {})) && !('id' in (bagged.htmlAttributes || {})),
+        'HTML: generator-owned attributes (style/id) are not carried');
+
+    // Regression: the attribute-name pattern used to split on any character outside
+    // [a-zA-Z0-9-:], so `data_under_score="x"` yielded TWO attributes - `data` plus an invented
+    // `under_score`. Assert the invented one is gone; the real name is not a bare-name match so it
+    // is filtered rather than carried, which is the safe outcome.
+    assert.ok(!preservedNodes.some(n => Object.keys(n.htmlAttributes || {}).some(k => k === 'data' || k.includes('under_score'))),
+        'HTML: an underscored attribute name is never split into an invented attribute');
+
     // ── Roundtrip: generate to HTML ──────────────────────────────────────────
     const result = await OfficeGenerator.generate(ast, 'html');
     const htmlOutput = result.value as string;
@@ -453,6 +512,18 @@ async function testHtml(): Promise<void> {
     assert.ok(htmlOutput.includes('<ul') || htmlOutput.includes('<ol'), 'HTML roundtrip: list tag');
     assert.ok(htmlOutput.includes('<table'), 'HTML roundtrip: table tag');
     assert.ok(htmlOutput.includes('<ol') || htmlOutput.includes('<ul'), 'HTML roundtrip: list');
+
+    // Preserved attributes must survive back out, and merging must not produce a duplicate
+    // `class` - which is merely invalid in HTML but a *fatal* well-formedness error in the XHTML
+    // EpubGenerator emits, i.e. an EPUB that refuses to open.
+    const preservedOut = String((await OfficeGenerator.generate(preserved, 'html')).value);
+    assert.ok(preservedOut.includes('data-custom="kept"'), 'HTML roundtrip: preserved attribute re-emitted');
+    assert.ok(/class="[^"]*\blead\b[^"]*"/.test(preservedOut), 'HTML roundtrip: source class merged into the class attribute');
+    for (const tag of preservedOut.match(/<[a-zA-Z][^>]*>/g) || []) {
+        const attrNames = [...tag.matchAll(/\s([a-zA-Z_:][\w:.-]*)\s*=/g)].map(m => m[1].toLowerCase());
+        assert.strictEqual(new Set(attrNames).size, attrNames.length,
+            `HTML roundtrip: no duplicate attribute in ${tag.slice(0, 80)}`);
+    }
 
     console.log('  HTML: All assertions passed ✓');
 }

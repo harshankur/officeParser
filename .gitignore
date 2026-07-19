@@ -21,6 +21,7 @@ scratch
 repro
 .npm-cache
 /plans
+/agent-instructions
 /AGENTS.md
 /GEMINI.md
 /CLAUDE.md

@@ -74,7 +74,7 @@ await terminateOcr(); // Snappy exit</code></pre>
     <p>When parsing extremely large Excel (.xlsx) or PowerPoint (.pptx) files:</p>
     <ul>
         <li><strong>AST vs. Text:</strong> The structured AST consumes significantly more memory than plain text. If you
-            don't need the hierarchy, use <code>ast.toText()</code> and allow the AST to be garbage-collected
+            don't need the hierarchy, use <code>await ast.to('text')</code> and allow the AST to be garbage-collected
             immediately.</li>
         <li><strong>Ignore Notes:</strong> For complex PowerPoints, setting <code>ignoreNotes: true</code> can reduce
             memory usage by skipping entire XML trees.</li>
@@ -167,7 +167,7 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
             </tr>
             <tr>
                 <td>Out of memory on large Excel files</td>
-                <td>Call <code>ast.toText()</code> early and discard the AST to allow GC</td>
+                <td>Call <code>await ast.to('text')</code> early and discard the AST to allow GC</td>
             </tr>
             <tr>
                 <td><code>md</code>/<code>html</code>/<code>csv</code> buffer not detected</td>

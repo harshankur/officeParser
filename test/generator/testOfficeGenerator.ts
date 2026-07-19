@@ -24,6 +24,7 @@ import {
     DeepRequired,
     GeneratorConfig,
     OfficeContentNode,
+    OfficeContentNodeType,
     OfficeParserAST,
     OfficeParserConfig,
 } from '../../src/types';
@@ -74,7 +75,7 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
         maxUncompressedBytes: 512 * 1024 * 1024,
         maxZipEntries: 10000
     },
-    mdParserConfig: {}
+    htmlParserConfig: { preserveAttributes: false }
 };
 
 /** Generator config permutations */
@@ -235,6 +236,13 @@ interface RoundtripMetrics {
     tables: number;
     lists: number;
     images: number;
+    // Fidelity dimensions. The metrics above count node *types* only, so a change to
+    // header-cell/embed/highlight/caption fidelity moves none of them - which is exactly the
+    // blind spot this harness exists to prevent. These make that class of regression visible.
+    headerCells: number;
+    embeds: number;
+    highlightedText: number;
+    captions: number;
 }
 
 // ============================================================================
@@ -273,6 +281,7 @@ function loadGeneratorBaseline(srcExt: string, destFmt: string): GeneratedMetric
 
 function extractRoundtripMetrics(ast: OfficeParserAST): RoundtripMetrics {
     let contentNodes = 0, headings = 0, tables = 0, lists = 0, images = 0;
+    let headerCells = 0, embeds = 0, highlightedText = 0, captions = 0;
 
     function traverse(nodes: OfficeContentNode[]) {
         for (const n of nodes) {
@@ -281,13 +290,20 @@ function extractRoundtripMetrics(ast: OfficeParserAST): RoundtripMetrics {
             if (n.type === 'table' || n.type === 'sheet') tables++;
             if (n.type === 'list') lists++;
             if (n.type === 'image') images++;
+            if (n.type === 'embed') embeds++;
+            // Tri-state: only an explicit `true` counts, so an absent flag never inflates this.
+            if (n.type === 'cell' && (n.metadata as any)?.isHeader === true) headerCells++;
+            // Cast: `highlight` lands on TextFormatting in a later commit; this metric is
+            // introduced first so that commit's effect is visible in the diff rather than silent.
+            if ((n.formatting as any)?.highlight === true) highlightedText++;
+            if ((n.type === 'image' || n.type === 'table') && (n.metadata as any)?.caption) captions++;
             if (n.children) traverse(n.children);
         }
     }
     traverse(ast.content);
 
     const textLength = ast.toText().length;
-    return { contentNodes, textLength, headings, tables, lists, images };
+    return { contentNodes, textLength, headings, tables, lists, images, headerCells, embeds, highlightedText, captions };
 }
 
 function extractGeneratedMetrics(output: string, fmt: GeneratorFormat): GeneratedMetrics {
@@ -455,6 +471,27 @@ function compareRoundtripASTs(
     const nOk = nRatio >= 0.90 && nRatio <= 1.10;
     results.push(mk('Content Nodes (±10%)', original.contentNodes, regenerated.contentNodes,
         nOk, `${(nRatio * 100).toFixed(1)}% of original nodes`, !nOk));
+
+    // --- Fidelity dimensions ---
+    // These are the constructs a "round-trips fine" node-type count can't see. Each is compared
+    // exactly, but only WARNs when it drops: several are legitimately unrepresentable in a given
+    // target (a header cell has no RTF/CSV equivalent, GFM has one header row, plain text has no
+    // highlight), so a FAIL would encode "lossy by design" as a failure. A drop still has to be
+    // visible, which is the entire point of adding them.
+    const fidelity: Array<[string, number, number]> = [
+        ['Header Cells', original.headerCells, regenerated.headerCells],
+        ['Embeds', original.embeds, regenerated.embeds],
+        ['Highlighted Runs', original.highlightedText, regenerated.highlightedText],
+        ['Captions', original.captions, regenerated.captions],
+    ];
+    for (const [label, before, after] of fidelity) {
+        // Nothing to prove when the source had none of this construct.
+        if (before === 0 && after === 0) continue;
+        const ok = before === after;
+        results.push(mk(`${label} (exact)`, before, after, ok,
+            ok ? `${after} preserved` : `Expected ${before}, got ${after} — lossy for this target?`,
+            !ok));
+    }
 
     return results;
 }
@@ -1332,6 +1369,104 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
     const trailingSpacesAst = createAST('docx', {}, trailingSpacesContent, [], parserConfig, undefined, () => '');
     const { value: trailingSpacesValue } = await trailingSpacesAst.to('text');
     results.push(mk('text', '.to(text) preserves genuine trailing spaces', 'ends with "   "', trailingSpacesValue.endsWith('   '), trailingSpacesValue.endsWith('   '), 'only a run of the exact newline delimiter is a generator artifact - other trailing whitespace is real content'));
+
+    // --- Issue #102: a whitespace-ONLY block is content, not an empty block ---
+    // The reported symptom was ".to('text') strips leading whitespace" for a Word document that
+    // begins with whitespace. In Word that is almost always a leading blank-but-not-empty
+    // paragraph, which is a different code path from an indented first line: the generator
+    // discarded any block whose children trimmed to '', while every parser's own toTextSync
+    // filters on `!== ''`. Both readings of the report are covered here.
+    const wordLikeToText = (content: OfficeContentNode[]) => content
+        .map(c => (c.children || []).map(k => k.text || '').join(''))
+        .filter(t => t != '')
+        .join('\n');
+
+    const issue102Cases: Array<[string, OfficeContentNode[]]> = [
+        ['leading whitespace-only paragraph', [
+            { type: 'paragraph', children: [{ type: 'text', text: '   ' }] } as OfficeContentNode,
+            { type: 'paragraph', children: [{ type: 'text', text: 'Hello' }] } as OfficeContentNode,
+        ]],
+        ['whitespace-only paragraph mid-document', [
+            { type: 'paragraph', children: [{ type: 'text', text: 'A' }] } as OfficeContentNode,
+            { type: 'paragraph', children: [{ type: 'text', text: '  ' }] } as OfficeContentNode,
+            { type: 'paragraph', children: [{ type: 'text', text: 'B' }] } as OfficeContentNode,
+        ]],
+        // A genuinely empty paragraph must still be dropped - that is the behaviour the
+        // trimmed-emptiness check was there for, and both paths already agreed on it.
+        ['genuinely empty paragraph still dropped', [
+            { type: 'paragraph', children: [{ type: 'text', text: '' }] } as OfficeContentNode,
+            { type: 'paragraph', children: [{ type: 'text', text: 'Hello' }] } as OfficeContentNode,
+        ]],
+    ];
+
+    for (const [label, content] of issue102Cases) {
+        const caseAst = createAST('docx', {}, content, [], parserConfig, undefined, () => wordLikeToText(content));
+        const legacy = caseAst.toText();
+        const { value: modern } = await caseAst.to('text');
+        results.push(mk('text', `#102: ${label}`, JSON.stringify(legacy), JSON.stringify(modern), legacy === modern,
+            'toText() is the documented equivalent of .to(text); a whitespace-only block must not vanish from one and not the other'));
+    }
+
+    // --- Nodes that carry their content in `text` with no children must not vanish ---
+    // TextGenerator rendered only `childrenOutput`, so a `chart` (whose entire data series lives in
+    // `text`) and a CSV `comment` were emitted as nothing at all - while the deprecated toText(),
+    // which reads node.text directly, kept both. The fix is generic rather than per-type, so assert
+    // it that way: any leaf-with-text must survive, not just the two we happened to find.
+    const leafTextTypes: Array<OfficeContentNodeType> = ['chart', 'comment'];
+    for (const leafType of leafTextTypes) {
+        const marker = `SERIES-${leafType.toUpperCase()}-42`;
+        const leafAst = createAST('docx', {}, [{ type: leafType, text: marker } as OfficeContentNode],
+            [], parserConfig, undefined, () => marker);
+        const { value: leafOut } = await leafAst.to('text');
+        results.push(mk('text', `leaf '${leafType}' node text is not dropped`,
+            marker, JSON.stringify(leafOut), leafOut.includes(marker),
+            'a node carrying its content in text with no children was rendered as empty; toText() kept it, so following the documented migration lost content'));
+    }
+    // Children still win when both are present - the fallback must not double-render.
+    const bothAst = createAST('docx', {}, [{
+        type: 'chart', text: 'RAW-FALLBACK',
+        children: [{ type: 'text', text: 'CHILD-TEXT' }],
+    } as OfficeContentNode], [], parserConfig, undefined, () => 'CHILD-TEXT');
+    const { value: bothOut } = await bothAst.to('text');
+    results.push(mk('text', 'node text is a fallback, not an addition',
+        'CHILD-TEXT only', JSON.stringify(bothOut),
+        bothOut.includes('CHILD-TEXT') && !bothOut.includes('RAW-FALLBACK'),
+        'rendered children are the richer representation; emitting both would duplicate the content'));
+
+    // --- Cells must be separated, not concatenated ---
+    // Without an explicit separator "ITEM" + "NEEDED" renders as "ITEMNEEDED" and the cell boundary
+    // is gone. This was invisible for XLSX/ODS only because their cell values carry a trailing
+    // non-breaking space in the source data - the delimiter came from the document, not from us,
+    // so any format without that trailing whitespace (MD, HTML) collided outright.
+    const cellRowContent: OfficeContentNode[] = [
+        {
+            type: 'table',
+            children: [{
+                type: 'row',
+                children: [
+                    { type: 'cell', children: [{ type: 'text', text: 'ITEM' }] },
+                    { type: 'cell', children: [{ type: 'text', text: 'NEEDED' }] },
+                ],
+            } as OfficeContentNode],
+        } as OfficeContentNode,
+    ];
+    const cellAst = createAST('docx', undefined as any, cellRowContent, [], parserConfig, undefined, () => '');
+    const { value: flatCells } = await cellAst.to('text', { textConfig: { preserveLayout: false } } as any);
+    results.push(mk('text', 'cells are separated when not rendering a grid',
+        'ITEM and NEEDED separated', JSON.stringify(flatCells),
+        !flatCells.includes('ITEMNEEDED') && /ITEM\s+NEEDED/.test(flatCells),
+        'preserveLayout:false must still delimit cells; concatenating them destroys the cell boundary'));
+    // No trailing delimiter: it is an artifact of appending one per cell, not content.
+    results.push(mk('text', 'no trailing cell separator on a row',
+        'row does not end with a tab', JSON.stringify(flatCells),
+        !flatCells.split('\n').some(l => l.endsWith('\t')),
+        'the separator after the final cell has nothing to separate from'));
+    // The aligned-grid path must be untouched by the separator change.
+    const { value: gridCells } = await cellAst.to('text', { textConfig: { preserveLayout: true } } as any);
+    results.push(mk('text', 'grid rendering unaffected by the cell separator',
+        'renders | ITEM | NEEDED |', JSON.stringify(gridCells),
+        gridCells.includes('| ITEM') && gridCells.includes('| NEEDED') && !gridCells.includes('ITEM\t'),
+        'preserveLayout:true routes through renderTable, which does its own column alignment'));
 
     // --- A table as the only/first top-level node: renderTable (text) and the HTML-fallback path
     // of renderMarkdownTable (md) both unconditionally wrap in a leading+trailing newline as

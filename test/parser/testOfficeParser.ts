@@ -89,7 +89,7 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
         maxUncompressedBytes: 512 * 1024 * 1024,
         maxZipEntries: 10000
     },
-    mdParserConfig: {}
+    htmlParserConfig: { preserveAttributes: false }
 };
 
 /** Config permutations to test */

@@ -13,7 +13,13 @@ interface HtmlNode {
 
 const parseAttributes = (attrString: string): Record<string, string> => {
     const attrs: Record<string, string> = {};
-    const regex = /([a-zA-Z0-9\-:]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+    // Attribute names follow the HTML5 rule - any character except whitespace and
+    // " ' > / = - rather than a hand-picked allowlist. The previous class
+    // ([a-zA-Z0-9\-:]) silently split a legal name on any character outside it, so
+    // `data_foo="x"` produced TWO attributes: `data` (empty) and an invented
+    // `foo="x"` that was never in the source. Harmless while nothing read unknown
+    // attributes; not harmless once they can be replayed into generated output.
+    const regex = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
     let match;
     while ((match = regex.exec(attrString)) !== null) {
         const name = match[1].toLowerCase();
@@ -21,6 +27,92 @@ const parseAttributes = (attrString: string): Record<string, string> => {
         attrs[name] = value;
     }
     return attrs;
+};
+
+/**
+ * Splits an inline `style` attribute into a property -> value map.
+ *
+ * Replaces substring matching (`styleAttr.includes('font-weight: bold')`) and unanchored regexes
+ * (`/color:\s*([^;]+)/`), which were wrong in both directions:
+ *   - false positives: `color:` matched inside `background-color:`, so
+ *     `"background-color: red; color: blue"` yielded color=red - the *wrong* value, not merely a
+ *     spurious one - and `width:` matched inside `max-width:`, so the ubiquitous responsive-image
+ *     style `max-width: 100%` was read as an explicit width.
+ *   - false negatives: `font-weight:bold` without a space, `font-weight: 700`, and `bolder` were
+ *     all missed, as was `line-through` inside `text-decoration: underline line-through`.
+ *
+ * Splitting is quote- and paren-aware so a semicolon inside `url(data:image/png;base64,...)` or a
+ * quoted font stack doesn't shatter the declaration. `!important` is stripped from values, since
+ * substring matching used to tolerate it and exact comparison otherwise would not - dropping it
+ * would be a silent regression rather than the intended fix.
+ */
+const parseStyleDeclarations = (styleAttr: string): Map<string, string> => {
+    const decls = new Map<string, string>();
+    if (!styleAttr) return decls;
+
+    let depth = 0;
+    let quote: '"' | '\'' | null = null;
+    let current = '';
+    const chunks: string[] = [];
+    for (const ch of styleAttr) {
+        if (quote) {
+            if (ch === quote) quote = null;
+        } else if (ch === '"' || ch === '\'') {
+            quote = ch;
+        } else if (ch === '(') {
+            depth++;
+        } else if (ch === ')') {
+            if (depth > 0) depth--;
+        } else if (ch === ';' && depth === 0) {
+            chunks.push(current);
+            current = '';
+            continue;
+        }
+        current += ch;
+    }
+    chunks.push(current);
+
+    for (const chunk of chunks) {
+        const idx = chunk.indexOf(':');
+        if (idx === -1) continue;
+        const prop = chunk.slice(0, idx).trim().toLowerCase();
+        if (!prop) continue;
+        const value = chunk.slice(idx + 1).trim().replace(/\s*!\s*important\s*$/i, '').trim();
+        if (value) decls.set(prop, value);
+    }
+    return decls;
+};
+
+/**
+ * Reads a declaration, also accepting the `-webkit-`/`-moz-`/`-ms-`/`-o-` prefixed spelling so a
+ * vendor-prefixed property keeps matching (substring matching used to catch those by accident).
+ */
+const getDeclaration = (decls: Map<string, string>, prop: string): string | undefined =>
+    decls.get(prop)
+    ?? decls.get(`-webkit-${prop}`)
+    ?? decls.get(`-moz-${prop}`)
+    ?? decls.get(`-ms-${prop}`)
+    ?? decls.get(`-o-${prop}`);
+
+/**
+ * Returns the first family from a `font-family` stack, respecting quotes so a quoted family name
+ * containing a comma (`'Fira, A', serif`) isn't split through the middle of its own name.
+ */
+const firstFontFamily = (fontFamily: string): string => {
+    let quote: '"' | '\'' | null = null;
+    let first = '';
+    for (const ch of fontFamily) {
+        if (quote) {
+            if (ch === quote) { quote = null; continue; }
+        } else if (ch === '"' || ch === '\'') {
+            quote = ch;
+            continue;
+        } else if (ch === ',') {
+            break;
+        }
+        first += ch;
+    }
+    return first.trim();
 };
 
 const parseHtmlTree = (html: string): HtmlNode => {
@@ -235,6 +327,43 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
     // consulted by parseChildren's <sup data-footnote-ref> handling below.
     const footnoteDefinitions = new Map<string, OfficeContentNode[]>();
 
+    // --- Generic attribute pass-through (htmlParserConfig.preserveAttributes) ---------------
+    // Captures attributes no typed metadata field consumed, so they can be replayed on
+    // generation. Everything here is a *defence-in-depth* filter: HtmlGenerator sanitizes again
+    // on the way out, because an AST can be built programmatically rather than parsed.
+    const preserveAttributes = config.htmlParserConfig?.preserveAttributes === true;
+
+    // `style` is already consumed wholesale into TextFormatting/metadata above, and `id` is
+    // consumed into anchorIds and re-emitted by the generator - carrying either would duplicate
+    // an attribute the generator composes itself. `class` is deliberately NOT excluded: the
+    // generator's class attribute is built purely from style-mapping and never from a parsed
+    // `class`, so without this a plain `<p class="lead">` loses "lead" entirely. The generator
+    // merges it into that attribute rather than emitting a second one.
+    const GENERATOR_OWNED_ATTRS = new Set(['id', 'style']);
+
+    /**
+     * Captures the attributes of `node` that `consumed` didn't claim.
+     * Returns undefined when nothing survives, so the field stays absent rather than `{}`.
+     */
+    const collectHtmlAttributes = (node: HtmlNode, consumed: string[]): Record<string, string> | undefined => {
+        if (!preserveAttributes || !node.attributes) return undefined;
+        const consumedSet = new Set(consumed.map(c => c.toLowerCase()));
+        const bag: Record<string, string> = {};
+        for (const [rawKey, value] of Object.entries(node.attributes)) {
+            const key = rawKey.toLowerCase();
+            if (consumedSet.has(key) || GENERATOR_OWNED_ATTRS.has(key)) continue;
+            // Event handlers are never carried, at any layer, with no opt-in.
+            if (/^on/i.test(key)) continue;
+            // srcdoc holds a whole HTML document; it cannot be safely escaped into an attribute.
+            if (key === 'srcdoc') continue;
+            // Reject anything that isn't a plain attribute name outright - a key containing a
+            // quote or '=' is the shape an attribute-injection payload takes.
+            if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(key)) continue;
+            bag[key] = value;
+        }
+        return Object.keys(bag).length > 0 ? bag : undefined;
+    };
+
     const parseNode = (node: HtmlNode, currentFormatting: TextFormatting = {}, listContext?: ListContext, depth: number = 0): OfficeContentNode | OfficeContentNode[] | null => {
         // Guard against a maliciously deep element tree (e.g. tens of thousands of
         // nested <div>) recursing until the call stack overflows. Real documents
@@ -286,26 +415,44 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             const styleAttr = node.attributes?.style || '';
             const alignAttr = node.attributes?.align || '';
             if (styleAttr || alignAttr) {
-                if (styleAttr.includes('font-weight: bold')) newFormatting.bold = true;
-                if (styleAttr.includes('font-style: italic')) newFormatting.italic = true;
-                if (styleAttr.includes('text-decoration: underline')) newFormatting.underline = true;
-                if (styleAttr.includes('text-decoration: line-through')) newFormatting.strikethrough = true;
+                const decls = parseStyleDeclarations(styleAttr);
 
-                const colorMatch = styleAttr.match(/color:\s*([^;]+)/);
-                if (colorMatch) newFormatting.color = colorMatch[1].trim();
+                // `bold`, `bolder`, and any weight >= 600 are all bold; the old substring check
+                // only ever saw the literal "font-weight: bold".
+                const weight = getDeclaration(decls, 'font-weight');
+                if (weight) {
+                    const numericWeight = parseInt(weight, 10);
+                    if (weight === 'bold' || weight === 'bolder' || (!isNaN(numericWeight) && numericWeight >= 600)) {
+                        newFormatting.bold = true;
+                    }
+                }
 
-                const bgMatch = styleAttr.match(/background-color:\s*([^;]+)/);
-                if (bgMatch) newFormatting.backgroundColor = bgMatch[1].trim();
+                if (getDeclaration(decls, 'font-style') === 'italic') newFormatting.italic = true;
 
-                const sizeMatch = styleAttr.match(/font-size:\s*([^;]+)/);
-                if (sizeMatch) newFormatting.size = sizeMatch[1].trim();
+                // text-decoration is a shorthand that can carry several keywords at once, so
+                // "underline line-through" has to set both flags rather than only the first.
+                const decoration = getDeclaration(decls, 'text-decoration') ?? getDeclaration(decls, 'text-decoration-line');
+                if (decoration) {
+                    const parts = decoration.split(/\s+/);
+                    if (parts.includes('underline')) newFormatting.underline = true;
+                    if (parts.includes('line-through')) newFormatting.strikethrough = true;
+                }
 
-                const fontMatch = styleAttr.match(/font-family:\s*([^;]+)/);
-                if (fontMatch) newFormatting.font = fontMatch[1].trim().split(',')[0].replace(/['"]/g, '');
+                const color = decls.get('color');
+                if (color) newFormatting.color = color;
 
-                const alignmentMatch = styleAttr.match(/text-align:\s*(left|center|right|justify)/);
-                if (alignmentMatch) {
-                    newFormatting.alignment = alignmentMatch[1].toLowerCase() as any;
+                const background = getDeclaration(decls, 'background-color');
+                if (background) newFormatting.backgroundColor = background;
+
+                const size = getDeclaration(decls, 'font-size');
+                if (size) newFormatting.size = size;
+
+                const fontFamily = getDeclaration(decls, 'font-family');
+                if (fontFamily) newFormatting.font = firstFontFamily(fontFamily);
+
+                const textAlign = getDeclaration(decls, 'text-align')?.toLowerCase();
+                if (textAlign && ['left', 'center', 'right', 'justify'].includes(textAlign)) {
+                    newFormatting.alignment = textAlign as any;
                 } else if (alignAttr) {
                     const align = alignAttr.toLowerCase();
                     if (['left', 'center', 'right', 'justify'].includes(align)) {
@@ -482,7 +629,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const pNode: OfficeContentNode = {
                     type: 'paragraph',
                     metadata: { alignment: newFormatting.alignment, anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as ParagraphMetadata,
-                    children: flattenedChildren
+                    children: flattenedChildren,
+                    htmlAttributes: collectHtmlAttributes(node, ['align'])
                 };
 
                 if (config.includeRawContent) {
@@ -497,7 +645,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const hNode: OfficeContentNode = {
                     type: 'heading',
                     metadata: { level, alignment: newFormatting.alignment, anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as HeadingMetadata,
-                    children: parseChildren(node, newFormatting, listContext)
+                    children: parseChildren(node, newFormatting, listContext),
+                    htmlAttributes: collectHtmlAttributes(node, ['align'])
                 };
                 return hNode;
             }
@@ -608,7 +757,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const tableNode: OfficeContentNode = {
                     type: 'table',
                     metadata: { anchorIds: anchorIds.length > 0 ? anchorIds : undefined, align: tableAlign } as TableMetadata,
-                    children: parseChildren(node, newFormatting, listContext)
+                    children: parseChildren(node, newFormatting, listContext),
+                    htmlAttributes: collectHtmlAttributes(node, ['data-align', 'align'])
                 };
                 if (config.includeRawContent) {
                     tableNode.rawContent = '<table>...</table>';
@@ -618,7 +768,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             if (tagName === 'tr') {
                 const rowNode: OfficeContentNode = {
                     type: 'row',
-                    children: parseChildren(node, newFormatting, listContext)
+                    children: parseChildren(node, newFormatting, listContext),
+                    htmlAttributes: collectHtmlAttributes(node, [])
                 };
                 if (config.includeRawContent) {
                     rowNode.rawContent = '<tr>...</tr>';
@@ -639,7 +790,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                         colSpan: colSpan && !isNaN(colSpan) ? colSpan : undefined,
                         rowSpan: rowSpan && !isNaN(rowSpan) ? rowSpan : undefined
                     } as CellMetadata,
-                    children: parseChildren(node, newFormatting, listContext)
+                    children: parseChildren(node, newFormatting, listContext),
+                    htmlAttributes: collectHtmlAttributes(node, ['colspan', 'rowspan', 'align'])
                 };
                 if (config.includeRawContent) {
                     cellNode.rawContent = '<td>...</td>';
@@ -652,11 +804,29 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
 
                 // CustomImage (inscript-editor) renders data-width/data-align, falling back to
                 // parsing the inline style for consumers that only emit the CSS.
-                const imgStyle = node.attributes?.style || '';
-                const width = node.attributes?.['data-width'] || imgStyle.match(/width:\s*([^;]+)/)?.[1]?.trim();
+                const imgDecls = parseStyleDeclarations(node.attributes?.style || '');
+                // Exact lookup, so `max-width: 100%` - the standard responsive-image style, and by
+                // far the most common inline style on an <img> - is no longer read as a declared
+                // width. It constrains the rendered size; it is not an author-specified width.
+                const width = node.attributes?.['data-width'] || getDeclaration(imgDecls, 'width');
+
+                // Alignment is inferred from which auto margin is present. Comparing the parsed
+                // value rather than substring-matching "margin-left: 0" stops `margin-left: 0.5rem`
+                // from being read as left-aligned, and lets the `margin: 0 auto` centering
+                // shorthand be recognised at all.
+                const marginLeft = getDeclaration(imgDecls, 'margin-left');
+                const marginRight = getDeclaration(imgDecls, 'margin-right');
+                const marginShorthand = getDeclaration(imgDecls, 'margin');
+                const isZero = (v: string | undefined) => v !== undefined && /^0(?:[a-z%]*)$/.test(v);
+                const shorthandParts = marginShorthand ? marginShorthand.split(/\s+/) : [];
+                const shorthandCentres = shorthandParts.length > 1
+                    && shorthandParts[shorthandParts.length - 1] === 'auto'
+                    && shorthandParts[1] === 'auto';
+
                 const alignAttr = node.attributes?.['data-align']
-                    || (imgStyle.includes('margin-left: 0') && !imgStyle.includes('margin-right: 0') ? 'left'
-                        : (imgStyle.includes('margin-right: 0') && !imgStyle.includes('margin-left: 0') ? 'right' : undefined));
+                    ?? (shorthandCentres ? 'center'
+                        : (isZero(marginLeft) && !isZero(marginRight) ? 'left'
+                            : (isZero(marginRight) && !isZero(marginLeft) ? 'right' : undefined)));
                 const align = (['left', 'center', 'right'] as const).includes(alignAttr as any) ? alignAttr as 'left' | 'center' | 'right' : undefined;
 
                 let imageNode: OfficeContentNode;

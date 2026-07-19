@@ -180,10 +180,56 @@ async function csvTests() {
     check('csv: comment line no formula split', !cellStartsFormula, `comment split into formula: ${JSON.stringify(csv2)}`);
 }
 
+/**
+ * `BaseContentNode.htmlAttributes` replays source attributes into generated HTML, so it is an
+ * injection surface by construction. These build the AST directly rather than parsing, because
+ * that is the path that bypasses the parser's own filtering - the generator has to stand alone.
+ */
+async function htmlAttributeBagTests() {
+    console.log('- HtmlGenerator attribute bag (integration)...');
+    const gen = async (htmlAttributes: Record<string, string>) =>
+        (await OfficeGenerator.generate(
+            astWith([{ type: 'paragraph', htmlAttributes, children: [{ type: 'text', text: 'x' }] }] as any),
+            'html', { htmlConfig: { standalone: false } } as any
+        )).value as string;
+
+    const onclick = await gen({ onclick: 'alert(1)', onerror: 'alert(2)' });
+    check('bag: event handlers dropped', !/onclick|onerror/i.test(onclick), onclick);
+
+    const jsHref = await gen({ href: 'javascript:alert(1)' });
+    check('bag: javascript: URL dropped', !/javascript:/i.test(jsHref), jsHref);
+
+    const dataHtml = await gen({ src: 'data:text/html,<script>alert(1)</script>' });
+    check('bag: data:text/html src dropped', !/data:text\/html/i.test(dataHtml), dataHtml);
+
+    const srcdoc = await gen({ srcdoc: '<script>alert(1)</script>' });
+    check('bag: srcdoc dropped', !/srcdoc/i.test(srcdoc), srcdoc);
+
+    // A key carrying its own quote/`=` is the shape of an attribute-injection payload.
+    const breakout = await gen({ 'x" onclick="alert(1)': 'y' });
+    check('bag: attribute-injecting key dropped', !/onclick/i.test(breakout), breakout);
+
+    const styleExpr = await gen({ style: 'width:expression(alert(1))' });
+    check('bag: style never carried', !/expression\(/i.test(styleExpr), styleExpr);
+
+    // Values are escaped, so a quote in a value cannot terminate the attribute early.
+    const quoted = await gen({ 'data-note': 'he said "hi" <b>' });
+    check('bag: value escaped', !/data-note="he said "/.test(quoted) && /&quot;|&#/.test(quoted), quoted);
+
+    // Duplicate attributes are merely invalid in HTML but FATAL in the XHTML EpubGenerator emits -
+    // an unopenable EPUB. Nothing else in the gate parses generated output as XML.
+    const dupe = await gen({ class: 'from-source', 'data-k': 'v' });
+    for (const tag of dupe.match(/<[a-zA-Z][^>]*>/g) || []) {
+        const names = [...tag.matchAll(/\s([a-zA-Z_:][\w:.-]*)\s*=/g)].map(m => m[1].toLowerCase());
+        check('bag: no duplicate attribute names', new Set(names).size === names.length, tag);
+    }
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
     await htmlTests();
+    await htmlAttributeBagTests();
     await markdownTests();
     await csvTests();
 

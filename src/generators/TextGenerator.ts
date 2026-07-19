@@ -4,6 +4,14 @@ import { BaseGenerator } from './BaseGenerator.js';
 const escapeRegExpChars = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
+ * Separator between table/sheet cells on the paths that don't render an aligned grid (a `table`
+ * with `preserveLayout` off, and `sheet`/`row`/`cell`, which never go through `renderTable`).
+ * A tab is the conventional plain-text column delimiter and, unlike a space, survives a value that
+ * already contains spaces.
+ */
+const CELL_SEPARATOR = '\t';
+
+/**
  * Generates plain text from an AST.
  */
 export class TextGenerator extends BaseGenerator<'text'> {
@@ -68,13 +76,55 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 return `${indent}${marker}${childrenOutput.trimStart()}` + (childrenOutput.endsWith(newline) ? '' : newline);
             }
 
-            // Append newline for block-level elements to maintain structure
+            // Cells need an explicit separator between them. Without one they concatenate into a
+            // single run - "ITEM" + "NEEDED" becomes "ITEMNEEDED", which is unreadable and loses the
+            // cell boundary entirely. This was previously masked for spreadsheets only because
+            // XLSX/ODS cell values happen to carry a trailing non-breaking space in the source data,
+            // so they *appeared* separated; formats whose cell text has no trailing whitespace (MD,
+            // HTML) collided outright. Relying on the data to supply a delimiter isn't a separator.
+            //
+            // Applies to the paths that don't go through renderTable: a `table` when preserveLayout
+            // is off, and `sheet`/`row`/`cell` always, since a sheet is not a `table` node.
+            if (node.type === 'cell') {
+                // Only when the cell doesn't already end in a line break. Cell content varies by
+                // source: DOCX/ODT/RTF wrap it in a paragraph, which emits its own newline and so
+                // already separates cells, while MD/HTML/XLSX hold bare text that would otherwise
+                // collide. Appending unconditionally would push a stray tab onto the formats that
+                // were already correct - measured, not assumed: doing so moved DOCX from 6 to 178
+                // line-edits away from toText().
+                if (childrenOutput === '' || childrenOutput.endsWith(newline)) return childrenOutput;
+                return childrenOutput + CELL_SEPARATOR;
+            }
+
+            // Append newline for block-level elements to maintain structure.
             const blockTypes = ['paragraph', 'heading', 'row', 'sheet', 'slide', 'note', 'list', 'table', 'code'];
+            if (node.type === 'row') {
+                // Trailing separator on the final cell is an artifact of appending one per cell, not
+                // content, so drop it rather than leaving every row ending in a stray tab.
+                const row = childrenOutput.endsWith(CELL_SEPARATOR)
+                    ? childrenOutput.slice(0, -CELL_SEPARATOR.length)
+                    : childrenOutput;
+                if (row === '') return '';
+                return row + (row.endsWith(newline) ? '' : newline);
+            }
             if (blockTypes.includes(node.type)) {
-                if (childrenOutput.trim() === '') return '';
+                // Drop a block only when it is genuinely empty, not merely whitespace. A paragraph
+                // containing spaces is content the document actually holds - discarding it silently
+                // deletes an author's blank-but-not-empty line, and disagreed with every parser's
+                // own toTextSync, which filters on `!== ''` rather than on trimmed emptiness.
+                if (childrenOutput === '') return '';
                 return childrenOutput + (childrenOutput.endsWith(newline) ? '' : newline);
             }
 
+            // Fallback for node types with no explicit handling above. Prefer rendered children,
+            // but fall back to the node's own text when it has none: a `chart` carries its whole
+            // data series in `text` with zero child nodes, and a CSV `comment` likewise, so
+            // returning only `childrenOutput` silently dropped both. Every parser's own toTextSync
+            // reads `node.text`, so this is what the rest of the library already does - and it
+            // covers any future node type of the same shape rather than just the two known today.
+            if (!childrenOutput && node.text) {
+                return node.text + (node.text.endsWith(newline) ? '' : newline);
+            }
             return childrenOutput;
         };
 
@@ -82,7 +132,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
             output += await this.processNodeRecursive(node, processor);
         }
 
-        if (this.collectedNotes.length > 0) {
+        if (this.collectedNotes.length > 0 && this.config.textConfig.renderNotes) {
             output += `${newline}${newline}--- Notes ---${newline}`;
             for (const note of this.collectedNotes) {
                 output += await this.processNodeRecursive(note, processor);

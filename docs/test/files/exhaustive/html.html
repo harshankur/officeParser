@@ -139,5 +139,24 @@
         </li>
     </section>
 
+    <!-- Generic attribute pass-through (htmlParserConfig.preserveAttributes). Only parsed into
+         htmlAttributes when that flag is on; absent by default. -->
+    <p data-custom="kept" data-tracking-id="abc123" class="lead">Paragraph with passthrough attributes.</p>
+    <p data_under_score="one-attribute">Attribute name containing an underscore.</p>
+
+    <!-- Inline-style declaration parsing. The false-negative cases matter as much as the
+         false-positive ones: substring matching used to catch !important and vendor prefixes by
+         accident, so an exact-match parser must keep catching them. -->
+    <p><span style="background-color: yellow">Background only, no text colour.</span></p>
+    <p><span style="background-color: red; color: blue">Background red, text blue.</span></p>
+    <p><span style="font-weight: bold !important">Bold via !important.</span></p>
+    <p><span style="font-weight: 700">Bold via numeric weight.</span></p>
+    <p><span style="-webkit-text-decoration: underline">Underline via vendor prefix.</span></p>
+    <p><span style="text-decoration: underline line-through">Underline and strikethrough together.</span></p>
+    <p><span style="font-family: 'Fira, A;B', serif">Quoted font stack containing a semicolon.</span></p>
+    <img src="https://example.com/responsive.png" alt="Responsive image" style="max-width: 100%; height: auto">
+    <img src="https://example.com/centered.png" alt="Centered image" style="margin: 0 auto">
+    <img src="https://example.com/indented.png" alt="Indented image" style="margin-left: 0.5rem; margin-right: auto">
+
 </body>
 </html>

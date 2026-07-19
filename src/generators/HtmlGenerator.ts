@@ -5,6 +5,57 @@ import { escapeHtml, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeF
 type ResolvedStandalone = Required<StandaloneConfig>;
 
 /**
+ * Attributes that carry a URL and therefore must go through `sanitizeUrl` rather than plain
+ * escaping - an escaped `javascript:` payload is still a `javascript:` payload.
+ */
+const URL_BEARING_ATTRS = new Set([
+    'href', 'src', 'srcset', 'action', 'formaction', 'poster', 'cite', 'data', 'background', 'ping',
+]);
+
+/**
+ * Renders `node.htmlAttributes` (see `BaseContentNode.htmlAttributes`) as an attribute string.
+ *
+ * This re-applies the parser's filtering rather than trusting it, because an AST can be built
+ * programmatically and handed straight to the generator - the parse-side pass is defence in depth,
+ * not the only gate. `class` is returned separately so the caller can merge it into the class
+ * attribute it already composes: emitting a second `class=` would be invalid HTML and, worse, a
+ * *fatal* XML well-formedness error once EpubGenerator converts the output to XHTML.
+ */
+function renderHtmlAttributeBag(
+    node: OfficeContentNode,
+    alreadyEmitted: Iterable<string> = []
+): { attrs: string; className?: string } {
+    const bag = node.htmlAttributes;
+    if (!bag) return { attrs: '' };
+
+    const taken = new Set([...alreadyEmitted].map(k => k.toLowerCase()));
+    let attrs = '';
+    let className: string | undefined;
+
+    for (const [rawKey, rawValue] of Object.entries(bag)) {
+        const key = rawKey.toLowerCase();
+        // Same policy as the parser, restated here because this path is independently reachable.
+        if (/^on/i.test(key)) continue;
+        if (key === 'srcdoc' || key === 'style' || key === 'id') continue;
+        if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(key)) continue;
+        if (taken.has(key)) continue;
+
+        if (key === 'class') {
+            className = String(rawValue);
+            continue;
+        }
+        if (URL_BEARING_ATTRS.has(key)) {
+            const safe = sanitizeUrl(String(rawValue));
+            if (!safe) continue;
+            attrs += ` ${key}="${safe}"`;
+            continue;
+        }
+        attrs += ` ${key}="${escapeHtml(String(rawValue))}"`;
+    }
+    return { attrs, className };
+}
+
+/**
  * Normalizes `HtmlGeneratorConfig.standalone` (`boolean | StandaloneConfig`) into a fully
  * resolved object. `true`/undefined turns every part on (a complete standalone document);
  * `false` turns every part off (a bare content fragment). When an object is passed, any field
@@ -532,10 +583,6 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
         let tag = mapping?.tag || this.getDefaultTag(node);
 
-        // Combine classes from mapping and defaults
-        const classes = mapping?.classes ? [...mapping.classes] : [];
-        const className = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
-
         // Handle Attributes from mapping
         let mappedAttrs = '';
         if (mapping?.attributes) {
@@ -543,6 +590,26 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 mappedAttrs += ` ${key}="${this.escape(val)}"`;
             }
         }
+
+        // Preserved source attributes (opt-in; absent unless htmlParserConfig.preserveAttributes).
+        // Dedupe against whatever the mapping already emitted so a typed field always wins, and
+        // take the bag's `class` back as a value to merge below rather than a second attribute.
+        const bag = renderHtmlAttributeBag(node, Object.keys(mapping?.attributes || {}));
+        // Fold into mappedAttrs rather than threading a separate fragment through all ~20 emission
+        // sites: every site already interpolates mappedAttrs, so this cannot miss one (a miss would
+        // silently drop preserved attributes), and an empty bag contributes nothing, so output for
+        // nodes without one stays byte-identical.
+        mappedAttrs += bag.attrs;
+
+        // Combine classes from mapping, defaults, and any preserved source class. Merging here is
+        // what keeps `<p class="lead">` from either losing "lead" or emitting a duplicate `class`.
+        const classes = mapping?.classes ? [...mapping.classes] : [];
+        if (bag.className) {
+            for (const c of bag.className.split(/\s+/).filter(Boolean)) {
+                if (!classes.includes(c)) classes.push(c);
+            }
+        }
+        const className = classes.length > 0 ? ` class="${this.escape(classes.join(' '))}"` : '';
 
         // Handle ID and Anchors
         let idAttr = '';

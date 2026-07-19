@@ -52,7 +52,16 @@
             <tr>
                 <td><del><code>toText()</code></del></td>
                 <td><code>function</code></td>
-                <td><strong>Deprecated</strong>: Synchronous utility to flatten the AST into plain text. Use the async <code>.to('text')</code> instead.</td>
+                <td><strong>Deprecated</strong>: Synchronous utility to flatten the AST into plain text. Use the async
+                    <code>.to('text')</code> instead: it is the maintained renderer, and this one is its unconfigurable
+                    predecessor. At its defaults <code>.to('text')</code> emits everything this method emits, verified
+                    across every bundled fixture in all 12 formats in both layout modes, and it renders merged table
+                    cells correctly (this method glues them into <code>OneThree</code> rather than
+                    <code>One Three</code>). The rest is configuration, not capability: notes and image placeholders are
+                    emitted by default and switchable via <code>textConfig.renderNotes</code> and
+                    <code>includeImages</code>, whereas this method emits neither and offers no way to request them.
+                    For the closest match to this output, pass
+                    <code>{ includeImages: false, textConfig: { preserveLayout: false, renderNotes: false } }</code>.</td>
             </tr>
             <tr>
                 <td><code>to(destination, config?)</code></td>
@@ -245,7 +254,7 @@
     </ul>
     <blockquote>
         [!NOTE]
-        <strong>Plain Text Conversion</strong>: Even though break nodes have no <code>text</code> property, the <code>ast.toText()</code> method automatically converts them into newlines (<code>\n</code>) or the configured <code>newlineDelimiter</code> to preserve the document's visual structure.
+        <strong>Plain Text Conversion</strong>: Even though break nodes have no <code>text</code> property, both <code>ast.to('text')</code> and the deprecated <code>ast.toText()</code> automatically convert them into newlines (<code>\n</code>) or the configured <code>newlineDelimiter</code> to preserve the document's visual structure.
     </blockquote>
 
     <h2>OfficeIssue Interface</h2>
