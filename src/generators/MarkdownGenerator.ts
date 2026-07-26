@@ -562,7 +562,12 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (!this.resolvedDialect.definitionLists) return `${childrenOutput}\n\n`;
                     return `: ${childrenOutput}\n`;
 
-                default:
+                case 'chart':
+                case 'drawing':
+                case 'comment':
+                case 'header':
+                case 'footer':
+                case 'slideMaster':
                     return childrenOutput;
             }
         };
@@ -639,8 +644,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             return override;
         }
 
+        const walkedByProcessor = node.type === 'table' || node.type === 'sheet';
+        const wasInImplicitBold = this.inImplicitBold;
+        if (node.type === 'heading' && this.hasUniformFormatting(node, f => f?.bold === true)) this.inImplicitBold = true;
         let childrenOutput = '';
-        if (node.children && node.children.length > 0) {
+        if (!walkedByProcessor && node.children && node.children.length > 0) {
             // Optimization: Merge adjacent text nodes with identical formatting
             const optimizedChildren = this.optimizeNodes(node.children);
             for (const child of optimizedChildren) {
@@ -656,11 +664,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             return (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') && !this.resolvedDialect.footnotes;
         };
 
-        if (node.notes && node.notes.length > 0) {
-            if (node.type !== 'slide') {
-                this.collectedNotes.push(...node.notes.filter(note => !isInlinedFootnote(note)));
-            }
-        }
+        this.collectNotesFrom(node);
 
         let result = await processor(node, childrenOutput);
 
@@ -763,6 +767,16 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         return result;
     }
 
+    private collectNotesFrom(node: OfficeContentNode) {
+        if (!node.notes || node.notes.length === 0) return;
+        if (node.type === 'slide') return;
+        const isInlinedFootnote = (note: OfficeContentNode): boolean => {
+            const meta = note.metadata as NoteMetadata;
+            return (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') && !this.resolvedDialect.footnotes;
+        };
+        this.collectedNotes.push(...node.notes.filter(note => !isInlinedFootnote(note)));
+    }
+
     private async renderMarkdownTableInternal(node: OfficeContentNode, processor: any): Promise<string> {
         let tableOutput = '';
         let maxCols = 0;
@@ -770,44 +784,58 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         // First pass: Process rows and determine max columns (accounting for colspans)
         const processedRows: string[][] = [];
         for (const rowNode of (node.children ?? [])) {
-            const override = await this.handleOnNode(rowNode);
-            if (override === false) continue;
-            if (typeof override === 'string') {
-                processedRows.push([override]);
-                continue;
-            }
-
-            const rowCells: string[] = [];
-            let lastCol = -1;
-
-            if (rowNode.children) {
-                const cellNodes = rowNode.children.filter(c => c.type === 'cell');
-                for (const cellNode of cellNodes) {
-                    const currentCol = (cellNode.metadata as any)?.col ?? (lastCol + 1);
-
-                    // Fill gaps with empty cells
-                    while (lastCol < currentCol - 1) {
-                        rowCells.push(' ');
-                        lastCol++;
-                    }
-
-                    // Process cell content
-                    let cellContent = await this.processNodeRecursive(cellNode, processor);
-                    // Use <br> fallback only if allowed, otherwise space
-                    const br = this.resolvedFallbackToHtml.cellLineBreaks ? '<br>' : ' ';
-                    cellContent = cellContent.trim().replace(/\n+/g, br).replace(/\|/g, '\\|');
-                    rowCells.push(cellContent);
-
-                    // Handle colspan by adding empty cells
-                    const colSpan = (cellNode.metadata as any)?.colSpan || 1;
-                    for (let i = 1; i < colSpan; i++) {
-                        rowCells.push(' ');
-                    }
-                    lastCol = currentCol + colSpan - 1;
+            // The first row becomes the header row - the `| --- |` separator emitted below marks
+            // it as such - so bold inside it is already implied.
+            const wasInImplicitBold = this.inImplicitBold;
+            if (processedRows.length === 0 && this.hasUniformFormatting(rowNode, f => f?.bold === true)) this.inImplicitBold = true;
+            try {
+                const override = await this.handleOnNode(rowNode);
+                if (override === false) continue;
+                if (typeof override === 'string') {
+                    processedRows.push([override]);
+                    continue;
                 }
+                // After the override checks, not before: a row the caller skipped via `onNode` must not
+                // still contribute its footnote to the end-of-document Notes section, where it would
+                // appear with no `[^id]` marker anywhere in the document pointing at it.
+                // `renderTableAsHtml` gets this right by returning early, so collecting here keeps the
+                // pipe and HTML paths agreeing on what a skipped row means.
+                this.collectNotesFrom(rowNode);
+
+                const rowCells: string[] = [];
+                let lastCol = -1;
+
+                if (rowNode.children) {
+                    const cellNodes = rowNode.children.filter(c => c.type === 'cell');
+                    for (const cellNode of cellNodes) {
+                        const currentCol = (cellNode.metadata as any)?.col ?? (lastCol + 1);
+
+                        // Fill gaps with empty cells
+                        while (lastCol < currentCol - 1) {
+                            rowCells.push(' ');
+                            lastCol++;
+                        }
+
+                        // Process cell content
+                        let cellContent = await this.processNodeRecursive(cellNode, processor);
+                        // Use <br> fallback only if allowed, otherwise space
+                        const br = this.resolvedFallbackToHtml.cellLineBreaks ? '<br>' : ' ';
+                        cellContent = cellContent.trim().replace(/\n+/g, br).replace(/\|/g, '\\|');
+                        rowCells.push(cellContent);
+
+                        // Handle colspan by adding empty cells
+                        const colSpan = (cellNode.metadata as any)?.colSpan || 1;
+                        for (let i = 1; i < colSpan; i++) {
+                            rowCells.push(' ');
+                        }
+                        lastCol = currentCol + colSpan - 1;
+                    }
+                }
+                processedRows.push(rowCells);
+                maxCols = Math.max(maxCols, rowCells.length);
+            } finally {
+                this.inImplicitBold = wasInImplicitBold;
             }
-            processedRows.push(rowCells);
-            maxCols = Math.max(maxCols, rowCells.length);
         }
 
         // Second pass: Build table string with separator
@@ -877,6 +905,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             const alignAttr = tableMeta?.align ? ` data-align="${escapeHtml(tableMeta.align)}"` : '';
             return `<table${alignAttr}>\n${rows}</table>\n`;
         } else if (node.type === 'row') {
+            this.collectNotesFrom(node);
             let cells = '';
             if (node.children) {
                 for (const cell of node.children) {
@@ -885,6 +914,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             }
             return `  <tr>\n${cells}  </tr>\n`;
         } else if (node.type === 'cell') {
+            this.collectNotesFrom(node);
             const meta = node.metadata as any;
             const rs = meta?.rowSpan > 1 ? ` rowspan="${meta.rowSpan}"` : '';
             const cs = meta?.colSpan > 1 ? ` colspan="${meta.colSpan}"` : '';
@@ -896,10 +926,16 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     content += await this.processNodeRecursive(child, async (n, co) => {
                         switch (n.type) {
                             case 'text': {
+                                if (n.metadata) {
+                                    const m = n.metadata as TextMetadata;
+                                    if (m.abbreviationTitle) {
+                                        this.collectedAbbreviations.set(n.text || '', m.abbreviationTitle);
+                                    }
+                                }
                                 // Inside HTML table cells, entity-encode angle brackets so cell
                                 // text can't inject a raw tag (e.g. </td><script>).
                                 let text = markdownEscapeText(n.text || '');
-                                if (n.formatting?.bold) text = `<b>${text}</b>`;
+                                if (n.formatting?.bold && !this.inImplicitBold) text = `<b>${text}</b>`;
                                 if (n.formatting?.italic) text = `<i>${text}</i>`;
                                 if (n.formatting?.underline) text = `<u>${text}</u>`;
                                 if (n.formatting?.subscript) text = `<sub>${text}</sub>`;
@@ -912,7 +948,28 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                                 return `<h${level}>${co}</h${level}>`;
                             }
                             case 'table': return await this.renderTableAsHtml(n);
-                            default: return co;
+                            case 'list':
+                            case 'image':
+                            case 'chart':
+                            case 'drawing':
+                            case 'slide':
+                            case 'note':
+                            case 'sheet':
+                            case 'row':
+                            case 'cell':
+                            case 'page':
+                            case 'break':
+                            case 'code':
+                            case 'comment':
+                            case 'header':
+                            case 'footer':
+                            case 'slideMaster':
+                            case 'embed':
+                            case 'admonition':
+                            case 'definitionList':
+                            case 'definitionTerm':
+                            case 'definitionDescription':
+                                return co;
                         }
                     });
                 }
