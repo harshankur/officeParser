@@ -133,6 +133,24 @@
 
     <div class="math block" data-math="block">$$a^2 + b^2 = c^2$$</div>
 
+    <!--
+        Native MathML, as opposed to the data-math round trip above. This is what real pages and
+        every EPUB3 spine item carry (EpubParser routes them through HtmlParser), and it used to
+        fall through to generic text concatenation: mfrac collapsed 1 over 2 into the number "12",
+        which still reads as a plausible value, so nothing downstream could tell it was wrong.
+    -->
+    <p>MathML fraction:
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac><mn>1</mn><mn>2</mn></mfrac></math>
+    </p>
+    <p>MathML superscript and root:
+        <math><msup><mi>x</mi><mn>2</mn></msup></math>
+        <math><msqrt><mn>9</mn></msqrt></math>
+    </p>
+    <p>MathML with an author-supplied TeX annotation, which must win over any reconstruction:
+        <math><semantics><mrow><mi>y</mi></mrow><annotation encoding="application/x-tex">\gamma_{0}</annotation></semantics></math>
+    </p>
+    <math display="block"><mrow><msub><mi>a</mi><mn>1</mn></msub><mo>+</mo><mi>b</mi></mrow></math>
+
     <section data-footnotes>
         <li data-footnote-id="fn1">
             <p>Footnote definition content here.</p>

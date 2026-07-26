@@ -4,6 +4,20 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.5.0] - 2026-07-26
+### Added
+- **Equations are parsed from every format that can carry them.** DOCX and PPTX equations (OMML, `<m:oMath>`) and native MathML (`<math>`, used by ODF embedded objects, HTML pages and EPUB3 spine items) are now converted to LaTeX and emitted as `code` nodes carrying `CodeMetadata.math`, the same shape Markdown's `$...$` already produced. Fractions, sub/superscripts, radicals, delimiters, n-ary operators, functions, accents, matrices and math alphabets (`ℝ` and friends) are all carried through, and a document's own `<annotation encoding="application/x-tex">` is preferred over anything reconstructed from the presentation markup. (#97)
+- **`includeBreakNodes` now works for ODF**, not just DOCX. ODF attaches breaks to the paragraph *style* (`fo:break-before`/`fo:break-after`) rather than writing an inline element, so nothing was ever found to emit; those now produce `break` nodes around the paragraph, and `<text:soft-page-break/>` maps onto the same `lastRenderedPage` type DOCX uses. (#104)
+
+### Fixed
+- **Equations were silently corrupted rather than merely missing.** DOCX and HTML/EPUB equations fell through to generic text concatenation, so `<m:num>1</m:num><m:den>2</m:den>` and `<mfrac><mn>1</mn><mn>2</mn></mfrac>` both came out as `12` - a plausible-looking number with no indication anything was lost. PPTX equations were dropped outright. ODF equations survived but in an ad hoc notation (`(1)/(2)`) that no generator could render as maths. (#97)
+- Table subtrees were rendered twice by the Markdown generator, making conversion time grow quadratically with nesting depth and duplicating any footnote inside a table cell. (#105)
+- Paragraph-level text properties (bold, font size, colour, font family) in ODF documents were parsed into the style table but never applied to the paragraph's text, so they were absent from every generated output. (#104)
+- ODF styles that explicitly turn formatting *off* (`fo:font-weight="normal"`, `style:text-underline-style="none"`, and the italic/strikethrough equivalents) were not recorded at all, so a span could not override an inherited paragraph style. LibreOffice writes exactly this whenever part of a bold paragraph is un-bolded. Such styles now appear in `metadata.styleMap` with the flag set to `false`, and a span carrying one clears the inherited value.
+- **Formatting a heading or table header row already implies is no longer emitted twice.** A heading whose every run is bold produced `# **Heading**` in Markdown, and in RTF and HTML an inner font size that *overrode* the heading's own and visibly shrank it. Uniform bold/size inside a heading or header row is now dropped in favour of the element's own styling; partial emphasis (`# Normal **Bold** Normal`) is untouched, and colour, font and every other property still come through.
+- Text inside PowerPoint grouped shapes (`<p:grpSp>`), including nested groups, was silently dropped. (#106)
+- A crafted ODF table row carrying a large `table:number-rows-repeated` with no cells bypassed the per-document cell budget entirely and could exhaust memory.
+
 ## [7.4.0] - 2026-07-19
 ### Added
 - **Markdown output dialect** (`MdGeneratorConfig.dialect`): target a real-world flavor (`'github'`, `'gitlab'`, `'obsidian'`, `'pandoc'`, strict `'commonmark'`, or the default `'extended'`), or pass a `MarkdownDialectConfig` object to control admonitions, footnotes, citations, wikilinks, math, tables, list markers and emphasis per feature. The default is byte-identical to prior output.

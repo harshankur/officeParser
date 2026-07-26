@@ -205,7 +205,10 @@
                 <td><code>includeBreakNodes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Line/Page Break Parsing</strong>: Specifically targets Word documents (DOCX). When set to
+                <td><strong>Line/Page Break Parsing</strong>: Supported for Word (DOCX) and OpenDocument (ODT/ODP/ODS)
+                    files. ODF carries page and column breaks on the paragraph style
+                    (<code>fo:break-before</code>/<code>fo:break-after</code>) rather than as an inline element, so
+                    those surface as breaks emitted around the paragraph. When set to
                     true, <code>officeParser</code> will extract physical breaks into the AST as <code>break</code>
                     nodes. This includes standard line breaks (<code>textWrapping</code>), hard carriage returns
                     (<code>carriageReturn</code>), page breaks (<code>page</code>), column breaks (<code>column</code>),

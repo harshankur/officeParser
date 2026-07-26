@@ -227,9 +227,14 @@
         <li><strong><code>list</code></strong> task-list items: <code>ListMetadata.isTask</code> and
             <code>.checked</code> mark a GFM task-list item (<code>- [x] Done</code>).</li>
         <li>Text-node metadata additions: <code>TextMetadata.citationKey</code> (Pandoc/MultiMarkdown
-            <code>[@key]</code>), <code>.wikilink</code> (Obsidian <code>[[page]]</code>),
-            <code>.math</code> (<code>'inline' | 'block'</code> LaTeX), and <code>.abbreviationTitle</code>
-            (Markdown Extra <code>*[HTML]: ...</code> abbreviations).</li>
+            <code>[@key]</code>), <code>.wikilink</code> (Obsidian <code>[[page]]</code>), and
+            <code>.abbreviationTitle</code> (Markdown Extra <code>*[HTML]: ...</code> abbreviations).</li>
+        <li><strong>Equations</strong> are <code>code</code> nodes carrying
+            <code>CodeMetadata.math</code> (<code>'inline' | 'block'</code>), with
+            <code>node.text</code> holding bare LaTeX. Every format that can carry an equation
+            produces this same node: OOXML <code>&lt;m:oMath&gt;</code> (DOCX, PPTX), MathML
+            <code>&lt;math&gt;</code> (ODT/ODP/ODS embedded objects, HTML, EPUB3), and Markdown
+            <code>$...$</code>/<code>$$...$$</code>.</li>
     </ul>
 
     <h3>4. Rich Content</h3>
@@ -243,7 +248,7 @@
     </ul>
 
     <h3>5. Breaks (The <code>break</code> Node)</h3>
-    <p>Breaks are added as <code>break</code> nodes when <code>includeBreakNodes</code> is enabled in the configuration. They represent physical layout changes within the document flow.</p>
+    <p>Breaks are added as <code>break</code> nodes when <code>includeBreakNodes</code> is enabled in the configuration. They represent physical layout changes within the document flow. DOCX writes them inline (<code>w:br</code>/<code>w:cr</code>), so they appear as children of the paragraph; ODF carries page and column breaks on the paragraph style (<code>fo:break-before</code>/<code>fo:break-after</code>), so those are emitted as siblings around the paragraph.</p>
     <ul>
         <li><strong><code>breakType</code></strong>: 
             <ul>

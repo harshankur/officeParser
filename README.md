@@ -128,7 +128,7 @@ npx officeparser my_document --fileType=docx --to=json
 | `--includeRawContent` | boolean | `false` | Include raw XML/RTF in nodes |
 | `--serializeRawContent` | boolean | `true` | Include stringified XML in metadata |
 | `--preserveXmlWhitespace` | boolean | `false` | Keep raw formatting space |
-| `--includeBreakNodes` | boolean | `false` | Include break nodes (DOCX only) |
+| `--includeBreakNodes` | boolean | `false` | Include break nodes (DOCX and ODF) |
 | `--verbose` | boolean | `false` | Show full error stack traces and warning logs |
 | `--includeFormatting` | boolean | `true` | Include formatting style map matching |
 | `--renderMetadata` | boolean | `false` | Render metadata as visible content in the generated output |
@@ -608,7 +608,14 @@ formatting: {
 }
 ```
 
-### 6. Break Nodes (DOCX only)
+> [!NOTE]
+> On a **content node**, an absent flag and `false` mean the same thing — the flag is simply not
+> applied. On **`ast.metadata.styleMap`**, they differ: an absent flag means the style says nothing
+> about that property (so it inherits), while `false` means the style explicitly turns it off
+> (ODF's `fo:font-weight="normal"`, DOCX's `<w:b w:val="0"/>`). Code resolving inheritance itself
+> must test `=== undefined`, not truthiness, or it will treat "explicitly off" as "unspecified".
+
+### 6. Break Nodes (DOCX and ODF)
 
 When `includeBreakNodes: true`, break elements appear as nodes:
 
@@ -622,6 +629,43 @@ Break Node (type: 'break')
 
 > [!NOTE]
 > Break nodes have no `text` property, but `ast.toText()` and `ast.to('text')` automatically convert them to the configured newline delimiter.
+
+> [!NOTE]
+> DOCX writes breaks inline (`w:br`/`w:cr`), so they land as children of the paragraph. ODF instead
+> carries page and column breaks on the paragraph *style* (`fo:break-before`/`fo:break-after`), so those
+> are emitted as siblings around the paragraph rather than inside it. `<text:soft-page-break/>` maps onto
+> `lastRenderedPage`, the same type as DOCX's `w:lastRenderedPageBreak`.
+
+### 6b. Equations
+
+Equations are extracted from every format that can carry them and normalized to **LaTeX**, so a
+formula means the same thing whichever format it arrived in:
+
+| Source format | Markup in the file |
+|---|---|
+| DOCX, PPTX | OOXML `<m:oMath>` / `<m:oMathPara>` |
+| ODT, ODP, ODS | MathML inside the embedded formula object |
+| HTML, EPUB | native MathML `<math>` |
+| Markdown | `$inline$` / `$$block$$` |
+
+They all land as the same node:
+
+```text
+Code Node (type: 'code')
+├── text: '\\frac{1}{2}'          // LaTeX, whatever the source markup was
+└── metadata: { math: 'inline' | 'block' }
+```
+
+Fractions, sub/superscripts, radicals, delimiters, n-ary operators (sums, integrals), named
+functions, accents, bars, matrices and math alphabets (`ℝ`, `𝒜`, …) are all preserved. When a
+document supplies its own TeX source in an `<annotation encoding="application/x-tex">`, that is
+used verbatim in preference to anything reconstructed from the presentation markup.
+
+> [!NOTE]
+> Equation text is *structure*, not prose: a fraction whose numerator and denominator are simply
+> concatenated reads as a different number rather than as obviously-missing content. Consumers that
+> index document text should treat `code` nodes carrying `math` as opaque LaTeX rather than
+> splitting them as words.
 
 ### 7. Document Metadata
 
@@ -688,7 +732,7 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 | Attribute lists | `![alt](img.png){width=50% .centered}` | `ImageMetadata.width` / `.align`, `TableMetadata.align` |
 | Citations | `[@smith2024]` | `TextMetadata.citationKey` |
 | Wikilinks | `[[Page]]` / `[[Page\|Alias]]` | `TextMetadata.wikilink`, `.link`, `.linkType` |
-| Inline/block math | `$E=mc^2$` / `` $$...$$ `` | `TextMetadata.math` (`'inline' \| 'block'`) |
+| Inline/block math | `$E=mc^2$` / `` $$...$$ `` | `type: 'code'`, `CodeMetadata.math` (`'inline' \| 'block'`) |
 | Frontmatter arrays | `tags: [a, b]` or `tags: ["a","b"]` | Real array in `metadata.customProperties`/`nativeProperties` |
 | MDX components (import-only) | `<Component prop="x">...</Component>` | Stripped; inner Markdown is kept. Never generated back. |
 
@@ -888,7 +932,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `includeRawContent` | `boolean` | `false` | Attach raw XML/RTF source to each node |
 | `serializeRawContent` | `boolean` | `true` | Re-serialize XML to clean strings (only if `includeRawContent: true`) |
 | `preserveXmlWhitespace` | `boolean` | `false` | Preserve original XML whitespace during serialization |
-| `includeBreakNodes` | `boolean` | `false` | Include `w:br` / `w:cr` as typed break nodes (DOCX only) |
+| `includeBreakNodes` | `boolean` | `false` | Include typed break nodes: DOCX `w:br`/`w:cr`, ODF `fo:break-before`/`fo:break-after` and `text:soft-page-break` |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal cross-references from AST |
 | `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`) as these lack magic bytes. |
 | `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
