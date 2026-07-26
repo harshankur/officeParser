@@ -857,7 +857,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             // whole cell array, so rows x cols is what actually exhausts memory; charge those
             // copies against the same budget.
             const allowedRows = cells.length === 0
-                ? rowsRepeated
+                ? (rowsRepeated > 0 ? 1 + cellBudget.take(rowsRepeated - 1) : 0)
                 : Math.min(rowsRepeated,
                     1 + Math.floor(cellBudget.take(Math.max(0, (rowsRepeated - 1) * cells.length)) / cells.length));
             for (let k = 0; k < allowedRows; k++) {

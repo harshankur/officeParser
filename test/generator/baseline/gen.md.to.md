@@ -21,12 +21,12 @@ To see the DOCX conversion in action, simply add this file to calibre using the 
 <a name="toc2054249818"></a>
 <div style="text-align: center">
 
-# **Text Formatting** {#text-formatting}
+# Text Formatting {#text-formatting}
 
 </div>
 
 <a name="toc2137712100"></a>
-## **Inline formatting** {#inline-formatting}
+## Inline formatting {#inline-formatting}
 
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
 
@@ -35,12 +35,12 @@ Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~stru
 A paragraph with styled text: *subtle emphasis  *followed by **strong text **and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
 
 <a name="toc1074133965"></a>
-## **Fun with fonts** {#fun-with-fonts}
+## Fun with fonts {#fun-with-fonts}
 
 This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion.
 
 <a name="paragraph-level-formatting"></a><a name="toc2022725662"></a>
-## **Paragraph level formatting** {#paragraph-level-formatting}
+## Paragraph level formatting {#paragraph-level-formatting}
 
 <div style="text-align: right">You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.</div>
 
@@ -49,12 +49,12 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like this
 <a name="toc28114276"></a>
 <div style="text-align: center">
 
-# **Tables** {#tables}
+# Tables {#tables}
 
 </div>
 
 
-| **ITEM** | **NEEDED** |
+| ITEM | NEEDED |
 |  ---  |  ---  |
 | Books | 1 |
 | Pens | 3 |
@@ -67,7 +67,7 @@ Tables in Word can vary from the extremely simple to the extremely complex. cali
 Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.
 
 
-| **City or Town** | <div style="text-align: center">**Point A**</div> | <div style="text-align: center">**Point B**</div> | <div style="text-align: center">**Point C**</div> | <div style="text-align: center">**Point D**</div> | <div style="text-align: center">**Point E**</div> |
+| City or Town | <div style="text-align: center">Point A</div> | <div style="text-align: center">Point B</div> | <div style="text-align: center">Point C</div> | <div style="text-align: center">Point D</div> | <div style="text-align: center">Point E</div> |
 |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
 | Point A | <div style="text-align: center">—</div> |  |  |  |  |
 | Point B | <div style="text-align: center">87</div> | <div style="text-align: center">—</div> |  |  |  |
@@ -78,7 +78,7 @@ Now let’s look at a fancier table—one with alternating row colors and partia
 Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.
 
 
-| **College** | **New students** | **Graduating students** | **Change** |
+| College | New students | Graduating students | Change |
 |  ---  |  ---  |  ---  |  ---  |
 |  | *Undergraduate* |  |  |
 | Cedar University | 110 | 103 | +7 |
@@ -289,14 +289,14 @@ We end with a fancy calendar, note how much of the original formatting is preser
 <a name="toc54889875"></a>
 <div style="text-align: center">
 
-# **Structural Elements** {#structural-elements}
+# Structural Elements {#structural-elements}
 
 </div>
 
 Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.
 
 <a name="toc201580556"></a>
-## **Footnotes & Endnotes** {#footnotes-endnotes}
+## Footnotes & Endnotes {#footnotes-endnotes}
 
 Footnotes In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.
 
@@ -305,19 +305,19 @@ and endnotes Endnotes are typically used for longer notes, they remain endnotes 
 are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.
 
 <a name="toc1977424358"></a>
-## **Dropcaps** {#dropcaps}
+## Dropcaps {#dropcaps}
 
 D
 
 rop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to specify how many lines of text a drop-cap should use.
 
 <a name="toc1233048813"></a>
-## **Links** {#links}
+## Links {#links}
 
 Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the [<u>calibre download page</u>](http://calibre-ebook.com/download). Then we have a link that points back to the section on [<u>paragraph level formatting</u>](#_Paragraph_level_formatting) in this document.
 
 <a name="toc64145348"></a>
-## **Table of Contents** {#table-of-contents}
+## Table of Contents {#table-of-contents}
 
 You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook.
 
@@ -358,7 +358,7 @@ You can see the Table of Contents created by calibre by clicking the Table of Co
 <a name="toc484565143"></a>
 <div style="text-align: center">
 
-# **Images** {#images}
+# Images {#images}
 
 </div>
 
@@ -371,26 +371,26 @@ There is no analogous technology in ebooks, so the conversion will usually end u
 <a name="toc1359965655"></a>
 <div style="text-align: center">
 
-# **Lists** {#lists}
+# Lists {#lists}
 
 </div>
 
 All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.
 
 <a name="toc1958162433"></a>
-## **Bulleted List** {#bulleted-list}
+## Bulleted List {#bulleted-list}
 
 - One
 - Two
 
 <a name="toc415190676"></a>
-## **Numbered List** {#numbered-list}
+## Numbered List {#numbered-list}
 
 1. One, with a very long line to demonstrate that the hanging indent for the list is working correctly
 2. Two
 
 <a name="toc1093260318"></a>
-## **Multi-level Lists** {#multi-level-lists}
+## Multi-level Lists {#multi-level-lists}
 
 1. One
     1. Two
@@ -408,7 +408,7 @@ A Multi-level list with bullets:
 - Five
 
 <a name="toc1471533984"></a>
-## **Continued Lists** {#continued-lists}
+## Continued Lists {#continued-lists}
 
 1. One
 2. Two

@@ -9,6 +9,19 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 export class RtfGenerator extends BaseGenerator<'rtf'> {
     private colorTable: string[] = [];
     private inTable = false;
+    /**
+     * Set while rendering a heading's children.
+     *
+     * A heading emits its own `{\\b\\fs44 ...}` wrapper, so a run inside it that also carries bold
+     * and a size - which is now the normal case for ODF, where the heading's paragraph style is
+     * inherited by its runs - would emit a nested `\\fs28` that *overrides* the outer `\\fs44`.
+     * The heading then renders at the body-text size it was styled with rather than at heading
+     * size. Suppressing the inherited weight and size inside a heading keeps the heading's own
+     * wrapper authoritative; every other property (colour, font) still comes through.
+     */
+    private inHeading = false;
+    /** As `inHeading`, but for the inherited font size - see `hasUniformFormatting`. */
+    private headingUniformSize = false;
 
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'rtf'>) {
         super('rtf', ast, config);
@@ -71,8 +84,16 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         checkAbortSignal(this.config.abortSignal);
         const wasInTable = this.inTable;
         if (node.type === 'table') this.inTable = true;
+        const wasInHeading = this.inHeading;
+        const wasHeadingSize = this.headingUniformSize;
+        if (node.type === 'heading') {
+            this.inHeading = this.hasUniformFormatting(node, f => f?.bold === true);
+            this.headingUniformSize = this.hasUniformFormatting(node, f => !!f?.size);
+        }
         const result = await super.processNodeRecursive(node, processor);
         this.inTable = wasInTable;
+        this.inHeading = wasInHeading;
+        this.headingUniformSize = wasHeadingSize;
         return result;
     }
 
@@ -106,7 +127,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     if (this.config.includeFormatting && f) {
                         let prefix = '';
                         let suffix = '';
-                        if (f.bold) { prefix += '\\b '; suffix = '\\b0 ' + suffix; }
+                        if (f.bold && !this.inHeading) { prefix += '\\b '; suffix = '\\b0 ' + suffix; }
                         if (f.italic) { prefix += '\\i '; suffix = '\\i0 ' + suffix; }
                         if (f.underline) { prefix += '\\ul '; suffix = '\\ul0 ' + suffix; }
                         if (f.strikethrough) { prefix += '\\strike '; suffix = '\\strike0 ' + suffix; }
@@ -125,7 +146,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                             const idx = this.getColorIndex(f.backgroundColor);
                             prefix += `\\highlight${idx + 1} `;
                         }
-                        if (f.size) {
+                        if (f.size && !this.headingUniformSize) {
                             let pt = 12; // default
                             const val = parseFloat(f.size);
                             if (!isNaN(val)) {

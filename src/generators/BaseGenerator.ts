@@ -202,6 +202,40 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     }
 
     /**
+     * True when every content-bearing text descendant satisfies `test` - i.e. the property is
+     * uniform across the whole node and therefore says nothing the node type does not already say.
+     *
+     * Used to decide whether a heading's or header row's inherited formatting can be dropped. The
+     * distinction matters: an ODF heading whose paragraph style is bold and 14pt yields a heading
+     * where *every* run is bold and 14pt, and re-emitting that gives `# **Heading**` in Markdown
+     * and, worse in RTF/HTML, an inner font-size that overrides the heading's own and visibly
+     * shrinks it. But `# Normal **Bold** Normal` is an author contrasting one word against the
+     * rest, and dropping that would discard real meaning. Only the uniform case is safe.
+     *
+     * Returns false when there is no text to judge, so an empty or image-only node never triggers
+     * suppression.
+     */
+    protected hasUniformFormatting(
+        node: OfficeContentNode,
+        test: (formatting: OfficeContentNode['formatting']) => boolean
+    ): boolean {
+        let sawText = false;
+        const walk = (n: OfficeContentNode): boolean => {
+            if (n.type === 'text') {
+                // Whitespace-only runs carry no visible formatting either way, so they neither
+                // count as evidence nor veto - otherwise a stray unformatted space between two
+                // bold runs would defeat the check on almost every real heading.
+                if (!(n.text || '').trim()) return true;
+                sawText = true;
+                return test(n.formatting);
+            }
+            return (n.children ?? []).every(walk);
+        };
+        const uniform = (node.children ?? []).every(walk);
+        return sawText && uniform;
+    }
+
+    /**
      * Recursively extracts plain text from a node and its children.
      */
     protected getNodeText(node: OfficeContentNode): string {

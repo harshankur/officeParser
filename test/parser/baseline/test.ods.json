@@ -567,6 +567,10 @@
       },
       "T1": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -575,6 +579,9 @@
       "T2": {
         "formatting": {
           "bold": true,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -582,6 +589,10 @@
       },
       "T3": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -589,6 +600,10 @@
       },
       "T4": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "9pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -596,7 +611,10 @@
       },
       "T5": {
         "formatting": {
+          "bold": false,
           "italic": true,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#808080",
           "font": "Ubuntu"
@@ -606,6 +624,8 @@
         "formatting": {
           "bold": true,
           "italic": true,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#4F81BD",
           "font": "Ubuntu"
@@ -613,6 +633,10 @@
       },
       "T7": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu Mono"
@@ -620,6 +644,10 @@
       },
       "T8": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#808080",
           "font": "Ubuntu"
@@ -627,6 +655,10 @@
       },
       "T9": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "10pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -634,7 +666,10 @@
       },
       "T10": {
         "formatting": {
+          "bold": false,
+          "italic": false,
           "underline": true,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#0000FF",
           "font": "Ubuntu"
@@ -642,6 +677,10 @@
       },
       "T11": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -650,6 +689,9 @@
       "T12": {
         "formatting": {
           "bold": true,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -657,7 +699,10 @@
       },
       "T13": {
         "formatting": {
+          "bold": false,
           "italic": true,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -667,6 +712,8 @@
         "formatting": {
           "bold": true,
           "italic": true,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -674,7 +721,10 @@
       },
       "T15": {
         "formatting": {
+          "bold": false,
+          "italic": false,
           "underline": true,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -682,6 +732,9 @@
       },
       "T16": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
           "strikethrough": true,
           "size": "12pt",
           "color": "#000000",
@@ -690,6 +743,10 @@
       },
       "T17": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "9pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -697,6 +754,10 @@
       },
       "T18": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "9pt",
           "color": "#000000",
           "font": "Ubuntu"
@@ -704,6 +765,10 @@
       },
       "T19": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#FF0000",
           "font": "Ubuntu"
@@ -711,6 +776,10 @@
       },
       "T20": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#92D050",
           "font": "Ubuntu"
@@ -718,6 +787,10 @@
       },
       "T21": {
         "formatting": {
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikethrough": false,
           "size": "12pt",
           "color": "#0070C0",
           "font": "Ubuntu"

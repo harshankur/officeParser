@@ -34,7 +34,7 @@ TestBool: true
 ---
 
 
-| **Text Formatting ** |
+| Text Formatting |
 |  ---  |
 | **Inline formatting ** |
 | Here, we demonstrate various types of inline text formatting and the use of embedded fonts. |
@@ -54,7 +54,7 @@ TestBool: true
 ---
 
 
-| **Tables ** |   |   |   |   |   |
+| Tables |   |   |   |   |   |
 |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
 | **ITEM ** | **NEEDED ** |   |   |   |   |
 | Books | 1 |   |   |   |   |
@@ -122,7 +122,7 @@ TestBool: true
 ---
 
 
-| **Structural Elements ** |
+| Structural Elements |
 |  ---  |
 | Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like. |
 | **Footnotes & Endnotes ** |
@@ -139,7 +139,7 @@ TestBool: true
 ---
 
 
-| **Images ** |
+| Images |
 |  ---  |
 | Centered images like this are useful for large pictures that should be a focus of attention. |
 | There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was *inserted*, not necessarily where it appears on the page in Word. |
@@ -151,7 +151,7 @@ TestBool: true
 ---
 
 
-| **Lists ** |   |
+| Lists |   |
 |  ---  |  ---  |
 | All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets. |   |
 | **Bulleted List ** |   |
@@ -186,7 +186,7 @@ TestBool: true
 ---
 
 
-| **Charts** |   |   |   |   |   |
+| Charts |   |   |   |   |   |
 |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
 |   |   |  | Series 1 | Series 2 | Series 3 |
 |   |   | Category 1 | 4.3 | 2.4 | 2 |

@@ -23,11 +23,11 @@ To see the DOCX conversion in action, simply add this file to calibre using the 
 
 <div style="text-align: center">
 
-# **Text Formatting** {#toc2054249818}
+# Text Formatting {#toc2054249818}
 
 </div>
 
-## **Inline formatting** {#toc2137712100}
+## Inline formatting {#toc2137712100}
 
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
 
@@ -35,12 +35,12 @@ Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~stru
 
 A paragraph with styled text: *subtle emphasis  *followed by **strong text **and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
 
-## **Fun with fonts** {#toc1074133965}
+## Fun with fonts {#toc1074133965}
 
 This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion. 
 
 <a name="paragraph-level-formatting"></a>
-## **Paragraph level formatting** {#toc2022725662}
+## Paragraph level formatting {#toc2022725662}
 
 <div style="text-align: right">You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.</div>
 
@@ -48,7 +48,7 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like this
 
 <div style="text-align: center">
 
-# **Tables** {#toc28114276}
+# Tables {#toc28114276}
 
 </div>
 
@@ -303,27 +303,27 @@ We end with a fancy calendar, note how much of the original formatting is preser
 
 <div style="text-align: center">
 
-# **Structural Elements** {#toc54889875}
+# Structural Elements {#toc54889875}
 
 </div>
 
 Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like. 
 
-## **Footnotes & Endnotes** {#toc201580556}
+## Footnotes & Endnotes {#toc201580556}
 
 Footnotes and endnotes are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.[^2][^1]
 
-## **Dropcaps** {#toc1977424358}
+## Dropcaps {#toc1977424358}
 
 D
 
 rop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to specify how many lines of text a drop-cap should use.
 
-## **Links** {#toc1233048813}
+## Links {#toc1233048813}
 
 Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the [<u>calibre download page</u>](http://calibre-ebook.com/download). Then we have a link that points back to the section on [<u>paragraph level formatting</u>](#paragraph-level-formatting) in this document.
 
-## **Table of Contents** {#toc64145348}
+## Table of Contents {#toc64145348}
 
  You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook. 
 
@@ -367,7 +367,7 @@ Two kinds of links are possible, those that refer to an external website and tho
 
 <div style="text-align: center">
 
-# **Images** {#toc484565143}
+# Images {#toc484565143}
 
 </div>
 
@@ -381,23 +381,23 @@ There is no analogous technology in ebooks, so the conversion will usually end u
 
 <div style="text-align: center">
 
-# **Lists** {#toc1359965655}
+# Lists {#toc1359965655}
 
 </div>
 
 All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.
 
-## **Bulleted List** {#toc1958162433}
+## Bulleted List {#toc1958162433}
 
 - One
 - Two
 
-## **Numbered List** {#toc415190676}
+## Numbered List {#toc415190676}
 
 1. One, with a very long line to demonstrate that the hanging indent for the list is working correctly
 2. Two
 
-## **Multi-level Lists** {#toc1093260318}
+## Multi-level Lists {#toc1093260318}
 
 1. One
     1. Two
@@ -414,7 +414,7 @@ A Multi-level list with bullets:
             - Four
 - Five
 
-## **Continued Lists** {#toc1471533984}
+## Continued Lists {#toc1471533984}
 
 1. One
 2. Two

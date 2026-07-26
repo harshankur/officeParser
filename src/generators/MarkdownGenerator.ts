@@ -120,6 +120,18 @@ function resolveFallbackToHtml(fallbackToHtml: boolean | FallbackToHtmlConfig | 
  */
 export class MarkdownGenerator extends BaseGenerator<'md'> {
     private isInsideTable = false;
+    /**
+     * Set while rendering the children of a heading, or the cells of a table's header row.
+     *
+     * Markdown already conveys "this is a heading" with `#` and "this is a header row" with the
+     * separator line, so a run inside one that also carries bold - the normal case for ODF, whose
+     * heading and header-row paragraph styles are bold and are now inherited by their runs - would
+     * render as `# **Heading**` and `| **ITEM** |`. That is redundant rather than wrong, but it
+     * also round-trips back into bold text nodes nested inside a heading, so the noise compounds
+     * on every parse/generate cycle. Emphasis the node type already implies is dropped; every
+     * other formatting flag still comes through.
+     */
+    private inImplicitBold = false;
     private hoistedContent: string[] = [];
     private collectedAbbreviations = new Map<string, string>();
     private resolvedDialect: ResolvedMarkdownDialect;
@@ -250,7 +262,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     let text = markdownEscapeText(node.text || '');
                     if (this.config.includeFormatting && node.formatting) {
                         const emphasisAsterisk = this.resolvedDialect.emphasisMarker === 'asterisk';
-                        if (node.formatting.bold) text = emphasisAsterisk ? `**${text}**` : `__${text}__`;
+                        if (node.formatting.bold && !this.inImplicitBold) text = emphasisAsterisk ? `**${text}**` : `__${text}__`;
                         if (node.formatting.italic) text = emphasisAsterisk ? `*${text}*` : `_${text}_`;
                         if (node.formatting.strikethrough && this.resolvedDialect.strikethrough) text = `~~${text}~~`;
 
@@ -655,6 +667,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 childrenOutput += await this.processNodeRecursive(child, processor);
             }
         }
+
+        this.inImplicitBold = wasInImplicitBold;
 
         // When the dialect has no footnote syntax, a footnote/endnote is inlined right at its
         // reference point instead (see below) - so it must not also be collected into the

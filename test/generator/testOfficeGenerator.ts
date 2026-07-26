@@ -50,6 +50,21 @@ const SOURCE_FORMATS = {
     spreadsheets: ['xlsx', 'ods', 'csv'] as const,
 };
 
+/**
+ * Formats fast mode leaves out - see the matching block in `test/parser/testOfficeParser.ts` for
+ * why PDF is the one that matters. The saving is smaller here (this suite excludes PDF *output*
+ * already, so only the source-side parse is paid), but keeping the two suites on one flag means an
+ * agent has a single command to remember rather than a rule about which suite takes the argument.
+ */
+const FAST_MODE_SKIPPED_FORMATS = ['pdf'];
+
+/** True when invoked as `... fast`. Never applies to `baseline` - see the parser suite's note. */
+const FAST_MODE = (process.argv[2] || '').toLowerCase() === 'fast';
+
+/** Drops the fast-mode-skipped formats from a list of extensions when fast mode is on. */
+const activeFormats = <T extends string>(formats: readonly T[]): T[] =>
+    FAST_MODE ? formats.filter(f => !FAST_MODE_SKIPPED_FORMATS.includes(f)) : [...formats];
+
 /** Parser config used to parse source files for generation */
 const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     extractAttachments: true,
@@ -1719,11 +1734,16 @@ async function runAllTests(): Promise<void> {
     const outputDir = path.join(__dirname, 'output');
     if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
+    if (FAST_MODE) {
+        console.log(`⚡ FAST MODE - skipping: ${FAST_MODE_SKIPPED_FORMATS.join(', ')}`);
+        console.log('   Run \'npm run test:generator\' for full coverage before considering work done.\n');
+    }
+
     // All source formats to test generation from
-    const allSources = [
+    const allSources = activeFormats([
         ...SOURCE_FORMATS.documents,
         ...SOURCE_FORMATS.spreadsheets,
-    ];
+    ]);
 
     // 1. Generation + Config tests
     console.log('Running generation and config permutation tests...');

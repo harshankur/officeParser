@@ -435,7 +435,8 @@
       },
       "T19": {
         "formatting": {
-          "bold": true
+          "bold": true,
+          "italic": false
         }
       },
       "TableCell26": {
@@ -1812,6 +1813,9 @@
         },
         "alignment": "right"
       },
+      "P1": {
+        "formatting": {}
+      },
       "P20": {
         "formatting": {},
         "alignment": "right"
@@ -1822,6 +1826,12 @@
     }
   },
   "content": [
+    {
+      "type": "break",
+      "metadata": {
+        "breakType": "page"
+      }
+    },
     {
       "type": "heading",
       "text": "Demonstration of DOCX support in calibre",
@@ -1853,7 +1863,10 @@
         {
           "type": "text",
           "text": "This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -1871,7 +1884,10 @@
         {
           "type": "text",
           "text": "There is support for images, tables, lists, footnotes, endnotes,",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -1879,7 +1895,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -1887,7 +1906,10 @@
         {
           "type": "text",
           "text": "links, dropcaps and",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -1895,7 +1917,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -1903,7 +1928,10 @@
         {
           "type": "text",
           "text": "various",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -1911,7 +1939,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -1919,7 +1950,10 @@
         {
           "type": "text",
           "text": "types of text and paragraph level formatting.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -1937,7 +1971,10 @@
         {
           "type": "text",
           "text": "To see the DOCX conversion in action, simply add this file to calibre using the",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -1945,7 +1982,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -1954,6 +1994,8 @@
           "type": "text",
           "text": "“Add Books”",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true
           },
           "metadata": {
@@ -1964,6 +2006,8 @@
           "type": "text",
           "text": " ",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true
           },
           "metadata": {
@@ -1973,7 +2017,10 @@
         {
           "type": "text",
           "text": "button and then click “",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -1982,6 +2029,8 @@
           "type": "text",
           "text": "Convert”.",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true
           },
           "metadata": {
@@ -1992,6 +2041,8 @@
           "type": "text",
           "text": " ",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true
           },
           "metadata": {
@@ -2001,7 +2052,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2009,7 +2063,10 @@
         {
           "type": "text",
           "text": "Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2017,7 +2074,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2026,6 +2086,8 @@
           "type": "text",
           "text": "“OK”",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true
           },
           "metadata": {
@@ -2035,7 +2097,10 @@
         {
           "type": "text",
           "text": ".",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2056,13 +2121,23 @@
       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"Normal\"/>"
     },
     {
+      "type": "break",
+      "metadata": {
+        "breakType": "page"
+      }
+    },
+    {
       "type": "heading",
       "text": "Text Formatting",
       "children": [
         {
           "type": "text",
           "text": "Text Formatting",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "14pt",
+            "color": "#365F91"
+          },
           "metadata": {
             "style": "Heading1"
           }
@@ -2085,7 +2160,11 @@
         {
           "type": "text",
           "text": "Inline formatting",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "13pt",
+            "color": "#4F81BD"
+          },
           "metadata": {
             "style": "Heading2"
           }
@@ -2107,7 +2186,10 @@
         {
           "type": "text",
           "text": "Here, we demonstrate various types of inline text formatting and the use of embedded fonts.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2125,7 +2207,10 @@
         {
           "type": "text",
           "text": "Here is some",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2133,7 +2218,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2142,6 +2230,8 @@
           "type": "text",
           "text": "bold,",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true
           },
           "metadata": {
@@ -2152,6 +2242,8 @@
           "type": "text",
           "text": " ",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true
           },
           "metadata": {
@@ -2162,6 +2254,8 @@
           "type": "text",
           "text": "italic,",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "italic": true
           },
           "metadata": {
@@ -2172,6 +2266,8 @@
           "type": "text",
           "text": " ",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "italic": true
           },
           "metadata": {
@@ -2182,6 +2278,8 @@
           "type": "text",
           "text": "bold-italic,",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true,
             "italic": true
           },
@@ -2193,6 +2291,8 @@
           "type": "text",
           "text": " ",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true,
             "italic": true
           },
@@ -2204,6 +2304,8 @@
           "type": "text",
           "text": "underlined",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "underline": true
           },
           "metadata": {
@@ -2214,6 +2316,8 @@
           "type": "text",
           "text": " ",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "underline": true
           },
           "metadata": {
@@ -2223,7 +2327,10 @@
         {
           "type": "text",
           "text": "and",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2231,7 +2338,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2240,6 +2350,8 @@
           "type": "text",
           "text": "struck out",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "strikethrough": true
           },
           "metadata": {
@@ -2250,6 +2362,8 @@
           "type": "text",
           "text": " ",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "strikethrough": true
           },
           "metadata": {
@@ -2259,7 +2373,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2267,7 +2384,10 @@
         {
           "type": "text",
           "text": "text. Then, we have a super",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2276,6 +2396,8 @@
           "type": "text",
           "text": "script",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "superscript": true
           },
           "metadata": {
@@ -2285,7 +2407,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2293,7 +2418,10 @@
         {
           "type": "text",
           "text": "and a sub",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2302,6 +2430,8 @@
           "type": "text",
           "text": "script",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "subscript": true
           },
           "metadata": {
@@ -2311,7 +2441,10 @@
         {
           "type": "text",
           "text": ". Now we see some",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2319,7 +2452,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2328,6 +2464,8 @@
           "type": "text",
           "text": "red",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "color": "#FF0000"
           },
           "metadata": {
@@ -2337,7 +2475,10 @@
         {
           "type": "text",
           "text": ",",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2345,7 +2486,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2354,6 +2498,8 @@
           "type": "text",
           "text": "green",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "color": "#92D050"
           },
           "metadata": {
@@ -2363,7 +2509,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2371,7 +2520,10 @@
         {
           "type": "text",
           "text": "and",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2379,7 +2531,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2388,6 +2543,8 @@
           "type": "text",
           "text": "blue",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "color": "#0070C0"
           },
           "metadata": {
@@ -2397,7 +2554,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2405,7 +2565,10 @@
         {
           "type": "text",
           "text": "text. Some text with a",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2413,7 +2576,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2422,6 +2588,8 @@
           "type": "text",
           "text": "yellow highlight",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "backgroundColor": "#FFFF00"
           },
           "metadata": {
@@ -2431,7 +2599,10 @@
         {
           "type": "text",
           "text": ". Some text in a",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2439,7 +2610,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2447,7 +2621,10 @@
         {
           "type": "text",
           "text": "box. Some text",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2455,7 +2632,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2463,7 +2643,10 @@
         {
           "type": "text",
           "text": "in",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2471,7 +2654,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2480,6 +2666,8 @@
           "type": "text",
           "text": "inverse video",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "color": "#FFFFFF",
             "backgroundColor": "#000000"
           },
@@ -2490,7 +2678,10 @@
         {
           "type": "text",
           "text": ".",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2508,7 +2699,10 @@
         {
           "type": "text",
           "text": "A paragraph with styled text:",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2516,7 +2710,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2525,6 +2722,8 @@
           "type": "text",
           "text": "subtle emphasis",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "italic": true,
             "color": "#808080"
           },
@@ -2536,6 +2735,8 @@
           "type": "text",
           "text": "  ",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "italic": true,
             "color": "#808080"
           },
@@ -2546,7 +2747,10 @@
         {
           "type": "text",
           "text": "followed by",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2554,7 +2758,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2563,6 +2770,8 @@
           "type": "text",
           "text": "strong text",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true
           },
           "metadata": {
@@ -2573,6 +2782,8 @@
           "type": "text",
           "text": " ",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true
           },
           "metadata": {
@@ -2582,7 +2793,10 @@
         {
           "type": "text",
           "text": "and",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2590,7 +2804,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2599,6 +2816,8 @@
           "type": "text",
           "text": "intense emphasis",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "bold": true,
             "italic": true,
             "color": "#4F81BD"
@@ -2610,7 +2829,10 @@
         {
           "type": "text",
           "text": ".",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2618,7 +2840,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2626,7 +2851,10 @@
         {
           "type": "text",
           "text": "This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2634,7 +2862,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2642,7 +2873,10 @@
         {
           "type": "text",
           "text": "—",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2650,7 +2884,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2658,7 +2895,10 @@
         {
           "type": "text",
           "text": "calibre can handle both with equal ease.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2676,7 +2916,11 @@
         {
           "type": "text",
           "text": "Fun with fonts",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "13pt",
+            "color": "#4F81BD"
+          },
           "metadata": {
             "style": "Heading2"
           }
@@ -2698,7 +2942,10 @@
         {
           "type": "text",
           "text": "This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2706,7 +2953,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2715,6 +2965,7 @@
           "type": "text",
           "text": "some text in the Ubuntu Mono typeface",
           "formatting": {
+            "size": "12pt",
             "font": "Ubuntu Mono"
           },
           "metadata": {
@@ -2725,6 +2976,7 @@
           "type": "text",
           "text": ", notice how every letter has the same width, even i and m",
           "formatting": {
+            "size": "12pt",
             "font": "Ubuntu Mono"
           },
           "metadata": {
@@ -2734,7 +2986,10 @@
         {
           "type": "text",
           "text": ". Every embedded font will automatically be embedded in the output ebook during conversion.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2742,7 +2997,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -2761,7 +3019,9 @@
           "type": "text",
           "text": "Paragraph level formatting",
           "formatting": {
-            "bold": true
+            "bold": true,
+            "size": "13pt",
+            "color": "#4F81BD"
           },
           "metadata": {
             "style": "Heading2"
@@ -2832,13 +3092,23 @@
       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P21\">For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is <text:s/>too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.</text:p>"
     },
     {
+      "type": "break",
+      "metadata": {
+        "breakType": "page"
+      }
+    },
+    {
       "type": "heading",
       "text": "Tables",
       "children": [
         {
           "type": "text",
           "text": "Tables",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "14pt",
+            "color": "#365F91"
+          },
           "metadata": {
             "style": "Heading1"
           }
@@ -2871,7 +3141,10 @@
                     {
                       "type": "text",
                       "text": "ITEM",
-                      "formatting": {},
+                      "formatting": {
+                        "bold": true,
+                        "color": "#FFFFFF"
+                      },
                       "metadata": {
                         "style": "P27"
                       }
@@ -2901,7 +3174,10 @@
                     {
                       "type": "text",
                       "text": "NEEDED",
-                      "formatting": {},
+                      "formatting": {
+                        "bold": true,
+                        "color": "#FFFFFF"
+                      },
                       "metadata": {
                         "style": "P29"
                       }
@@ -3253,7 +3529,10 @@
         {
           "type": "text",
           "text": "Tables in Word can vary from the extremely simple to the extremely complex.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -3261,7 +3540,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -3269,7 +3551,10 @@
         {
           "type": "text",
           "text": "calibre",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -3277,7 +3562,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -3285,7 +3573,10 @@
         {
           "type": "text",
           "text": "tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -3293,7 +3584,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -3301,7 +3595,10 @@
         {
           "type": "text",
           "text": "Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -3309,7 +3606,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -3317,7 +3617,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -3325,7 +3628,10 @@
         {
           "type": "text",
           "text": "To the left of this paragraph is a floating two column table with a nice green border and header row.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -3343,7 +3649,10 @@
         {
           "type": "text",
           "text": "Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -3371,7 +3680,10 @@
                     {
                       "type": "text",
                       "text": "City or Town",
-                      "formatting": {},
+                      "formatting": {
+                        "size": "11pt",
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P64"
                       }
@@ -3401,7 +3713,10 @@
                     {
                       "type": "text",
                       "text": "Point A",
-                      "formatting": {},
+                      "formatting": {
+                        "size": "11pt",
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P66"
                       }
@@ -3432,7 +3747,10 @@
                     {
                       "type": "text",
                       "text": "Point B",
-                      "formatting": {},
+                      "formatting": {
+                        "size": "11pt",
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P68"
                       }
@@ -3463,7 +3781,10 @@
                     {
                       "type": "text",
                       "text": "Point C",
-                      "formatting": {},
+                      "formatting": {
+                        "size": "11pt",
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P70"
                       }
@@ -3494,7 +3815,10 @@
                     {
                       "type": "text",
                       "text": "Point D",
-                      "formatting": {},
+                      "formatting": {
+                        "size": "11pt",
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P72"
                       }
@@ -3525,7 +3849,10 @@
                     {
                       "type": "text",
                       "text": "Point E",
-                      "formatting": {},
+                      "formatting": {
+                        "size": "11pt",
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P74"
                       }
@@ -3562,7 +3889,9 @@
                     {
                       "type": "text",
                       "text": "Point A",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P77"
                       }
@@ -3592,7 +3921,9 @@
                     {
                       "type": "text",
                       "text": "—",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P79"
                       }
@@ -3717,7 +4048,9 @@
                     {
                       "type": "text",
                       "text": "Point B",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P90"
                       }
@@ -3747,7 +4080,9 @@
                     {
                       "type": "text",
                       "text": "87",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P92"
                       }
@@ -3777,7 +4112,9 @@
                     {
                       "type": "text",
                       "text": "—",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P94"
                       }
@@ -3876,7 +4213,9 @@
                     {
                       "type": "text",
                       "text": "Point C",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P103"
                       }
@@ -3906,7 +4245,9 @@
                     {
                       "type": "text",
                       "text": "64",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P105"
                       }
@@ -3937,7 +4278,9 @@
                     {
                       "type": "text",
                       "text": "56",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P107"
                       }
@@ -3968,7 +4311,9 @@
                     {
                       "type": "text",
                       "text": "—",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P109"
                       }
@@ -4049,7 +4394,9 @@
                     {
                       "type": "text",
                       "text": "Point D",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P116"
                       }
@@ -4079,7 +4426,9 @@
                     {
                       "type": "text",
                       "text": "37",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P118"
                       }
@@ -4109,7 +4458,9 @@
                     {
                       "type": "text",
                       "text": "32",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P120"
                       }
@@ -4139,7 +4490,9 @@
                     {
                       "type": "text",
                       "text": "91",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P122"
                       }
@@ -4169,7 +4522,9 @@
                     {
                       "type": "text",
                       "text": "—",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P124"
                       }
@@ -4226,7 +4581,9 @@
                     {
                       "type": "text",
                       "text": "Point E",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P129"
                       }
@@ -4256,7 +4613,9 @@
                     {
                       "type": "text",
                       "text": "93",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P131"
                       }
@@ -4287,7 +4646,9 @@
                     {
                       "type": "text",
                       "text": "35",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P133"
                       }
@@ -4318,7 +4679,9 @@
                     {
                       "type": "text",
                       "text": "54",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P135"
                       }
@@ -4349,7 +4712,9 @@
                     {
                       "type": "text",
                       "text": "43",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P137"
                       }
@@ -4380,7 +4745,9 @@
                     {
                       "type": "text",
                       "text": "—",
-                      "formatting": {},
+                      "formatting": {
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "P139"
                       }
@@ -4450,7 +4817,10 @@
                     {
                       "type": "text",
                       "text": "College",
-                      "formatting": {},
+                      "formatting": {
+                        "bold": true,
+                        "color": "#FFFFFF"
+                      },
                       "metadata": {
                         "style": "P148"
                       }
@@ -4480,7 +4850,10 @@
                     {
                       "type": "text",
                       "text": "New students",
-                      "formatting": {},
+                      "formatting": {
+                        "bold": true,
+                        "color": "#FFFFFF"
+                      },
                       "metadata": {
                         "style": "P150"
                       }
@@ -4510,7 +4883,10 @@
                     {
                       "type": "text",
                       "text": "Graduating students",
-                      "formatting": {},
+                      "formatting": {
+                        "bold": true,
+                        "color": "#FFFFFF"
+                      },
                       "metadata": {
                         "style": "P152"
                       }
@@ -4540,7 +4916,10 @@
                     {
                       "type": "text",
                       "text": "Change",
-                      "formatting": {},
+                      "formatting": {
+                        "bold": true,
+                        "color": "#FFFFFF"
+                      },
                       "metadata": {
                         "style": "P154"
                       }
@@ -5377,6 +5756,8 @@
           "type": "text",
           "text": "Source:",
           "formatting": {
+            "size": "10pt",
+            "font": "Ubuntu",
             "italic": true,
             "color": "#808080"
           },
@@ -5387,7 +5768,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "10pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "FootnoteText"
           }
@@ -5395,7 +5779,10 @@
         {
           "type": "text",
           "text": "Fictitious data, for illustration purposes only",
-          "formatting": {},
+          "formatting": {
+            "size": "10pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "FootnoteText"
           }
@@ -5732,7 +6119,9 @@
                     {
                       "type": "text",
                       "text": "December 2007",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P261"
                       }
@@ -5790,7 +6179,9 @@
                     {
                       "type": "text",
                       "text": "Sun",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P264"
                       }
@@ -5841,7 +6232,9 @@
                     {
                       "type": "text",
                       "text": "Mon",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P268"
                       }
@@ -5892,7 +6285,9 @@
                     {
                       "type": "text",
                       "text": "Tue",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P272"
                       }
@@ -5943,7 +6338,9 @@
                     {
                       "type": "text",
                       "text": "Wed",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P276"
                       }
@@ -5994,7 +6391,9 @@
                     {
                       "type": "text",
                       "text": "Thu",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P280"
                       }
@@ -6045,7 +6444,9 @@
                     {
                       "type": "text",
                       "text": "Fri",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P284"
                       }
@@ -6096,7 +6497,9 @@
                     {
                       "type": "text",
                       "text": "Sat",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P288"
                       }
@@ -6385,7 +6788,9 @@
                     {
                       "type": "text",
                       "text": "1",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P315"
                       }
@@ -6702,7 +7107,9 @@
                     {
                       "type": "text",
                       "text": "2",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P345"
                       }
@@ -6753,7 +7160,9 @@
                     {
                       "type": "text",
                       "text": "3",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P349"
                       }
@@ -6804,7 +7213,9 @@
                     {
                       "type": "text",
                       "text": "4",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P353"
                       }
@@ -6855,7 +7266,9 @@
                     {
                       "type": "text",
                       "text": "5",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P357"
                       }
@@ -6906,7 +7319,9 @@
                     {
                       "type": "text",
                       "text": "6",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P361"
                       }
@@ -6957,7 +7372,9 @@
                     {
                       "type": "text",
                       "text": "7",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P365"
                       }
@@ -7008,7 +7425,9 @@
                     {
                       "type": "text",
                       "text": "8",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P369"
                       }
@@ -7325,7 +7744,9 @@
                     {
                       "type": "text",
                       "text": "9",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P399"
                       }
@@ -7376,7 +7797,9 @@
                     {
                       "type": "text",
                       "text": "10",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P403"
                       }
@@ -7427,7 +7850,9 @@
                     {
                       "type": "text",
                       "text": "11",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P407"
                       }
@@ -7478,7 +7903,9 @@
                     {
                       "type": "text",
                       "text": "12",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P411"
                       }
@@ -7529,7 +7956,9 @@
                     {
                       "type": "text",
                       "text": "13",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P415"
                       }
@@ -7580,7 +8009,9 @@
                     {
                       "type": "text",
                       "text": "14",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P419"
                       }
@@ -7631,7 +8062,9 @@
                     {
                       "type": "text",
                       "text": "15",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P423"
                       }
@@ -7948,7 +8381,9 @@
                     {
                       "type": "text",
                       "text": "16",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P453"
                       }
@@ -7999,7 +8434,9 @@
                     {
                       "type": "text",
                       "text": "17",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P457"
                       }
@@ -8050,7 +8487,9 @@
                     {
                       "type": "text",
                       "text": "18",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P461"
                       }
@@ -8101,7 +8540,9 @@
                     {
                       "type": "text",
                       "text": "19",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P465"
                       }
@@ -8152,7 +8593,9 @@
                     {
                       "type": "text",
                       "text": "20",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P469"
                       }
@@ -8203,7 +8646,9 @@
                     {
                       "type": "text",
                       "text": "21",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P473"
                       }
@@ -8254,7 +8699,9 @@
                     {
                       "type": "text",
                       "text": "22",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P477"
                       }
@@ -8571,7 +9018,9 @@
                     {
                       "type": "text",
                       "text": "23",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P507"
                       }
@@ -8622,7 +9071,9 @@
                     {
                       "type": "text",
                       "text": "24",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P511"
                       }
@@ -8673,7 +9124,9 @@
                     {
                       "type": "text",
                       "text": "25",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P515"
                       }
@@ -8724,7 +9177,9 @@
                     {
                       "type": "text",
                       "text": "26",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P519"
                       }
@@ -8775,7 +9230,9 @@
                     {
                       "type": "text",
                       "text": "27",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P523"
                       }
@@ -8826,7 +9283,9 @@
                     {
                       "type": "text",
                       "text": "28",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P527"
                       }
@@ -8877,7 +9336,9 @@
                     {
                       "type": "text",
                       "text": "29",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P531"
                       }
@@ -9194,7 +9655,9 @@
                     {
                       "type": "text",
                       "text": "30",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#365F91"
+                      },
                       "metadata": {
                         "style": "P561"
                       }
@@ -9245,7 +9708,9 @@
                     {
                       "type": "text",
                       "text": "31",
-                      "formatting": {},
+                      "formatting": {
+                        "color": "#7F7F7F"
+                      },
                       "metadata": {
                         "style": "P565"
                       }
@@ -9482,13 +9947,23 @@
       "rawContent": "<table:table xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"Table244\"><table:table-columns><table:table-column table:style-name=\"TableColumn245\"/><table:table-column table:style-name=\"TableColumn246\"/><table:table-column table:style-name=\"TableColumn247\"/><table:table-column table:style-name=\"TableColumn248\"/><table:table-column table:style-name=\"TableColumn249\"/><table:table-column table:style-name=\"TableColumn250\"/><table:table-column table:style-name=\"TableColumn251\"/><table:table-column table:style-name=\"TableColumn252\"/><table:table-column table:style-name=\"TableColumn253\"/><table:table-column table:style-name=\"TableColumn254\"/><table:table-column table:style-name=\"TableColumn255\"/><table:table-column table:style-name=\"TableColumn256\"/><table:table-column table:style-name=\"TableColumn257\"/><table:table-column table:style-name=\"TableColumn258\"/></table:table-columns><table:table-row table:style-name=\"TableRow259\"><table:table-cell table:style-name=\"TableCell260\" table:number-columns-spanned=\"13\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P261\">December 2007</text:p></table:table-cell><table:covered-table-cell/><table:covered-table-cell/><table:covered-table-cell/><table:covered-table-cell/><table:covered-table-cell/><table:covered-table-cell/><table:covered-table-cell/><table:covered-table-cell/><table:covered-table-cell/><table:covered-table-cell/><table:covered-table-cell/><table:covered-table-cell/><table:table-cell><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P261\"/></table:table-cell></table:table-row><table:table-row table:style-name=\"TableRow262\"><table:table-cell table:style-name=\"TableCell263\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P264\">Sun</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell265\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P266\"/></table:table-cell><table:table-cell table:style-name=\"TableCell267\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P268\">Mon</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell269\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P270\"/></table:table-cell><table:table-cell table:style-name=\"TableCell271\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P272\">Tue</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell273\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P274\"/></table:table-cell><table:table-cell table:style-name=\"TableCell275\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P276\">Wed</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell277\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P278\"/></table:table-cell><table:table-cell table:style-name=\"TableCell279\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P280\">Thu</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell281\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P282\"/></table:table-cell><table:table-cell table:style-name=\"TableCell283\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P284\">Fri</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell285\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P286\"/></table:table-cell><table:table-cell table:style-name=\"TableCell287\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P288\">Sat</text:p></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row table:style-name=\"TableRow289\"><table:table-cell table:style-name=\"TableCell290\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P291\"/></table:table-cell><table:table-cell table:style-name=\"TableCell292\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P293\"/></table:table-cell><table:table-cell table:style-name=\"TableCell294\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P295\"/></table:table-cell><table:table-cell table:style-name=\"TableCell296\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P297\"/></table:table-cell><table:table-cell table:style-name=\"TableCell298\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P299\"/></table:table-cell><table:table-cell table:style-name=\"TableCell300\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P301\"/></table:table-cell><table:table-cell table:style-name=\"TableCell302\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P303\"/></table:table-cell><table:table-cell table:style-name=\"TableCell304\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P305\"/></table:table-cell><table:table-cell table:style-name=\"TableCell306\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P307\"/></table:table-cell><table:table-cell table:style-name=\"TableCell308\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P309\"/></table:table-cell><table:table-cell table:style-name=\"TableCell310\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P311\"/></table:table-cell><table:table-cell table:style-name=\"TableCell312\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P313\"/></table:table-cell><table:table-cell table:style-name=\"TableCell314\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P315\">1</text:p></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row table:style-name=\"TableRow316\"><table:table-cell table:style-name=\"TableCell317\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P318\"/></table:table-cell><table:table-cell table:style-name=\"TableCell319\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P320\"/></table:table-cell><table:table-cell table:style-name=\"TableCell321\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P322\"/></table:table-cell><table:table-cell table:style-name=\"TableCell323\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P324\"/></table:table-cell><table:table-cell table:style-name=\"TableCell325\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P326\"/></table:table-cell><table:table-cell table:style-name=\"TableCell327\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P328\"/></table:table-cell><table:table-cell table:style-name=\"TableCell329\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P330\"/></table:table-cell><table:table-cell table:style-name=\"TableCell331\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P332\"/></table:table-cell><table:table-cell table:style-name=\"TableCell333\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P334\"/></table:table-cell><table:table-cell table:style-name=\"TableCell335\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P336\"/></table:table-cell><table:table-cell table:style-name=\"TableCell337\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P338\"/></table:table-cell><table:table-cell table:style-name=\"TableCell339\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P340\"/></table:table-cell><table:table-cell table:style-name=\"TableCell341\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P342\"/></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row table:style-name=\"TableRow343\"><table:table-cell table:style-name=\"TableCell344\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P345\">2</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell346\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P347\"/></table:table-cell><table:table-cell table:style-name=\"TableCell348\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P349\">3</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell350\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P351\"/></table:table-cell><table:table-cell table:style-name=\"TableCell352\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P353\">4</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell354\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P355\"/></table:table-cell><table:table-cell table:style-name=\"TableCell356\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P357\">5</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell358\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P359\"/></table:table-cell><table:table-cell table:style-name=\"TableCell360\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P361\">6</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell362\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P363\"/></table:table-cell><table:table-cell table:style-name=\"TableCell364\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P365\">7</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell366\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P367\"/></table:table-cell><table:table-cell table:style-name=\"TableCell368\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P369\">8</text:p></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row table:style-name=\"TableRow370\"><table:table-cell table:style-name=\"TableCell371\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P372\"/></table:table-cell><table:table-cell table:style-name=\"TableCell373\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P374\"/></table:table-cell><table:table-cell table:style-name=\"TableCell375\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P376\"/></table:table-cell><table:table-cell table:style-name=\"TableCell377\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P378\"/></table:table-cell><table:table-cell table:style-name=\"TableCell379\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P380\"/></table:table-cell><table:table-cell table:style-name=\"TableCell381\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P382\"/></table:table-cell><table:table-cell table:style-name=\"TableCell383\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P384\"/></table:table-cell><table:table-cell table:style-name=\"TableCell385\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P386\"/></table:table-cell><table:table-cell table:style-name=\"TableCell387\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P388\"/></table:table-cell><table:table-cell table:style-name=\"TableCell389\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P390\"/></table:table-cell><table:table-cell table:style-name=\"TableCell391\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P392\"/></table:table-cell><table:table-cell table:style-name=\"TableCell393\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P394\"/></table:table-cell><table:table-cell table:style-name=\"TableCell395\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P396\"/></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row table:style-name=\"TableRow397\"><table:table-cell table:style-name=\"TableCell398\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P399\">9</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell400\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P401\"/></table:table-cell><table:table-cell table:style-name=\"TableCell402\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P403\">10</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell404\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P405\"/></table:table-cell><table:table-cell table:style-name=\"TableCell406\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P407\">11</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell408\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P409\"/></table:table-cell><table:table-cell table:style-name=\"TableCell410\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P411\">12</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell412\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P413\"/></table:table-cell><table:table-cell table:style-name=\"TableCell414\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P415\">13</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell416\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P417\"/></table:table-cell><table:table-cell table:style-name=\"TableCell418\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P419\">14</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell420\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P421\"/></table:table-cell><table:table-cell table:style-name=\"TableCell422\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P423\">15</text:p></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row table:style-name=\"TableRow424\"><table:table-cell table:style-name=\"TableCell425\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P426\"/></table:table-cell><table:table-cell table:style-name=\"TableCell427\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P428\"/></table:table-cell><table:table-cell table:style-name=\"TableCell429\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P430\"/></table:table-cell><table:table-cell table:style-name=\"TableCell431\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P432\"/></table:table-cell><table:table-cell table:style-name=\"TableCell433\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P434\"/></table:table-cell><table:table-cell table:style-name=\"TableCell435\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P436\"/></table:table-cell><table:table-cell table:style-name=\"TableCell437\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P438\"/></table:table-cell><table:table-cell table:style-name=\"TableCell439\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P440\"/></table:table-cell><table:table-cell table:style-name=\"TableCell441\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P442\"/></table:table-cell><table:table-cell table:style-name=\"TableCell443\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P444\"/></table:table-cell><table:table-cell table:style-name=\"TableCell445\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P446\"/></table:table-cell><table:table-cell table:style-name=\"TableCell447\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P448\"/></table:table-cell><table:table-cell table:style-name=\"TableCell449\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P450\"/></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row table:style-name=\"TableRow451\"><table:table-cell table:style-name=\"TableCell452\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P453\">16</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell454\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P455\"/></table:table-cell><table:table-cell table:style-name=\"TableCell456\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P457\">17</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell458\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P459\"/></table:table-cell><table:table-cell table:style-name=\"TableCell460\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P461\">18</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell462\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P463\"/></table:table-cell><table:table-cell table:style-name=\"TableCell464\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P465\">19</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell466\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P467\"/></table:table-cell><table:table-cell table:style-name=\"TableCell468\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P469\">20</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell470\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P471\"/></table:table-cell><table:table-cell table:style-name=\"TableCell472\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P473\">21</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell474\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P475\"/></table:table-cell><table:table-cell table:style-name=\"TableCell476\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P477\">22</text:p></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row table:style-name=\"TableRow478\"><table:table-cell table:style-name=\"TableCell479\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P480\"/></table:table-cell><table:table-cell table:style-name=\"TableCell481\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P482\"/></table:table-cell><table:table-cell table:style-name=\"TableCell483\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P484\"/></table:table-cell><table:table-cell table:style-name=\"TableCell485\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P486\"/></table:table-cell><table:table-cell table:style-name=\"TableCell487\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P488\"/></table:table-cell><table:table-cell table:style-name=\"TableCell489\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P490\"/></table:table-cell><table:table-cell table:style-name=\"TableCell491\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P492\"/></table:table-cell><table:table-cell table:style-name=\"TableCell493\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P494\"/></table:table-cell><table:table-cell table:style-name=\"TableCell495\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P496\"/></table:table-cell><table:table-cell table:style-name=\"TableCell497\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P498\"/></table:table-cell><table:table-cell table:style-name=\"TableCell499\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P500\"/></table:table-cell><table:table-cell table:style-name=\"TableCell501\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P502\"/></table:table-cell><table:table-cell table:style-name=\"TableCell503\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P504\"/></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row table:style-name=\"TableRow505\"><table:table-cell table:style-name=\"TableCell506\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P507\">23</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell508\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P509\"/></table:table-cell><table:table-cell table:style-name=\"TableCell510\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P511\">24</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell512\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P513\"/></table:table-cell><table:table-cell table:style-name=\"TableCell514\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P515\">25</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell516\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P517\"/></table:table-cell><table:table-cell table:style-name=\"TableCell518\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P519\">26</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell520\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P521\"/></table:table-cell><table:table-cell table:style-name=\"TableCell522\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P523\">27</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell524\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P525\"/></table:table-cell><table:table-cell table:style-name=\"TableCell526\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P527\">28</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell528\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P529\"/></table:table-cell><table:table-cell table:style-name=\"TableCell530\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P531\">29</text:p></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row table:style-name=\"TableRow532\"><table:table-cell table:style-name=\"TableCell533\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P534\"/></table:table-cell><table:table-cell table:style-name=\"TableCell535\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P536\"/></table:table-cell><table:table-cell table:style-name=\"TableCell537\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P538\"/></table:table-cell><table:table-cell table:style-name=\"TableCell539\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P540\"/></table:table-cell><table:table-cell table:style-name=\"TableCell541\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P542\"/></table:table-cell><table:table-cell table:style-name=\"TableCell543\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P544\"/></table:table-cell><table:table-cell table:style-name=\"TableCell545\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P546\"/></table:table-cell><table:table-cell table:style-name=\"TableCell547\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P548\"/></table:table-cell><table:table-cell table:style-name=\"TableCell549\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P550\"/></table:table-cell><table:table-cell table:style-name=\"TableCell551\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P552\"/></table:table-cell><table:table-cell table:style-name=\"TableCell553\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P554\"/></table:table-cell><table:table-cell table:style-name=\"TableCell555\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P556\"/></table:table-cell><table:table-cell table:style-name=\"TableCell557\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P558\"/></table:table-cell><table:covered-table-cell/></table:table-row><table:table-row table:style-name=\"TableRow559\"><table:table-cell table:style-name=\"TableCell560\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P561\">30</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell562\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P563\"/></table:table-cell><table:table-cell table:style-name=\"TableCell564\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P565\">31</text:p></table:table-cell><table:table-cell table:style-name=\"TableCell566\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P567\"/></table:table-cell><table:table-cell table:style-name=\"TableCell568\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P569\"/></table:table-cell><table:table-cell table:style-name=\"TableCell570\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P571\"/></table:table-cell><table:table-cell table:style-name=\"TableCell572\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P573\"/></table:table-cell><table:table-cell table:style-name=\"TableCell574\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P575\"/></table:table-cell><table:table-cell table:style-name=\"TableCell576\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P577\"/></table:table-cell><table:table-cell table:style-name=\"TableCell578\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P579\"/></table:table-cell><table:table-cell table:style-name=\"TableCell580\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P581\"/></table:table-cell><table:table-cell table:style-name=\"TableCell582\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P583\"/></table:table-cell><table:table-cell table:style-name=\"TableCell584\" table:number-columns-spanned=\"2\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P585\"/></table:table-cell><table:covered-table-cell/></table:table-row></table:table>"
     },
     {
+      "type": "break",
+      "metadata": {
+        "breakType": "page"
+      }
+    },
+    {
       "type": "heading",
       "text": "Structural Elements",
       "children": [
         {
           "type": "text",
           "text": "Structural Elements",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "14pt",
+            "color": "#365F91"
+          },
           "metadata": {
             "style": "Heading1"
           }
@@ -9511,7 +9986,10 @@
         {
           "type": "text",
           "text": "Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9519,7 +9997,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9537,7 +10018,11 @@
         {
           "type": "text",
           "text": "Footnotes & Endnotes",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "13pt",
+            "color": "#4F81BD"
+          },
           "metadata": {
             "style": "Heading2"
           }
@@ -9559,7 +10044,10 @@
         {
           "type": "text",
           "text": "Footnotes",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9579,7 +10067,10 @@
                     {
                       "type": "text",
                       "text": " ",
-                      "formatting": {},
+                      "formatting": {
+                        "size": "10pt",
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "FootnoteText"
                       }
@@ -9587,7 +10078,10 @@
                     {
                       "type": "text",
                       "text": "In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
-                      "formatting": {},
+                      "formatting": {
+                        "size": "10pt",
+                        "font": "Ubuntu"
+                      },
                       "metadata": {
                         "style": "FootnoteText"
                       }
@@ -9609,7 +10103,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9617,7 +10114,10 @@
         {
           "type": "text",
           "text": "and endnotes",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9637,7 +10137,9 @@
                     {
                       "type": "text",
                       "text": " ",
-                      "formatting": {},
+                      "formatting": {
+                        "size": "10pt"
+                      },
                       "metadata": {
                         "style": "EndnoteText"
                       }
@@ -9645,7 +10147,9 @@
                     {
                       "type": "text",
                       "text": "Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
-                      "formatting": {},
+                      "formatting": {
+                        "size": "10pt"
+                      },
                       "metadata": {
                         "style": "EndnoteText"
                       }
@@ -9667,7 +10171,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9675,7 +10182,10 @@
         {
           "type": "text",
           "text": "are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9693,7 +10203,11 @@
         {
           "type": "text",
           "text": "Dropcaps",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "13pt",
+            "color": "#4F81BD"
+          },
           "metadata": {
             "style": "Heading2"
           }
@@ -9743,7 +10257,11 @@
         {
           "type": "text",
           "text": "Links",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "13pt",
+            "color": "#4F81BD"
+          },
           "metadata": {
             "style": "Heading2"
           }
@@ -9765,7 +10283,10 @@
         {
           "type": "text",
           "text": "Two kinds of links are possible, those that refer to an external website and those that refer to",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9773,7 +10294,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9781,7 +10305,10 @@
         {
           "type": "text",
           "text": "locations",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9789,7 +10316,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9797,7 +10327,10 @@
         {
           "type": "text",
           "text": "inside the document itself. Both are supported by calibre. For example, here is a link pointing to the",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9805,7 +10338,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9814,6 +10350,8 @@
           "type": "text",
           "text": "calibre download page",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "underline": true,
             "color": "#0000FF"
           },
@@ -9826,7 +10364,10 @@
         {
           "type": "text",
           "text": ".",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9834,7 +10375,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9842,7 +10386,10 @@
         {
           "type": "text",
           "text": "Then we have a link that points back to the section on",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9850,7 +10397,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9859,6 +10409,8 @@
           "type": "text",
           "text": "paragraph level formatting",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "underline": true,
             "color": "#0000FF"
           },
@@ -9871,7 +10423,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9879,7 +10434,10 @@
         {
           "type": "text",
           "text": "in this document.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9897,7 +10455,11 @@
         {
           "type": "text",
           "text": "Table of Contents",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "13pt",
+            "color": "#4F81BD"
+          },
           "metadata": {
             "style": "Heading2"
           }
@@ -9919,7 +10481,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9927,7 +10492,10 @@
         {
           "type": "text",
           "text": "You can see the",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9935,7 +10503,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9943,7 +10514,10 @@
         {
           "type": "text",
           "text": "Table of Contents",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9951,7 +10525,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9959,7 +10536,10 @@
         {
           "type": "text",
           "text": "created by calibre",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9967,7 +10547,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9975,7 +10558,10 @@
         {
           "type": "text",
           "text": "by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -9983,7 +10569,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -10804,13 +11393,23 @@
       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"Normal\"/>"
     },
     {
+      "type": "break",
+      "metadata": {
+        "breakType": "page"
+      }
+    },
+    {
       "type": "heading",
       "text": "Images",
       "children": [
         {
           "type": "text",
           "text": "Images",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "14pt",
+            "color": "#365F91"
+          },
           "metadata": {
             "style": "Heading1"
           }
@@ -10833,7 +11432,10 @@
         {
           "type": "text",
           "text": "Centered images like this are useful for large pictures that should be a focus of attention.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -10841,7 +11443,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -10888,7 +11493,10 @@
         {
           "type": "text",
           "text": "There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -10896,7 +11504,10 @@
         {
           "type": "text",
           "text": " ",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -10905,6 +11516,8 @@
           "type": "text",
           "text": "inserted",
           "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu",
             "italic": true,
             "color": "#808080"
           },
@@ -10915,7 +11528,10 @@
         {
           "type": "text",
           "text": ", not necessarily where it appears on the page in Word.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -10927,13 +11543,23 @@
       "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"Normal\">There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was<text:s/><text:span text:style-name=\"SubtleEmphasis\">inserted</text:span>, not necessarily where it appears on the page in Word.</text:p>"
     },
     {
+      "type": "break",
+      "metadata": {
+        "breakType": "page"
+      }
+    },
+    {
       "type": "heading",
       "text": "Lists",
       "children": [
         {
           "type": "text",
           "text": "Lists",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "14pt",
+            "color": "#365F91"
+          },
           "metadata": {
             "style": "Heading1"
           }
@@ -10956,7 +11582,10 @@
         {
           "type": "text",
           "text": "All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.",
-          "formatting": {},
+          "formatting": {
+            "size": "12pt",
+            "font": "Ubuntu"
+          },
           "metadata": {
             "style": "Normal"
           }
@@ -10974,7 +11603,11 @@
         {
           "type": "text",
           "text": "Bulleted List",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "13pt",
+            "color": "#4F81BD"
+          },
           "metadata": {
             "style": "Heading2"
           }
@@ -11042,7 +11675,11 @@
         {
           "type": "text",
           "text": "Numbered List",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "13pt",
+            "color": "#4F81BD"
+          },
           "metadata": {
             "style": "Heading2"
           }
@@ -11110,7 +11747,11 @@
         {
           "type": "text",
           "text": "Multi-level Lists",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "13pt",
+            "color": "#4F81BD"
+          },
           "metadata": {
             "style": "Heading2"
           }
@@ -11403,7 +12044,11 @@
         {
           "type": "text",
           "text": "Continued Lists",
-          "formatting": {},
+          "formatting": {
+            "bold": true,
+            "size": "13pt",
+            "color": "#4F81BD"
+          },
           "metadata": {
             "style": "Heading2"
           }

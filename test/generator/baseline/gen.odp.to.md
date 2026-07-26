@@ -26,7 +26,7 @@ To see the DOCX conversion in action, simply add this file to calibre using th
 
 ---
 
-# **Text Formatting** {#text-formatting}
+# Text Formatting {#text-formatting}
 
 **Inline formatting**
 
@@ -55,10 +55,10 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like th
 
 ---
 
-# **Tables** {#tables}
+# Tables {#tables}
 
 
-| **ITEM ** | **NEEDED ** |
+| ITEM | NEEDED |
 |  ---  |  ---  |
 | Books | 1 |
 | Pens | 3 |
@@ -91,7 +91,7 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like th
 Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.
 
 
-| **College ** | **New students ** | **Graduating students ** | **Change ** |
+| College | New students | Graduating students | Change |
 |  ---  |  ---  |  ---  |  ---  |
 |  | *Undergraduate* |  |  |
 | Cedar University | 110 | 103 | +7 |
@@ -328,7 +328,7 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 
 ---
 
-# **Structural Elements** {#structural-elements}
+# Structural Elements {#structural-elements}
 
 Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like. 
 
@@ -351,7 +351,7 @@ Two kinds of links are possible, those that refer to an external website and t
 
 ---
 
-# **Images** {#images}
+# Images {#images}
 
 Centered images like this are useful for large pictures that should be a focus of attention. 
 

@@ -27,6 +27,49 @@ const FILE_GROUPS = {
     spreadsheets: ['xlsx', 'ods', 'csv']
 };
 
+/**
+ * Formats fast mode leaves out.
+ *
+ * PDF alone is roughly two thirds of this suite's wall clock. It is not that PDFs are large - a
+ * plain parse of `test.pdf` takes under a second - it is that `FULL_CONFIG` sets `ocr: true`, and
+ * PDF is the only format where that means rasterizing pages and running Tesseract over them. Each
+ * of the seven PDF parses this suite performs costs 24-27s; every other format in the run finishes
+ * in under a second.
+ *
+ * Fast mode exists so an iterating agent gets a real signal in well under a minute instead of six.
+ * It is deliberately NOT what `npm test` runs: PDF is a supported format, its OCR path is exactly
+ * the kind of slow code that rots unnoticed, and the full suite still covers it on every push.
+ */
+const FAST_MODE_SKIPPED_FORMATS = ['pdf'];
+
+/**
+ * True when invoked as `... fast`. Checked against argv rather than an env var so the scripts stay
+ * portable to Windows shells, and gated so `baseline` can never be affected - a baseline generated
+ * with formats missing would silently bake the omission into the committed files.
+ */
+const FAST_MODE = (process.argv[2] || '').toLowerCase() === 'fast';
+
+/** Drops the fast-mode-skipped formats from a list of extensions when fast mode is on. */
+const activeFormats = <T extends string>(formats: readonly T[]): T[] =>
+    FAST_MODE ? formats.filter(f => !FAST_MODE_SKIPPED_FORMATS.includes(f)) : [...formats];
+
+/**
+ * A visible SKIP row per omitted format. Fast mode must never read as "everything passed" - the
+ * run summary counts these alongside the real results, so the omission is on the report rather
+ * than only in whoever remembers which command they typed.
+ */
+const fastModeSkipResults = (): FeatureTest[] => FAST_MODE_SKIPPED_FORMATS.map(ext => ({
+    category: 'Fast Mode',
+    feature: 'Format skipped',
+    fileType: ext,
+    result: {
+        status: 'SKIP' as const,
+        expected: 'Full coverage',
+        actual: 'Skipped',
+        details: `Fast mode: ${ext} omitted (OCR-heavy). Run 'npm run test:parser' for full coverage.`
+    }
+}));
+
 /** Baseline status tracker */
 const BASELINE_STATUS = {
     docx: true,   // ✅ Complete
@@ -2719,22 +2762,30 @@ async function runAllTests() {
 
     const allResults: FeatureTest[] = [];
 
+    if (FAST_MODE) {
+        console.log(`\n⚡ FAST MODE - skipping: ${FAST_MODE_SKIPPED_FORMATS.join(', ')}`);
+        console.log('   Run \'npm run test:parser\' for full coverage before considering work done.\n');
+        allResults.push(...fastModeSkipResults());
+    }
+
+    const formats = activeFormats(Object.keys(BASELINE_STATUS));
+
     // 1. Individual file tests
     console.log('Running individual file tests...');
-    for (const ext of Object.keys(BASELINE_STATUS)) {
+    for (const ext of formats) {
         const results = await testFile(ext);
         allResults.push(...results);
     }
 
     // 2. Group parity tests
     console.log('Running group parity tests...');
-    allResults.push(...await testGroupParity(FILE_GROUPS.documents, 'Documents'));
-    allResults.push(...await testGroupParity(FILE_GROUPS.presentations, 'Presentations'));
-    allResults.push(...await testGroupParity(FILE_GROUPS.spreadsheets, 'Spreadsheets'));
+    allResults.push(...await testGroupParity(activeFormats(FILE_GROUPS.documents), 'Documents'));
+    allResults.push(...await testGroupParity(activeFormats(FILE_GROUPS.presentations), 'Presentations'));
+    allResults.push(...await testGroupParity(activeFormats(FILE_GROUPS.spreadsheets), 'Spreadsheets'));
 
     // 3. Config tests
     console.log('Running config permutation tests...');
-    for (const ext of Object.keys(BASELINE_STATUS)) {
+    for (const ext of formats) {
         const results = await testConfigs(ext);
         allResults.push(...results);
     }
@@ -2830,8 +2881,8 @@ async function copyToBaseline(): Promise<void> {
 // Parse command line arguments
 const args = process.argv.slice(2);
 
-if (args.length === 0) {
-    // No arguments - run all tests
+if (args.length === 0 || args[0].toLowerCase() === 'fast') {
+    // No arguments (or `fast`) - run the whole suite; FAST_MODE decides what it covers
     runAllTests().catch((err) => {
         console.error(err);
         process.exit(1);

@@ -8,6 +8,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = fsPath.dirname(__filename);
 const ROOT = fsPath.join(__dirname, '..', '..');
 
+/**
+ * Formats fast mode leaves out - see the matching block in `test/parser/testOfficeParser.ts` for
+ * the full reasoning. Here it is one test rather than seven, but that one test shells out to the
+ * CLI, which parses the PDF with OCR on: 27.0s against 1.8s for the next slowest format, making it
+ * the single largest cost in `npm run test:fast` once the parser and generator suites were fixed.
+ */
+const FAST_MODE_SKIPPED_FORMATS = ['pdf'];
+
+/** True when invoked as `... fast`. This suite has no `baseline` mode, so nothing else to gate. */
+const FAST_MODE = (process.argv[2] || '').toLowerCase() === 'fast';
+
 const CLI_SRC = fsPath.join(ROOT, 'src', 'cli.ts');
 const SAMPLE_HTML = fsPath.join(ROOT, 'test', 'files', 'test.html');
 const RESULTS_DIR = fsPath.join(__dirname, 'results');
@@ -506,10 +517,26 @@ async function runTests() {
     }
 
     // 27-38: Parity comparison against baseline parser outputs for all 12 formats
+    if (FAST_MODE) {
+        console.log(`\n⚡ FAST MODE - skipping parity for: ${FAST_MODE_SKIPPED_FORMATS.join(', ')}`);
+        console.log('   Run \'npm run test:cli\' for full coverage before considering work done.\n');
+    }
     const extensions = ['docx', 'odt', 'xlsx', 'ods', 'pptx', 'odp', 'pdf', 'rtf', 'csv', 'html', 'md', 'epub'];
     for (let idx = 0; idx < extensions.length; idx++) {
         const ext = extensions[idx];
         const testNum = 27 + idx;
+        // Skipped in place rather than filtered out of `extensions`, so the numbering the console
+        // output and the report use stays stable between a fast run and a full one.
+        if (FAST_MODE && FAST_MODE_SKIPPED_FORMATS.includes(ext)) {
+            console.log(`Test ${testNum}: CLI Parity for ${ext.toUpperCase()} - SKIPPED (fast mode)`);
+            results.push({
+                name: `CLI text parity: ${ext}`,
+                status: 'SKIP',
+                details: `Fast mode: ${ext} omitted (OCR-heavy). Run 'npm run test:cli' for full coverage.`,
+                duration: 0
+            });
+            continue;
+        }
         console.log(`Test ${testNum}: CLI Parity against Parser Baseline for ${ext.toUpperCase()}`);
         const tStart = Date.now();
         const testFile = fsPath.join(ROOT, 'test', 'files', `test.${ext}`);

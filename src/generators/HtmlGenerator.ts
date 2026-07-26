@@ -93,10 +93,19 @@ function resolveStandalone(standalone: boolean | StandaloneConfig | undefined): 
 export class HtmlGenerator extends BaseGenerator<'html'> {
     private chartCounter = 0;
     private isSpreadsheetMode = false;
+    /**
+     * Set while rendering a heading's children, so `formatText` can drop the run-level bold and
+     * font-size the `<hN>` already establishes. See the note there, and the identical flag in
+     * `RtfGenerator`, where the same inherited size actively shrinks the heading.
+     */
+    private inHeading = false;
+    /** As `inHeading`, but for the inherited font size - see `hasUniformFormatting`. */
+    private headingUniformSize = false;
 
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'html'>) {
         super('html', ast, config);
     }
+
 
     /**
      * Generates HTML string from the provided AST.
@@ -530,6 +539,25 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         // method entirely, so without repeating the check here the signal would be silently
         // inert for this generator - which is exactly how it was missed.
         checkAbortSignal(this.config.abortSignal);
+        const wasInHeading = this.inHeading;
+        const wasHeadingSize = this.headingUniformSize;
+        if (node.type === 'heading') {
+            this.inHeading = this.hasUniformFormatting(node, f => f?.bold === true);
+            this.headingUniformSize = this.hasUniformFormatting(node, f => !!f?.size);
+        }
+        try {
+            return await this.processNodeRecursiveInner(node, processor, override);
+        } finally {
+            this.inHeading = wasInHeading;
+            this.headingUniformSize = wasHeadingSize;
+        }
+    }
+
+    private async processNodeRecursiveInner(
+        node: OfficeContentNode,
+        processor: (node: OfficeContentNode, childrenOutput: string) => string | Promise<string>,
+        override?: string | boolean | void
+    ): Promise<string> {
         // Use pre-evaluated override if provided, otherwise call handleOnNode
         const actualOverride = override !== undefined ? override : await this.handleOnNode(node);
 
@@ -1152,14 +1180,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const f = node.formatting;
 
         if (this.config.includeFormatting && f) {
-            if (f.bold) result = `<b>${result}</b>`;
+            // Inside an `<hN>`, the heading's own styling is authoritative. A run that also carries
+            // bold and a font size - the normal case for ODF, where a heading's paragraph style is
+            // inherited by its runs - would wrap the text in `<b>` the heading already implies and,
+            // worse, in a `<span style="font-size: 14pt">` that *shrinks* the heading to the size
+            // its paragraph style happened to name. See the same suppression in RtfGenerator.
+            if (f.bold && !this.inHeading) result = `<b>${result}</b>`;
             if (f.italic) result = `<i>${result}</i>`;
             if (f.underline) result = `<u>${result}</u>`;
             if (f.strikethrough) result = `<strike>${result}</strike>`;
             if (f.subscript) result = `<sub>${result}</sub>`;
             if (f.superscript) result = `<sup>${result}</sup>`;
 
-            const styles = this.getInlineStyles(node);
+            const styles = this.headingUniformSize
+                ? this.getInlineStyles(node, { skipFontSize: true })
+                : this.getInlineStyles(node);
             if (styles) {
                 result = `<span style="${styles}">${result}</span>`;
             }
@@ -1193,7 +1228,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         return result;
     }
 
-    private getInlineStyles(node: OfficeContentNode): string {
+    private getInlineStyles(node: OfficeContentNode, options: { skipFontSize?: boolean } = {}): string {
         const styles: string[] = [];
 
         // Colors/sizes/fonts/alignments are free strings from an untrusted document;
@@ -1221,7 +1256,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             const f = node.formatting;
             if (f.color) pushSafe('color', f.color);
             if (f.backgroundColor) pushSafe('background-color', f.backgroundColor);
-            if (f.size) pushSafe('font-size', f.size);
+            if (f.size && !options.skipFontSize) pushSafe('font-size', f.size);
             if (f.font) {
                 const safeFont = sanitizeCssValue(f.font);
                 if (safeFont) styles.push(`font-family: ${safeFont}, sans-serif`);
