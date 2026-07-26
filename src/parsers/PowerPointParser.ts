@@ -675,12 +675,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             }
             // Case 4: Grouped shape (recursive!)
             else if (tag === "p:grpSp") {
-                // Extract the nested <p:spTree> inside the group
-                const nestedTree = getFirstElementByTagName(element, "p:spTree");
-                // Recurse into the nested tree
-                if (nestedTree) {
-                    nodes.push(...traverseSpTree(nestedTree, slideNumber, xmlContentString));
-                }
+                // Recurse into the group element itself which holds the child shapes
+                nodes.push(...traverseSpTree(element, slideNumber, xmlContentString));
             }
         }
         return nodes;
