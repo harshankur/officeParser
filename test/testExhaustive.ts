@@ -407,6 +407,26 @@ async function testHtml(): Promise<void> {
     assertExists(codeNodes, n => (n.metadata as any)?.math === 'inline', 'HTML: inline math code node');
     assertExists(codeNodes, n => (n.metadata as any)?.math === 'block', 'HTML: block math code node');
 
+    // Native MathML, which reaches every EPUB too since EpubParser parses each spine item with
+    // HtmlParser. Each assertion below names the construct whose *structure* is the point: it is
+    // not enough that the digits survive, because the bug being locked out here was structure
+    // being silently flattened away while the characters came through looking fine.
+    const mathNodes = codeNodes.filter(n => (n.metadata as any)?.math);
+    assertExists(mathNodes, n => n.text === '\\frac12', 'HTML: MathML mfrac becomes \\frac, not the concatenation "12"');
+    assertExists(mathNodes, n => n.text === 'x^2', 'HTML: MathML msup becomes x^2, not the concatenation "x2"');
+    assertExists(mathNodes, n => n.text === '\\sqrt9', 'HTML: MathML msqrt becomes \\sqrt9');
+    // An author-written TeX annotation is the source of truth and must be preferred verbatim
+    // over anything reconstructed from the presentation tree beside it.
+    assertExists(mathNodes, n => n.text === '\\gamma_{0}', 'HTML: TeX annotation wins over the presentation MathML');
+    // `display="block"` is MathML's own way of marking a display equation.
+    assertExists(mathNodes, n => n.text === 'a_1+b' && (n.metadata as any)?.math === 'block',
+        'HTML: MathML display="block" yields a block math node with its subscript intact');
+    // The whole point of the conversion: no math node may be a bare run of the digits and letters
+    // its markup happened to contain, which is exactly what flattening produced.
+    for (const n of mathNodes) {
+        assert.ok(!/^[0-9]+$/.test(n.text || ''), `HTML: math node "${n.text}" flattened to bare digits`);
+    }
+
     // ── Tables ────────────────────────────────────────────────────────────────
     const tables = nodes.filter(n => n.type === 'table');
     assert.ok(tables.length >= 1, 'HTML: Has table nodes');

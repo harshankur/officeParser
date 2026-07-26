@@ -1,6 +1,7 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
+import { isEmptyMath, MathNode, mathmlTreeToLatex } from '../utils/mathUtils.js';
 import { isSafeHtmlAttributeName } from '../utils/sanitize.js';
 
 /**
@@ -18,6 +19,26 @@ interface HtmlNode {
     children: HtmlNode[];
     parent?: HtmlNode;
 }
+
+/**
+ * Presents an `HtmlNode` as a `MathNode` for the shared MathML converter.
+ *
+ * The shapes already line up field for field; the one thing that must happen here is entity
+ * decoding, since this parser keeps text nodes in their raw escaped form and `&lt;` inside an
+ * `<mo>` is a less-than operator, not markup.
+ */
+const toMathNode = (node: HtmlNode): MathNode => ({
+    tagName: node.tagName,
+    attributes: node.attributes,
+    text: node.text === undefined ? undefined : node.text
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'"),
+    children: (node.children || []).map(toMathNode),
+});
 
 const parseAttributes = (attrString: string): Record<string, string> => {
     const attrs: Record<string, string> = {};
@@ -587,6 +608,25 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     type: 'code',
                     text: latex,
                     metadata: { math: mathMode } as CodeMetadata
+                };
+            }
+
+            // Native MathML. This is what a real-world page and every EPUB3 uses (EpubParser
+            // routes each spine item through here), as opposed to the `data-math` round-trip
+            // contract above, which only ever appears in this library's own HTML output. Without
+            // it, a `<math>` element fell through to the generic element handling below, which
+            // concatenates descendant text: `<mfrac><mn>1</mn><mn>2</mn></mfrac>` became "12".
+            if (tagName === 'math' || tagName.endsWith(':math')) {
+                // `display="block"` is MathML's own attribute for a display equation; the legacy
+                // `mode="display"` means the same thing and is still emitted by older producers.
+                const isBlock = node.attributes?.['display'] === 'block'
+                    || node.attributes?.['mode'] === 'display';
+                const latex = mathmlTreeToLatex(toMathNode(node));
+                if (isEmptyMath(latex)) return null;
+                return {
+                    type: 'code',
+                    text: latex,
+                    metadata: { math: isBlock ? 'block' : 'inline' } as CodeMetadata
                 };
             }
 

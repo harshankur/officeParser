@@ -21,10 +21,11 @@
  * @module OpenOfficeParser
  */
 
-import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
+import { mathmlToLatex } from '../utils/mathUtils.js';
 
 /**
  * Tracks how many table cells a single document has been allowed to materialize.
@@ -305,63 +306,6 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      * 
      * @param node - The paragraph element to parse
      */
-    const parseMathML = (node: Node): string => {
-        if (!node) return '';
-        if (node.nodeType === 3) { // Text node
-            return node.textContent || '';
-        }
-        if (node.nodeType !== 1) { // Not an element
-            return '';
-        }
-        const element = node as Element;
-        const tagName = element.tagName.toLowerCase().replace(/^.*:/, ''); // strip namespace prefix
-
-        switch (tagName) {
-            case 'math':
-            case 'mrow':
-            case 'semantics':
-                return Array.from(element.childNodes).map(parseMathML).join('');
-            case 'mfrac': {
-                const children = Array.from(element.childNodes).filter((n: any) => n.nodeType === 1);
-                if (children.length >= 2) {
-                    return `(${parseMathML(children[0])})/(${parseMathML(children[1])})`;
-                }
-                return Array.from(element.childNodes).map(parseMathML).join('');
-            }
-            case 'msub': {
-                const children = Array.from(element.childNodes).filter((n: any) => n.nodeType === 1);
-                if (children.length >= 2) {
-                    return `${parseMathML(children[0])}_${parseMathML(children[1])}`;
-                }
-                return Array.from(element.childNodes).map(parseMathML).join('');
-            }
-            case 'msup': {
-                const children = Array.from(element.childNodes).filter((n: any) => n.nodeType === 1);
-                if (children.length >= 2) {
-                    return `${parseMathML(children[0])}^${parseMathML(children[1])}`;
-                }
-                return Array.from(element.childNodes).map(parseMathML).join('');
-            }
-            case 'msubsup': {
-                const children = Array.from(element.childNodes).filter((n: any) => n.nodeType === 1);
-                if (children.length >= 3) {
-                    return `${parseMathML(children[0])}_${parseMathML(children[1])}^${parseMathML(children[2])}`;
-                }
-                return Array.from(element.childNodes).map(parseMathML).join('');
-            }
-            case 'mi':
-            case 'mn':
-            case 'mo':
-            case 'mtext':
-            case 'ms':
-                return element.textContent || '';
-            case 'annotation':
-                return '';
-            default:
-                return Array.from(element.childNodes).map(parseMathML).join('');
-        }
-    };
-
     /**
      * Helper to parse inline content (text, spans, links, notes, etc.) recursively.
      * 
@@ -559,23 +503,26 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 const mathNode = getFirstElementByTagName(objXml, "math");
                                 if (mathNode) {
                                     isFormula = true;
-                                    formulaText = parseMathML(mathNode).trim();
+                                    formulaText = mathmlToLatex(mathNode).trim();
                                 }
                             }
                         }
 
                         if (isFormula) {
                             fullText += formulaText;
-                            const textNode: OfficeContentNode = {
-                                type: 'text',
+                            // A `code` node carrying `math`, not a plain `text` node: the formula
+                            // is LaTeX, and marking it as such is what lets generators render it
+                            // as maths rather than emit it as prose that happens to contain
+                            // backslashes. Same node shape DOCX, PPTX, HTML and Markdown produce.
+                            const formulaNode: OfficeContentNode = {
+                                type: 'code',
                                 text: formulaText,
-                                formatting: parentFormatting,
-                                metadata: linkMetadata ? { ...linkMetadata } : undefined
+                                metadata: { math: 'inline', ...(linkMetadata ?? {}) } as CodeMetadata
                             };
                             if (config.includeRawContent) {
-                                textNode.rawContent = getRawContent(frame, sourceXml, config);
+                                formulaNode.rawContent = getRawContent(frame, sourceXml, config);
                             }
-                            children.push(textNode);
+                            children.push(formulaNode);
                         } else {
                             // Standard inline image extraction fallback if object is not a formula
                             let altText = '';
@@ -1356,15 +1303,18 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             const mathNode = getFirstElementByTagName(objXml, "math");
 
                             if (mathNode) {
-                                // Math formula object at block level
-                                const formulaText = parseMathML(mathNode).trim();
+                                // Math formula object at block level - a display equation, so the
+                                // inner node is `math: 'block'` where the inline site above emits
+                                // `math: 'inline'`.
+                                const formulaText = mathmlToLatex(mathNode).trim();
                                 const formulaNode: OfficeContentNode = {
                                     type: 'paragraph',
                                     text: formulaText,
                                     children: [
                                         {
-                                            type: 'text',
-                                            text: formulaText
+                                            type: 'code',
+                                            text: formulaText,
+                                            metadata: { math: 'block' } as CodeMetadata
                                         }
                                     ]
                                 };
@@ -1518,7 +1468,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                             const mathNode = getFirstElementByTagName(objXml, "math");
                                             if (mathNode) {
                                                 isFormula = true;
-                                                formulaText = parseMathML(mathNode).trim();
+                                                formulaText = mathmlToLatex(mathNode).trim();
                                             }
                                         }
                                     }
@@ -1526,15 +1476,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                                 if (isFormula) {
                                     cellText += formulaText;
-                                    const textNode: OfficeContentNode = {
-                                        type: 'text',
+                                    const formulaNode: OfficeContentNode = {
+                                        type: 'code',
                                         text: formulaText,
-                                        formatting: {}
+                                        metadata: { math: 'inline' } as CodeMetadata
                                     };
                                     if (config.includeRawContent) {
-                                        textNode.rawContent = getRawContent(frame, xmlString, config);
+                                        formulaNode.rawContent = getRawContent(frame, xmlString, config);
                                     }
-                                    children.push(textNode);
+                                    children.push(formulaNode);
                                 } else if (drawImages.length > 0) {
                                     // logic for image node
                                     const imageNode: OfficeContentNode = {

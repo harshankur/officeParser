@@ -22,11 +22,12 @@
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
  */
 
-import { ChartMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, SlideMetadata, TextFormatting } from '../types.js';
+import { ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, SlideMetadata, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
+import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
 import { getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
@@ -623,6 +624,28 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                             // In a normal paragraph, just add a newline
                             activeNode.text += "\n";
                             activeNode.children?.push({ type: 'text', text: "\n" });
+                        }
+                    } else {
+                        // Equations. This loop dispatches on `a:r`/`a:fld`, so an `m:oMath` -
+                        // which is a sibling of the runs, not one of them - was never visited at
+                        // all and the formula vanished from the slide without a warning.
+                        //
+                        // PowerPoint writes the equation either directly in the paragraph or
+                        // wrapped in `mc:AlternateContent`/`a14:m` for pre-2010 readers, so take
+                        // the element itself when it is the equation and search inside it
+                        // otherwise. `getElementsByTagName` returns document order, which is the
+                        // order the equations are read in.
+                        const isMath = tag === "m:oMath" || tag === "m:oMathPara";
+                        const equations = isMath ? [element] : getElementsByTagName(element, "m:oMath");
+                        for (const equation of equations) {
+                            const latex = ommlToLatex(equation);
+                            if (isEmptyMath(latex)) continue;
+                            activeNode.text += latex;
+                            activeNode.children?.push({
+                                type: 'code',
+                                text: latex,
+                                metadata: { math: tag === "m:oMathPara" ? 'block' : 'inline' } as CodeMetadata
+                            });
                         }
                     }
                 }

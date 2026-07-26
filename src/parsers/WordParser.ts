@@ -60,10 +60,11 @@
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/ [MS-DOCX] Specification
  */
 
-import { BreakMetadata, CellMetadata, CommentMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
+import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
 import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
@@ -801,6 +802,25 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                             text += nestedP.text;
                         }
                     }
+                }
+            } else if (isElement(node) && (node.nodeName === 'm:oMath' || node.nodeName === 'oMath'
+                || node.nodeName === 'm:oMathPara' || node.nodeName === 'oMathPara')) {
+                // Equations. Without this branch they reach the generic fallback below, which
+                // recurses into every child and concatenates the `m:t` runs with no separators -
+                // so `<m:num>1</m:num><m:den>2</m:den>` came out as "12". That is worse than
+                // dropping the formula: the result still reads as a number, so nothing downstream
+                // can tell it is wrong.
+                //
+                // `m:oMathPara` is a display equation on its own line; a bare `m:oMath` is inline.
+                const isBlock = node.nodeName === 'm:oMathPara' || node.nodeName === 'oMathPara';
+                const latex = ommlToLatex(node);
+                if (!isEmptyMath(latex)) {
+                    text += latex;
+                    children.push({
+                        type: 'code',
+                        text: latex,
+                        metadata: { math: isBlock ? 'block' : 'inline' } as CodeMetadata
+                    });
                 }
             } else if (node.childNodes.length > 0) {
                 // Generic fallback for unknown elements that might contain content
