@@ -21,7 +21,7 @@
  * @module OpenOfficeParser
  */
 
-import { CellMetadata, ChartData, ChartMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -78,6 +78,40 @@ const createCellBudget = (config: OfficeParserConfig): CellBudget =>
  * negative or non-numeric value becomes 1 (the element renders once), so a garbage attribute
  * can neither drop a cell nor poison arithmetic downstream (`colIndex += NaN`).
  */
+/**
+ * Paragraph-style properties that outlive the style table: everything here is read once from
+ * `style:paragraph-properties` and then applied wherever the style is referenced.
+ */
+interface ParagraphStyleInfo {
+    alignment?: 'left' | 'center' | 'right' | 'justify';
+    dropCap?: boolean;
+    /** `fo:break-before` - a break emitted before the paragraph that carries the style. */
+    breakBefore?: 'page' | 'column';
+    /** `fo:break-after` - a break emitted after it. */
+    breakAfter?: 'page' | 'column';
+}
+
+/**
+ * Merges a style's formatting over what it inherits, dropping any flag the style explicitly turns
+ * off rather than carrying a `false` forward.
+ *
+ * Generators all test these flags for truthiness, so a retained `false` would render the same - but
+ * it would not *compare* the same, and `MarkdownGenerator.optimizeNodes` merges adjacent text nodes
+ * only when their formatting objects are equal. Leaving `bold: false` on one node and nothing on
+ * its neighbour would silently stop that merge and fragment the output. Same reasoning, and same
+ * shape, as `WordParser`'s direct-run-property merge.
+ */
+const mergeFormatting = (inherited: TextFormatting, override?: TextFormatting): TextFormatting => {
+    if (!override) return { ...inherited };
+    const merged: TextFormatting = { ...inherited };
+    for (const key of Object.keys(override) as (keyof TextFormatting)[]) {
+        const value = override[key];
+        if (value === false) delete merged[key];
+        else if (value !== undefined) (merged as Record<string, unknown>)[key] = value;
+    }
+    return merged;
+};
+
 const toRepeatCount = (attr: string | null): number => {
     const n = parseInt(attr || "1");
     return Number.isFinite(n) && n > 0 ? n : 1;
@@ -148,7 +182,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     // Style Map: styleName -> TextFormatting
     // Inline style parsing (from content.xml automatic styles)
     const styleMap: { [key: string]: TextFormatting } = {};
-    const paragraphStyleMap: { [key: string]: { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean } } = {};
+    const paragraphStyleMap: { [key: string]: ParagraphStyleInfo } = {};
     const listCounters: { [listId: string]: { [level: string]: number } } = {}; // Track item index per listId/level
     let currentListId: string | null = null;
     let lastListType: 'ordered' | 'unordered' | null = null;
@@ -158,13 +192,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     let traverse: (node: Element, targetArray: OfficeContentNode[], forceHeading?: boolean, sourceXml?: string, asSheet?: boolean) => void;
 
     // Helper to parse styles
-    const parseStyles = (xml: Document) => {
-        const styles = getElementsByTagName(xml, "style:style");
+    const parseStyles = (scope: Document | Element) => {
+        const styles = getElementsByTagName(scope, "style:style");
         for (const style of styles) {
             const name = style.getAttribute("style:name");
             if (!name) continue;
 
-            const styleInfo: { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean } = {};
+            const styleInfo: ParagraphStyleInfo = {};
 
             // Parse paragraph properties for alignment and drop caps
             const paraProps = getFirstElementByTagName(style, "style:paragraph-properties");
@@ -189,6 +223,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 if (dropCap) {
                     styleInfo.dropCap = true;
                 }
+
+                // Page/column breaks. ODF attaches these to the paragraph style rather than
+                // writing an inline element the way DOCX's `<w:br w:type="page"/>` does, which is
+                // why `includeBreakNodes` produced nothing at all for ODF: there was no inline
+                // element to find. Only the two break kinds that map onto a BreakMetadata type
+                // are carried; `auto` and `even-page`/`odd-page` have no equivalent.
+                const breakBefore = paraProps.getAttribute("fo:break-before");
+                if (breakBefore === 'page' || breakBefore === 'column') styleInfo.breakBefore = breakBefore;
+                const breakAfter = paraProps.getAttribute("fo:break-after");
+                if (breakAfter === 'page' || breakAfter === 'column') styleInfo.breakAfter = breakAfter;
             }
 
             if (Object.keys(styleInfo).length > 0) {
@@ -208,10 +252,24 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
 
             if (textProps) {
-                if (textProps.getAttribute("fo:font-weight") === "bold" || textProps.getAttribute("style:font-weight-asian") === "bold") formatting.bold = true;
-                if (textProps.getAttribute("fo:font-style") === "italic" || textProps.getAttribute("style:font-style-asian") === "italic") formatting.italic = true;
-                if (textProps.getAttribute("style:text-underline-style") === "solid") formatting.underline = true;
-                if (textProps.getAttribute("style:text-line-through-style") === "solid") formatting.strikethrough = true;
+                // Record the *off* states as an explicit `false`, not as an absent key.
+                //
+                // Now that a paragraph style's text properties are inherited by the runs inside it,
+                // a span has to be able to turn one back off: LibreOffice writes
+                // `fo:font-weight="normal"` on the span whenever a user un-bolds part of a
+                // bold-styled paragraph. With only the `true` side recorded, that span had nothing
+                // to override the inherited value with and came out bold - wrong in the opposite
+                // direction from the bug the inheritance fixed. `TextFormatting`'s flags are
+                // `boolean | undefined` precisely so "explicitly off" is expressible.
+                const fontWeight = textProps.getAttribute("fo:font-weight") || textProps.getAttribute("style:font-weight-asian");
+                // Numeric weights are the same axis: 600+ is bold, below that is not.
+                if (fontWeight) formatting.bold = fontWeight === "bold" || /^[6-9]00$/.test(fontWeight);
+                const fontStyle = textProps.getAttribute("fo:font-style") || textProps.getAttribute("style:font-style-asian");
+                if (fontStyle) formatting.italic = fontStyle === "italic" || fontStyle === "oblique";
+                const underline = textProps.getAttribute("style:text-underline-style");
+                if (underline) formatting.underline = underline !== "none";
+                const lineThrough = textProps.getAttribute("style:text-line-through-style");
+                if (lineThrough) formatting.strikethrough = lineThrough !== "none";
                 const size = textProps.getAttribute("fo:font-size") || textProps.getAttribute("style:font-size-asian");
                 if (size) formatting.size = size;
                 const color = textProps.getAttribute("fo:color");
@@ -321,7 +379,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         styleMap: Record<string, TextFormatting>,
         config: OfficeParserConfig,
         notes: OfficeContentNode[],
-        paragraphStyleMap: Record<string, { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean }>,
+        paragraphStyleMap: Record<string, ParagraphStyleInfo>,
         parentFormatting: TextFormatting = {},
         linkMetadata?: { link?: string; linkType?: 'internal' | 'external' },
         sourceXml: string = ''
@@ -373,6 +431,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         formatting: parentFormatting,
                         metadata: linkMetadata ? { ...linkMetadata } : undefined
                     });
+                } else if (tagName === 'text:soft-page-break') {
+                    // The page boundary the editor recorded at its last save. DOCX's equivalent
+                    // is `w:lastRenderedPageBreak`, so it maps onto the same break type rather
+                    // than onto 'page', which is reserved for a break the author asked for.
+                    if (config.includeBreakNodes) {
+                        children.push({ type: 'break', metadata: { breakType: 'lastRenderedPage' } as BreakMetadata });
+                    }
                 } else if (tagName === 'text:line-break') {
                     // Line break
                     fullText += '\n';
@@ -385,7 +450,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 } else if (tagName === 'text:span') {
                     // Formatted text span
                     const styleName = element.getAttribute("text:style-name");
-                    const formatting = styleName ? { ...parentFormatting, ...styleMap[styleName] } : parentFormatting;
+                    const formatting = styleName ? mergeFormatting(parentFormatting, styleMap[styleName]) : parentFormatting;
 
                     const spanContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, formatting, linkMetadata, sourceXml);
                     fullText += spanContent.text;
@@ -597,7 +662,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      */
     const parseParagraphContent = (
         node: Element,
-        paraStyleMap: Record<string, { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean }>,
+        paraStyleMap: Record<string, ParagraphStyleInfo>,
         styleMap: Record<string, TextFormatting>,
         config: OfficeParserConfig,
         sourceXml: string
@@ -607,9 +672,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         const styleInfo = paraStyle ? paraStyleMap[paraStyle] : undefined;
         const alignment = styleInfo?.alignment;
         const dropCap = styleInfo?.dropCap;
+        const formatting = mergeFormatting({}, paraStyle ? styleMap[paraStyle] : undefined);
 
         // Parse content recursively using the new helper
-        const content = parseInlineContent(node, styleMap, config, notes, paraStyleMap, {}, undefined, sourceXml);
+        const content = parseInlineContent(node, styleMap, config, notes, paraStyleMap, formatting, undefined, sourceXml);
 
         // Add style name to metadata of children if they don't have one
         if (paraStyle) {
@@ -707,7 +773,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      */
     const parseTable = (
         tableNode: Element,
-        paraStyleMap: Record<string, { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean }>,
+        paraStyleMap: Record<string, ParagraphStyleInfo>,
         styleMap: Record<string, TextFormatting>,
         config: OfficeParserConfig,
         sourceXml: string,
@@ -888,79 +954,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         // splitting a huge repeat expansion across many small tables. `traverse` and the
         // spreadsheet branch below both close over this; `parseTable` receives it explicitly.
         const cellBudget = createCellBudget(config);
-        // Parse automatic styles (local to content.xml)
+        // Automatic styles are local to content.xml, but their definitions have exactly the
+        // shape styles.xml uses, so they go through the same reader rather than a second copy of
+        // it - the copy is how `fo:break-before` came to be read in neither place.
         const automaticStyles = getFirstElementByTagName(xml, "office:automatic-styles");
         if (automaticStyles) {
-            const styles = getElementsByTagName(automaticStyles, "style:style");
-            for (const style of styles) {
-                const name = style.getAttribute("style:name");
-                if (!name) continue;
-
-                // Parse paragraph properties for alignment
-                const paraProps = getFirstElementByTagName(style, "style:paragraph-properties");
-                const styleInfo: { alignment?: 'left' | 'center' | 'right' | 'justify', dropCap?: boolean } = {};
-
-                if (paraProps) {
-                    const textAlign = paraProps.getAttribute("fo:text-align");
-                    if (textAlign) {
-                        const alignMap: Record<string, 'left' | 'center' | 'right' | 'justify'> = {
-                            'start': 'left',
-                            'left': 'left',
-                            'center': 'center',
-                            'end': 'right',
-                            'right': 'right',
-                            'justify': 'justify'
-                        };
-                        if (alignMap[textAlign]) {
-                            styleInfo.alignment = alignMap[textAlign];
-                        }
-                    }
-
-                    const dropCap = getFirstElementByTagName(paraProps, "style:drop-cap");
-                    if (dropCap) styleInfo.dropCap = true;
-                }
-
-                if (Object.keys(styleInfo).length > 0) {
-                    paragraphStyleMap[name] = styleInfo;
-                }
-
-                const cellProps = getFirstElementByTagName(style, "style:table-cell-properties");
-                const formatting: TextFormatting = {};
-
-                if (cellProps) {
-                    const bgColor = cellProps.getAttribute("fo:background-color");
-                    if (bgColor && bgColor !== 'transparent') formatting.backgroundColor = bgColor;
-                }
-
-                const textProps = getFirstElementByTagName(style, "style:text-properties");
-                if (textProps) {
-                    if (textProps.getAttribute("fo:font-weight") === "bold" || textProps.getAttribute("style:font-weight-asian") === "bold") formatting.bold = true;
-                    if (textProps.getAttribute("fo:font-style") === "italic" || textProps.getAttribute("style:font-style-asian") === "italic") formatting.italic = true;
-                    if (textProps.getAttribute("style:text-underline-style") === "solid") formatting.underline = true;
-                    if (textProps.getAttribute("style:text-line-through-style") === "solid") formatting.strikethrough = true;
-                    const size = textProps.getAttribute("fo:font-size") || textProps.getAttribute("style:font-size-asian");
-                    if (size) formatting.size = size;
-                    const color = textProps.getAttribute("fo:color");
-                    if (color) formatting.color = color;
-
-                    // Background color
-                    const bgColor = textProps.getAttribute("fo:background-color");
-                    if (bgColor && bgColor !== 'transparent') formatting.backgroundColor = bgColor;
-
-                    // Font family
-                    const fontName = textProps.getAttribute("style:font-name") || textProps.getAttribute("fo:font-family");
-                    if (fontName) formatting.font = fontName;
-
-                    // Subscript/Superscript from text-position (e.g., "sub 58%" or "super 58%")
-                    const textPosition = textProps.getAttribute("style:text-position");
-                    if (textPosition) {
-                        if (textPosition.startsWith("sub")) formatting.subscript = true;
-                        if (textPosition.startsWith("super")) formatting.superscript = true;
-                    }
-                }
-
-                if (Object.keys(formatting).length > 0) styleMap[name] = formatting;
-            }
+            parseStyles(automaticStyles);
         }
 
         // Start traversal
@@ -988,8 +987,25 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
          * @param sourceXml - The source XML string for raw content extraction
          * @param asSheet - If true, treats tables as sheets (for ODS)
          */
+        /**
+         * Emits the break a paragraph style asks for, on the given side of that paragraph.
+         *
+         * ODF has no inline break element for these - `fo:break-before="page"` sits on the style,
+         * so the break is a property of the paragraph rather than a run inside it. That makes it a
+         * sibling emitted around the paragraph node, not a child of it, which is the one structural
+         * difference from how DOCX's `<w:br w:type="page"/>` lands.
+         */
+        const pushStyleBreak = (styleName: string | null, targetArray: OfficeContentNode[], edge: 'before' | 'after') => {
+            if (!config.includeBreakNodes || !styleName) return;
+            const info = paragraphStyleMap[styleName];
+            const breakType = edge === 'before' ? info?.breakBefore : info?.breakAfter;
+            if (!breakType) return;
+            targetArray.push({ type: 'break', metadata: { breakType } as BreakMetadata });
+        };
+
         traverse = (node: Element, targetArray: OfficeContentNode[], forceHeading = false, sourceXml = '', asSheet = false) => {
             if (node.tagName === "text:p") {
+                pushStyleBreak(node.getAttribute("text:style-name"), targetArray, 'before');
                 const pContent = parseParagraphContent(node, paragraphStyleMap, styleMap, config, sourceXml);
                 const type = (forceHeading || (node.getAttribute("text:style-name") || '').toLowerCase().includes('title')) ? 'heading' : 'paragraph';
 
@@ -1023,8 +1039,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     pNode.rawContent = getRawContent(node, sourceXml, config);
                 }
                 targetArray.push(pNode);
+                pushStyleBreak(node.getAttribute("text:style-name"), targetArray, 'after');
                 lastWasList = false;
             } else if (node.tagName === "text:h") {
+                pushStyleBreak(node.getAttribute("text:style-name"), targetArray, 'before');
                 const level = parseInt(node.getAttribute("text:outline-level") || "1");
                 const hContent = parseParagraphContent(node, paragraphStyleMap, styleMap, config, sourceXml);
 
@@ -1052,6 +1070,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     hNode.rawContent = getRawContent(node, sourceXml, config);
                 }
                 targetArray.push(hNode);
+                pushStyleBreak(node.getAttribute("text:style-name"), targetArray, 'after');
                 lastWasList = false;
             } else if (node.tagName === "table:table") {
                 // Parse table with proper structure
@@ -1428,7 +1447,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 if (spans.length > 0) {
                                     for (const span of spans) {
                                         const styleName = span.getAttribute("text:style-name");
-                                        const formatting = styleName ? styleMap[styleName] : {};
+                                        // Through `mergeFormatting` like every other span site, so
+                                        // an explicit `false` is dropped rather than written onto
+                                        // the node - and so the node gets its own object instead of
+                                        // aliasing the shared style-table entry.
+                                        const formatting = mergeFormatting({}, styleName ? styleMap[styleName] : undefined);
                                         const text = span.textContent || '';
                                         cellText += text;
 
