@@ -17,6 +17,85 @@ const MIMES = {
     '.pdf': 'application/pdf'
 };
 
+/**
+ * Detection assertions shared by every bundle page.
+ *
+ * These pages are HTML strings executed in a browser, so they cannot import the Node test
+ * helpers; the ZIP builder has to be inlined. Defining it once and interpolating keeps the
+ * four bundle variants from drifting apart.
+ *
+ * Two things are asserted. A non-ZIP format (RTF) proves `file-type` itself is bundled: the
+ * ZIP fallback cannot rescue that one, so it fails loudly if the module was dropped from the
+ * build. A streamed archive, whose declaration sits past the sniffer's budgets, proves the
+ * fallback works in the browser, since nothing else can name it.
+ */
+const DETECTION_ASSERTIONS = `
+                            // 4. Detection: a non-ZIP format proves file-type itself is bundled.
+                            //    The ZIP fallback cannot rescue this one, so it fails loudly if
+                            //    file-type was dropped from the build.
+                            //    The IIFE pages expose a namespace, the ESM pages a bare import.
+                            const parseFn = (typeof officeParser !== 'undefined')
+                                ? officeParser.parseOffice.bind(officeParser)
+                                : parseOffice;
+                            const rtfRes = await fetch('/test/files/test.rtf');
+                            const rtfBuf = await rtfRes.arrayBuffer();
+                            const rtfAst = await parseFn(new Uint8Array(rtfBuf));
+                            if (rtfAst.type === 'rtf') {
+                                results.push('DETECT_NONZIP: PASS');
+                            } else {
+                                results.push('DETECT_NONZIP: FAIL (got ' + rtfAst.type + ')');
+                            }
+
+                            // 5. Detection: an archive written by a streaming producer, whose
+                            //    declaration sits past the sniffer's budgets (issue #82). Only the
+                            //    ZIP introspection fallback can name this one.
+                            const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+                            const crc32 = b => { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+                            const enc = t => new TextEncoder().encode(t);
+                            const buildZip = entries => {
+                                const parts = [], central = []; let off = 0;
+                                for (const e of entries) {
+                                    const name = enc(e.name), crc = crc32(e.data), dd = !!e.dd, flags = dd ? 0x808 : 0x800;
+                                    const lv = new DataView(new ArrayBuffer(30 + name.length)), lb = new Uint8Array(lv.buffer);
+                                    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(6, flags, true);
+                                    lv.setUint16(8, 0, true); lv.setUint16(10, 0, true); lv.setUint16(12, 0x21, true);
+                                    lv.setUint32(14, dd ? 0 : crc, true); lv.setUint32(18, dd ? 0 : e.data.length, true); lv.setUint32(22, dd ? 0 : e.data.length, true);
+                                    lv.setUint16(26, name.length, true); lv.setUint16(28, 0, true); lb.set(name, 30);
+                                    const lo = off; parts.push(lb, e.data); off += lb.length + e.data.length;
+                                    if (dd) { const d = new DataView(new ArrayBuffer(16)); d.setUint32(0, 0x08074b50, true); d.setUint32(4, crc, true); d.setUint32(8, e.data.length, true); d.setUint32(12, e.data.length, true); parts.push(new Uint8Array(d.buffer)); off += 16; }
+                                    const cv = new DataView(new ArrayBuffer(46 + name.length)), cb = new Uint8Array(cv.buffer);
+                                    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true); cv.setUint16(8, flags, true);
+                                    cv.setUint16(10, 0, true); cv.setUint16(12, 0, true); cv.setUint16(14, 0x21, true);
+                                    cv.setUint32(16, crc, true); cv.setUint32(20, e.data.length, true); cv.setUint32(24, e.data.length, true);
+                                    cv.setUint16(28, name.length, true); cv.setUint32(42, lo, true); cb.set(name, 46); central.push(cb);
+                                }
+                                const cdLen = central.reduce((n, c) => n + c.length, 0);
+                                const ev = new DataView(new ArrayBuffer(22));
+                                ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, entries.length, true); ev.setUint16(10, entries.length, true);
+                                ev.setUint32(12, cdLen, true); ev.setUint32(16, off, true);
+                                const all = [...parts, ...central, new Uint8Array(ev.buffer)];
+                                const total = all.reduce((n, a) => n + a.length, 0), out = new Uint8Array(total);
+                                let q = 0; for (const a of all) { out.set(a, q); q += a.length; }
+                                return out;
+                            };
+                            const filler = n => { const b = new Uint8Array(n); let s2 = 7; for (let i = 0; i < n; i++) { s2 = (s2 * 1103515245 + 12345) & 0x7fffffff; b[i] = s2 & 0xff; } return b; };
+                            const PNS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
+                            const streamedDeck = buildZip([
+                                { name: 'ppt/theme/theme1.xml', data: filler(1200 * 1024), dd: true },
+                                { name: '[Content_Types].xml', data: enc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/></Types>'), dd: true },
+                                { name: 'ppt/presentation.xml', data: enc('<?xml version="1.0"?><p:presentation ' + PNS + '/>'), dd: true },
+                                { name: 'ppt/slides/slide1.xml', data: enc('<?xml version="1.0"?><p:sld ' + PNS + '><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Streamed deck</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>'), dd: true },
+                            ]);
+                            const streamedAst = await parseFn(streamedDeck);
+                            const streamedText = (await streamedAst.to('text')).value;
+                            if (streamedAst.type === 'pptx' && streamedText.includes('Streamed deck')) {
+                                results.push('DETECT_STREAMED_ZIP: PASS');
+                            } else {
+                                results.push('DETECT_STREAMED_ZIP: FAIL (type ' + streamedAst.type + ')');
+                            }
+
+`;
+
 // Start static file server
 const server = http.createServer((req, res) => {
     const urlPath = req.url.split('?')[0];
@@ -112,6 +191,7 @@ const server = http.createServer((req, res) => {
                                 results.push('PDF: FAIL (text missing: ' + pdfText.slice(0, 100) + ')');
                             }
 
+${DETECTION_ASSERTIONS}
                             document.getElementById('status').textContent = results.join(' | ');
                         } catch (err) {
                             console.error('TEST ERROR STACK:', err.stack || err.message);
@@ -217,6 +297,7 @@ const server = http.createServer((req, res) => {
                                 results.push('PDF: FAIL (text missing: ' + pdfText.slice(0, 100) + ')');
                             }
 
+${DETECTION_ASSERTIONS}
                             document.getElementById('status').textContent = results.join(' | ');
                         } catch (err) {
                             console.error('TEST ERROR STACK:', err.stack || err.message);
@@ -330,6 +411,7 @@ const server = http.createServer((req, res) => {
                                 results.push('OCR_STUB: FAIL (warnings: ' + JSON.stringify(docxAst2.warnings || []) + ')');
                             }
 
+${DETECTION_ASSERTIONS}
                             document.getElementById('status').textContent = results.join(' | ');
                         } catch (err) {
                             console.error(err);
@@ -444,6 +526,7 @@ const server = http.createServer((req, res) => {
                                 results.push('OCR_STUB: FAIL (warnings: ' + JSON.stringify(docxAst2.warnings || []) + ')');
                             }
 
+${DETECTION_ASSERTIONS}
                             document.getElementById('status').textContent = results.join(' | ');
                         } catch (err) {
                             console.error(err);

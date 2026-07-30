@@ -2230,6 +2230,246 @@ async function testAbortSignal(): Promise<FeatureTest[]> {
 }
 
 /**
+ * Type detection has to survive archives whose layout defeats magic-byte sniffing.
+ *
+ * `file-type` names an OOXML package by parsing `[Content_Types].xml`, but it walks the archive
+ * under fixed budgets: at most 1024 entries, and roughly 1 MiB of scanning to locate the trailing
+ * data descriptors of entries written with general-purpose flag bit 3. Push that part far enough
+ * back and detection reports a plain `zip`, which is not a format this library parses, so a valid
+ * document failed as an unsupported file type (issue #82). Both layouts are real: streaming ZIP
+ * writers set bit 3, and a media-heavy deck can carry more than 1024 parts.
+ *
+ * These build archives in exactly those two shapes, for every ZIP-backed format, and assert the
+ * document parses anyway. Controls confirm the fallback did not make detection permissive.
+ */
+async function testZipTypeDetection(): Promise<FeatureTest[]> {
+    const results: FeatureTest[] = [];
+    const record = (feature: string, expected: any, actual: any, condition: boolean, details: string, duration = 0): void => {
+        results.push({
+            category: 'ZIP Type Detection',
+            feature,
+            fileType: 'zip',
+            result: { status: condition ? 'PASS' : 'FAIL', expected, actual, details, duration }
+        });
+    };
+
+    const { buildZip, incompressibleBytes } = require('../helpers/zipBuilder');
+    const fflate = require('fflate');
+    const encode = (text: string) => fflate.strToU8(text);
+
+    /** Comfortably past the ~1 MiB descriptor-scanning budget. */
+    const LEAD_BYTES_PAST_SCAN_BUDGET = 1200 * 1024;
+    /** Comfortably past the 1024-entry walk budget. */
+    const ENTRIES_PAST_WALK_BUDGET = 1100;
+
+    const P_NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
+    const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const contentTypes = (mainType: string, part: string) => encode(`<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="${part}" ContentType="${mainType}"/></Types>`);
+    const odfContent = (body: string) => encode(`<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body>${body}</office:body></office:document-content>`);
+
+    // Each format, with the parts needed to both identify it and yield recoverable text.
+    const FORMATS: Array<{ ext: string, marker: string, parts: Record<string, Uint8Array> }> = [
+        {
+            ext: 'pptx', marker: 'Detected pptx',
+            parts: {
+                '[Content_Types].xml': contentTypes('application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml', '/ppt/presentation.xml'),
+                'ppt/presentation.xml': encode(`<?xml version="1.0"?><p:presentation ${P_NS}/>`),
+                'ppt/slides/slide1.xml': encode(`<?xml version="1.0"?><p:sld ${P_NS}><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Detected pptx</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`),
+            },
+        },
+        {
+            ext: 'docx', marker: 'Detected docx',
+            parts: {
+                '[Content_Types].xml': contentTypes('application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml', '/word/document.xml'),
+                'word/document.xml': encode(`<?xml version="1.0"?><w:document ${W_NS}><w:body><w:p><w:r><w:t>Detected docx</w:t></w:r></w:p></w:body></w:document>`),
+            },
+        },
+        {
+            ext: 'xlsx', marker: 'Detected xlsx',
+            parts: {
+                '[Content_Types].xml': contentTypes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml', '/xl/workbook.xml'),
+                'xl/workbook.xml': encode('<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="S1" sheetId="1"/></sheets></workbook>'),
+                'xl/worksheets/sheet1.xml': encode('<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Detected xlsx</t></is></c></row></sheetData></worksheet>'),
+            },
+        },
+        {
+            ext: 'odt', marker: 'Detected odt',
+            parts: {
+                mimetype: encode('application/vnd.oasis.opendocument.text'),
+                'content.xml': odfContent('<office:text><text:p>Detected odt</text:p></office:text>'),
+            },
+        },
+        {
+            ext: 'ods', marker: 'Detected ods',
+            parts: {
+                mimetype: encode('application/vnd.oasis.opendocument.spreadsheet'),
+                'content.xml': odfContent('<office:spreadsheet><table:table table:name="S1"><table:table-row><table:table-cell><text:p>Detected ods</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet>'),
+            },
+        },
+        {
+            ext: 'odp', marker: 'Detected odp',
+            parts: {
+                mimetype: encode('application/vnd.oasis.opendocument.presentation'),
+                'content.xml': odfContent('<office:presentation><draw:page xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" draw:name="p1"><draw:frame><draw:text-box><text:p>Detected odp</text:p></draw:text-box></draw:frame></draw:page></office:presentation>'),
+            },
+        },
+    ];
+
+    // 1. Streamed entries (flag bit 3) ahead of the format declaration.
+    for (const format of FORMATS) {
+        const startTime = Date.now();
+        const entries = [
+            { name: 'padding/lead.bin', data: incompressibleBytes(LEAD_BYTES_PAST_SCAN_BUDGET), dataDescriptor: true },
+            ...Object.entries(format.parts).map(([name, data]) => ({ name, data: data as Uint8Array, dataDescriptor: true })),
+        ];
+        try {
+            const ast = await OfficeParser.parseOffice(buildZip(entries), {});
+            const text = (await ast.to('text')).value as string;
+            record(`${format.ext}: streamed entries before the declaration still detect`,
+                format.ext, ast.type, ast.type === format.ext && text.includes(format.marker),
+                ast.type === format.ext ? 'Detected and parsed from the archive declaration'
+                    : `Detected as ${ast.type}`,
+                Date.now() - startTime);
+        } catch (err: any) {
+            record(`${format.ext}: streamed entries before the declaration still detect`,
+                format.ext, `${err.name}: ${err.message}`, false,
+                `Threw instead of detecting: ${err.message}`, Date.now() - startTime);
+        }
+    }
+
+    // 2. More entries ahead of the declaration than the sniffer will walk.
+    for (const format of FORMATS.slice(0, 3)) {
+        const startTime = Date.now();
+        const entries: any[] = [];
+        for (let i = 0; i < ENTRIES_PAST_WALK_BUDGET; i++) entries.push({ name: `padding/f${i}.bin`, data: encode('x') });
+        for (const [name, data] of Object.entries(format.parts)) entries.push({ name, data });
+        try {
+            const ast = await OfficeParser.parseOffice(buildZip(entries), {});
+            record(`${format.ext}: ${ENTRIES_PAST_WALK_BUDGET} entries before the declaration still detect`,
+                format.ext, ast.type, ast.type === format.ext,
+                ast.type === format.ext ? 'Detected past the sniffer entry budget' : `Detected as ${ast.type}`,
+                Date.now() - startTime);
+        } catch (err: any) {
+            record(`${format.ext}: ${ENTRIES_PAST_WALK_BUDGET} entries before the declaration still detect`,
+                format.ext, `${err.name}: ${err.message}`, false,
+                `Threw instead of detecting: ${err.message}`, Date.now() - startTime);
+        }
+    }
+
+    // 3. Controls. The fallback must not turn every archive into an office document, and must
+    //    not disturb the errors that corrupt input already produces.
+    {
+        const startTime = Date.now();
+        const plainZip = Buffer.from(fflate.zipSync({ 'notes.txt': encode('just some text') }));
+        let message = '';
+        try { await OfficeParser.parseOffice(plainZip, { outputErrorToConsole: false } as any); }
+        catch (err: any) { message = String(err?.officeIssue?.code); }
+        record('a plain ZIP is still rejected as unsupported', 'EXTENSION_UNSUPPORTED', message,
+            message === 'EXTENSION_UNSUPPORTED', 'An archive with no office declaration must not be adopted',
+            Date.now() - startTime);
+
+        let corruptCode = '';
+        try { await OfficeParser.parseOffice(Buffer.from('not an archive at all'), { fileType: 'pptx', outputErrorToConsole: false } as any); }
+        catch (err: any) { corruptCode = String(err?.officeIssue?.code); }
+        record('corrupt input still reports the corrupt-archive error', 'ZIP_NO_ENTRIES_FOUND', corruptCode,
+            corruptCode === 'ZIP_NO_ENTRIES_FOUND', 'Detection must not mask the corrupt-input errors');
+    }
+
+    // 4. The declaration is authoritative, so a wrong caller hint is still reported as one.
+    {
+        const startTime = Date.now();
+        const pptx = Buffer.from(fflate.zipSync(FORMATS[0].parts));
+        const mismatchWarnings: string[] = [];
+        try {
+            await OfficeParser.parseOffice(pptx, { fileType: 'docx', outputErrorToConsole: false, onWarning: (i: any) => mismatchWarnings.push(i.code) } as any);
+        } catch { /* the docx parser then fails on the missing part, which is expected here */ }
+        record('a genuinely wrong fileType hint still warns', 'BUFFER_TYPE_MISMATCH',
+            mismatchWarnings.join(',') || 'none', mismatchWarnings.includes('BUFFER_TYPE_MISMATCH'),
+            'Resolving the type must not silence real mismatches', Date.now() - startTime);
+
+        // ...but an archive the sniffer could not name is not evidence of a mismatch. This
+        // warned on every streamed document, telling the caller their pptx was a zip.
+        const streamed = buildZip([
+            { name: 'padding/lead.bin', data: incompressibleBytes(LEAD_BYTES_PAST_SCAN_BUDGET), dataDescriptor: true },
+            ...Object.entries(FORMATS[0].parts).map(([name, data]) => ({ name, data: data as Uint8Array, dataDescriptor: true })),
+        ]);
+        const hintedWarnings: string[] = [];
+        await OfficeParser.parseOffice(streamed, { fileType: 'pptx', outputErrorToConsole: false, onWarning: (i: any) => hintedWarnings.push(i.code) } as any);
+        record('a correct fileType hint produces no mismatch warning', 'no BUFFER_TYPE_MISMATCH',
+            hintedWarnings.join(',') || 'none', !hintedWarnings.includes('BUFFER_TYPE_MISMATCH'),
+            'A generic zip result must not be reported as disagreeing with the caller');
+    }
+
+    // 5. Detection is capped, independently of the parse's own decompression limits. The two
+    //    parts introspection reads name the format and nothing else, so a real one is tiny; an
+    //    oversized one is a crafted archive trying to make a single call inflate twice.
+    {
+        const startTime = Date.now();
+        const XML_COMMENT_PAD_BYTES = 4.5 * 1024 * 1024; // past the 4 MiB detection cap
+        const oversizedContentTypes = encode(
+            `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
+            + `<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>`
+            + `<!--${'x'.repeat(XML_COMMENT_PAD_BYTES)}--></Types>`
+        );
+        const entries = [
+            { name: 'padding/lead.bin', data: incompressibleBytes(LEAD_BYTES_PAST_SCAN_BUDGET), dataDescriptor: true },
+            { name: '[Content_Types].xml', data: oversizedContentTypes, dataDescriptor: true },
+            ...Object.entries(FORMATS[0].parts)
+                .filter(([name]) => name !== '[Content_Types].xml')
+                .map(([name, data]) => ({ name, data: data as Uint8Array, dataDescriptor: true })),
+        ];
+        let outcome: 'resolved' | 'rejected' = 'resolved';
+        try { await OfficeParser.parseOffice(buildZip(entries), { outputErrorToConsole: false } as any); }
+        catch { outcome = 'rejected'; }
+        record('an oversized declaration is not inflated past the detection cap',
+            'rejected (falls back to unsupported, not parsed via a 4.5 MiB introspection read)',
+            outcome, outcome === 'rejected',
+            outcome === 'resolved'
+                ? 'detectOfficeTypeFromZip inflated an oversized part instead of giving up'
+                : 'Detection gave up rather than reading past its cap', Date.now() - startTime);
+
+        // Control: the same layout, comfortably under the cap, must still detect normally -
+        // this is what proves the rejection above is the cap and not the streamed layout itself.
+        const underCapEntries = [
+            { name: 'padding/lead.bin', data: incompressibleBytes(LEAD_BYTES_PAST_SCAN_BUDGET), dataDescriptor: true },
+            ...Object.entries(FORMATS[0].parts).map(([name, data]) => ({ name, data: data as Uint8Array, dataDescriptor: true })),
+        ];
+        const controlAst = await OfficeParser.parseOffice(buildZip(underCapEntries), {});
+        record('a normal-sized declaration still detects under the same cap',
+            'pptx', controlAst.type, controlAst.type === 'pptx',
+            'The cap must not affect a real, small [Content_Types].xml');
+    }
+
+    // 6. The hint-path skip trades a diagnostic for speed: when the hint is itself a ZIP-backed
+    //    format and byte-sniffing only got as far as "generic zip", introspection does not run
+    //    to double-check it, even if the hint happens to be wrong. This is the accepted cost of
+    //    keeping an explicit fileType the cheap path (verified separately by timing during
+    //    development); what belongs in the suite is that the trade stays exactly this narrow.
+    {
+        const startTime = Date.now();
+        // Genuinely a docx, laid out to defeat byte-sniffing, but told it is a pptx.
+        const mislabeled = buildZip([
+            { name: 'padding/lead.bin', data: incompressibleBytes(LEAD_BYTES_PAST_SCAN_BUDGET), dataDescriptor: true },
+            ...Object.entries(FORMATS[1].parts).map(([name, data]) => ({ name, data: data as Uint8Array, dataDescriptor: true })),
+        ]);
+        const warnings: string[] = [];
+        let code = '';
+        try {
+            await OfficeParser.parseOffice(mislabeled,
+                { fileType: 'pptx', outputErrorToConsole: false, onWarning: (i: any) => warnings.push(i.code) } as any);
+        } catch (err: any) { code = String(err?.officeIssue?.code); }
+        record('a wrong zip-backed hint on a sniff-defeating archive skips the mismatch warning',
+            'no BUFFER_TYPE_MISMATCH, REQUIRED_PART_MISSING from the hinted parser',
+            `warnings=${warnings.join(',') || 'none'}, error=${code}`,
+            !warnings.includes('BUFFER_TYPE_MISMATCH') && code === 'REQUIRED_PART_MISSING',
+            'The hint still drives parsing (and fails there), it just is not double-checked first',
+            Date.now() - startTime);
+    }
+
+    return results;
+}
+
+/**
  * The PowerPoint content loop treats every file it does not explicitly skip as a slide or a
  * note, so each non-slide part the extraction filter pulls in needs its own skip. The document
  * property parts had only one skip between them, which held purely because their real contents
@@ -3005,7 +3245,11 @@ async function runAllTests() {
     console.log('Running PowerPoint non-slide part tests...');
     allResults.push(...await testPowerPointNonSlideParts());
 
-    // 8. Generate report
+    // 8. ZIP type detection for archives that defeat magic-byte sniffing
+    console.log('Running ZIP type detection tests...');
+    allResults.push(...await testZipTypeDetection());
+
+    // 9. Generate report
     console.log('\n');
     const logger = new DualLogger();
     const failedCount = generateReport(allResults, logger);

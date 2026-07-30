@@ -15,7 +15,7 @@
  */
 
 import { Unzip, UnzipInflate } from 'fflate';
-import { DecompressionLimits, OfficeErrorType, OfficeParserConfig } from '../types.js';
+import { DecompressionLimits, OfficeErrorType, OfficeParserConfig, SupportedFileType } from '../types.js';
 import { getOfficeError } from './errorUtils.js';
 
 /**
@@ -260,3 +260,124 @@ export const findRequiredPart = (
     return found;
 };
 
+/** The part naming an OOXML package's document type. */
+const OOXML_CONTENT_TYPES_PATH = '[Content_Types].xml';
+
+/** The part naming an ODF or EPUB package's document type. */
+const ODF_MIMETYPE_PATH = 'mimetype';
+
+/**
+ * Substrings of the main-part content type each OOXML format declares in
+ * `[Content_Types].xml`, matched as plain text because only this one value is needed.
+ */
+const OOXML_MAIN_CONTENT_TYPES: ReadonlyArray<readonly [string, SupportedFileType]> = [
+    ['wordprocessingml.document.main+xml', 'docx'],
+    ['spreadsheetml.sheet.main+xml', 'xlsx'],
+    ['presentationml.presentation.main+xml', 'pptx'],
+];
+
+/** Exact `mimetype` entry contents for the packages that carry one. */
+const PACKAGE_MIMETYPES: Readonly<Record<string, SupportedFileType>> = {
+    'application/vnd.oasis.opendocument.text': 'odt',
+    'application/vnd.oasis.opendocument.spreadsheet': 'ods',
+    'application/vnd.oasis.opendocument.presentation': 'odp',
+    'application/epub+zip': 'epub',
+};
+
+/** First two bytes of every ZIP local file header ("PK"). */
+const ZIP_MAGIC_BYTES = [0x50, 0x4b];
+
+/**
+ * Reporting is suppressed while sniffing: the input is not yet known to be a document, so a
+ * failure here is an inconclusive guess rather than something the caller did wrong. Without a
+ * config, `getOfficeError` would write these to the console.
+ */
+const SILENT_DETECTION_CONFIG: OfficeParserConfig = { outputErrorToConsole: false };
+
+/** Whether a buffer starts with the ZIP local file header signature. */
+const looksLikeZip = (buffer: Buffer): boolean =>
+    buffer.length >= ZIP_MAGIC_BYTES.length && ZIP_MAGIC_BYTES.every((byte, i) => buffer[i] === byte);
+
+/**
+ * How much a type sniff may inflate before giving up, in bytes.
+ *
+ * The two parts read here name the format and nothing else, so they are tiny in any real
+ * document: a few hundred bytes of `mimetype`, a few kilobytes of `[Content_Types].xml`. A
+ * crafted archive could declare them as hundreds of megabytes, and since the document is
+ * inflated again during the parse that follows, honouring the full decompression budget here
+ * would let a single call spend it twice. This cap keeps sniffing cheap; an archive that
+ * exceeds it is simply reported as unidentified.
+ */
+const MAX_DETECTION_INFLATED_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Resolves which office format a ZIP archive actually holds, by reading the part that names it.
+ *
+ * This exists because magic-byte sniffing is a heuristic that gives up. `file-type` identifies an
+ * OOXML package by parsing `[Content_Types].xml`, but it walks the archive under fixed budgets:
+ * at most 1024 entries, and (for entries whose sizes are deferred to a trailing data descriptor,
+ * general-purpose flag bit 3) about 1 MiB of scanning to locate those descriptors. An archive
+ * that puts enough data before `[Content_Types].xml` to exhaust either budget is reported as a
+ * generic `zip`, which previously surfaced to the caller as "add support for zip files" for a
+ * perfectly valid document. Both layouts occur in the wild: streaming ZIP writers set bit 3, and
+ * a media-heavy deck can hold more than 1024 parts.
+ *
+ * We already ship a ZIP reader that has neither limitation, so rather than guessing from the
+ * first bytes this opens the archive and reads the declaration directly. It is deliberately the
+ * fallback rather than the primary check, since the byte-level sniff is far cheaper and settles
+ * every non-ZIP format.
+ *
+ * @param zipInput - The candidate archive
+ * @param limits - Decompression limits, so sniffing an untrusted file stays bounded
+ * @returns The format the archive declares, or `undefined` if it declares none or cannot be read
+ *
+ * @example
+ * ```typescript
+ * // A presentation whose [Content_Types].xml sits behind 2 MiB of streamed entries
+ * await detectOfficeTypeFromZip(buffer, limits); // -> 'pptx'
+ * ```
+ */
+export const detectOfficeTypeFromZip = async (
+    zipInput: Buffer,
+    limits: DecompressionLimits
+): Promise<SupportedFileType | undefined> => {
+    if (!looksLikeZip(zipInput)) return undefined;
+
+    let files: ZipFileContent[];
+    try {
+        files = await extractFiles(
+            zipInput,
+            name => name === OOXML_CONTENT_TYPES_PATH || name === ODF_MIMETYPE_PATH,
+            // Never inflate more for a sniff than the caller already allows for the parse, and
+            // never more than a sniff could legitimately need.
+            {
+                ...limits,
+                maxUncompressedBytes: Math.min(
+                    limits?.maxUncompressedBytes ?? MAX_DETECTION_INFLATED_BYTES,
+                    MAX_DETECTION_INFLATED_BYTES
+                ),
+            },
+            SILENT_DETECTION_CONFIG
+        );
+    } catch {
+        // Unreadable, truncated, or not an archive at all. The caller keeps whatever the
+        // byte-level sniff decided, and the parser it dispatches to reports the real problem.
+        return undefined;
+    }
+
+    // ODF and EPUB state their type outright, so prefer that over inspecting OOXML parts.
+    const mimetypeEntry = files.find(file => file.path === ODF_MIMETYPE_PATH);
+    if (mimetypeEntry) {
+        const declared = PACKAGE_MIMETYPES[mimetypeEntry.content.toString().trim()];
+        if (declared) return declared;
+    }
+
+    const contentTypesEntry = files.find(file => file.path === OOXML_CONTENT_TYPES_PATH);
+    if (contentTypesEntry) {
+        const contentTypes = contentTypesEntry.content.toString();
+        const match = OOXML_MAIN_CONTENT_TYPES.find(([marker]) => contentTypes.includes(marker));
+        if (match) return match[1];
+    }
+
+    return undefined;
+};

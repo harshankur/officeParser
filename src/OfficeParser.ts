@@ -53,6 +53,39 @@ import { assertNode } from './utils/envUtils.js';
 import { getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
 import { loadFileType } from './utils/moduleLoader.js';
 import { terminateOcr } from './utils/ocrUtils.js';
+import { detectOfficeTypeFromZip } from './utils/zipUtils.js';
+
+/** What magic-byte sniffing reports for an archive it could not identify further. */
+const GENERIC_ZIP_EXTENSION = 'zip';
+
+/** The formats that are ZIP archives, and so cannot be contradicted by a bare `zip` result. */
+const ZIP_BACKED_FILE_TYPES: ReadonlySet<string> = new Set(['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'epub']);
+
+/**
+ * Upgrades a magic-byte result of `zip` (or none at all) into the specific office format the
+ * archive declares, by reading that declaration from inside the archive.
+ *
+ * Byte sniffing identifies an OOXML package by parsing `[Content_Types].xml`, but it walks the
+ * archive under fixed budgets and reports a plain `zip` when it runs out before finding that
+ * part. Since `zip` is not a format this library parses, a valid document then failed as an
+ * unsupported file type. Our own reader has no such budget, so it settles the question whenever
+ * sniffing is inconclusive.
+ *
+ * @param detected - What magic-byte sniffing reported, if anything
+ * @param buffer - The file content
+ * @param config - Resolved parser configuration, for its decompression limits
+ * @returns The resolved type, the original detection when nothing better is found, or undefined
+ */
+const resolveZipBackedType = async (
+    detected: string | undefined,
+    buffer: Buffer,
+    config: OfficeParserConfig
+): Promise<string | undefined> => {
+    if (detected && detected !== GENERIC_ZIP_EXTENSION) return detected;
+
+    const resolved = await detectOfficeTypeFromZip(buffer, config.decompressionLimits ?? {});
+    return resolved ?? detected;
+};
 
 /**
  * Main parser class providing office document parsing functionality.
@@ -169,12 +202,13 @@ export class OfficeParser {
             // This matches v6 behavior and prevents crashes in older Node environments
             // where file-type 22.x might be incompatible.
             if (buffer.length > 0 && !ext) {
+                let detected: string | undefined;
                 try {
                     const { fileTypeFromBuffer } = await loadFileType();
                     const type = await fileTypeFromBuffer(buffer);
 
                     if (type) {
-                        ext = type.ext;
+                        detected = type.ext;
                     } else {
                         // If no extension could be detected and none was provided,
                         // it might be a text-based format (csv, md, html) which
@@ -184,15 +218,28 @@ export class OfficeParser {
                     // Log warning but don't crash; the switch below will handle unsupported/missing ext
                     logWarning(OfficeWarningType.FILE_TYPE_DETECTION_FAILED, internalConfig, { error });
                 }
+
+                ext = await resolveZipBackedType(detected, buffer, internalConfig) ?? '';
             } else if (buffer.length > 0 && ext) {
                 // If extension is known, we can optionally verify it, but we wrap it
                 // in a try-catch to avoid breaking Node 18 if file-type fails to load.
                 try {
                     const { fileTypeFromBuffer } = await loadFileType();
                     const type = await fileTypeFromBuffer(buffer);
-                    if (type && type.ext.toLowerCase() !== ext.toLowerCase()) {
+                    // A bare `zip` cannot contradict a caller who already said "this is a
+                    // docx", so there is nothing a closer look could add. Skipping it keeps an
+                    // explicit fileType the cheapest route, rather than making it pay for an
+                    // archive scan that exists only to decide whether to warn.
+                    const worthResolving = !(type?.ext === GENERIC_ZIP_EXTENSION && ZIP_BACKED_FILE_TYPES.has(ext.toLowerCase()));
+                    const detected = worthResolving
+                        ? await resolveZipBackedType(type?.ext, buffer, internalConfig)
+                        : type?.ext;
+                    // A bare `zip` says only that the bytes are an archive, which every format
+                    // on this path already is. Reporting it as a mismatch against the caller's
+                    // own extension is noise, so only a resolved format is worth comparing.
+                    if (detected && detected !== GENERIC_ZIP_EXTENSION && detected.toLowerCase() !== ext.toLowerCase()) {
                         // Mismatch found between authoritative extension and detected content
-                        logWarning(OfficeWarningType.BUFFER_TYPE_MISMATCH, internalConfig, { detected: type.ext, expected: ext });
+                        logWarning(OfficeWarningType.BUFFER_TYPE_MISMATCH, internalConfig, { detected, expected: ext });
                     }
                 } catch (error: any) {
                     // Log warning so user knows verification could not be performed

@@ -350,6 +350,33 @@ function checkBrowserEsm(isSlim = false): CheckResult[] {
     return results;
 }
 
+/**
+ * A string that only `file-type` contributes, used to prove it was inlined into a bundle.
+ *
+ * The browser build has no module resolver at runtime, so `file-type` has to be baked in at
+ * build time. That only happens because `moduleLoader.ts` writes the specifier as a literal
+ * `import('file-type')` that esbuild can see, while the Node path deliberately hides the same
+ * string inside `String(...)` so it is left alone. Making the browser specifier computed, for
+ * instance by hoisting it into a variable, silently drops the module from the bundle and type
+ * detection fails at runtime rather than at build time.
+ *
+ * The marker is deliberately something no office format mentions: our own source names OOXML
+ * content types, so any of those would also match our code and prove nothing.
+ */
+const FILE_TYPE_INLINE_MARKER = 'META-INF/mozilla.rsa';
+
+function checkFileTypeInlined(relPath: string, label: string): CheckResult[] {
+    if (!fileExists(relPath)) {
+        return [fail(`${label}: ${relPath} exists`, 'File not found')];
+    }
+
+    if (readFile(relPath).includes(FILE_TYPE_INLINE_MARKER)) {
+        return [pass(`${label}: file-type is inlined for buffer detection`)];
+    }
+    return [fail(`${label}: file-type is inlined for buffer detection`,
+        `Marker ${JSON.stringify(FILE_TYPE_INLINE_MARKER)} not found — the browser bundle cannot detect a file type from a buffer`)];
+}
+
 // ---------------------------------------------------------------------------
 // Section 6: Browser Type Declarations
 // ---------------------------------------------------------------------------
@@ -501,6 +528,14 @@ async function main() {
         { title: 'Browser ESM Slim Bundle (dist/officeparser.browser.slim.mjs)', fn: () => checkBrowserEsm(true) },
         { title: 'Browser Type Declarations', fn: () => checkBrowserTypes(false) },
         { title: 'Browser Slim Type Declarations', fn: () => checkBrowserTypes(true) },
+        {
+            title: 'Buffer type detection is bundled for the browser', fn: () => [
+                ...checkFileTypeInlined('dist/officeparser.browser.mjs', 'Browser ESM'),
+                ...checkFileTypeInlined('dist/officeparser.browser.slim.mjs', 'Browser ESM Slim'),
+                ...checkFileTypeInlined('dist/officeparser.browser.iife.js', 'Browser IIFE'),
+                ...checkFileTypeInlined('dist/officeparser.browser.slim.iife.js', 'Browser IIFE Slim'),
+            ]
+        },
         { title: 'package.json Path Integrity', fn: checkPackageJson },
     ];
 
