@@ -82,22 +82,36 @@ export function isFullParserConfig(config: any): config is FullOfficeParserConfi
 
 /**
  * Resolves a full parser configuration by merging defaults and user-provided overrides.
- * 
+ *
+ * The returned object always belongs solely to the caller of this function. That matters
+ * because a parse installs per-call state on the config it is handed, such as the collector
+ * that gathers warnings for one document's `ast.warnings`. Returning the caller's own object
+ * would attach that state to an object they may reuse, so a second parse would append its
+ * warnings to the first document's already-returned AST, and each parse would retain the
+ * previous one's state for as long as the config lived.
+ *
+ * Only the configuration containers are copied. Callbacks and `abortSignal` keep their
+ * identity, since a copy of an `AbortSignal` would no longer be tied to its controller.
+ *
  * @param userConfig - Optional configuration provided by the user
- * @returns A fully populated configuration object
+ * @returns A fully populated configuration object, owned by the caller
  */
 export function resolveParserConfig(
     userConfig?: OfficeParserConfig | FullOfficeParserConfig
 ): FullOfficeParserConfig {
     if (isFullParserConfig(userConfig)) {
-        if (!userConfig.decompressionLimits) {
-            userConfig.decompressionLimits = {
-                maxUncompressedBytes: 512 * 1024 * 1024,
-                maxZipEntries: 10000,
-                maxTableCells: 1000000,
-            };
+        const resolved: FullOfficeParserConfig = { ...userConfig };
+        resolved.ocrConfig = { ...userConfig.ocrConfig };
+        if (userConfig.ocrConfig?.timeout) {
+            resolved.ocrConfig.timeout = { ...userConfig.ocrConfig.timeout };
         }
-        return userConfig;
+        resolved.decompressionLimits = {
+            ...(userConfig.decompressionLimits ?? DEFAULT_OFFICE_PARSER_CONFIG.decompressionLimits)
+        };
+        if (userConfig.htmlParserConfig) {
+            resolved.htmlParserConfig = { ...userConfig.htmlParserConfig };
+        }
+        return resolved;
     }
 
     // 1. Start with full defaults (deep cloned)
@@ -153,25 +167,57 @@ export function resolveParserConfig(
     return config;
 }
 
+/** The per-destination and metadata sub-objects a generator config groups its settings into. */
+const GENERATOR_CONFIG_CONTAINERS = [
+    'metadataOverrides', 'htmlConfig', 'mdConfig', 'pdfConfig',
+    'csvConfig', 'textConfig', 'rtfConfig', 'chunksConfig',
+] as const;
+
 /**
- * Resolves a full, destination-specific configuration by merging defaults, 
+ * Copies a generator config's containers so writes during generation cannot reach the caller.
+ *
+ * One level is enough: the containers are what generation writes to. Everything else is copied
+ * by reference on purpose, since callbacks, `styleMap` and `abortSignal` are values whose
+ * identity matters, and a duplicated `AbortSignal` would no longer be tied to its controller.
+ *
+ * @param source - The caller's configuration
+ * @returns An equivalent configuration owned by us
+ */
+function copyGeneratorConfigContainers(source: FullGeneratorConfig): FullGeneratorConfig {
+    const copy: any = { ...source };
+    for (const key of GENERATOR_CONFIG_CONTAINERS) {
+        const container = (source as any)[key];
+        if (container && typeof container === 'object') copy[key] = { ...container };
+    }
+    return copy;
+}
+
+/**
+ * Resolves a full, destination-specific configuration by merging defaults,
  * AST-level settings, and user-provided overrides.
- * 
+ *
+ * As with {@link resolveParserConfig}, the returned object belongs solely to the caller of this
+ * function, so that per-run normalization cannot edit a config the caller still holds.
+ *
  * @param destination - The target format
  * @param userConfig - Optional configuration provided by the user
  * @param astConfig - Optional configuration from the source AST (for inheritance)
- * @returns A fully populated configuration object
+ * @returns A fully populated configuration object, owned by the caller
  */
 export function resolveGeneratorConfig<D extends string>(
     destination: D,
     astConfig?: OfficeParserConfig,
     userConfig?: GeneratorConfig<D> | FullGeneratorConfig
 ): FullGeneratorConfig {
-    // If it's already a full config and we don't need to merge AST config, return it as is.
-    // We assume FullGeneratorConfig is already "safe" (references resolved).
+    // Already complete, so nothing to merge. Still copied rather than handed straight back, for
+    // the same reason as resolveParserConfig: generation writes to the config it is given. The
+    // width check below normalizes an invalid `containerWidth` to 'auto', and doing that to the
+    // caller's own object both edits a value they still hold and silences the warning on every
+    // later run, so the same config would report a problem once and then appear clean.
     if (isFullGeneratorConfig(userConfig) && !astConfig) {
-        validateHtmlConfigWidth(userConfig.htmlConfig, userConfig);
-        return userConfig;
+        const resolved = copyGeneratorConfigContainers(userConfig);
+        validateHtmlConfigWidth(resolved.htmlConfig, resolved);
+        return resolved;
     }
 
     // 1. Start with full defaults (deep cloned to avoid reference sharing)

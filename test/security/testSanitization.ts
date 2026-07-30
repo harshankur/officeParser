@@ -1126,10 +1126,10 @@ async function odfTypeResolutionTests() {
             `got type ${fromPath.type}, text ${JSON.stringify(fromPath.toText())}`);
     } finally { fs.unlinkSync(tmp); }
 
-    // Supplying that type must not write it back into the caller's config. A config object
-    // that is already complete is passed through by reference, so recording this file's type
-    // on it would pin every later parse that reused the object to the wrong format: parse an
-    // .odt, then a .docx with the same config, and the second one is routed to the ODF parser.
+    // Supplying that type must not write it back into the caller's config, or every later parse
+    // reusing the object would be pinned to the wrong format: parse an .odt, then a .docx with
+    // the same config, and the second one is routed to the ODF parser. Config ownership in
+    // general is covered by configOwnershipTests below; this pins the dispatch half of it.
     const reused: any = {
         ...QUIET, extractAttachments: true, ocr: false, fileType: null,
         decompressionLimits: { maxUncompressedBytes: 512 * 1024 * 1024, maxZipEntries: 10000, maxTableCells: 1000000 },
@@ -1148,6 +1148,103 @@ async function odfTypeResolutionTests() {
     check('odf type: a reused config still routes a later docx to the Word parser',
         afterOdt.type === 'docx' && afterOdt.toText().includes('Word doc'),
         `got type ${afterOdt.type}, text ${JSON.stringify(afterOdt.toText())}`);
+}
+
+async function configOwnershipTests() {
+    console.log('- Config ownership across parses...');
+
+    // A parse installs per-call state on the config it is given: the collector that gathers one
+    // document's warnings for its `ast.warnings`. If config resolution hands back the caller's
+    // own object, that state attaches to something the caller may reuse, and every later parse
+    // appends its warnings to earlier, already-returned ASTs while retaining their arrays.
+    //
+    // This only happens for a config complete enough to skip the defaults merge, so these use
+    // one that genuinely qualifies: `ocrConfig` carrying `language` and `workerPath`.
+    const fullConfig = (): any => ({
+        ocrConfig: { language: 'eng', workerPath: '', abortSignal: null },
+        outputErrorToConsole: false,
+        fileType: 'pptx',
+    });
+
+    // A presentation with no slides warns, which gives each parse exactly one warning to trace.
+    const slideless = Buffer.from(zipSync({ 'ppt/presentation.xml': zipEnc('<p:presentation/>') }));
+
+    const shared = fullConfig();
+    const PARSE_COUNT = 4;
+    const asts: any[] = [];
+    for (let i = 0; i < PARSE_COUNT; i++) asts.push(await OfficeParser.parseOffice(slideless, shared));
+
+    const counts = asts.map(ast => ast.warnings.length);
+    check('config ownership: each parse keeps only its own warnings',
+        counts.every(count => count === 1), `warnings per AST: ${JSON.stringify(counts)}`);
+    check('config ownership: a returned AST is not modified by a later parse',
+        asts[0].warnings.length === 1,
+        `the first AST accumulated ${asts[0].warnings.length} warnings over ${PARSE_COUNT} parses`);
+
+    // The caller's object must come back exactly as it went in.
+    check('config ownership: parsing does not add fields to the caller\'s config',
+        !('decompressionLimits' in shared), 'decompressionLimits was written onto the caller\'s object');
+    check('config ownership: parsing does not replace the caller\'s onWarning',
+        shared.onWarning === undefined, 'the warning collector was written onto the caller\'s object');
+
+    // The caller's own handler still fires, once per warning, for every parse.
+    const observed: string[] = [];
+    const withHandler = { ...fullConfig(), onWarning: (issue: any) => observed.push(issue.code) };
+    await OfficeParser.parseOffice(slideless, withHandler);
+    await OfficeParser.parseOffice(slideless, withHandler);
+    check('config ownership: the caller\'s handler fires once per warning per parse',
+        observed.length === 2 && observed.every(code => code === 'NO_SLIDES_FOUND'),
+        `got ${JSON.stringify(observed)}`);
+
+    // Copying must not extend to values whose identity carries meaning. A cloned AbortSignal is
+    // no longer tied to its controller, so cancellation would silently stop working.
+    const aborted = new AbortController();
+    aborted.abort();
+    const resolved: any = resolveParserConfig({ ...fullConfig(), abortSignal: aborted.signal } as any);
+    check('config ownership: abortSignal keeps its identity through resolution',
+        resolved.abortSignal === aborted.signal, 'the signal was copied instead of referenced');
+    let abortName = '';
+    try { await OfficeParser.parseOffice(slideless, { ...fullConfig(), abortSignal: aborted.signal }); }
+    catch (e: any) { abortName = e?.name; }
+    check('config ownership: an aborted signal still cancels a parse', abortName === 'AbortError',
+        `expected AbortError, got ${JSON.stringify(abortName)}`);
+
+    // Containers, by contrast, must be fresh so per-parse writes cannot reach the caller.
+    const source = fullConfig();
+    const copy: any = resolveParserConfig(source);
+    check('config ownership: nested config containers are copied',
+        copy.ocrConfig !== source.ocrConfig, 'ocrConfig was shared with the caller');
+
+    // Generation has the same contract. Its per-run normalization rewrites an unusable
+    // containerWidth to 'auto'; done to the caller's object that both edits a value they still
+    // hold and hides the problem from every later run, so the same config would report it once
+    // and then look clean. An AST built by hand carries no config of its own, which is what
+    // lets a complete generator config skip the merge and reach this path.
+    const generatorConfig: any = resolveGeneratorConfig('html', undefined, { outputErrorToConsole: false } as any);
+    generatorConfig.htmlConfig.containerWidth = 'not-a-width';
+    const generatorWarnings: string[] = [];
+    generatorConfig.onWarning = (issue: any) => generatorWarnings.push(issue.code);
+
+    const ast = astWith([{ type: 'paragraph', text: 'Hi', children: [{ type: 'text', text: 'Hi', formatting: {} }] }]);
+    delete (ast as any).config;
+    await OfficeGenerator.generate(ast as any, 'html' as any, generatorConfig);
+    const widthAfterFirstRun = generatorConfig.htmlConfig.containerWidth;
+    await OfficeGenerator.generate(ast as any, 'html' as any, generatorConfig);
+
+    check('config ownership: generating does not rewrite the caller\'s containerWidth',
+        widthAfterFirstRun === 'not-a-width',
+        `caller's width became ${JSON.stringify(widthAfterFirstRun)} after one generate`);
+    check('config ownership: an invalid width warns on every run, not just the first',
+        generatorWarnings.filter(code => code === 'INVALID_CONTAINER_WIDTH').length === 2,
+        `got ${JSON.stringify(generatorWarnings)}`);
+
+    // The same identity rule applies on the generator side.
+    const generatorSource: any = resolveGeneratorConfig('html', undefined, { outputErrorToConsole: false } as any);
+    const generatorCopy: any = resolveGeneratorConfig('html', undefined, generatorSource);
+    check('config ownership: generator containers are copied',
+        generatorCopy.htmlConfig !== generatorSource.htmlConfig, 'htmlConfig was shared with the caller');
+    check('config ownership: generator callbacks keep their identity',
+        generatorCopy.onNode === generatorSource.onNode, 'onNode was replaced during resolution');
 }
 
 function errorReportingTests() {
@@ -1206,6 +1303,7 @@ async function main() {
     await missingMainPartTests();
     await incompleteArchiveWarningTests();
     await odfTypeResolutionTests();
+    await configOwnershipTests();
     errorReportingTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
