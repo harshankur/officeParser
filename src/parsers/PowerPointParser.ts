@@ -815,7 +815,12 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         if (file.path.match(mediaFileRegex)) continue;
         if (file.path.match(chartFileRegex)) continue;
         if (file.path.match(slideRelsRegex)) continue;
+        // All three document-property parts are extracted for metadata and were read earlier;
+        // only the core one was skipped here, leaving the other two to be parsed again as if
+        // they might be slides.
         if (file.path.match(corePropsFileRegex)) continue;
+        if (file.path.match(appPropsFileRegex)) continue;
+        if (file.path.match(customPropsFileRegex)) continue;
         if (file.path.includes("comment")) continue;
         // This loop treats every remaining file as a slide or note, so the presentation part
         // has to be skipped explicitly: it carries no slide number and would otherwise be

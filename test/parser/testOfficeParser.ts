@@ -2230,6 +2230,75 @@ async function testAbortSignal(): Promise<FeatureTest[]> {
 }
 
 /**
+ * The PowerPoint content loop treats every file it does not explicitly skip as a slide or a
+ * note, so each non-slide part the extraction filter pulls in needs its own skip. The document
+ * property parts had only one skip between them, which held purely because their real contents
+ * carry no shape tree; anything that changed the fallthrough would have turned them into slides,
+ * the same way the presentation part once did. These pin the skip itself rather than that
+ * incidental protection, by handing the parser property parts that do carry a shape tree.
+ */
+async function testPowerPointNonSlideParts(): Promise<FeatureTest[]> {
+    const results: FeatureTest[] = [];
+    const record = (feature: string, expected: any, actual: any, condition: boolean, details: string, duration = 0): void => {
+        results.push({
+            category: 'PowerPoint Non-Slide Parts',
+            feature,
+            fileType: 'pptx',
+            result: { status: condition ? 'PASS' : 'FAIL', expected, actual, details, duration }
+        });
+    };
+
+    const fflate = require('fflate');
+    const P = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        + 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
+    // A shape tree carrying text: the shape the loop looks for when building a slide.
+    const spTree = (text: string) =>
+        `<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>`;
+
+    const startTime = Date.now();
+    const entries: Record<string, Uint8Array> = {
+        'ppt/presentation.xml': fflate.strToU8(`<?xml version="1.0"?><p:presentation ${P}/>`),
+        'ppt/slides/slide1.xml': fflate.strToU8(`<?xml version="1.0"?><p:sld ${P}>${spTree('Real slide text')}</p:sld>`),
+        // Property parts shaped like slides. Real ones never look like this; the point is that
+        // the parser must skip them on identity, not because their contents happen to be inert.
+        'docProps/app.xml': fflate.strToU8(`<?xml version="1.0"?><p:sld ${P}>${spTree('App property text')}</p:sld>`),
+        'docProps/custom.xml': fflate.strToU8(`<?xml version="1.0"?><p:sld ${P}>${spTree('Custom property text')}</p:sld>`),
+        'docProps/core.xml': fflate.strToU8(`<?xml version="1.0"?><p:sld ${P}>${spTree('Core property text')}</p:sld>`),
+    };
+
+    try {
+        const ast: any = await OfficeParser.parseOffice(Buffer.from(fflate.zipSync(entries)),
+            { fileType: 'pptx', includeRawContent: true });
+        const serialized = JSON.stringify(ast.content);
+
+        record('Only real slides become slide nodes', 1, ast.content.length,
+            ast.content.length === 1,
+            ast.content.length === 1 ? 'Property parts did not become slides'
+                : `Property parts leaked in as ${ast.content.length - 1} extra node(s)`,
+            Date.now() - startTime);
+        record('The real slide is still parsed', 'Real slide text',
+            serialized.includes('Real slide text') ? 'Real slide text' : serialized.slice(0, 120),
+            serialized.includes('Real slide text'), 'Skipping property parts must not affect slides');
+
+        for (const [part, text] of [
+            ['docProps/app.xml', 'App property text'],
+            ['docProps/custom.xml', 'Custom property text'],
+            ['docProps/core.xml', 'Core property text'],
+        ] as const) {
+            record(`${part} contributes no content`, 'absent',
+                serialized.includes(text) ? 'present' : 'absent', !serialized.includes(text),
+                `${part} must never be read as slide content`);
+        }
+    } catch (err: any) {
+        record('Property parts are skipped by the slide loop', 'Parsed AST',
+            `${err.name}: ${err.message}`, false,
+            `Threw instead of parsing: ${err.message}`, Date.now() - startTime);
+    }
+
+    return results;
+}
+
+/**
  * Headers, footers and comments live in their own parts of a DOCX archive, so they reach the
  * AST only if the extraction filter asks for them. It did not, which left the code that parses
  * them unreachable and dropped all three from every document without a word of warning. These
@@ -2932,7 +3001,11 @@ async function runAllTests() {
     console.log('Running Word header/footer/comment tests...');
     allResults.push(...await testWordAuxiliaryParts());
 
-    // 7. Generate report
+    // 7. PowerPoint non-slide part handling
+    console.log('Running PowerPoint non-slide part tests...');
+    allResults.push(...await testPowerPointNonSlideParts());
+
+    // 8. Generate report
     console.log('\n');
     const logger = new DualLogger();
     const failedCount = generateReport(allResults, logger);
