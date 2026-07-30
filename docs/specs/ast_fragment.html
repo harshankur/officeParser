@@ -277,6 +277,31 @@
 }</code></pre>
     <p>Use <code>issue.code</code> for programmatic handling (e.g. <code>if (issue.code === 'OCR_FAILED') { ... }</code>).</p>
 
+    <p>Thrown errors carry the same object on <code>error.officeIssue</code>, so a failed parse is identified by
+        the same stable <code>code</code>, rather than by matching message text:</p>
+    <pre><code>try {
+    const ast = await officeParser.parseOffice(buffer, { fileType: 'docx' });
+} catch (err) {
+    switch (err.officeIssue?.code) {
+        case 'ZIP_NO_ENTRIES_FOUND':  // not a ZIP archive at all
+        case 'ZIP_TRUNCATED':         // cut off in transfer, entries incomplete
+        case 'REQUIRED_PART_MISSING': // readable ZIP, but not the format it claims
+            console.error('Unusable file:', err.officeIssue.message);
+            break;
+        default:
+            throw err;
+    }
+}</code></pre>
+    <blockquote>
+        [!IMPORTANT]
+        <strong>A corrupt file throws; it does not parse as an empty document.</strong> If an archive is not
+        readable, is truncated, or is missing the part its format requires (<code>word/document.xml</code>,
+        <code>xl/workbook.xml</code>, <code>ppt/presentation.xml</code>, ODF <code>content.xml</code>, the EPUB OPF),
+        parsing rejects with one of the codes above, so an empty result means the document really is empty.
+        Files that are legitimately empty still parse and say so through <code>onWarning</code> /
+        <code>ast.warnings</code> (<code>NO_WORKSHEETS_FOUND</code>, <code>NO_SLIDES_FOUND</code>).
+    </blockquote>
+
     <h2>Text Formatting</h2>
     <p>Applied to <code>text</code>, <code>paragraph</code>, or <code>heading</code> nodes.</p>
     <pre><code>{

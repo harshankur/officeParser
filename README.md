@@ -206,6 +206,15 @@ const ast = await officeParser.parseOffice(buffer);
 > const ast = await officeParser.parseOffice(markdownBuffer, { fileType: 'md' });
 > ```
 
+> [!NOTE]
+> **ZIP-backed formats are identified from inside the archive.** DOCX, XLSX, PPTX, ODT, ODS, ODP
+> and EPUB are all ZIP files, and telling them apart from the first bytes alone is unreliable for
+> archives written by streaming producers or holding very many parts. When the byte signature is
+> inconclusive, the archive is opened and the format is read from its own declaration
+> (`[Content_Types].xml`, or the `mimetype` entry), so these parse from a buffer without a hint.
+> Supplying `fileType` remains the fastest and most certain route: it decides which parser runs,
+> and for these formats no archive inspection is done at all.
+
 ### Cancellation with AbortSignal
 
 You can pass a standard `AbortSignal` (e.g. from an `AbortController`) to cancel an active parse operation. This is especially useful for setting request-level timeouts or canceling long-running parses (like large PDFs with OCR).
@@ -532,6 +541,34 @@ interface OfficeIssue {
     details?: any;             // original error or extra context
 }
 ```
+
+Thrown errors carry the same object on `error.officeIssue`, so a failed parse is identified by
+the same stable `code` you would branch on for a warning, rather than by matching message text:
+
+```js
+try {
+    const ast = await officeParser.parseOffice(buffer, { fileType: 'docx' });
+} catch (err) {
+    switch (err.officeIssue?.code) {
+        case 'ZIP_NO_ENTRIES_FOUND':  // not a ZIP archive at all
+        case 'ZIP_TRUNCATED':         // cut off in transfer, entries incomplete
+        case 'REQUIRED_PART_MISSING': // readable ZIP, but not the format it claims
+            console.error('Unusable file:', err.officeIssue.message);
+            break;
+        default:
+            throw err;
+    }
+}
+```
+
+> [!IMPORTANT]
+> **A corrupt file throws; it does not parse as an empty document.** If an archive is not
+> readable, is truncated, or is missing the part its format requires (`word/document.xml`,
+> `xl/workbook.xml`, `ppt/presentation.xml`, ODF `content.xml`, the EPUB OPF), parsing rejects
+> with one of the codes above. An empty result therefore means the document really is empty.
+> Files that are legitimately empty still parse, and say so through `onWarning` /
+> `ast.warnings` (`NO_WORKSHEETS_FOUND` for a chartsheet-only workbook, `NO_SLIDES_FOUND` for a
+> presentation with no slides).
 
 ---
 

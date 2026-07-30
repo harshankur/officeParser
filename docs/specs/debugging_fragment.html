@@ -115,6 +115,13 @@ await officeParser.parseOffice(markdownBuffer);
 await officeParser.parseOffice(markdownBuffer, { fileType: 'md' });
 await officeParser.parseOffice(htmlBuffer,     { fileType: 'html' });
 await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre>
+    <p><strong>ZIP-backed formats do not need this hint.</strong> DOCX, XLSX, PPTX, ODT, ODS, ODP and EPUB are all ZIP
+        archives, and identifying them from the leading bytes alone is unreliable for archives written by streaming
+        producers (which defer entry sizes to trailing data descriptors) or holding very many parts. When the byte
+        signature comes back as a plain <code>zip</code>, the archive is opened and the format is read from its own
+        declaration, either <code>[Content_Types].xml</code> or the <code>mimetype</code> entry. If you previously saw
+        <code>Sorry, OfficeParser currently supports docx, pptx, xlsx&hellip;</code> for a valid document, that was this
+        case and it no longer occurs.</p>
     <p>The <code>fileType</code> option is authoritative — it bypasses magic-bytes detection even for binary formats.
     </p>
 
@@ -139,7 +146,11 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
     <ul>
         <li><strong>Max Uncompressed Size:</strong> Defaults to 512 MB. Files exceeding this size will reject with a <code>ZIP_SIZE_LIMIT_EXCEEDED</code> error.</li>
         <li><strong>Max Zip Entries:</strong> Defaults to 10,000 entries. Archives with more files will reject with a <code>ZIP_ENTRY_COUNT_LIMIT_EXCEEDED</code> error.</li>
+        <li><strong>Corrupt / non-ZIP input:</strong> Data that yields no readable ZIP entries at all rejects with a <code>ZIP_NO_ENTRIES_FOUND</code> error, since every ZIP-based document format requires at least one entry. This is not a tunable limit: it means the input is corrupt, truncated, or not actually a ZIP-based file.</li>
+        <li><strong>Truncated input:</strong> An archive missing its End of Central Directory record rejects with a <code>ZIP_TRUNCATED</code> error. The file was cut off (typically an interrupted download or upload), so entries recovered from it cannot be trusted to be the whole document.</li>
+        <li><strong>Wrong kind of archive:</strong> A perfectly readable ZIP that lacks the part its format requires rejects with a <code>REQUIRED_PART_MISSING</code> error naming the missing part (<code>word/document.xml</code>, <code>xl/workbook.xml</code>, <code>ppt/presentation.xml</code>, ODF <code>content.xml</code>, or the EPUB OPF). This is what a renamed ZIP or a partial upload looks like.</li>
     </ul>
+    <p>None of these three are tunable: they report that the input is not a usable document, not that a limit was hit. A workbook with only chartsheets and a presentation with no slides are legitimate and still parse, emitting a <code>NO_WORKSHEETS_FOUND</code> or <code>NO_SLIDES_FOUND</code> warning so an empty result is never silent.</p>
     <p>If you need to process larger files, you can increase these limits or disable them by providing custom values in <code>decompressionLimits</code>:</p>
     <pre><code>const ast = await officeParser.parseOffice('large_file.docx', {
     decompressionLimits: {
@@ -192,6 +203,22 @@ await officeParser.parseOffice(csvBuffer,      { fileType: 'csv' });</code></pre
             <tr>
                 <td>ZIP extraction failed or limit exceeded</td>
                 <td>Increase <code>decompressionLimits.maxUncompressedBytes</code> or <code>decompressionLimits.maxZipEntries</code></td>
+            </tr>
+            <tr>
+                <td><code>ZIP_NO_ENTRIES_FOUND</code> error</td>
+                <td>The input is not a readable ZIP archive at all. Verify the file and the <code>fileType</code> hint</td>
+            </tr>
+            <tr>
+                <td><code>ZIP_TRUNCATED</code> error</td>
+                <td>The file was cut off in transfer. Re-download or re-upload it, then compare the byte size against the source</td>
+            </tr>
+            <tr>
+                <td><code>REQUIRED_PART_MISSING</code> error</td>
+                <td>A readable ZIP that is not the document type it claims. Check the file opens in its native application, and that <code>fileType</code> matches what it actually is</td>
+            </tr>
+            <tr>
+                <td>Document parses but comes back empty</td>
+                <td>Check <code>ast.warnings</code> for <code>NO_WORKSHEETS_FOUND</code> / <code>NO_SLIDES_FOUND</code> - the file really is empty. Corrupt input throws instead of returning empty</td>
             </tr>
             <tr>
                 <td>Images missing from generated EPUB</td>
