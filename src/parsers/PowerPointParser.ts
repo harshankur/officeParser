@@ -109,7 +109,6 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     });
 
     const content: OfficeContentNode[] = [];
-    const rawContents: string[] = [];
     const slideRelsMap: Record<number, Record<string, { type: string, target: string }>> = {};
 
     const authorMap: Record<string, { author?: string, initials?: string }> = {};
@@ -829,9 +828,6 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
         const xmlContentString = file.content.toString();
         const xml = parseXmlString(xmlContentString, { locator: config.includeRawContent });
-        if (config.includeRawContent) {
-            rawContents.push(xmlContentString);
-        }
 
         const slideMatch = file.path.match(slideNumberRegex);
         const slideNumber = slideMatch ? parseInt(slideMatch[1]) : 0;

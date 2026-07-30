@@ -453,7 +453,6 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
 
 
     const content: OfficeContentNode[] = [];
-    const rawContents: string[] = [];
     const numberingState: { [key: string]: { [key: string]: number } } = {};
     const listCounters: { [key: string]: { [key: string]: number } } = {}; // Track item index per listId/level
 
@@ -1148,10 +1147,6 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         if (file.path.match(footerFileRegex)) continue;
 
         const documentContent = file.content.toString();
-        if (config.includeRawContent) {
-            rawContents.push(documentContent);
-        }
-
         const doc = parseXmlString(documentContent, { locator: config.includeRawContent });
         const body = getFirstElementByTagName(doc, "w:body");
         if (body) {

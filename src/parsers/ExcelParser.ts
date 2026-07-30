@@ -441,7 +441,6 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     }
 
     const content: OfficeContentNode[] = [];
-    const rawContents: string[] = [];
 
     for (const file of files) {
         if (file.path.match(mediaFileRegex)) continue;
@@ -453,10 +452,6 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         if (file.path.match(drawingRelsRegex)) continue;
 
         if (file.path.match(sheetsRegex)) {
-            if (config.includeRawContent) {
-                rawContents.push(file.content.toString());
-            }
-
             const sheetFilename = file.path.split('/').pop() || '';
             const relsFilename = `xl/worksheets/_rels/${sheetFilename}.rels`;
             const relsFile = files.find(f => f.path === relsFilename);
