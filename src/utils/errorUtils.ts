@@ -6,13 +6,18 @@
  * consistent error reporting across all parsers and the main entry point.
  */
 
-import { OfficeErrorType, OfficeIssue, OfficeParserConfig, OfficeWarningType } from '../types.js';
+import { OfficeError, OfficeErrorType, OfficeIssue, OfficeParserConfig, OfficeWarningType } from '../types.js';
 
 /** Error header prefix for all error messages */
 const ERRORHEADER = "[OfficeParser]: ";
 
+// `OfficeError` (the public shape callers catch) lives in types.ts alongside `OfficeIssue`.
+// Every error built by getOfficeError is branded with its issue, which serves two purposes:
+// consumers branch on `err.officeIssue.code` instead of matching message text, and
+// getWrappedError recognizes an error it has already reported and prefixed, so it neither
+// reports it twice nor prepends a second header.
 
-/** 
+/**
  * Lookup table for error messages.
  * Some entries are functions that take parameters to build dynamic messages.
  */
@@ -35,6 +40,9 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.ZIP_ENTRY_COUNT_LIMIT_EXCEEDED]: (limit: number) => `ZIP entry count exceeds limit (${limit})`,
     [OfficeErrorType.ZIP_ENTRY_INVALID_SIZE]: `ZIP entry missing a valid declared size`,
     [OfficeErrorType.ZIP_SIZE_LIMIT_EXCEEDED]: (limit: number) => `ZIP uncompressed size limit exceeded (${limit} bytes)`,
+    [OfficeErrorType.ZIP_NO_ENTRIES_FOUND]: `No readable entries found in ZIP data. The input is corrupt, truncated, or not a ZIP archive: every ZIP-based document format requires at least one entry.`,
+    [OfficeErrorType.ZIP_TRUNCATED]: `Malformed ZIP data: no End of Central Directory record was found at the end of the input. Either the file was cut off during download or transfer, or extra data follows the archive; in both cases the entries recovered from it cannot be trusted to be the whole document.`,
+    [OfficeErrorType.REQUIRED_PART_MISSING]: (info: { fileType: string, part: string }) => `Your ${info.fileType} file is a readable ZIP archive but is missing its required '${info.part}' part, so it cannot be a valid ${info.fileType} document. The file is corrupt, incomplete, or mislabeled. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce the error.`,
     [OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED]: `Document nesting depth exceeded the safe limit (possible denial-of-service input)`,
     [OfficeErrorType.EMBEDDING_TIMEOUT]: (timeout: number) => `Embedding call timed out after ${timeout}ms`
 };
@@ -62,6 +70,8 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.TABLE_CELL_LIMIT_EXCEEDED]: (limit: number) => `Table cell limit (${limit}) reached while expanding repeated ODF cells/rows; the remaining cells were not materialized. A few hundred bytes of XML can request an unbounded number of cells via table:number-columns-repeated / table:number-rows-repeated, so this is capped. Raise decompressionLimits.maxTableCells if your documents legitimately exceed it.`,
     [OfficeWarningType.INVALID_CONTAINER_WIDTH]: (val: any) => `Invalid HTML containerWidth: ${JSON.stringify(val)}. Falling back to "auto". Width must be a positive number, a valid CSS length string (e.g., "900px", "100%", "50vw"), or "auto".`,
     [OfficeWarningType.METADATA_NOT_REPRESENTABLE]: (info: { keys: string[], format: string }) => `Custom metadata ${info.keys.map(k => `'${k}'`).join(', ')} could not be written to ${info.format} output: the format has a fixed metadata vocabulary with no place for caller-defined keys. The named metadata fields (title, author, etc.) were still applied.`,
+    [OfficeWarningType.NO_WORKSHEETS_FOUND]: `Workbook contains no worksheet parts (xl/worksheets/). If the workbook holds only chartsheets this is expected and there is simply no cell text to extract; otherwise the file may be incomplete.`,
+    [OfficeWarningType.NO_SLIDES_FOUND]: `Presentation contains no slides (ppt/slides/). A legitimately empty presentation produces this too, but if you expected content the file may be incomplete.`,
     [OfficeWarningType.INVALID_STYLE_MAP_TAG]: (tag: string) => `styleMap output.tag ${JSON.stringify(tag)} is not an allowed element name and was ignored; the node's default tag was used instead. A tag name is written into both the opening and closing tag, so only a known-safe set of block, heading and inline elements is accepted.`
 };
 
@@ -119,7 +129,7 @@ const reportIssue = (
  * @param info - Optional additional information
  * @returns The Error object to be thrown
  */
-export const getOfficeError = (type: OfficeErrorType, config?: OfficeParserConfig, info?: any): Error => {
+export const getOfficeError = (type: OfficeErrorType, config?: OfficeParserConfig, info?: any): OfficeError => {
     const message = createOfficeError(type, info);
     const issue: OfficeIssue = {
         type: 'error',
@@ -127,26 +137,38 @@ export const getOfficeError = (type: OfficeErrorType, config?: OfficeParserConfi
         message,
         details: info
     };
-    
+
     reportIssue(issue, config);
-    return new Error(ERRORHEADER + message);
+    const error: OfficeError = new Error(ERRORHEADER + message);
+    // Brand the error with the issue that produced it so getWrappedError can tell an
+    // already-reported, already-prefixed OfficeParser error from a raw third-party one.
+    error.officeIssue = issue;
+    return error;
 };
 
 /**
  * Wraps an existing error with OfficeParser context and performs corruption detection.
  * Optionally logs the error to console.
  * 
+ * An error already built by {@link getOfficeError} is returned untouched: it carries an
+ * `officeIssue`, meaning it has been reported once and already bears the `[OfficeParser]: `
+ * header. Re-wrapping it would report the same issue a second time, prepend a second header,
+ * and flatten its specific error code to `FILE_CORRUPTED`. This is a marker check on the error
+ * object rather than a test against its message text, so it stays independent of wording.
+ *
  * **Important**: Do NOT pass AbortErrors to this function. AbortErrors (err.name === 'AbortError')
  * represent deliberate user cancellation and must be re-thrown as-is from the catch block so that
  * callers can reliably detect them via `err.name === 'AbortError'` or `err instanceof DOMException`.
  * This function always returns a plain `new Error(...)`, which would strip the AbortError identity.
- * 
+ *
  * @param error - The original error object
  * @param config - Parser configuration
  * @param filePath - Optional file path for context
  * @returns The wrapped Error object to be thrown
  */
 export const getWrappedError = (error: any, config: OfficeParserConfig, filePath?: string): Error => {
+    if (error?.officeIssue) return error;
+
     let message = error.message || error;
     let code: OfficeErrorType | OfficeWarningType = OfficeErrorType.FILE_CORRUPTED; // Default for wrapped errors
 

@@ -84,6 +84,7 @@ import {
     OfficeConverterConfig,
     OfficeErrorType,
     OfficeWarningType,
+    OfficeError,
     ConversionResult,
 } from './types.js';
 
@@ -131,6 +132,7 @@ export {
     generate,
     OfficeErrorType,
     OfficeWarningType,
+    OfficeError,
     ConversionResult,
 };
 

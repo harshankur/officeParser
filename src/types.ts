@@ -39,6 +39,12 @@ export enum OfficeErrorType {
     ZIP_ENTRY_INVALID_SIZE = 'ZIP_ENTRY_INVALID_SIZE',
     /** ZIP uncompressed size limit exceeded */
     ZIP_SIZE_LIMIT_EXCEEDED = 'ZIP_SIZE_LIMIT_EXCEEDED',
+    /** ZIP data yielded no readable entries (corrupt, truncated, or not a ZIP archive) */
+    ZIP_NO_ENTRIES_FOUND = 'ZIP_NO_ENTRIES_FOUND',
+    /** ZIP data is truncated: the End of Central Directory record is absent */
+    ZIP_TRUNCATED = 'ZIP_TRUNCATED',
+    /** A readable ZIP archive is missing the part its document format requires */
+    REQUIRED_PART_MISSING = 'REQUIRED_PART_MISSING',
     /** Document element/structure nesting exceeded the safe recursion depth */
     MAX_NESTING_DEPTH_EXCEEDED = 'MAX_NESTING_DEPTH_EXCEEDED',
     /** Embedding call timed out */
@@ -89,7 +95,11 @@ export enum OfficeWarningType {
     /** A metadata override could not be represented in the destination format's vocabulary */
     METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE',
     /** A styleMap output.tag was not an allowed element name and was ignored */
-    INVALID_STYLE_MAP_TAG = 'INVALID_STYLE_MAP_TAG'
+    INVALID_STYLE_MAP_TAG = 'INVALID_STYLE_MAP_TAG',
+    /** A workbook archive contains no worksheet parts (chartsheet-only workbooks are legitimate) */
+    NO_WORKSHEETS_FOUND = 'NO_WORKSHEETS_FOUND',
+    /** A presentation archive contains no slides (a zero-slide presentation is legitimate) */
+    NO_SLIDES_FOUND = 'NO_SLIDES_FOUND'
 }
 
 /**
@@ -475,6 +485,30 @@ export interface OfficeIssue {
     code: OfficeWarningType | OfficeErrorType;
     /** Optional additional context or original error object. */
     details?: any;
+}
+
+/**
+ * An Error thrown by OfficeParser, carrying the structured issue that produced it.
+ *
+ * Catching code can branch on `error.officeIssue.code`, the same stable enum used for warnings,
+ * instead of matching against message text. Errors that originate outside the library (and
+ * `AbortError`, which is deliberately re-thrown untouched so cancellation stays detectable via
+ * `error.name`) do not carry this property, hence the optional marker.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *     await parseOffice(buffer, { fileType: 'docx' });
+ * } catch (err) {
+ *     if ((err as OfficeError).officeIssue?.code === OfficeErrorType.REQUIRED_PART_MISSING) {
+ *         // the archive is readable, but it is not a docx
+ *     }
+ * }
+ * ```
+ */
+export interface OfficeError extends Error {
+    /** The structured issue this error was created from. */
+    officeIssue?: OfficeIssue;
 }
 
 /**

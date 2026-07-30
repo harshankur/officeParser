@@ -47,7 +47,7 @@ import { parsePdf } from './parsers/PdfParser.js';
 import { parsePowerPoint } from './parsers/PowerPointParser.js';
 import { parseRtf } from './parsers/RtfParser.js';
 import { parseWord } from './parsers/WordParser.js';
-import { OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeParserConfig, OfficeWarningType } from './types.js';
+import { OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SupportedFileType } from './types.js';
 import { resolveParserConfig } from './utils/configUtils.js';
 import { assertNode } from './utils/envUtils.js';
 import { getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
@@ -177,7 +177,7 @@ export class OfficeParser {
                         ext = type.ext;
                     } else {
                         // If no extension could be detected and none was provided,
-                        // it might be a text-based format (csv, md, html) which 
+                        // it might be a text-based format (csv, md, html) which
                         // lack magic bytes. We'll let the switch default handle it.
                     }
                 } catch (error: any) {
@@ -185,7 +185,7 @@ export class OfficeParser {
                     logWarning(OfficeWarningType.FILE_TYPE_DETECTION_FAILED, internalConfig, { error });
                 }
             } else if (buffer.length > 0 && ext) {
-                // If extension is known, we can optionally verify it, but we wrap it 
+                // If extension is known, we can optionally verify it, but we wrap it
                 // in a try-catch to avoid breaking Node 18 if file-type fails to load.
                 try {
                     const { fileTypeFromBuffer } = await loadFileType();
@@ -218,7 +218,17 @@ export class OfficeParser {
                 case 'odt':
                 case 'odp':
                 case 'ods':
-                    result = await parseOpenOffice(buffer, internalConfig);
+                    // The three ODF types share one parser, which needs to know which of them
+                    // it is looking at. It normally reads that from the archive's mimetype
+                    // entry; passing the resolved type along gives it something accurate to
+                    // fall back on when that entry is missing.
+                    //
+                    // Overridden on a copy rather than on internalConfig: resolveParserConfig
+                    // returns an already-complete config by reference, so writing to it would
+                    // pin the caller's own object to this file's type and misroute every later
+                    // parse that reused it.
+                    result = await parseOpenOffice(buffer,
+                        { ...internalConfig, fileType: ext.toLowerCase() as SupportedFileType });
                     break;
                 case 'pdf':
                     result = await parsePdf(buffer, internalConfig);

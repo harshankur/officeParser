@@ -29,7 +29,7 @@ import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
 import { decodeXmlEntities, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
-import { extractFiles } from '../utils/zipUtils.js';
+import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
 /**
  * Parses an Excel spreadsheet (.xlsx) and extracts sheets, rows, and cells.
@@ -73,8 +73,21 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             !!x.match(appPropsFileRegex) ||
             (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(drawingRelsRegex))) ||
             ((!!config.extractAttachments || !config.ignoreComments) && !!x.match(relsRegex)),
-        config.decompressionLimits
+        config.decompressionLimits,
+        config
     );
+
+    // Every workbook has xl/workbook.xml; without it the archive is not a spreadsheet.
+    // Resolved up front so a file that cannot be a workbook fails before any of the parsing
+    // work below, and read again further down for the sheet-name map.
+    const workbookFile = findRequiredPart(files, path => path === 'xl/workbook.xml', config,
+        { fileType: 'xlsx', part: 'xl/workbook.xml' });
+
+    // Worksheets, by contrast, are not guaranteed: a workbook holding only chartsheets is
+    // valid and simply has no cell text to extract. Warn rather than fail, so the caller can
+    // tell "nothing to read here" from "we read nothing".
+    if (!files.some(file => !!file.path.match(sheetsRegex)))
+        logWarning(OfficeWarningType.NO_WORKSHEETS_FOUND, config);
 
     const sharedStringsFile = files.find(f => f.path === stringsFilePath);
     // Updated to store structured content (rich text runs) or simple string
@@ -395,10 +408,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
     // Parse workbook.xml to get sheet names and map them to sheet files
     const sheetNameMap: Record<string, string> = {};
-    const workbookFile = files.find(f => f.path === 'xl/workbook.xml');
     const workbookRelsFile = files.find(f => f.path === 'xl/_rels/workbook.xml.rels');
 
-    if (workbookFile && workbookRelsFile) {
+    if (workbookRelsFile) {
         // Parse rels to get rId -> file mapping
         const relsXml = parseXmlString(workbookRelsFile.content.toString());
         const relationships = getElementsByTagName(relsXml, "Relationship");

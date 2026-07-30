@@ -120,7 +120,7 @@ const toRepeatCount = (attr: string | null): number => {
 import { createAttachment } from '../utils/imageUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
 import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
-import { extractFiles } from '../utils/zipUtils.js';
+import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
 /**
  * Helper to clean and extract attachment name from xlink:href or paths.
@@ -132,9 +132,12 @@ const cleanAttachmentName = (href: string): string => {
     return cleaned.split('/').pop() || '';
 };
 
+/** The ODF document types this parser handles, used to validate a caller-supplied file type. */
+const ODF_FILE_TYPES: SupportedFileType[] = ['odt', 'odp', 'ods'];
+
 /**
  * Parses an OpenOffice document (.odt, .odp, .ods) and extracts content.
- * 
+ *
  * @param buffer - The ODF file as a Buffer
  * @param config - Parser configuration
  * @returns A promise resolving to the parsed AST
@@ -161,12 +164,20 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             !!x.match(stylesFileRegex) ||
             !!x.match(mimetypeFileRegex) ||
             (!!config.extractAttachments && !!x.match(mediaFileRegex)),
-        config.decompressionLimits
+        config.decompressionLimits,
+        config
     );
 
     // 1. Determine File Type
     const mimetypeFile = files.find(f => f.path === 'mimetype');
-    let fileType: SupportedFileType = 'odt'; // Default
+    // The archive's own mimetype entry is authoritative when present. When it is missing,
+    // fall back to the type the caller asked for (or that was derived from the extension)
+    // rather than assuming text: guessing 'odt' for a spreadsheet sends the parser down the
+    // office:text branch, which finds nothing in an office:spreadsheet body and yields an
+    // empty document for a perfectly valid file.
+    let fileType: SupportedFileType = ODF_FILE_TYPES.includes(config.fileType as SupportedFileType)
+        ? config.fileType as SupportedFileType
+        : 'odt';
     if (mimetypeFile) {
         const mime = mimetypeFile.content.toString().trim();
         if (mime.includes('spreadsheet')) fileType = 'ods';
@@ -174,7 +185,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         else if (mime.includes('text')) fileType = 'odt';
     }
 
-    const mainContentFile = files.find(f => f.path === 'content.xml') || files.find(f => f.path.match(contentFileRegex));
+    // The document body is the content.xml at the archive root. The fallback stays anchored
+    // and excludes embedded objects: an ODF file can carry Object N/content.xml for a chart
+    // or formula, and an unanchored match would promote one of those to the document body
+    // when the real one is missing, silently parsing a chart as if it were the whole file.
+    const mainContentFile = files.find(f => f.path === 'content.xml')
+        || findRequiredPart(files,
+            path => /(^|\/)content\.xml$/.test(path) && !objectContentFileRegex.test(path),
+            config, { fileType, part: 'content.xml' });
     const stylesFile = files.find(f => f.path === 'styles.xml');
     const stylesDom = stylesFile ? parseXmlString(stylesFile.content.toString()) : undefined;
     const content: OfficeContentNode[] = [];

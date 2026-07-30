@@ -391,6 +391,15 @@ function checkBrowserTypes(isSlim = false): CheckResult[] {
         results.push(fail(`${label}: contains GeneratorConfig declaration`, 'GeneratorConfig not found in .d.ts'));
     }
 
+    // OfficeError is the documented way to read a thrown error's typed code
+    // (`err.officeIssue.code`). Being an interface it has no runtime export to check, so the
+    // declaration bundle is the only place a TypeScript consumer can lose access to it.
+    if (content.includes('OfficeError')) {
+        results.push(pass(`${label}: contains OfficeError declaration`));
+    } else {
+        results.push(fail(`${label}: contains OfficeError declaration`, 'OfficeError not found in .d.ts'));
+    }
+
     return results;
 }
 

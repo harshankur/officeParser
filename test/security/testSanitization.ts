@@ -6,7 +6,6 @@
  * break out of their destination context (HTML attribute/tag, inline script,
  * CSS, a CSV formula, a Markdown link, an RTF group) in the generated output.
  */
-import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -19,6 +18,9 @@ import {
     escapeHtml, escapeXml, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl,
     serializeForInlineScript, csvSafeCell, escapeRtf, markdownEscapeText, sanitizeMarkdownUrl, sanitizeRtfUrl
 } from '../../src/utils/sanitize';
+import { extractFiles } from '../../src/utils/zipUtils';
+import { getOfficeError, getWrappedError } from '../../src/utils/errorUtils';
+import { OfficeErrorType } from '../../src/types';
 
 let passed = 0;
 let failed = 0;
@@ -849,6 +851,343 @@ async function abortSignalTests() {
         'a live signal suppressed output');
 }
 
+/** Silences the console for guards that report through it, without disabling the guard itself. */
+const QUIET = { outputErrorToConsole: false } as any;
+
+/** Encodes test fixture XML for zipSync. */
+const zipEnc = (text: string) => new TextEncoder().encode(text);
+
+/** Deterministic incompressible filler, so a truncation lands inside real deflate output. */
+const zipFiller = (size: number) => {
+    const bytes = new Uint8Array(size);
+    let seed = 12345;
+    for (let i = 0; i < size; i++) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; bytes[i] = seed & 0xff; }
+    return bytes;
+};
+
+/** Resolves to the rejection message, or '' if the promise resolved instead. */
+async function rejectionMessage(run: () => Promise<unknown>): Promise<string> {
+    try { await run(); return ''; }
+    catch (e: any) { return String(e?.message); }
+}
+
+async function corruptArchiveTests() {
+    console.log('- Corrupt / non-ZIP archive input (issue #107)...');
+
+    const EXPECTED_MESSAGE = '[OfficeParser]: No readable entries found in ZIP data. The input is corrupt, truncated, or not a ZIP archive: every ZIP-based document format requires at least one entry.';
+
+    // extractFiles used to surface fflate's "invalid zip data" for non-ZIP input; the 7.3.0
+    // streaming rewrite silently resolved with [] instead, making a corrupt file
+    // indistinguishable from a genuinely empty document (issue #107). Zero entries can never
+    // be a valid office document, so this must reject, with the exact message from the table.
+    for (const [name, buf] of [
+        ['plain text', Buffer.from('not a real docx')],
+        ['empty buffer', Buffer.alloc(0)],
+        ['stray PK magic inside text', Buffer.from('hello PK\x03\x04 world, still not a zip')],
+        // An archive that is well-formed but holds nothing is equally impossible as a document.
+        ['valid but empty archive', Buffer.from(zipSync({}))],
+        // Garbage carrying the End Of Central Directory signature must still be caught here,
+        // rather than passing the truncation check and reporting the wrong reason.
+        ['garbage containing an EOCD signature',
+            Buffer.concat([Buffer.from('junk'), Buffer.from([0x50, 0x4b, 0x05, 0x06]), Buffer.alloc(30)])],
+    ] as const) {
+        const message = await rejectionMessage(() => extractFiles(buf, () => true, {}, QUIET));
+        check(`corrupt zip: ${name} rejects with the exact typed message`, message === EXPECTED_MESSAGE,
+            `got ${JSON.stringify(message)}`);
+    }
+
+    // Control: a real archive whose entries are ALL filtered out must still resolve empty.
+    // The entry count is taken before the filter runs, so this stays a success, not a reject.
+    const zipped = Buffer.from(zipSync({ 'unrelated.txt': zipEnc('x') }));
+    let filteredOk = false;
+    try { filteredOk = (await extractFiles(zipped, () => false, {}, QUIET)).length === 0; }
+    catch { /* a rejection here would itself be the regression */ }
+    check('corrupt zip: fully-filtered valid archive still resolves empty', filteredOk,
+        'a valid archive with no matching entries must not be treated as corrupt');
+
+    // End to end: the public parse API rejects instead of returning an empty AST. Exact
+    // equality, not a substring: the single-report guard makes the prefix deterministic.
+    const e2eMessage = await rejectionMessage(() =>
+        OfficeParser.parseOffice(Buffer.from('not a real docx'), { fileType: 'docx', ...QUIET } as any));
+    check('corrupt zip: parseOffice rejects for a corrupt docx buffer', e2eMessage === EXPECTED_MESSAGE,
+        e2eMessage ? `unexpected message: ${JSON.stringify(e2eMessage)}` : 'parseOffice resolved instead of rejecting');
+
+    // Errors raised inside extractFiles must honour the caller's reporting config like every
+    // other issue, rather than always writing to the console.
+    const routed: any[] = [];
+    await rejectionMessage(() => extractFiles(Buffer.from('nope'), () => true, {},
+        { onWarning: (issue: any) => routed.push(issue) } as any));
+    check('corrupt zip: extraction errors route through onWarning',
+        routed.length === 1 && routed[0].code === 'ZIP_NO_ENTRIES_FOUND',
+        `got ${JSON.stringify(routed.map(i => i.code))}`);
+}
+
+async function truncatedArchiveTests() {
+    console.log('- Truncated archive input...');
+
+    const EXPECTED_MESSAGE = '[OfficeParser]: Malformed ZIP data: no End of Central Directory record was found at the end of the input. Either the file was cut off during download or transfer, or extra data follows the archive; in both cases the entries recovered from it cannot be trusted to be the whole document.';
+
+    // The streaming reader rebuilds entries from local file headers alone, so a cut archive
+    // still yields whatever preceded the cut and used to resolve as if nothing were wrong.
+    // Requiring the trailer that ends every complete archive is what catches this.
+    const archive = Buffer.from(zipSync({
+        'word/document.xml': zipFiller(40000),
+        'word/styles.xml': zipFiller(40000),
+    }));
+
+    // The trailer must sit at the end of the input, not merely somewhere in it. A ZIP comment
+    // is length-limited to 16 bits, so a conformant archive ends within 64 KiB of its own
+    // trailer; anything further is either a cut-off file or a payload appended after the
+    // archive. Readers that locate the trailer from the end reject both, which is also what
+    // this library did before the streaming rewrite, so the last case here is deliberate
+    // rather than incidental: it keeps a smuggled payload from riding along inside a document.
+    const APPENDED_BYTE = 0x41;
+    for (const [name, buf] of [
+        ['trailer sliced off', archive.subarray(0, archive.length - 10)],
+        ['cut inside the central directory', archive.subarray(0, Math.floor(archive.length * 0.99))],
+        ['data appended past the comment limit', Buffer.concat([archive, Buffer.alloc(70 * 1024, APPENDED_BYTE)])],
+    ] as const) {
+        const message = await rejectionMessage(() => extractFiles(buf as Buffer, () => true, {}, QUIET));
+        check(`truncated zip: ${name} rejects with the exact typed message`, message === EXPECTED_MESSAGE,
+            `got ${JSON.stringify(message)}`);
+    }
+
+    // Control for the boundary above: a trailer still reachable within the comment window is
+    // a readable archive, so trailing bytes alone must not be treated as corruption.
+    let withinWindow = -1;
+    try {
+        withinWindow = (await extractFiles(
+            Buffer.concat([archive, Buffer.alloc(60 * 1024, APPENDED_BYTE)]), () => true, {}, QUIET)).length;
+    } catch { /* a rejection here would be the over-strict failure */ }
+    check('truncated zip: trailing bytes within the comment window still extract', withinWindow === 2,
+        `expected 2 entries, got ${withinWindow}`);
+
+    // A cut landing inside an entry's compressed data leaves that entry's completion callback
+    // pending forever, so the promise could only settle if something else settles it. Raced
+    // against a timer because the failure mode under test is "never settles", not "wrong value".
+    const midEntry = archive.subarray(0, archive.length >> 1) as Buffer;
+    const HUNG = Symbol('hung');
+    const outcome = await Promise.race([
+        extractFiles(midEntry, () => true, {}, QUIET).then(() => 'resolved').catch(() => 'rejected'),
+        new Promise(resolve => setTimeout(() => resolve(HUNG), 5000)),
+    ]);
+    check('truncated zip: a cut inside entry data settles rather than hanging', outcome === 'rejected',
+        outcome === HUNG ? 'extractFiles never settled' : `unexpectedly ${String(outcome)}`);
+
+    // Control: the same archive intact must extract both entries.
+    let intactCount = -1;
+    try { intactCount = (await extractFiles(archive, () => true, {}, QUIET)).length; }
+    catch { /* a rejection here would itself be the regression */ }
+    check('truncated zip: the intact archive still extracts normally', intactCount === 2,
+        `expected 2 entries, got ${intactCount}`);
+
+    // End to end, with the exact single-prefixed message.
+    const e2eMessage = await rejectionMessage(() =>
+        OfficeParser.parseOffice(archive.subarray(0, archive.length - 10) as Buffer, { fileType: 'docx', ...QUIET } as any));
+    check('truncated zip: parseOffice rejects a truncated docx', e2eMessage === EXPECTED_MESSAGE,
+        e2eMessage ? `unexpected message: ${JSON.stringify(e2eMessage)}` : 'parseOffice resolved instead of rejecting');
+}
+
+async function missingMainPartTests() {
+    console.log('- Readable archives missing their required part...');
+
+    const requiredPartMessage = (fileType: string, part: string) =>
+        `[OfficeParser]: Your ${fileType} file is a readable ZIP archive but is missing its required '${part}' part, so it cannot be a valid ${fileType} document. The file is corrupt, incomplete, or mislabeled. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce the error.`;
+
+    const ODS_MIME = 'application/vnd.oasis.opendocument.spreadsheet';
+    const ODT_MIME = 'application/vnd.oasis.opendocument.text';
+
+    // A ZIP that extracts perfectly can still be a photo bundle, a partial upload or a
+    // mislabeled file. Each of these is a valid archive with the format's main part removed,
+    // which before this check parsed into an empty AST that no caller could distinguish from
+    // a genuinely empty document.
+    for (const [name, fileType, part, entries] of [
+        ['docx without word/document.xml', 'docx', 'word/document.xml',
+            { '[Content_Types].xml': zipEnc('<Types/>'), 'word/styles.xml': zipEnc('<styles/>') }],
+        ['xlsx without xl/workbook.xml', 'xlsx', 'xl/workbook.xml',
+            { 'xl/worksheets/sheet1.xml': zipEnc('<worksheet/>') }],
+        ['pptx without ppt/presentation.xml', 'pptx', 'ppt/presentation.xml',
+            { 'ppt/slides/slide1.xml': zipEnc('<p:sld/>') }],
+        ['odt without content.xml', 'odt', 'content.xml',
+            { mimetype: zipEnc(ODT_MIME), 'styles.xml': zipEnc('<styles/>') }],
+        ['epub without an OPF', 'epub', 'OPF package document (.opf)',
+            { 'META-INF/container.xml': zipEnc('<container/>'), 'ch1.xhtml': zipEnc('<html/>') }],
+        // The reported symptom of #107 reproduced with a perfectly valid archive: a zip of
+        // photos handed over as a docx. The entry-count guard cannot see this one.
+        ['a photo archive handed over as docx', 'docx', 'word/document.xml',
+            { 'photos/a.jpg': zipEnc('x'.repeat(500)), 'notes.txt': zipEnc('hi') }],
+        // Anchoring regression: an ODF file can carry Object N/content.xml for an embedded
+        // chart. That must never stand in for the document body when the real one is absent.
+        ['ods whose only content.xml is an embedded object', 'ods', 'content.xml',
+            { mimetype: zipEnc(ODS_MIME), 'Object 1/content.xml': zipEnc('<chart/>') }],
+    ] as const) {
+        const buf = Buffer.from(zipSync(entries as any));
+        const message = await rejectionMessage(() =>
+            OfficeParser.parseOffice(buf, { fileType, ...QUIET } as any));
+        check(`missing part: ${name} rejects with the exact typed message`,
+            message === requiredPartMessage(fileType, part), `got ${JSON.stringify(message)}`);
+    }
+
+    // Positive controls: minimal but complete archives must still parse, with their text
+    // intact. Without these the checks above could be satisfied by rejecting everything.
+    const docx = Buffer.from(zipSync({
+        'word/document.xml': zipEnc('<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello docx</w:t></w:r></w:p></w:body></w:document>'),
+    }));
+    const docxAst = await OfficeParser.parseOffice(docx, { fileType: 'docx', ...QUIET } as any);
+    check('missing part: a minimal complete docx still parses', docxAst.toText().includes('Hello docx'),
+        `got ${JSON.stringify(docxAst.toText())}`);
+
+    const pptx = Buffer.from(zipSync({
+        'ppt/presentation.xml': zipEnc('<p:presentation/>'),
+        'ppt/slides/slide1.xml': zipEnc('<?xml version="1.0"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Hello slide</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>'),
+    }));
+    const pptxAst = await OfficeParser.parseOffice(pptx, { fileType: 'pptx', ...QUIET } as any);
+    check('missing part: a minimal complete pptx still parses', pptxAst.toText().includes('Hello slide'),
+        `got ${JSON.stringify(pptxAst.toText())}`);
+    // ppt/presentation.xml is extracted for the check above, and the slide loop treats every
+    // unrecognized file as a slide, so it must be skipped explicitly or it becomes an extra
+    // empty slide in the deck.
+    check('missing part: the presentation part does not become a phantom slide',
+        pptxAst.content.length === 1, `expected 1 slide node, got ${pptxAst.content.length}`);
+
+    const odt = Buffer.from(zipSync({
+        mimetype: zipEnc(ODT_MIME),
+        'content.xml': zipEnc('<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:text><text:p>Hello odt</text:p></office:text></office:body></office:document-content>'),
+    }));
+    const odtAst = await OfficeParser.parseOffice(odt, { fileType: 'odt', ...QUIET } as any);
+    check('missing part: a minimal complete odt still parses', odtAst.toText().includes('Hello odt'),
+        `got ${JSON.stringify(odtAst.toText())}`);
+}
+
+async function incompleteArchiveWarningTests() {
+    console.log('- Legitimately empty archives warn rather than fail...');
+
+    const collect = () => { const issues: any[] = []; return { issues, config: { ...QUIET, onWarning: (i: any) => issues.push(i) } as any }; };
+
+    // A workbook holding only chartsheets has no worksheets and no cell text. That is valid,
+    // so it warns; the missing-part check above is what covers a workbook that is not one.
+    const chartsOnly = collect();
+    const xlsx = Buffer.from(zipSync({
+        'xl/workbook.xml': zipEnc('<workbook/>'),
+        'xl/_rels/workbook.xml.rels': zipEnc('<Relationships/>'),
+    }));
+    const xlsxAst = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx', ...chartsOnly.config });
+    const sheetWarnings = chartsOnly.issues.filter(i => i.code === 'NO_WORKSHEETS_FOUND');
+    check('empty archive: a chartsheet-only workbook resolves', xlsxAst.type === 'xlsx');
+    check('empty archive: it warns exactly once about missing worksheets', sheetWarnings.length === 1,
+        `got ${JSON.stringify(chartsOnly.issues.map(i => i.code))}`);
+    check('empty archive: the worksheet warning text is exact',
+        sheetWarnings[0]?.message === 'Workbook contains no worksheet parts (xl/worksheets/). If the workbook holds only chartsheets this is expected and there is simply no cell text to extract; otherwise the file may be incomplete.',
+        `got ${JSON.stringify(sheetWarnings[0]?.message)}`);
+
+    // PowerPoint can save a deck with no slides at all, so this warns rather than failing.
+    const noSlides = collect();
+    const pptx = Buffer.from(zipSync({ 'ppt/presentation.xml': zipEnc('<p:presentation/>') }));
+    const pptxAst = await OfficeParser.parseOffice(pptx, { fileType: 'pptx', ...noSlides.config });
+    const slideWarnings = noSlides.issues.filter(i => i.code === 'NO_SLIDES_FOUND');
+    check('empty archive: a slide-less presentation resolves', pptxAst.type === 'pptx');
+    check('empty archive: it warns exactly once about missing slides', slideWarnings.length === 1,
+        `got ${JSON.stringify(noSlides.issues.map(i => i.code))}`);
+    check('empty archive: the slide warning text is exact',
+        slideWarnings[0]?.message === 'Presentation contains no slides (ppt/slides/). A legitimately empty presentation produces this too, but if you expected content the file may be incomplete.',
+        `got ${JSON.stringify(slideWarnings[0]?.message)}`);
+}
+
+async function odfTypeResolutionTests() {
+    console.log('- ODF type resolution (mimetype vs caller hint)...');
+
+    const ODS_MIME = 'application/vnd.oasis.opendocument.spreadsheet';
+    const spreadsheetBody = zipEnc('<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table table:name="S1"><table:table-row><table:table-cell><text:p>CellValue</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>');
+
+    // The three ODF types share a parser that branches on the body shape it expects. With no
+    // mimetype entry it used to assume text regardless of what the caller said, so a valid
+    // spreadsheet was walked as a text document and came back empty.
+    const noMimetype = Buffer.from(zipSync({ 'content.xml': spreadsheetBody }));
+    const hinted = await OfficeParser.parseOffice(noMimetype, { fileType: 'ods', ...QUIET } as any);
+    check('odf type: a caller hint resolves a spreadsheet with no mimetype entry', hinted.type === 'ods',
+        `got type ${hinted.type}`);
+    check('odf type: that spreadsheet\'s cells are actually parsed', hinted.toText().includes('CellValue'),
+        `got ${JSON.stringify(hinted.toText())}`);
+
+    // When the archive declares its own type, that stays authoritative over the hint.
+    const withMimetype = Buffer.from(zipSync({ mimetype: zipEnc(ODS_MIME), 'content.xml': spreadsheetBody }));
+    const declared = await OfficeParser.parseOffice(withMimetype, { fileType: 'odt', ...QUIET } as any);
+    check('odf type: the archive mimetype beats a conflicting hint', declared.type === 'ods',
+        `got type ${declared.type}`);
+
+    // From a file path there is no fileType in config at all; the dispatcher supplies the
+    // extension, which is the only thing this path can go on.
+    const tmp = path.join(os.tmpdir(), `officeparser-no-mimetype-${process.pid}.ods`);
+    fs.writeFileSync(tmp, noMimetype);
+    try {
+        const fromPath = await OfficeParser.parseOffice(tmp, QUIET);
+        check('odf type: the file extension resolves a spreadsheet with no mimetype entry',
+            fromPath.type === 'ods' && fromPath.toText().includes('CellValue'),
+            `got type ${fromPath.type}, text ${JSON.stringify(fromPath.toText())}`);
+    } finally { fs.unlinkSync(tmp); }
+
+    // Supplying that type must not write it back into the caller's config. A config object
+    // that is already complete is passed through by reference, so recording this file's type
+    // on it would pin every later parse that reused the object to the wrong format: parse an
+    // .odt, then a .docx with the same config, and the second one is routed to the ODF parser.
+    const reused: any = {
+        ...QUIET, extractAttachments: true, ocr: false, fileType: null,
+        decompressionLimits: { maxUncompressedBytes: 512 * 1024 * 1024, maxZipEntries: 10000, maxTableCells: 1000000 },
+    };
+    const odt = Buffer.from(zipSync({
+        mimetype: zipEnc('application/vnd.oasis.opendocument.text'),
+        'content.xml': zipEnc('<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:text><text:p>Text doc</text:p></office:text></office:body></office:document-content>'),
+    }));
+    const docx = Buffer.from(zipSync({
+        'word/document.xml': zipEnc('<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Word doc</w:t></w:r></w:p></w:body></w:document>'),
+    }));
+    await OfficeParser.parseOffice(odt, { ...reused, fileType: 'odt' });
+    check('odf type: parsing does not pin the caller\'s config to that type',
+        reused.fileType === null, `caller config fileType became ${JSON.stringify(reused.fileType)}`);
+    const afterOdt = await OfficeParser.parseOffice(docx, { ...reused, fileType: 'docx' });
+    check('odf type: a reused config still routes a later docx to the Word parser',
+        afterOdt.type === 'docx' && afterOdt.toText().includes('Word doc'),
+        `got type ${afterOdt.type}, text ${JSON.stringify(afterOdt.toText())}`);
+}
+
+function errorReportingTests() {
+    console.log('- Error reporting (single report, single prefix)...');
+
+    // Parser errors pass through getWrappedError on their way out. It exists to give raw
+    // third-party failures OfficeParser context, but a typed error has already been reported
+    // and already carries the header, so re-wrapping it reported the same issue twice, added
+    // a second '[OfficeParser]: ' prefix, and flattened its code to FILE_CORRUPTED.
+    const reported: any[] = [];
+    const config = { onWarning: (issue: any) => reported.push(issue) } as any;
+    const typed = getOfficeError(OfficeErrorType.REQUIRED_PART_MISSING, config,
+        { fileType: 'docx', part: 'word/document.xml' });
+    const wrapped = getWrappedError(typed, config);
+
+    check('error reporting: a typed error passes through the wrapper untouched', wrapped === typed,
+        'getWrappedError rebuilt an error that was already an OfficeParser error');
+    check('error reporting: it is reported exactly once', reported.length === 1,
+        `got ${reported.length} reports: ${JSON.stringify(reported.map(i => i.code))}`);
+    check('error reporting: the reported code is preserved, not flattened',
+        reported[0]?.code === OfficeErrorType.REQUIRED_PART_MISSING, `got ${reported[0]?.code}`);
+    check('error reporting: the message carries exactly one header',
+        (String(wrapped.message).match(/\[OfficeParser\]: /g) || []).length === 1,
+        `got ${JSON.stringify(wrapped.message)}`);
+    check('error reporting: the structured issue is exposed on the error',
+        (typed as any).officeIssue?.code === OfficeErrorType.REQUIRED_PART_MISSING,
+        'officeIssue missing from the returned error');
+
+    // A raw third-party error still gets wrapped, which is the behavior being preserved.
+    const rawReported: any[] = [];
+    const raw = new Error('invalid zip data');
+    const rawWrapped = getWrappedError(raw, { onWarning: (i: any) => rawReported.push(i) } as any);
+    check('error reporting: an untyped error is still wrapped', rawWrapped !== raw
+        && String(rawWrapped.message) === '[OfficeParser]: invalid zip data',
+        `got ${JSON.stringify(rawWrapped.message)}`);
+    check('error reporting: an untyped error is reported once as corruption',
+        rawReported.length === 1 && rawReported[0].code === OfficeErrorType.FILE_CORRUPTED,
+        `got ${JSON.stringify(rawReported.map(i => i.code))}`);
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
@@ -862,6 +1201,12 @@ async function main() {
     await rtfUrlTests();
     await odfRepeatExpansionTests();
     await abortSignalTests();
+    await corruptArchiveTests();
+    await truncatedArchiveTests();
+    await missingMainPartTests();
+    await incompleteArchiveWarningTests();
+    await odfTypeResolutionTests();
+    errorReportingTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

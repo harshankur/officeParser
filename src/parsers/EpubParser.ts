@@ -37,7 +37,8 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
             || /\.opf$/i.test(path)
             || /\.(xhtml|html|htm)$/i.test(path)
             || (!!config.extractAttachments && /\.(png|jpe?g|gif|svg|webp)$/i.test(path)),
-        config.decompressionLimits
+        config.decompressionLimits,
+        config
     );
 
     // The OPF path is authoritative via META-INF/container.xml; fall back to scanning
@@ -51,7 +52,8 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
     }
     const opfFile = (opfPath && files.find(f => f.path === opfPath)) || files.find(f => /\.opf$/i.test(f.path));
     if (!opfFile) {
-        throw getOfficeError(OfficeErrorType.FILE_CORRUPTED, config, 'epub (no OPF manifest found)');
+        throw getOfficeError(OfficeErrorType.REQUIRED_PART_MISSING, config,
+            { fileType: 'epub', part: 'OPF package document (.opf)' });
     }
 
     const opfDir = opfFile.path.includes('/') ? opfFile.path.substring(0, opfFile.path.lastIndexOf('/') + 1) : '';

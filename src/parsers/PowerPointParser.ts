@@ -30,7 +30,7 @@ import { createAttachment } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
 import { getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
-import { extractFiles } from '../utils/zipUtils.js';
+import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
 /**
  * Parses a PowerPoint presentation (.pptx) and extracts slides and notes.
@@ -58,6 +58,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     const commentsFileRegex = /ppt\/comments\/comment\d+\.xml/;
     const commentAuthorsRegex = /ppt\/commentAuthors\.xml/;
     const slideMastersRegex = /ppt\/slideMasters\/slideMaster\d+\.xml/;
+    const presentationFileRegex = /ppt\/presentation\.xml/;
 
     const files = await extractFiles(
         buffer,
@@ -69,9 +70,20 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             !!x.match(slideRelsRegex) ||
             (!config.ignoreComments && (!!x.match(commentsFileRegex) || !!x.match(commentAuthorsRegex))) ||
             (!config.ignoreSlideMasters && !!x.match(slideMastersRegex)) ||
+            !!x.match(presentationFileRegex) ||
             (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(chartFileRegex))),
-        config.decompressionLimits
+        config.decompressionLimits,
+        config
     );
+
+    // ppt/presentation.xml is the part that makes an archive a presentation, and unlike the
+    // slides it is always present: PowerPoint can save a deck with no slides at all, so an
+    // empty ppt/slides/ is a warning rather than a failure.
+    findRequiredPart(files, path => !!path.match(presentationFileRegex), config,
+        { fileType: 'pptx', part: 'ppt/presentation.xml' });
+
+    if (!files.some(file => !!file.path.match(slidesRegex)))
+        logWarning(OfficeWarningType.NO_SLIDES_FOUND, config);
 
     // Extract metadata
     const corePropsFile = files.find(f => f.path.match(corePropsFileRegex));
@@ -805,6 +817,10 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         if (file.path.match(slideRelsRegex)) continue;
         if (file.path.match(corePropsFileRegex)) continue;
         if (file.path.includes("comment")) continue;
+        // This loop treats every remaining file as a slide or note, so the presentation part
+        // has to be skipped explicitly: it carries no slide number and would otherwise be
+        // added to the deck as an empty slide.
+        if (file.path.match(presentationFileRegex)) continue;
 
         const xmlContentString = file.content.toString();
         const xml = parseXmlString(xmlContentString, { locator: config.includeRawContent });

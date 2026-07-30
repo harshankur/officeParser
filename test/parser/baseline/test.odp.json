@@ -27,7 +27,7 @@
     "includeBreakNodes": true,
     "ignoreInternalLinks": false,
     "csvDelimiter": ",",
-    "fileType": null,
+    "fileType": "odp",
     "abortSignal": null,
     "ignoreComments": false,
     "ignoreHeadersAndFooters": false,

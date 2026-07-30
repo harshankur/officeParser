@@ -67,7 +67,7 @@ import { createAttachment } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
 import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
-import { extractFiles } from '../utils/zipUtils.js';
+import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
 /**
  * Parses a Word document (.docx) and extracts content, formatting, and metadata.
@@ -256,8 +256,14 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             !!x.match(relsFileRegex) ||
             !!x.match(stylesFileRegex) ||
             (!!config.extractAttachments && !!x.match(mediaFileRegex)),
-        config.decompressionLimits
+        config.decompressionLimits,
+        config
     );
+
+    // A DOCX without its main document part is not a DOCX. Checked with the same regex the
+    // parse loop below uses to recognize it, so the two cannot fall out of step.
+    findRequiredPart(files, path => !!path.match(documentFileRegex), config,
+        { fileType: 'docx', part: 'word/document.xml' });
 
     // Extract metadata
     const corePropsFile = files.find(f => f.path.match(corePropsFileRegex));
