@@ -18,6 +18,7 @@ const esbuild = require('esbuild');
 const { nodeModulesPolyfillPlugin } = require('esbuild-plugins-node-modules-polyfill');
 const fs = require('fs');
 const path = require('path');
+const { annotateDynamicImports } = require('./scripts/dynamicImports.js');
 
 // ---------------------------------------------------------------------------
 // Config Generator
@@ -37,6 +38,11 @@ function getBrowserConfig(isSlim) {
             'fs': path.resolve(__dirname, 'scripts/browser-stubs/fs.js'),
             'fs/promises': path.resolve(__dirname, 'scripts/browser-stubs/fs.js'),
             'puppeteer': path.resolve(__dirname, 'scripts/browser-stubs/puppeteer.js'),
+            // Left unresolved, this reaches the output as a bare Node built-in and a consumer's
+            // bundler reports it as missing, even though the only code path that imports it is
+            // gated on running under Node.
+            'child_process': path.resolve(__dirname, 'scripts/browser-stubs/child_process.js'),
+            'url': path.resolve(__dirname, 'scripts/browser-stubs/url.js'),
         },
         define: {
             'process.env.NODE_ENV': '"production"',
@@ -91,7 +97,7 @@ if (typeof setImmediate === 'undefined') {
 }
 
 // ---------------------------------------------------------------------------
-// @vite-ignore plugin for pdfjs-dist workerSrc dynamic import
+// Bundler ignore annotations for dynamic imports (see scripts/dynamicImports.js)
 // ---------------------------------------------------------------------------
 
 function viteIgnoreDynamicImportsPlugin() {
@@ -104,24 +110,21 @@ function viteIgnoreDynamicImportsPlugin() {
                 const outfile = build.initialOptions.outfile;
                 if (!outfile || !fs.existsSync(outfile)) return;
 
-                let content = fs.readFileSync(outfile, 'utf8');
+                const content = fs.readFileSync(outfile, 'utf8');
+                const { output, annotated } = annotateDynamicImports(content);
 
-                // TODO: [Add Test] - Add an automated CI test to verify that the browser bundle
-                // does not contain unannotated dynamic imports that trigger Vite/Webpack warnings.
-                //
-                // Replace dynamic imports that use variables (not string literals)
-                // with Vite and Webpack ignore annotations.
-                // This suppresses "unanalyzable dynamic import" and "Critical dependency" warnings.
-                // We skip imports that already have @vite-ignore, webpackIgnore, or use string literals.
-                const pattern = /\bimport\((?!\s*['"`]|\s*\/\*\s*@vite-ignore\s*\*\/|\s*\/\*\s*webpackIgnore:\s*true\s*\*\/)([^)]+)\)/g;
-                const replaced = content.replace(
-                    pattern,
-                    'import(/* @vite-ignore */ /* webpackIgnore: true */ $1)'
-                );
+                if (annotated > 0) {
+                    // This edits an already-built bundle by offset, so confirm the result still
+                    // parses before it is written. A miscounted offset would otherwise ship a
+                    // syntactically broken bundle that only fails in a consumer's build.
+                    try {
+                        esbuild.transformSync(output, { loader: 'js', format: 'esm' });
+                    } catch (err) {
+                        throw new Error(`Annotating dynamic imports broke ${path.basename(outfile)}: ${err.message}`);
+                    }
 
-                if (replaced !== content) {
-                    fs.writeFileSync(outfile, replaced, 'utf8');
-                    console.log(`  → injected ignore comments into dynamic imports in ${path.basename(outfile)}`);
+                    fs.writeFileSync(outfile, output, 'utf8');
+                    console.log(`  → annotated ${annotated} dynamic import(s) in ${path.basename(outfile)}`);
                 }
             });
         },

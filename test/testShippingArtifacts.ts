@@ -365,6 +365,90 @@ function checkBrowserEsm(isSlim = false): CheckResult[] {
  */
 const FILE_TYPE_INLINE_MARKER = 'META-INF/mozilla.rsa';
 
+/**
+ * Node built-ins that must not survive as import specifiers in a browser bundle.
+ *
+ * A consumer's bundler resolves every specifier it can see, whether or not the surrounding code
+ * would ever run in a browser, so a leftover Node built-in fails their build even though our
+ * code paths are gated on running under Node.
+ */
+const NODE_ONLY_SPECIFIERS = ['child_process', 'fs', 'url', 'puppeteer'];
+
+/**
+ * Exercises the dynamic-import classifier against the shapes it has to tell apart.
+ *
+ * The bundle checks below run the same classifier the build uses to place its annotations, so
+ * on their own they cannot see a classifier that is wrong in both places at once: that is
+ * exactly how issue #108 shipped, with a rule that mistook an interpolated template literal for
+ * a static string. These pin the rule itself against fixed inputs, independently of any bundle.
+ */
+function checkDynamicImportClassifier(): CheckResult[] {
+    const { findUnanalyzableDynamicImports } = require('../scripts/dynamicImports.js');
+    const results: CheckResult[] = [];
+
+    const cases: Array<{ source: string, unanalyzable: boolean, why: string }> = [
+        { source: 'await import("file-type")', unanalyzable: false, why: 'a quoted specifier is resolvable' },
+        { source: "await import('pdfjs-dist')", unanalyzable: false, why: 'single quotes too' },
+        { source: 'await import(`pdfjs-dist`)', unanalyzable: false, why: 'a template with no substitution is still fixed' },
+        // The shape that broke webpack: a template that interpolates cannot be resolved.
+        { source: 'await import(`${base}${this._noWasmFilename}`)', unanalyzable: true, why: 'an interpolated template is not resolvable' },
+        { source: 'await import(`${dir}/worker.mjs`)', unanalyzable: true, why: 'interpolation anywhere makes it dynamic' },
+        { source: 'await import(specifier)', unanalyzable: true, why: 'a bare identifier is not resolvable' },
+        { source: 'await import(getName(a, b))', unanalyzable: true, why: 'a call expression is not resolvable' },
+        { source: 'await import(/* webpackIgnore: true */ `${x}`)', unanalyzable: false, why: 'already annotated' },
+        { source: 'await import(/* @vite-ignore */ specifier)', unanalyzable: false, why: 'already annotated' },
+    ];
+
+    for (const { source, unanalyzable, why } of cases) {
+        const found = findUnanalyzableDynamicImports(source).length > 0;
+        const label = `Dynamic import rule: ${source}`;
+        if (found === unanalyzable) results.push(pass(label, why));
+        else results.push(fail(label, `expected ${unanalyzable ? 'unanalyzable' : 'resolvable'} (${why})`));
+    }
+
+    return results;
+}
+
+/**
+ * Guards the two ways a browser bundle can break a consumer's build (issue #108).
+ *
+ * A dynamic import a bundler cannot resolve is not skipped by webpack: it builds a context
+ * module over the whole directory the expression might reach, which for a published package
+ * means every file in `dist/`, Node-only ones included. And a bare Node built-in specifier is
+ * reported as a missing module. Neither shows up in our own tests, since we do not bundle the
+ * bundles; only a consumer sees it.
+ */
+function checkBundlerCompatibility(relPath: string, label: string): CheckResult[] {
+    if (!fileExists(relPath)) {
+        return [fail(`${label}: ${relPath} exists`, 'File not found')];
+    }
+
+    const results: CheckResult[] = [];
+    const content = readFile(relPath);
+
+    // Same classifier the build uses to add the annotations, so the two cannot disagree.
+    const { findUnanalyzableDynamicImports } = require('../scripts/dynamicImports.js');
+    const unannotated = findUnanalyzableDynamicImports(content);
+    if (unannotated.length === 0) {
+        results.push(pass(`${label}: every dynamic import is bundler-safe`));
+    } else {
+        results.push(fail(`${label}: every dynamic import is bundler-safe`,
+            `${unannotated.length} unannotated dynamic import(s), first: ${unannotated[0].snippet}`));
+    }
+
+    const leaked = NODE_ONLY_SPECIFIERS.filter(name =>
+        content.includes(`import("${name}")`) || content.includes(`import('${name}')`)
+        || content.includes(`require("${name}")`) || content.includes(`require('${name}')`));
+    if (leaked.length === 0) {
+        results.push(pass(`${label}: no Node-only module specifiers`));
+    } else {
+        results.push(fail(`${label}: no Node-only module specifiers`,
+            `bundle still references ${leaked.join(', ')} — a consumer's bundler cannot resolve these`));
+    }
+
+    return results;
+}
+
 function checkFileTypeInlined(relPath: string, label: string): CheckResult[] {
     if (!fileExists(relPath)) {
         return [fail(`${label}: ${relPath} exists`, 'File not found')];
@@ -528,6 +612,15 @@ async function main() {
         { title: 'Browser ESM Slim Bundle (dist/officeparser.browser.slim.mjs)', fn: () => checkBrowserEsm(true) },
         { title: 'Browser Type Declarations', fn: () => checkBrowserTypes(false) },
         { title: 'Browser Slim Type Declarations', fn: () => checkBrowserTypes(true) },
+        { title: 'Dynamic import classification', fn: () => checkDynamicImportClassifier() },
+        {
+            title: 'Browser bundles are safe for consumer bundlers', fn: () => [
+                ...checkBundlerCompatibility('dist/officeparser.browser.mjs', 'Browser ESM'),
+                ...checkBundlerCompatibility('dist/officeparser.browser.slim.mjs', 'Browser ESM Slim'),
+                ...checkBundlerCompatibility('dist/officeparser.browser.iife.js', 'Browser IIFE'),
+                ...checkBundlerCompatibility('dist/officeparser.browser.slim.iife.js', 'Browser IIFE Slim'),
+            ]
+        },
         {
             title: 'Buffer type detection is bundled for the browser', fn: () => [
                 ...checkFileTypeInlined('dist/officeparser.browser.mjs', 'Browser ESM'),
