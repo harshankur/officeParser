@@ -95,8 +95,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     const footnotesFileRegex = /word\/footnotes[\d+]?.xml/;
     const endnotesFileRegex = /word\/endnotes[\d+]?.xml/;
     const commentsFileRegex = /word\/comments[\d+]?.xml/;
-    const headerFileRegex = /word\/header[\d+]?.xml/;
-    const footerFileRegex = /word\/footer[\d+]?.xml/;
+    // Headers and footers are the only parts a document can have many of: Word writes up to
+    // three per section (default, first page, even pages), so a handful of sections is enough
+    // to reach header10.xml. The single-character form the other parts use stops matching at
+    // nine, which would drop those later files as silently as not extracting them at all.
+    const headerFileRegex = /word\/header\d*\.xml/;
+    const footerFileRegex = /word\/footer\d*\.xml/;
     const numberingFileRegex = /word\/numbering[\d+]?.xml/;
     const mediaFileRegex = /(word\/)?media\/.*/;
     const corePropsFileRegex = /docProps\/core[\d+]?.xml/;
@@ -255,6 +259,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             !!x.match(appPropsFileRegex) ||
             !!x.match(relsFileRegex) ||
             !!x.match(stylesFileRegex) ||
+            (!config.ignoreComments && !!x.match(commentsFileRegex)) ||
+            (!config.ignoreHeadersAndFooters && (!!x.match(headerFileRegex) || !!x.match(footerFileRegex))) ||
             (!!config.extractAttachments && !!x.match(mediaFileRegex)),
         config.decompressionLimits,
         config

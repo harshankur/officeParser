@@ -2229,6 +2229,132 @@ async function testAbortSignal(): Promise<FeatureTest[]> {
     return results;
 }
 
+/**
+ * Headers, footers and comments live in their own parts of a DOCX archive, so they reach the
+ * AST only if the extraction filter asks for them. It did not, which left the code that parses
+ * them unreachable and dropped all three from every document without a word of warning. These
+ * build minimal archives that actually contain those parts, which the bundled fixture does not.
+ */
+async function testWordAuxiliaryParts(): Promise<FeatureTest[]> {
+    const results: FeatureTest[] = [];
+    const record = (feature: string, expected: any, actual: any, condition: boolean, details: string, duration = 0): void => {
+        results.push({
+            category: 'Word Headers/Footers/Comments',
+            feature,
+            fileType: 'docx',
+            result: { status: condition ? 'PASS' : 'FAIL', expected, actual, details, duration }
+        });
+    };
+
+    const fflate = require('fflate');
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const para = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const build = (entries: Record<string, string>) =>
+        Buffer.from(fflate.zipSync(Object.fromEntries(
+            Object.entries(entries).map(([name, xml]) => [name, fflate.strToU8(xml)]))));
+
+    const documentXml = `<?xml version="1.0"?><w:document ${W}><w:body>`
+        + `<w:p><w:commentRangeStart w:id="1"/><w:r><w:t>Body text</w:t></w:r>`
+        + `<w:commentRangeEnd w:id="1"/><w:r><w:commentReference w:id="1"/></w:r></w:p>`
+        + `</w:body></w:document>`;
+    const fullDocx = () => build({
+        'word/document.xml': documentXml,
+        'word/comments.xml': `<?xml version="1.0"?><w:comments ${W}>`
+            + `<w:comment w:id="1" w:author="Reviewer" w:date="2026-01-01T00:00:00Z" w:initials="R">`
+            + `${para('A reviewer note')}</w:comment></w:comments>`,
+        'word/header1.xml': `<?xml version="1.0"?><w:hdr ${W}>${para('Page header text')}</w:hdr>`,
+        'word/footer1.xml': `<?xml version="1.0"?><w:ftr ${W}>${para('Page footer text')}</w:ftr>`,
+    });
+
+    // 1. Headers, footers and comments all reach the AST by default.
+    {
+        const startTime = Date.now();
+        try {
+            const ast: any = await OfficeParser.parseOffice(fullDocx(), { fileType: 'docx' });
+            const headers = JSON.stringify(ast.auxiliary?.headers ?? []);
+            const footers = JSON.stringify(ast.auxiliary?.footers ?? []);
+            const content = JSON.stringify(ast.content);
+
+            record('Header text reaches ast.auxiliary.headers', 'Page header text',
+                headers.includes('Page header text') ? 'Page header text' : headers,
+                headers.includes('Page header text'), 'Header part parsed into auxiliary content',
+                Date.now() - startTime);
+            record('Footer text reaches ast.auxiliary.footers', 'Page footer text',
+                footers.includes('Page footer text') ? 'Page footer text' : footers,
+                footers.includes('Page footer text'), 'Footer part parsed into auxiliary content');
+            record('Comment text reaches the document content', 'A reviewer note',
+                content.includes('A reviewer note') ? 'A reviewer note' : content.slice(0, 120),
+                content.includes('A reviewer note'), 'Comment part parsed and attached to its anchor');
+            record('Comment author metadata is preserved', 'Reviewer',
+                content.includes('Reviewer') ? 'Reviewer' : content.slice(0, 120),
+                content.includes('Reviewer'), 'Comment author carried through with the comment');
+        } catch (err: any) {
+            record('Header/footer/comment parts parse', 'Parsed AST', `${err.name}: ${err.message}`,
+                false, `Threw instead of parsing: ${err.message}`, Date.now() - startTime);
+        }
+    }
+
+    // 2. Word writes up to three headers per section, so a document with several sections
+    //    passes header9.xml. The part names must keep matching beyond a single digit.
+    {
+        const startTime = Date.now();
+        const HEADER_COUNT = 12;
+        const entries: Record<string, string> = {
+            'word/document.xml': `<?xml version="1.0"?><w:document ${W}><w:body>${para('Body')}</w:body></w:document>`
+        };
+        for (let i = 1; i <= HEADER_COUNT; i++)
+            entries[`word/header${i}.xml`] = `<?xml version="1.0"?><w:hdr ${W}>${para(`H${i}`)}</w:hdr>`;
+
+        try {
+            const ast: any = await OfficeParser.parseOffice(build(entries), { fileType: 'docx' });
+            const count = (ast.auxiliary?.headers ?? []).length;
+            const headers = JSON.stringify(ast.auxiliary?.headers ?? []);
+            record(`All ${HEADER_COUNT} headers parse, including double-digit part names`,
+                HEADER_COUNT, count, count === HEADER_COUNT && headers.includes('"H12"'),
+                count === HEADER_COUNT ? 'Every header part matched' : `Only ${count} of ${HEADER_COUNT} matched`,
+                Date.now() - startTime);
+        } catch (err: any) {
+            record(`All ${HEADER_COUNT} headers parse, including double-digit part names`,
+                HEADER_COUNT, `${err.name}: ${err.message}`, false,
+                `Threw instead of parsing: ${err.message}`, Date.now() - startTime);
+        }
+    }
+
+    // 3. The two config flags gate their own parts and nothing else. Extraction is now gated
+    //    on them, so a flag that over-reaches would silently take the other part with it.
+    {
+        const startTime = Date.now();
+        try {
+            const noHeaders: any = await OfficeParser.parseOffice(fullDocx(),
+                { fileType: 'docx', ignoreHeadersAndFooters: true });
+            record('ignoreHeadersAndFooters drops headers and footers', 'undefined',
+                JSON.stringify(noHeaders.auxiliary), noHeaders.auxiliary === undefined,
+                'No auxiliary content when headers and footers are ignored', Date.now() - startTime);
+            record('ignoreHeadersAndFooters keeps comments', 'comment retained',
+                JSON.stringify(noHeaders.content).includes('A reviewer note') ? 'comment retained' : 'comment lost',
+                JSON.stringify(noHeaders.content).includes('A reviewer note'),
+                'Ignoring headers and footers must not affect comments');
+
+            const noComments: any = await OfficeParser.parseOffice(fullDocx(),
+                { fileType: 'docx', ignoreComments: true });
+            record('ignoreComments drops comments', 'comment absent',
+                JSON.stringify(noComments.content).includes('A reviewer note') ? 'comment present' : 'comment absent',
+                !JSON.stringify(noComments.content).includes('A reviewer note'),
+                'No comment content when comments are ignored');
+            record('ignoreComments keeps headers and footers', 'Page header text',
+                JSON.stringify(noComments.auxiliary?.headers ?? []).includes('Page header text')
+                    ? 'Page header text' : JSON.stringify(noComments.auxiliary),
+                JSON.stringify(noComments.auxiliary?.headers ?? []).includes('Page header text'),
+                'Ignoring comments must not affect headers and footers');
+        } catch (err: any) {
+            record('Config flags gate their own parts', 'Parsed AST', `${err.name}: ${err.message}`,
+                false, `Threw instead of parsing: ${err.message}`, Date.now() - startTime);
+        }
+    }
+
+    return results;
+}
+
 async function testDecompressionLimits(): Promise<FeatureTest[]> {
     const results: FeatureTest[] = [];
 
@@ -2802,7 +2928,11 @@ async function runAllTests() {
     console.log('Running ZIP decompression limit tests...');
     allResults.push(...await testDecompressionLimits());
 
-    // 6. Generate report
+    // 6. Word header/footer/comment extraction
+    console.log('Running Word header/footer/comment tests...');
+    allResults.push(...await testWordAuxiliaryParts());
+
+    // 7. Generate report
     console.log('\n');
     const logger = new DualLogger();
     const failedCount = generateReport(allResults, logger);
