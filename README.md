@@ -1372,12 +1372,12 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer);
 
 // Or specify your own:
 const ast = await officeParser.parseOffice(pdfArrayBuffer, {
-    pdfWorkerSrc: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.1.200/build/pdf.worker.min.mjs'
+    pdfWorkerSrc: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs'
 });
 ```
 
 > [!NOTE]
-> The `pdfjs-dist` worker version must match the version bundled with `officeparser` (currently **6.1.200**).
+> The `pdfjs-dist` worker version must match the version bundled with `officeparser` (currently **6.2.108**).
 
 ---
 
@@ -1386,7 +1386,7 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer, {
 | Symptom | Fix |
 |---------|-----|
 | Node.js process stays alive after finishing | Call `await officeParser.terminateOcr()` at end of script when OCR was used |
-| `"Worker not found"` in browser for PDF | Verify `pdfWorkerSrc` points to `pdf.worker.min.mjs` matching version `6.1.200` |
+| `"Worker not found"` in browser for PDF | Verify `pdfWorkerSrc` points to `pdf.worker.min.mjs` matching version `6.2.108` |
 | Low OCR accuracy | Verify `ocrConfig.language` matches the document language; quality depends on image resolution |
 | Out of memory on large Excel files | Call `await ast.to('text')` early and discard the AST object to allow garbage collection |
 | `md`/`html`/`csv` buffer not detected | Add `fileType: 'md'` (or `'html'`, `'csv'`) to config (these formats have no magic bytes) |

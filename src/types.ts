@@ -340,7 +340,7 @@ export interface CommonOfficeParserConfig {
      * The URL/path to the PDF.js worker script.
      *
      * **Mandatory** when using PDF parsing in browser environments to avoid worker configuration errors.
-     * If not provided, it defaults to `https://cdn.jsdelivr.net/npm/pdfjs-dist@6.1.200/build/pdf.worker.min.mjs`.
+     * If not provided, it defaults to `https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs`.
      * You can override this with your own local path or a different CDN link.
      */
     pdfWorkerSrc?: string;

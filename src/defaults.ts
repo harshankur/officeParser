@@ -1,6 +1,6 @@
 import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OfficeParserConfig, PdfGeneratorConfig, SemanticChunkingConfig, TextGeneratorConfig } from './types.js';
 
-const PDFJS_VERSION = '6.1.200';
+const PDFJS_VERSION = '6.2.108';
 const DEFAULT_PDF_WORKER_SRC = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
 
 /**
