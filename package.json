@@ -120,7 +120,7 @@
     "@xmldom/xmldom": "^0.9.10",
     "fflate": "^0.8.3",
     "file-type": "^22.0.1",
-    "pdfjs-dist": "6.1.200",
+    "pdfjs-dist": "6.2.108",
     "tesseract.js": "^7.0.0"
   },
   "peerDependenciesMeta": {

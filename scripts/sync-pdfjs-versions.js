@@ -20,6 +20,10 @@ function syncVersions() {
 
     let packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
 
+    // Captured before the argument overwrite below, so that version strings written
+    // without the `pdfjs-dist@` prefix can be rewritten from the old value.
+    const previousPdfJsVersion = (packageJson.dependencies['pdfjs-dist'] || '').replace(/[\^~]/g, '');
+
     // If version is provided as an argument, update package.json first
     if (versionFromArg) {
         console.log(`Updating package.json pdfjs-dist dependency to: ${versionFromArg}`);
@@ -45,6 +49,7 @@ function syncVersions() {
         'src/types.ts',
         'src/defaults.ts',
         'docs/index.html',
+        'docs/specs/debugging_fragment.html',
         'README.md'
     ];
 
@@ -65,6 +70,14 @@ function syncVersions() {
                 const rawVersionRegex = /const PDFJS_VERSION = '[\d.]+';/;
                 const targetRawVersionString = `const PDFJS_VERSION = '${pdfJsVersion}';`;
                 newContent = newContent.replace(rawVersionRegex, targetRawVersionString);
+            }
+
+            // Prose in the debugging docs cites the version without the `pdfjs-dist@`
+            // prefix, which the standard replacement above cannot match. Rewrite the
+            // previous version literally so those references do not go stale.
+            if (previousPdfJsVersion !== '' && previousPdfJsVersion !== pdfJsVersion) {
+                const bareVersionRegex = new RegExp(previousPdfJsVersion.replace(/\./g, '\\.'), 'g');
+                newContent = newContent.replace(bareVersionRegex, pdfJsVersion);
             }
 
             if (content !== newContent) {
