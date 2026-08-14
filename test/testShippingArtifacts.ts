@@ -18,7 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as child_process from 'child_process';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -461,6 +461,44 @@ function checkFileTypeInlined(relPath: string, label: string): CheckResult[] {
         `Marker ${JSON.stringify(FILE_TYPE_INLINE_MARKER)} not found — the browser bundle cannot detect a file type from a buffer`)];
 }
 
+/**
+ * Smoke-imports a browser ESM bundle in a real Node subprocess (4.F.6 / 6.E.3). Every other bundle
+ * check here is static string matching, which cannot catch a bundle that parses but throws on
+ * evaluation - a bad top-level reference, or a dynamic-import annotation the runtime rejects.
+ * Importing it for real and confirming the documented entry points are present closes that gap.
+ * (A browser bundle is still valid Node ESM: its browser-only code paths are gated at call time,
+ * so module evaluation and export access work under Node.)
+ */
+function checkBrowserEsmExecutes(isSlim = false): CheckResult[] {
+    const suffix = isSlim ? '.slim' : '';
+    const relPath = `dist/officeparser.browser${suffix}.mjs`;
+    const label = isSlim ? 'Browser ESM Slim' : 'Browser ESM';
+
+    if (!fileExists(relPath)) {
+        return [fail(`${label}: smoke-imports as an ESM module`, `${relPath} not found`)];
+    }
+
+    const url = pathToFileURL(path.join(ROOT, relPath)).href;
+    const script =
+        `import(${JSON.stringify(url)}).then(m => {` +
+        `const ok = typeof m.parseOffice === 'function' && typeof m.OfficeGenerator?.generate === 'function';` +
+        `process.stdout.write(ok ? 'OK' : 'MISSING:' + typeof m.parseOffice + ',' + typeof m.OfficeGenerator);` +
+        `}).catch(e => { process.stdout.write('THREW:' + ((e && e.message) || e)); process.exit(3); });`;
+
+    let r: ReturnType<typeof child_process.spawnSync>;
+    try {
+        r = child_process.spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 30000 });
+    } catch (e) {
+        return [fail(`${label}: smoke-imports as an ESM module`, String(e))];
+    }
+    const out = String(r.stdout ?? '').trim();
+    if (r.status === 0 && out === 'OK') {
+        return [pass(`${label}: smoke-imports and exposes parseOffice + OfficeGenerator.generate`)];
+    }
+    return [fail(`${label}: smoke-imports and exposes parseOffice + OfficeGenerator.generate`,
+        out || String(r.stderr ?? '').slice(0, 200) || `exit ${r.status}`)];
+}
+
 // ---------------------------------------------------------------------------
 // Section 6: Browser Type Declarations
 // ---------------------------------------------------------------------------
@@ -627,6 +665,12 @@ async function main() {
                 ...checkFileTypeInlined('dist/officeparser.browser.slim.mjs', 'Browser ESM Slim'),
                 ...checkFileTypeInlined('dist/officeparser.browser.iife.js', 'Browser IIFE'),
                 ...checkFileTypeInlined('dist/officeparser.browser.slim.iife.js', 'Browser IIFE Slim'),
+            ]
+        },
+        {
+            title: 'Browser ESM bundles execute (smoke import)', fn: () => [
+                ...checkBrowserEsmExecutes(false),
+                ...checkBrowserEsmExecutes(true),
             ]
         },
         { title: 'package.json Path Integrity', fn: checkPackageJson },

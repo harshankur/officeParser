@@ -181,6 +181,87 @@ async function htmlTests() {
     check('html: javascript link neutralized', !html3.includes('href="javascript:'), 'javascript href survived');
 }
 
+async function htmlSourceAttributesTests() {
+    console.log('- HtmlGenerator sourceAttributes emission...');
+    // Every sourceAttributes sink writes an attacker-influenced value into a data-* attribute. It
+    // must be entity-escaped so it can neither break out of the attribute (") nor open a tag (< >).
+    // Each payload attempts both. standalone:false keeps the output to the body so the document
+    // shell can't produce a false positive.
+    const ATTR = 'x" onerror="alert(1)';
+    const TAG = '"><script>alert(1)</script>';
+    const cfg = { htmlConfig: { sourceAttributes: true, standalone: false } };
+
+    const cases: Array<[string, any[]]> = [
+        ['wikilink data-target', [{ type: 'paragraph', children: [
+            { type: 'text', text: 'link', metadata: { wikilink: true, link: ATTR, linkType: 'internal' } }] }]],
+        ['wikilink data-alias', [{ type: 'paragraph', children: [
+            { type: 'text', text: TAG, metadata: { wikilink: true, link: 'Page', linkType: 'internal' } }] }]],
+        ['citation data-key', [{ type: 'paragraph', children: [
+            { type: 'text', text: 'c', metadata: { citationKey: ATTR } }] }]],
+        ['inline math data-math', [{ type: 'code', text: ATTR, metadata: { math: 'inline' } }]],
+        ['block math data-math', [{ type: 'code', text: TAG, metadata: { math: 'block' } }]],
+        ['mermaid data-mermaid', [{ type: 'code', text: TAG, metadata: { language: 'mermaid' } }]],
+    ];
+    for (const [name, content] of cases) {
+        const out = (await OfficeGenerator.generate(astWith(content), 'html', cfg as any)).value as string;
+        check(`html: ${name} no attribute breakout`, !/onerror\s*=\s*"/.test(out), `broke out: ${JSON.stringify(out.slice(0, 200))}`);
+        check(`html: ${name} no tag breakout`, !/<script/i.test(out), `tag injected: ${JSON.stringify(out.slice(0, 200))}`);
+    }
+
+    // Positive control: the emission must actually happen, or the checks above are vacuous.
+    const okMath = (await OfficeGenerator.generate(astWith([{ type: 'code', text: 'E=mc^2', metadata: { math: 'inline' } }]), 'html', cfg as any)).value as string;
+    check('html: sourceAttributes actually emits data-math', /data-math="E=mc\^2"/.test(okMath), okMath.slice(0, 200));
+}
+
+async function iframePreservationTests() {
+    console.log('- HtmlParser iframe preservation (opt-in)...');
+    const parseHtml = (html: string, extra: any = {}) =>
+        OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html', ...extra } as any);
+    const toHtml = async (ast: any) => String((await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: false } } as any)).value);
+
+    // Default: a non-YouTube iframe is dropped entirely (the standing security posture).
+    const offHtml = await toHtml(await parseHtml('<iframe src="https://example.com/x"></iframe>'));
+    check('iframe: dropped by default', !/<iframe/i.test(offHtml), offHtml.slice(0, 160));
+
+    // Opted in: a legitimate https iframe survives to HTML and Markdown.
+    const onAst = await parseHtml('<iframe src="https://player.example.com/v/1" width="640" height="360"></iframe>', { htmlParserConfig: { preserveIframes: true } });
+    check('iframe: preserved when opted in (html)', /<iframe src="https:\/\/player\.example\.com\/v\/1"/.test(await toHtml(onAst)), 'not preserved');
+    check('iframe: preserved when opted in (md)', /<iframe src="https:\/\/player\.example\.com/.test(String((await OfficeGenerator.generate(onAst, 'md')).value)), 'not in md');
+
+    // A query-string src must survive with its & escaped exactly once, not compounding every cycle.
+    const qsHtml = await toHtml(await parseHtml('<iframe src="https://player.example.com/v?a=1&amp;b=2"></iframe>', { htmlParserConfig: { preserveIframes: true } }));
+    check('iframe: query-string src escaped once, not double-escaped', qsHtml.includes('a=1&amp;b=2') && !qsHtml.includes('&amp;amp;'), qsHtml.slice(0, 200));
+
+    // Hostile schemes: even with preservation on, the src must not survive generation.
+    for (const badSrc of ['javascript:alert(1)', 'data:text/html,alert(1)']) {
+        const badAst = await parseHtml(`<iframe src="${badSrc}"></iframe>`, { htmlParserConfig: { preserveIframes: true } });
+        const badHtml = await toHtml(badAst);
+        check(`iframe: hostile src ${JSON.stringify(badSrc.slice(0, 16))} yields no live iframe (html)`, !/<iframe/i.test(badHtml) && !/javascript:|data:text\/html/i.test(badHtml), badHtml.slice(0, 200));
+        const badMd = String((await OfficeGenerator.generate(badAst, 'md')).value);
+        check(`iframe: hostile src ${JSON.stringify(badSrc.slice(0, 16))} yields no live iframe (md)`, !/javascript:|data:text\/html/i.test(badMd), badMd.slice(0, 200));
+    }
+
+    // Allowlist: only listed hosts survive.
+    const allowAst = await parseHtml('<iframe src="https://player.vimeo.com/video/1"></iframe><iframe src="https://evil.example/x"></iframe>', { htmlParserConfig: { preserveIframes: ['vimeo.com'] } });
+    const allowHtml = await toHtml(allowAst);
+    check('iframe allowlist: listed host kept', allowHtml.includes('player.vimeo.com'), allowHtml.slice(0, 200));
+    check('iframe allowlist: unlisted host dropped', !allowHtml.includes('evil.example'), allowHtml.slice(0, 200));
+
+    // The allowlist must not be fooled by lookalike hosts: a suffix that isn't a dot-boundary,
+    // a host that merely contains the entry, or the entry smuggled into the userinfo.
+    for (const badHost of ['vimeo.com.evil.com', 'evilvimeo.com', 'notvimeo.com', 'vimeo.com@evil.com']) {
+        const bypassHtml = await toHtml(await parseHtml(`<iframe src="https://${badHost}/x"></iframe>`, { htmlParserConfig: { preserveIframes: ['vimeo.com'] } }));
+        check(`iframe allowlist: lookalike host ${JSON.stringify(badHost)} rejected`, !/<iframe/i.test(bypassHtml), bypassHtml.slice(0, 200));
+    }
+
+    // The preserved-iframe src must not compound its entity-escaping across Markdown save/reload
+    // cycles: a `&amp;` in a query string must stay `&amp;`, not grow into `&amp;amp;` each time.
+    const mdCfg: any = { fileType: 'md', htmlParserConfig: { preserveIframes: true } };
+    let cyc = String((await OfficeGenerator.generate(await parseHtml('<iframe src="https://x.co/v?a=1&amp;b=2"></iframe>', { htmlParserConfig: { preserveIframes: true } }), 'md')).value);
+    for (let i = 0; i < 2; i++) cyc = String((await OfficeGenerator.generate(await OfficeParser.parseOffice(Buffer.from(cyc), mdCfg), 'md')).value);
+    check('iframe: src does not compound &amp; over md save/reload cycles', cyc.includes('a=1&amp;b=2') && !cyc.includes('&amp;amp;'), cyc.slice(0, 200));
+}
+
 async function markdownTests() {
     console.log('- MarkdownGenerator (integration)...');
 
@@ -1285,12 +1366,34 @@ function errorReportingTests() {
         `got ${JSON.stringify(rawReported.map(i => i.code))}`);
 }
 
+async function mdInlineFormattingTests() {
+    console.log('- MarkdownGenerator inline formatting (opt-in <span style>)...');
+    const cfg = { mdConfig: { fallbackToHtml: { inlineFormatting: true } } };
+    // color/backgroundColor/size land in a style attribute; each value must be CSS-sanitized so it
+    // can't break out of the attribute or inject a url()/expression().
+    const payloads = ['red;}body{display:none', 'expression(alert(1))', 'url(javascript:alert(1))', 'x"><script>alert(1)</script>', 'red;background:url(//evil)'];
+    for (const payload of payloads) {
+        const ast = astWith([{ type: 'paragraph', children: [
+            { type: 'text', text: 'x', formatting: { color: payload, backgroundColor: payload, size: payload } }] } as any]);
+        const md = (await OfficeGenerator.generate(ast, 'md', cfg as any)).value as string;
+        check(`md inline: payload ${JSON.stringify(payload.slice(0, 18))} no CSS/tag breakout`,
+            !/expression\s*\(|url\s*\(|<script|javascript:/i.test(md) && !/style="[^"]*"[^>]*"/.test(md), md.slice(0, 200));
+    }
+    // Positive control: a legitimate color still round-trips (the checks above aren't vacuous).
+    const ok = (await OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [
+        { type: 'text', text: 'x', formatting: { color: '#c00' } }] } as any]), 'md', cfg as any)).value as string;
+    check('md inline: legitimate color emitted', /<span style="color: ?#c00/.test(ok), ok.slice(0, 200));
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
     configPollutionTests();
     await htmlTests();
     await htmlAttributeBagTests();
+    await htmlSourceAttributesTests();
+    await iframePreservationTests();
+    await mdInlineFormattingTests();
     await markdownTests();
     await csvTests();
     await metadataOverrideTests();

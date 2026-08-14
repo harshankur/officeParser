@@ -93,7 +93,7 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
         maxZipEntries: 10000,
         maxTableCells: 1000000
     },
-    htmlParserConfig: { preserveAttributes: false }
+    htmlParserConfig: { preserveAttributes: false, preserveIframes: false }
 };
 
 /**

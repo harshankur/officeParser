@@ -13,7 +13,7 @@
  */
 
 import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 
@@ -46,7 +46,9 @@ if (!existsSync(mjsPath)) {
 // --- Check 2: dynamic import resolves ---
 let mod;
 try {
-    mod = await import(mjsPath);
+    // Import via a file:// URL: on Windows an absolute path like C:\... is otherwise read as a
+    // URL scheme ("c:") and rejected by the ESM loader.
+    mod = await import(pathToFileURL(mjsPath).href);
     pass('ESM import resolves');
 } catch (e) {
     fail('ESM import resolves', String(e));
