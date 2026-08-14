@@ -30,9 +30,13 @@ Wikilink: [[WikiPage]] and [[WikiPage|Alias Text]]
 
 Citation: [@smith2023]
 
-Footnote reference[^fn1].
+Footnote reference[^fn1]. Multi-line footnote[^fnML].
 
 [^fn1]: This is the footnote definition text.
+
+[^fnML]: First line of a multi-line note.
+    Second line, indented four spaces.
+    Third line here.
 
 *[ABBR]: Abbreviation Full Title
 

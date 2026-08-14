@@ -1,6 +1,3 @@
----
----
-
 <a id="toc581531977"></a><a id="ole-link1"></a><a id="ole-link2"></a>Demonstration of DOCX support in calibre
 
 This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action.
@@ -101,7 +98,7 @@ Miscellaneous structural elements you can add to your document, like footnotes, 
 
 ## Footnotes & Endnotes {#toc201580556}
 
-Footnotes and endnotes are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.[^1][^2]
+Footnotes[^1] and endnotes[^2] are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.
 
 ## Dropcaps {#toc1977424358}
 
@@ -199,11 +196,6 @@ An interruption in our regularly scheduled listing, for this essential and very 
 
 3. We now resume our normal programming
 4. Four
-
-
----
-
-### Notes
 
 [^1]: In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.
 

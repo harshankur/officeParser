@@ -2848,6 +2848,7 @@
                 { id: 'cfg_putNotesAtLast', label: '<del>Notes At Last</del> <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'switch', default: false },
                 { id: 'cfg_includeBreakNodes', label: 'Include Break Nodes', type: 'switch', default: true },
                 { id: 'cfg_preserveAttributes', label: 'Preserve HTML Attributes', type: 'switch', default: false },
+                { id: 'cfg_preserveIframes', label: 'Preserve Iframes', type: 'switch', default: false },
                 { id: 'cfg_outputErrorToConsole', label: '<del>Verbose Errors</del> <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'switch', default: false },
                 { id: 'cfg_ocrLanguage', label: '<del>OCR Lang</del> <small style="opacity: 0.5; font-size: 0.7rem;">(Deprecated)</small>', type: 'text', default: 'eng', width: '80px' },
                 { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: ',', width: '60px' },
@@ -2874,7 +2875,8 @@
                 { id: 'cfg_html_inj_headStart', label: 'Inj Head Start', type: 'inline-popover-textarea', default: '', height: '100px' },
                 { id: 'cfg_html_inj_headEnd', label: 'Inj Head End', type: 'inline-popover-textarea', default: '', height: '100px' },
                 { id: 'cfg_html_inj_bodyStart', label: 'Inj Body Start', type: 'inline-popover-textarea', default: '', height: '100px' },
-                { id: 'cfg_html_inj_bodyEnd', label: 'Inj Body End', type: 'inline-popover-textarea', default: '', height: '100px' }
+                { id: 'cfg_html_inj_bodyEnd', label: 'Inj Body End', type: 'inline-popover-textarea', default: '', height: '100px' },
+                { id: 'cfg_html_sourceAttributes', label: 'Source Attributes', type: 'switch', default: false }
             ],
             md: [
                 { id: 'cfg_md_dialect', label: 'Dialect', type: 'inline-select', options: ['extended', 'github', 'gitlab', 'obsidian', 'pandoc', 'commonmark'], names: ['Extended', 'GitHub', 'GitLab', 'Obsidian', 'Pandoc', 'CommonMark'], default: 'extended' },
@@ -3793,7 +3795,7 @@
                                 <div style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">HTML Fallback Detail<button class="modal-close-btn" style="font-size: 0.8rem;" onclick="window.toggleConfigPopover('cfg_md_fallback_popover')">✕</button></div>
                                 <div style="font-size: 0.65rem; color: var(--text-dim); margin-bottom: 0.5rem; line-height: 1.4;">Splits the single HTML Fallback switch into its parts. Anything left on "from switch" follows the switch above.</div>
                                 <button id="cfg_md_f_reset" class="btn btn-outline" style="width: 100%; padding: 0.3rem; font-size: 0.7rem; margin-bottom: 0.6rem;">Reset all to switch</button>
-                                <div style="display: flex; flex-direction: column; gap: 0.4rem;"><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Text Formatting</span><select id="cfg_md_f_textFormatting" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Alignment</span><select id="cfg_md_f_alignment" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Anchors</span><select id="cfg_md_f_anchors" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Tables</span><select id="cfg_md_f_tables" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Embeds</span><select id="cfg_md_f_embeds" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Cell Line Breaks</span><select id="cfg_md_f_cellLineBreaks" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div></div>
+                                <div style="display: flex; flex-direction: column; gap: 0.4rem;"><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Text Formatting</span><select id="cfg_md_f_textFormatting" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Alignment</span><select id="cfg_md_f_alignment" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Anchors</span><select id="cfg_md_f_anchors" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Tables</span><select id="cfg_md_f_tables" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Embeds</span><select id="cfg_md_f_embeds" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Cell Line Breaks</span><select id="cfg_md_f_cellLineBreaks" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from switch</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;" title="Off by default even when the switch is on; opt in to round-trip inline color/highlight/font-size as <span style> runs."><span class="config-label" style="font-size: 0.7rem;">Inline Formatting</span><select id="cfg_md_f_inlineFormatting" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>Off (opt-in)</option><option value="true">On</option></select></div></div>
                             </div>
                     </div>
                 </div>
@@ -4715,10 +4717,16 @@
                     const el = document.getElementById('cfg_md_f_' + f);
                     if (el && el.value) overrides[f] = el.value === 'true';
                 });
-                if (Object.keys(overrides).length === 0) return base;
+                // inlineFormatting is opt-in only: off by default even when the switch is on, so it
+                // never follows the switch, and the boolean form cannot express it. An explicit `On`
+                // therefore forces the object form with all other parts still following the switch.
+                const inlineEl = document.getElementById('cfg_md_f_inlineFormatting');
+                const inlineOn = !!(inlineEl && inlineEl.value === 'true');
+                if (Object.keys(overrides).length === 0 && !inlineOn) return base;
                 // Omitted parts follow the switch, matching resolveFallbackToHtml's own semantics.
                 const resolved = {};
                 MD_FALLBACK_FIELDS.forEach(f => { resolved[f] = f in overrides ? overrides[f] : base; });
+                resolved.inlineFormatting = inlineOn;
                 return resolved;
             }
 
@@ -4762,7 +4770,7 @@
                     ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
                     putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
                     includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
-                    htmlParserConfig: { preserveAttributes: document.getElementById('cfg_preserveAttributes').checked },
+                    htmlParserConfig: { preserveAttributes: document.getElementById('cfg_preserveAttributes').checked, preserveIframes: document.getElementById('cfg_preserveIframes').checked },
                     outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
                     ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
                     csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
@@ -5077,7 +5085,7 @@
                         ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
                         putNotesAtLast: document.getElementById('cfg_putNotesAtLast').checked,
                         includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
-                    htmlParserConfig: { preserveAttributes: document.getElementById('cfg_preserveAttributes').checked },
+                    htmlParserConfig: { preserveAttributes: document.getElementById('cfg_preserveAttributes').checked, preserveIframes: document.getElementById('cfg_preserveIframes').checked },
                         outputErrorToConsole: document.getElementById('cfg_outputErrorToConsole').checked,
                         ocrLanguage: document.getElementById('cfg_ocrLanguage').value,
                         csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
@@ -5134,7 +5142,9 @@
             // Controls inside the md object-form popovers. Not schema-driven, so they need the
             // same manual persistence and listener wiring the standalone popover uses.
             const MD_DIALECT_POPOVER_IDS = [...MD_DIALECT_ENUM_FIELDS, ...MD_DIALECT_BOOL_FIELDS].map(f => 'cfg_md_d_' + f);
-            const MD_FALLBACK_POPOVER_IDS = MD_FALLBACK_FIELDS.map(f => 'cfg_md_f_' + f);
+            // inlineFormatting isn't in MD_FALLBACK_FIELDS (it doesn't follow the switch), but its
+            // control still needs the same persistence/listener/reset wiring as the rest.
+            const MD_FALLBACK_POPOVER_IDS = [...MD_FALLBACK_FIELDS.map(f => 'cfg_md_f_' + f), 'cfg_md_f_inlineFormatting'];
 
             [...MD_DIALECT_POPOVER_IDS, ...MD_FALLBACK_POPOVER_IDS].forEach(id => {
                 const el = document.getElementById(id);
@@ -5747,7 +5757,8 @@
                         headEnd: document.getElementById('cfg_html_inj_headEnd').value || undefined,
                         bodyStart: document.getElementById('cfg_html_inj_bodyStart').value || undefined,
                         bodyEnd: document.getElementById('cfg_html_inj_bodyEnd').value || undefined
-                    }
+                    },
+                    sourceAttributes: document.getElementById('cfg_html_sourceAttributes').checked
                 };
             }
 

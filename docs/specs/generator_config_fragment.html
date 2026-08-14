@@ -171,6 +171,16 @@
                     Useful for inserting analytics scripts, custom fonts, or wrapper elements.
                 </td>
             </tr>
+            <tr>
+                <td><code>sourceAttributes</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Carry each rich node's raw source in a <code>data-*</code> attribute (undelimited text content),
+                    so attribute-driven consumers can rehydrate the node: <code>data-wikilink</code>/<code>data-target</code>/<code>data-alias</code>
+                    on wikilinks, a <code>&lt;span class="citation" data-key&gt;</code> for citations, the LaTeX in
+                    <code>data-math</code>, and a <code>&lt;div class="mermaid" data-mermaid&gt;</code> for mermaid. Off by default the
+                    output is byte-identical to before, and the parser reads every shape it emits. Forced off for PDF and EPUB.</td>
+            </tr>
         </tbody>
     </table>
 
@@ -350,7 +360,8 @@ await ast.to('md', {
 
     <h4 id="fallbacktohtmlconfig">FallbackToHtmlConfig</h4>
     <p><code>fallbackToHtml</code> accepts a boolean, which applies uniformly, or an object controlling each part
-        independently. Omitted fields default to on.</p>
+        independently. Omitted fields default to on, <strong>except <code>inlineFormatting</code></strong>, which is off
+        by default even when the boolean is <code>true</code> and must be opted into explicitly.</p>
     <table>
         <thead>
             <tr>
@@ -366,6 +377,7 @@ await ast.to('md', {
             <tr><td><code>tables</code></td><td><code>boolean</code></td><td><code>&lt;table&gt;</code> for nested or merged-cell tables a pipe table cannot express. When off, nested tables are hoisted out and rendered sequentially.</td></tr>
             <tr><td><code>embeds</code></td><td><code>boolean</code></td><td>Raw HTML for video/embed nodes. When off, they degrade to a plain link.</td></tr>
             <tr><td><code>cellLineBreaks</code></td><td><code>boolean</code></td><td><code>&lt;br&gt;</code> inside a table cell, which a pipe table cannot otherwise contain.</td></tr>
+            <tr><td><code>inlineFormatting</code></td><td><code>boolean</code></td><td>Inline text color, highlight, and font size via a <code>&lt;span style="color:…;background-color:…;font-size:…"&gt;</code> run, which the Markdown parser reads back. These have no Markdown syntax and are otherwise lost silently. <strong>Off by default even when <code>fallbackToHtml</code> is <code>true</code></strong> (it changes default output). Enable it explicitly with <code>fallbackToHtml: { inlineFormatting: true }</code>.</td></tr>
         </tbody>
     </table>
 

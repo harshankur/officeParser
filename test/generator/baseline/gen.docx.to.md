@@ -311,7 +311,7 @@ Miscellaneous structural elements you can add to your document, like footnotes, 
 
 ## Footnotes & Endnotes {#toc201580556}
 
-Footnotes and endnotes are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.[^2][^1]
+Footnotes[^2] and endnotes[^1] are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.
 
 ## Dropcaps {#toc1977424358}
 
@@ -327,39 +327,39 @@ Two kinds of links are possible, those that refer to an external website and tho
 
  You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook. 
 
-[<u>Demonstration of DOCX support in calibre1</u>](#toc581531977)
+[<u>**Demonstration of DOCX support in calibre1**</u>](#toc581531977)
 
-[<u>Text Formatting1</u>](#toc2054249818)
+[<u>**Text Formatting1**</u>](#toc2054249818)
 
-[<u>Inline formatting2</u>](#toc2137712100)
+[<u>*Inline formatting2*</u>](#toc2137712100)
 
-[<u>Fun with fonts2</u>](#toc1074133965)
+[<u>*Fun with fonts2*</u>](#toc1074133965)
 
-[<u>Paragraph level formatting2</u>](#toc2022725662)
+[<u>*Paragraph level formatting2*</u>](#toc2022725662)
 
-[<u>Tables2</u>](#toc28114276)
+[<u>**Tables2**</u>](#toc28114276)
 
-[<u>Structural Elements4</u>](#toc54889875)
+[<u>**Structural Elements4**</u>](#toc54889875)
 
-[<u>Footnotes & Endnotes5</u>](#toc201580556)
+[<u>*Footnotes & Endnotes5*</u>](#toc201580556)
 
-[<u>Dropcaps5</u>](#toc1977424358)
+[<u>*Dropcaps5*</u>](#toc1977424358)
 
-[<u>Links5</u>](#toc1233048813)
+[<u>*Links5*</u>](#toc1233048813)
 
-[<u>Table of Contents5</u>](#toc64145348)
+[<u>*Table of Contents5*</u>](#toc64145348)
 
-[<u>Images6</u>](#toc484565143)
+[<u>**Images6**</u>](#toc484565143)
 
-[<u>Lists7</u>](#toc1359965655)
+[<u>**Lists7**</u>](#toc1359965655)
 
-[<u>Bulleted List8</u>](#toc1958162433)
+[<u>*Bulleted List8*</u>](#toc1958162433)
 
-[<u>Numbered List8</u>](#toc415190676)
+[<u>*Numbered List8*</u>](#toc415190676)
 
-[<u>Multi-level Lists8</u>](#toc1093260318)
+[<u>*Multi-level Lists8*</u>](#toc1093260318)
 
-[<u>Continued Lists8</u>](#toc1471533984)
+[<u>*Continued Lists8*</u>](#toc1471533984)
 
 
 
@@ -423,11 +423,6 @@ An interruption in our regularly scheduled listing, for this essential and very 
 
 3. We now resume our normal programming
 4. Four
-
-
----
-
-### Notes
 
 [^2]: In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.
 

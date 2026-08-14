@@ -188,14 +188,23 @@ officeParser.parseOffice('/path/to/file.docx', function(ast, err) {
 });
 ```
 
-### File Buffers & ArrayBuffers
+### File Buffers, ArrayBuffers & Blobs
 
-Pass a `Buffer`, `ArrayBuffer`, or `Uint8Array` instead of a file path:
+Pass a `Buffer`, `ArrayBuffer`, `Uint8Array`, or a web `Blob`/`File` instead of a file path:
 
 ```js
 const fs = require('fs');
 const buffer = fs.readFileSync('/path/to/file.pdf');
 const ast = await officeParser.parseOffice(buffer);
+```
+
+In the browser you can hand a `File`/`Blob` straight from an `<input type="file">` — no need to
+read it into a buffer first. A `File`'s name drives type detection, so no `fileType` hint is
+needed when the name has a recognizable extension:
+
+```js
+// input.files[0] is a File (e.g. "report.docx")
+const ast = await officeParser.parseOffice(input.files[0]);
 ```
 
 > [!IMPORTANT]
@@ -475,6 +484,8 @@ const { value: chunks } = await OfficeConverter.convert('report.docx', 'chunks',
 
 ### The `OfficeChunk` Object
 
+`generate(ast, 'chunks')` (and `ast.to('chunks')`) resolves to a real `OfficeChunk[]` **array**, not a JSON string - serialize it to JSON/JSONL yourself if your pipeline needs that.
+
 Every chunk contains text and rich metadata for citations and filtered retrieval:
 
 ```ts
@@ -738,7 +749,7 @@ Admonition Node (type: 'admonition')
 └── children: [ Paragraph | List | ... ]   (block content)
 
 Embed Node (type: 'embed')
-└── metadata: { embedType: 'youtube', videoId: string, url?: string, width?: string, align?: string }
+└── metadata: { embedType: 'youtube' | 'iframe', videoId?: string, url?: string, width?: string, height?: string, align?: string }
 
 Definition List Node (type: 'definitionList')
 └── children:
@@ -973,7 +984,8 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal cross-references from AST |
 | `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`) as these lack magic bytes. |
 | `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
-| `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000 }` | **New**: Limits applied during ZIP extraction to protect against excessive memory and resource usage |
+| `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000, maxTableCells: 1000000 }` | **New**: Limits applied during ZIP extraction (and ODF cell expansion) to protect against excessive memory and resource usage |
+| `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes — `true` for any, or a hostname allowlist; the src is scheme-checked on generation |
 | `pdfWorkerSrc` | `string` | CDN (jsDelivr) | Path/URL to `pdf.worker.min.mjs` (required in browser) |
 | `onWarning` | `(issue: OfficeIssue) => void` | — | Callback for non-fatal parsing issues |
 | `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel parsing (rejects with AbortError) |
@@ -1083,6 +1095,7 @@ Pass as `htmlConfig` inside `GeneratorConfig`.
 | `injections.headEnd` | `string` | `''` | Raw HTML injected before `</head>` |
 | `injections.bodyStart` | `string` | `''` | Raw HTML injected after `<body>` |
 | `injections.bodyEnd` | `string` | `''` | Raw HTML injected before `</body>` |
+| `sourceAttributes` | `boolean` | `false` | Carry each rich node's raw source in a `data-*` attribute (undelimited text), so attribute-driven consumers can rehydrate it: `data-wikilink`/`data-target`/`data-alias` on wikilinks, a `<span class="citation" data-key>` for citations, the LaTeX in `data-math`, and a `<div class="mermaid" data-mermaid>` for mermaid. Off = byte-identical to before; the parser reads every shape it emits. Forced off for PDF/EPUB |
 
 #### `standalone`: granular envelope control
 
@@ -1133,7 +1146,7 @@ Pass as `mdConfig` inside `GeneratorConfig`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `fallbackToHtml` | `boolean` | `true` | Use HTML tags for features Markdown cannot represent (underlines, merged table cells, etc.) |
+| `fallbackToHtml` | `boolean \| FallbackToHtmlConfig` | `true` | Use HTML tags for features Markdown cannot represent (underlines, merged table cells, embeds, etc.). Pass an object for per-feature control. `inlineFormatting` (default `false`, opt-in even when the boolean is `true`) additionally round-trips inline color/highlight/font-size as `<span style="...">` runs. |
 
 ### PdfGeneratorConfig
 
