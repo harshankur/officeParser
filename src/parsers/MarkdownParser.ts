@@ -1,6 +1,7 @@
 import { AdmonitionMetadata, BreakMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
+import { iframeAllowed } from '../utils/sanitize.js';
 
 // Sentinel node type for a standalone bookmark-anchor block (e.g. `<a id="x"></a>` on its
 // own line). A post-parse pass folds these into the following node's anchorIds so they
@@ -61,7 +62,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     const attachments: OfficeAttachment[] = [];
 
     // Parse YAML Front Matter
-    if (textStr.startsWith('---\n')) {
+    if (/^---\n---[ \t]*(?:\n|$)/.test(textStr)) {
+        // Empty frontmatter block: strip it so `---\n---` isn't misread as a setext `## ---`
+        // heading (empty metadata used to emit exactly this shape, and other producers do too).
+        textStr = textStr.replace(/^---\n---[ \t]*(?:\n|$)/, '');
+    } else if (textStr.startsWith('---\n')) {
         const endIdx = textStr.indexOf('\n---\n', 4);
         if (endIdx !== -1) {
             const frontMatter = textStr.substring(4, endIdx);
@@ -76,10 +81,16 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 if (match) {
                     const key = match[1].trim();
                     const rawVal = match[2].trim();
-                    const val = rawVal.replace(/^"(.*)"$/, '$1');
+                    // A quoted scalar is explicitly a string in YAML: strip the quotes but never
+                    // coerce it, so `version: "123"` / `flag: "true"` keep their string-ness across
+                    // a save/reload cycle instead of silently degrading to a number/boolean on the
+                    // next parse (which the generator would then re-emit unquoted, losing the type
+                    // permanently). Only bare, unquoted scalars coerce.
+                    const isQuoted = /^"(.*)"$/.test(rawVal) || /^'(.*)'$/.test(rawVal);
+                    const val = rawVal.replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
 
                     let parsedVal: any = val;
-                    if (rawVal.startsWith('[') && rawVal.endsWith(']')) {
+                    if (!isQuoted && rawVal.startsWith('[') && rawVal.endsWith(']')) {
                         // Flow-array (`tags: [a, b]`) or JSON-array (`tags: ["a","b"]`) value -
                         // parse into a real array instead of storing the literal bracket string,
                         // so it round-trips symmetrically with MarkdownGenerator's frontmatter output.
@@ -90,7 +101,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                             const inner = rawVal.slice(1, -1).trim();
                             parsedVal = inner === '' ? [] : splitFlowArrayItems(inner).map(item => item.replace(/^['"](.*)['"]$/, '$1'));
                         }
-                    } else if (val === 'true') parsedVal = true;
+                    } else if (isQuoted) parsedVal = val;
+                    else if (val === 'true') parsedVal = true;
                     else if (val === 'false') parsedVal = false;
                     else if (!isNaN(Number(val)) && val !== '') parsedVal = Number(val);
 
@@ -164,11 +176,32 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
     // Extract footnote definitions (`[^id]: text`) before block splitting, since
     // definitions conventionally live at the end of the document, after every place
-    // they're referenced - inline parsing below needs the full map upfront. v1 only
-    // supports single-line definitions (MultiMarkdown/Pandoc/GLFM's common baseline).
+    // they're referenced - inline parsing below needs the full map upfront. The first line
+    // may be followed by continuation lines indented one level (4 spaces or a tab), which are
+    // dedented and joined onto the definition (Pandoc/GFM). A 4-space-indented block right after
+    // a definition is therefore read as its continuation rather than as a standalone code block.
+    // Supported (lossless) shape: contiguous continuation - the indented lines follow the
+    // definition with no blank line between them. Known limitation (6.E.1): a continuation
+    // separated from the definition by a BLANK line is not folded in - the regex below stops at
+    // the blank line, and the indented block after it re-parses as a fenced/indented code block on
+    // save. Multi-paragraph footnotes should therefore use the contiguous form.
     const footnoteDefinitions = new Map<string, string>();
-    textStr = textStr.replace(/^\[\^([^\]]+)\]:[ \t]*(.*)$/gm, (_match, id, definition) => {
-        footnoteDefinitions.set(id, definition.trim());
+    // Every id a `[^id]` reference consumes, so definitions that are never referenced can be
+    // detected at the end and preserved rather than silently dropped (see the orphan sweep below).
+    const referencedFootnoteIds = new Set<string>();
+    // One reused note node per referenced id. Repeated `[^id]` references are a single shared
+    // footnote in Markdown, so they must not each materialise a full copy of the body - the
+    // generators would otherwise renumber them to [^1]/[^2] and duplicate the definition. Office
+    // notes reach the generators as distinct objects even when they share a numeric id, so those
+    // stay separate; only genuinely shared Markdown references collapse.
+    const footnoteNodesById = new Map<string, OfficeContentNode>();
+    textStr = textStr.replace(/^\[\^([^\]]+)\]:[ \t]*(.*(?:\n(?: {4}|\t).*)*)$/gm, (_match, id, definition) => {
+        const dedented = String(definition)
+            .split('\n')
+            .map((line: string, i: number) => i === 0 ? line : line.replace(/^(?: {4}|\t)/, ''))
+            .join('\n')
+            .trim();
+        footnoteDefinitions.set(id, dedented);
         return '';
     });
 
@@ -276,7 +309,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Inline math requires no whitespace right after the opening $ or right before the
         // closing $, the common heuristic (matching Pandoc/KaTeX) for avoiding false
         // positives on currency like "$5 and $10".
-        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
+        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|<span\s+style="(?<spanStyle>[^"]*)">(?<spanContent>.+?)<\/span>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
         let lastIndex = 0;
         let match;
 
@@ -308,16 +341,40 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 nodes.push(...parseInline(g.subscript, { ...currentFormatting, subscript: true }));
             } else if (g.superscript !== undefined) { // Superscript
                 nodes.push(...parseInline(g.superscript, { ...currentFormatting, superscript: true }));
+            } else if (g.spanContent !== undefined) { // Inline styled span: color / highlight / font-size
+                const style = g.spanStyle || '';
+                const styled: TextFormatting = { ...currentFormatting };
+                // Anchor each property to a declaration boundary so `color` doesn't match inside
+                // `background-color`.
+                const prop = (name: string): string | undefined => {
+                    const m = style.match(new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`, 'i'));
+                    return m ? m[1].trim() : undefined;
+                };
+                const color = prop('color');
+                if (color) styled.color = color;
+                const background = prop('background-color');
+                if (background) styled.backgroundColor = background;
+                const size = prop('font-size');
+                if (size) styled.size = size;
+                nodes.push(...parseInline(g.spanContent, styled));
             } else if (g.footnoteId !== undefined) { // Footnote reference
                 const noteId = g.footnoteId;
-                const definition = footnoteDefinitions.get(noteId);
-                const noteChildren = definition !== undefined ? parseInline(definition) : [];
-                const noteNode: OfficeContentNode = {
-                    type: 'note',
-                    text: noteChildren.map(c => c.text || '').join(''),
-                    children: noteChildren,
-                    metadata: { noteType: 'footnote', noteId }
-                };
+                referencedFootnoteIds.add(noteId);
+                // Reuse the same note object across every reference to this id (see the map's
+                // declaration): the first reference builds the body, the rest share it, so the
+                // generators assign one key and emit one definition.
+                let noteNode = footnoteNodesById.get(noteId);
+                if (!noteNode) {
+                    const definition = footnoteDefinitions.get(noteId);
+                    const noteChildren = definition !== undefined ? parseInline(definition) : [];
+                    noteNode = {
+                        type: 'note',
+                        text: noteChildren.map(c => c.text || '').join(''),
+                        children: noteChildren,
+                        metadata: { noteType: 'footnote', noteId }
+                    };
+                    footnoteNodesById.set(noteId, noteNode);
+                }
                 // Notes attach to the preceding text node (matches WordParser's convention);
                 // fall back to an empty text node if the reference opens the inline run.
                 if (nodes.length > 0) {
@@ -604,6 +661,37 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 } as EmbedMetadata
             });
             continue;
+        }
+
+        // Generic iframe fallback: MarkdownGenerator's 'embed' case emits a single-line
+        // <iframe src="…"></iframe> for a preserved iframe when fallbackToHtml is on. Recognise
+        // it only when the caller opted into iframe preservation, so default parsing is unchanged.
+        const iframeMatch = block.match(/^<iframe\s+([^>]*?)\/?>(?:\s*<\/iframe>)?$/i);
+        if (iframeMatch) {
+            const attrsStr = iframeMatch[1];
+            // The emitted <iframe> HTML-escapes its attribute values (sanitizeUrl -> escapeHtml), so
+            // decode them back; otherwise the src double-escapes (`&amp;` -> `&amp;amp;`) and its
+            // query string is corrupted a little more on every save/reload cycle. `&amp;` is decoded
+            // last so a genuinely double-escaped value only unwinds one level per parse.
+            const decodeAttr = (s: string | undefined) => (s || '')
+                .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+                .replace(/&#39;/g, '\'').replace(/&amp;/g, '&');
+            const src = decodeAttr(attrsStr.match(/\bsrc="([^"]*)"/i)?.[1]);
+            if (src && iframeAllowed(src, config.htmlParserConfig?.preserveIframes)) {
+                const width = attrsStr.match(/\bwidth="([^"]*)"/i)?.[1];
+                const height = attrsStr.match(/\bheight="([^"]*)"/i)?.[1];
+                content.push({
+                    type: 'embed',
+                    text: src,
+                    metadata: {
+                        embedType: 'iframe',
+                        url: src,
+                        width: width !== undefined ? decodeAttr(width) : undefined,
+                        height: height !== undefined ? decodeAttr(height) : undefined
+                    } as EmbedMetadata
+                });
+                continue;
+            }
         }
 
         // Code Block
@@ -933,9 +1021,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
         }
 
-        // Hr
+        // Hr - a thematic break (horizontal rule), not a page break, so it survives a save as
+        // `---` rather than collapsing to a bare newline.
         if (block.match(/^---+$|^\*\*\*+$|^___+$/)) {
-            content.push({ type: 'break', metadata: { breakType: 'page' } });
+            content.push({ type: 'break', metadata: { breakType: 'thematic' } });
             continue;
         }
 
@@ -972,6 +1061,23 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
         content.length = 0;
         content.push(...merged);
+    }
+
+    // Orphan footnote definitions (defined but never referenced) would otherwise vanish entirely -
+    // a user who deletes a `[^x]` reference but keeps its `[^x]: ...` definition loses the
+    // definition on the next save. Preserve them as trailing note nodes, marked `unreferenced` so
+    // the generators route them into their footnotes section (not inline) and emit no citation
+    // marker or dangling back-link. Both generators still emit the definition (md: a `[^x]:` line;
+    // html: a `div[data-footnote-id]` inside `section[data-footnotes]`, which re-parses on import).
+    for (const [id, definition] of footnoteDefinitions) {
+        if (referencedFootnoteIds.has(id)) continue;
+        const noteChildren = parseInline(definition);
+        content.push({
+            type: 'note',
+            text: noteChildren.map(c => c.text || '').join(''),
+            children: noteChildren,
+            metadata: { noteType: 'footnote', noteId: id, unreferenced: true },
+        });
     }
 
     const toTextSync = () => content.map(n => {

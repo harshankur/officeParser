@@ -1,5 +1,5 @@
 import { AdmonitionMetadata, BreakMetadata, CodeMetadata, ConversionResult, EmbedMetadata, FallbackToHtmlConfig, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, TableMetadata, TextMetadata } from '../types.js';
-import { escapeHtml, markdownEscapeText, sanitizeCssValue, sanitizeMarkdownUrl } from '../utils/sanitize.js';
+import { escapeHtml, markdownEscapeText, sanitizeCssValue, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 
@@ -75,7 +75,10 @@ function resolveDialect(dialect: MarkdownDialectPreset | MarkdownDialectConfig |
  */
 function resolveFallbackToHtml(fallbackToHtml: boolean | FallbackToHtmlConfig | undefined): ResolvedFallbackToHtml {
     const uniform = (on: boolean): ResolvedFallbackToHtml => ({
+        // inlineFormatting is opt-in only: it is never enabled by the boolean form, since it changes
+        // default output. Every other field follows the boolean.
         textFormatting: on, alignment: on, anchors: on, tables: on, embeds: on, cellLineBreaks: on,
+        inlineFormatting: false,
     });
     if (fallbackToHtml === undefined || typeof fallbackToHtml === 'boolean') return uniform(fallbackToHtml ?? true);
     const on = uniform(true);
@@ -86,6 +89,7 @@ function resolveFallbackToHtml(fallbackToHtml: boolean | FallbackToHtmlConfig | 
         tables: fallbackToHtml.tables ?? on.tables,
         embeds: fallbackToHtml.embeds ?? on.embeds,
         cellLineBreaks: fallbackToHtml.cellLineBreaks ?? on.cellLineBreaks,
+        inlineFormatting: fallbackToHtml.inlineFormatting ?? on.inlineFormatting,
     };
 }
 
@@ -214,29 +218,35 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         // Add Metadata (YAML Front Matter)
         const meta = this.effectiveMetadata;
         if (meta) {
-            output += '---\n';
-            // JSON-encode scalar values so a title/author/description containing a
-            // quote or newline can't break out of the YAML string and inject
-            // arbitrary front-matter keys. (JSON.stringify of a benign value yields
-            // the same `"..."` form as before, so normal output is unchanged.)
-            if (meta.title) output += `title: ${JSON.stringify(meta.title)}\n`;
-            if (meta.author) output += `author: ${JSON.stringify(meta.author)}\n`;
+            // Build the field lines first. JSON-encode scalar values so a title/author/description
+            // containing a quote or newline can't break out of the YAML string and inject arbitrary
+            // front-matter keys. (JSON.stringify of a benign value yields the same `"..."` form as
+            // before, so normal output is unchanged.)
+            let fields = '';
+            if (meta.title) fields += `title: ${JSON.stringify(meta.title)}\n`;
+            if (meta.author) fields += `author: ${JSON.stringify(meta.author)}\n`;
             const createdIso = this.toIsoDate(meta.created);
-            if (createdIso) output += `created: ${createdIso}\n`;
+            if (createdIso) fields += `created: ${createdIso}\n`;
             const modifiedIso = this.toIsoDate(meta.modified);
-            if (modifiedIso) output += `modified: ${modifiedIso}\n`;
-            if (meta.description) output += `description: ${JSON.stringify(meta.description)}\n`;
-            if (meta.subject) output += `subject: ${JSON.stringify(meta.subject)}\n`;
-            if (meta.keywords) output += `keywords: ${JSON.stringify(meta.keywords)}\n`;
+            if (modifiedIso) fields += `modified: ${modifiedIso}\n`;
+            if (meta.description) fields += `description: ${JSON.stringify(meta.description)}\n`;
+            if (meta.subject) fields += `subject: ${JSON.stringify(meta.subject)}\n`;
+            if (meta.keywords) fields += `keywords: ${JSON.stringify(meta.keywords)}\n`;
 
             if (meta.customProperties) {
                 for (const [key, val] of Object.entries(meta.customProperties)) {
                     // Strip newlines/colons from the key so it can't inject a new mapping.
                     const safeKey = String(key).replace(/[\r\n:]+/g, ' ').trim();
-                    output += `${safeKey}: ${Array.isArray(val) ? this.serializeFrontmatterArray(val) : JSON.stringify(val)}\n`;
+                    fields += `${safeKey}: ${Array.isArray(val) ? this.serializeFrontmatterArray(val) : JSON.stringify(val)}\n`;
                 }
             }
-            output += '---\n\n';
+
+            // Only emit the frontmatter fence when at least one field is present. Empty metadata
+            // (a bare Tiptap/HTML fragment with no <head>) would otherwise emit `---\n---`, which
+            // reparses as a setext `## ---` heading and corrupts the document on every save/reload.
+            if (fields) {
+                output += `---\n${fields}---\n\n`;
+            }
         }
 
         const processor = async (node: OfficeContentNode, childrenOutput: string): Promise<string> => {
@@ -271,6 +281,22 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             if (node.formatting.underline) text = `<u>${text}</u>`;
                             if (node.formatting.subscript) text = `<sub>${text}</sub>`;
                             if (node.formatting.superscript) text = `<sup>${text}</sup>`;
+                        }
+
+                        // Inline color / highlight / font size have no Markdown syntax; emit a styled
+                        // <span> (outermost, so the inner Markdown markers survive) only when opted in,
+                        // so default output is unchanged. Values are CSS-sanitized against injection.
+                        if (this.resolvedFallbackToHtml.inlineFormatting) {
+                            const styles: string[] = [];
+                            const pushStyle = (prop: string, val: string | undefined) => {
+                                if (!val) return;
+                                const safe = sanitizeCssValue(val); // drops url()/expression()/<>/quotes
+                                if (safe) styles.push(`${prop}: ${safe}`);
+                            };
+                            pushStyle('color', node.formatting.color);
+                            pushStyle('background-color', node.formatting.backgroundColor);
+                            pushStyle('font-size', node.formatting.size);
+                            if (styles.length) text = `<span style="${styles.join('; ')}">${text}</span>`;
                         }
                     }
                     const meta = node.metadata as TextMetadata;
@@ -424,12 +450,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'break': {
-                    // A hard line break (CommonMark: two trailing spaces before the
-                    // newline) round-trips back to a distinct 'break' node on reparse;
-                    // every other breakType (including 'page', used for a thematic-break
-                    // HR) keeps emitting a bare newline, unchanged.
+                    // A hard line break (CommonMark: two trailing spaces before the newline)
+                    // round-trips back to a distinct 'break' node on reparse. A thematic break
+                    // emits `---` as its own block (the top-level loop supplies the surrounding
+                    // blank lines), so a Markdown `---` / HTML `<hr>` survives a save instead of
+                    // collapsing to whitespace. Every other breakType - notably 'page', which
+                    // Markdown has no syntax for - keeps emitting a bare newline, unchanged.
                     const meta = node.metadata as BreakMetadata | undefined;
                     if (meta?.breakType === 'carriageReturn') return '  \n';
+                    if (meta?.breakType === 'thematic') return '---';
                     return '\n';
                 }
 
@@ -503,7 +532,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             // into an end-of-document "### Notes" section under a [^id] marker.
                             return childrenOutput.trim();
                         }
-                        return `[^${this.getFootnoteKey(node)}]: ${childrenOutput.trim()}\n\n`;
+                        // Indent continuation lines one level so a multi-line body re-parses as a
+                        // single definition (a bare newline would end it). Single-line bodies, the
+                        // common case, are unaffected.
+                        return `[^${this.getFootnoteKey(node)}]: ${childrenOutput.trim().replace(/\n/g, '\n    ')}\n\n`;
                     }
                     return `> **Note:** ${childrenOutput.trim()}\n\n`;
                 }
@@ -513,6 +545,19 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // save default), emit the exact single-line div MarkdownParser recognises on
                     // reimport; otherwise degrade to a plain link.
                     const meta = node.metadata as EmbedMetadata;
+                    if (meta?.embedType === 'iframe') {
+                        // sanitizeUrl scheme-checks and HTML-escapes the src (hostile schemes drop
+                        // the node). The single-line <iframe> is what MarkdownParser recognises on
+                        // reimport, gated there on preserveIframes.
+                        const safe = sanitizeUrl(meta?.url || '');
+                        if (!safe) return '';
+                        if (this.resolvedFallbackToHtml.embeds) {
+                            const w = meta?.width ? ` width="${escapeHtml(meta.width)}"` : '';
+                            const h = meta?.height ? ` height="${escapeHtml(meta.height)}"` : '';
+                            return `\n<iframe src="${safe}"${w}${h}></iframe>\n\n`;
+                        }
+                        return `[Embed](${sanitizeMarkdownUrl(meta?.url || '')})\n\n`;
+                    }
                     const id = meta?.videoId || '';
                     if (this.resolvedFallbackToHtml.embeds) {
                         const width = meta?.width ? ` data-width="${escapeHtml(meta.width)}"` : '';
@@ -588,6 +633,16 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         for (let i = 0; i < optimizedContent.length; i++) {
             const node = optimizedContent[i];
             const nextNode = optimizedContent[i + 1];
+
+            // A top-level footnote/endnote note is an orphan definition (unreferenced `[^id]: ...`
+            // the MarkdownParser recovered). Collect it so it's emitted with the other definitions
+            // at the document end rather than inline before them.
+            const orphanNoteType = (node.metadata as NoteMetadata)?.noteType;
+            if (node.type === 'note' && (orphanNoteType === 'footnote' || orphanNoteType === 'endnote')) {
+                this.collectedNotes.push(node);
+                continue;
+            }
+
             let result = await this.processNodeRecursive(node, processor);
 
             // Ensure lists and other block elements are separated from non-similar content by a blank line
@@ -605,8 +660,21 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         }
 
         if (this.collectedNotes.length > 0) {
-            let notesMd = '\n\n---\n\n### Notes\n\n';
-            for (const note of this.collectedNotes) {
+            // No decorative `---\n\n### Notes` preamble: `[^id]:` definitions are valid on their own
+            // (GitHub/Pandoc render the footnotes section and its rule automatically), and the
+            // literal heading round-tripped as a real `###` node - so every save/reload re-emitted
+            // the parsed heading AND a fresh one, growing the document unbounded. Emitting the bare
+            // definitions makes the cycle byte-stable. Behaviour change, noted in the changelog.
+            // Collapse the preceding block's trailing blank lines so exactly one blank line separates
+            // the body from the definitions (rather than the doubled `\n\n\n\n` the concatenation
+            // would otherwise leave).
+            output = output.replace(/\n+$/, '');
+            let notesMd = '\n\n';
+            // De-duplicate by node identity: a footnote referenced more than once shares a single
+            // note object (see MarkdownParser), pushed here once per reference. Emit its definition
+            // just once. Distinct notes - even two office notes that happen to share a numeric id -
+            // are separate objects and are all kept.
+            for (const note of [...new Set(this.collectedNotes)]) {
                 notesMd += await this.processNodeRecursive(note, processor);
             }
             output += notesMd;
@@ -720,6 +788,12 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
         for (const node of nodes) {
             if (node.type === 'text' && current && current.type === 'text' &&
+                // A note anchors to the end of its text run and its `[^id]` marker is emitted there;
+                // merging a following run onto a note-carrying run would slide the marker past it
+                // (`Body[^1].` -> `Body.[^1]`). Keep such runs separate so the marker stays put and
+                // matches where HtmlGenerator emits it.
+                (!current.notes || current.notes.length === 0) &&
+                (!node.notes || node.notes.length === 0) &&
                 this.areFormattingEqual(node.formatting, current.formatting) &&
                 JSON.stringify(node.metadata) === JSON.stringify(current.metadata)) {
                 current.text = (current.text || '') + (node.text || '');
