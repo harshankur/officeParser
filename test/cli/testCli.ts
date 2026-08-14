@@ -3,10 +3,19 @@ import * as path from 'url';
 import * as fsPath from 'path';
 import * as child_process from 'child_process';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = fsPath.dirname(__filename);
 const ROOT = fsPath.join(__dirname, '..', '..');
+
+// Resolve tsx's own CLI entry so the CLI can be launched as `node <tsx-cli> <script>` directly.
+// Spawning `npx` (a `.cmd` shim on Windows) through child_process fails under modern Node's
+// batch-file spawn hardening, which left `test:cli` - the last stage of `npm test` - failing on
+// Windows even after the rest of #111 was fixed. Going straight through node needs no shell and
+// no batch file, so it is portable.
+const require = createRequire(import.meta.url);
+const TSX_CLI = require.resolve('tsx/cli');
 
 /**
  * Formats fast mode leaves out - see the matching block in `test/parser/testOfficeParser.ts` for
@@ -54,7 +63,7 @@ class DualLogger {
 }
 
 function runCli(args: string[]): { stdout: string; stderr: string; status: number } {
-    const result = child_process.spawnSync('npx', ['tsx', CLI_SRC, SAMPLE_HTML, ...args], {
+    const result = child_process.spawnSync(process.execPath, [TSX_CLI, CLI_SRC, SAMPLE_HTML, ...args], {
         encoding: 'utf8',
         timeout: 30000,
     });
@@ -66,7 +75,7 @@ function runCli(args: string[]): { stdout: string; stderr: string; status: numbe
 }
 
 function runCliRaw(args: string[]): { stdout: string; stderr: string; status: number } {
-    const result = child_process.spawnSync('npx', ['tsx', CLI_SRC, ...args], {
+    const result = child_process.spawnSync(process.execPath, [TSX_CLI, CLI_SRC, ...args], {
         encoding: 'utf8',
         timeout: 30000,
     });
@@ -301,14 +310,14 @@ async function runTests() {
     // 10. Help / Usage output
     console.log('Test 10: Usage output (no args)');
     const t10 = Date.now();
-    const res10 = child_process.spawnSync('npx', ['tsx', CLI_SRC], { encoding: 'utf8' });
+    const res10 = child_process.spawnSync(process.execPath, [TSX_CLI, CLI_SRC], { encoding: 'utf8' });
     const d10 = Date.now() - t10;
     assertContains(res10.stdout, 'Usage: officeparser <file>', 'Usage output', d10);
 
     // 11. File not found
     console.log('Test 11: File not found error');
     const t11 = Date.now();
-    const res11 = child_process.spawnSync('npx', ['tsx', CLI_SRC, 'non_existent.docx'], { encoding: 'utf8' });
+    const res11 = child_process.spawnSync(process.execPath, [TSX_CLI, CLI_SRC, 'non_existent.docx'], { encoding: 'utf8' });
     const d11 = Date.now() - t11;
     assertContains(res11.stderr, 'Error parsing file', 'File not found error', d11);
 
