@@ -226,7 +226,7 @@ export function resolveGeneratorConfig<D extends string>(
     // 2. Merge common properties and sub-configs
     if (userConfig) {
         // Extract sub-configs to avoid shallow-overwriting the whole sub-config objects
-        const { htmlConfig, mdConfig, pdfConfig, csvConfig, textConfig, chunksConfig, ...commonProps } = userConfig as any;
+        const { htmlConfig, mdConfig, pdfConfig, csvConfig, textConfig, rtfConfig, chunksConfig, ...commonProps } = userConfig as any;
         Object.assign(config, withoutPrototypeKeys(commonProps));
 
         // Merge sub-configs individually, ignoring undefined properties to preserve defaults
@@ -268,6 +268,7 @@ export function resolveGeneratorConfig<D extends string>(
         if (pdfConfig) mergeSubConfig(config.pdfConfig, pdfConfig);
         if (csvConfig) mergeSubConfig(config.csvConfig, csvConfig);
         if (textConfig) mergeSubConfig(config.textConfig, textConfig);
+        if (rtfConfig) mergeSubConfig(config.rtfConfig, rtfConfig);
         if (chunksConfig) mergeSubConfig(config.chunksConfig, chunksConfig);
     }
 

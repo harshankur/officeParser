@@ -407,6 +407,18 @@ export interface HtmlParserConfig {
      * Defaults to false.
      */
     preserveAttributes?: boolean;
+    /**
+     * Preserve `<iframe>` embeds that aren't recognized as a known provider (YouTube is always
+     * recognized). By default every non-YouTube iframe is dropped, which is a deliberate security
+     * posture other consumers rely on; set this to opt back in. `true` preserves any iframe; an
+     * array is a hostname allowlist (an entry matches the src's host exactly or as a `.`-suffix,
+     * so `"vimeo.com"` also matches `player.vimeo.com`). Preserved iframes become `embed` nodes
+     * with `embedType: 'iframe'`; on generation the `src` is still scheme-checked (only http/https
+     * survive). This also governs a raw `<iframe>` block encountered in Markdown input.
+     *
+     * Defaults to false.
+     */
+    preserveIframes?: boolean | string[];
 }
 
 /**
@@ -917,6 +929,18 @@ export interface HtmlGeneratorConfig {
      * Granular injection points for custom HTML, scripts, and styles.
      */
     injections?: HtmlInjectionConfig;
+    /**
+     * Carry each rich node's raw source in a `data-*` attribute, with undelimited text content,
+     * so attribute-driven structured consumers (rich-text editors, custom viewers) can rehydrate
+     * the node from the markup rather than re-parsing the display text. Affects wikilinks
+     * (adds `data-wikilink`/`data-target`/`data-alias`), citations (a `<span class="citation">`
+     * carrying `data-key` instead of `<cite>`), math (the LaTeX in `data-math`, undelimited) and
+     * mermaid (a `<div class="mermaid" data-mermaid>` instead of `<pre><code>`).
+     *
+     * Off by default; the default output is byte-identical to previous releases. The widened
+     * `HtmlParser` reads every shape this emits, so output stays self-round-trippable.
+     */
+    sourceAttributes?: boolean;
 }
 
 /**
@@ -1138,6 +1162,14 @@ export interface FallbackToHtmlConfig {
     embeds?: boolean;
     /** Multi-line table cell content joined with `<br>` instead of a space. */
     cellLineBreaks?: boolean;
+    /**
+     * Inline text color, highlight, and font size via a `<span style="color:...;background-color:...;
+     * font-size:...">` run, which the Markdown parser reads back. These have no Markdown syntax and
+     * are silently lost otherwise. Unlike the other fields this is **off by default even when
+     * `fallbackToHtml` is `true`**, because it changes default output; enable it explicitly with
+     * `fallbackToHtml: { inlineFormatting: true }`.
+     */
+    inlineFormatting?: boolean;
 }
 
 /**
@@ -1443,6 +1475,17 @@ export interface OfficeChunk {
 export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods' | 'pdf' | 'rtf' | 'md' | 'html' | 'csv' | 'epub';
 
 /**
+ * A structural stand-in for the web `Blob`/`File` so `parseOffice`/`convert` accept them in the
+ * browser without pulling the DOM lib into this package's types. Any object with an
+ * `arrayBuffer()` method qualifies. When `name` is present (as on a `File`) it is used only for
+ * extension-based type detection, never as a filesystem path.
+ */
+export interface BlobLike {
+    arrayBuffer(): Promise<ArrayBuffer>;
+    name?: string;
+}
+
+/**
  * Types of content nodes in the AST.
  */
 export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster' | 'embed' | 'admonition' | 'definitionList' | 'definitionTerm' | 'definitionDescription';
@@ -1731,7 +1774,7 @@ export interface TableMetadata {
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
     /**
-     * Layout alignment of the table on the page (e.g. inscript-editor's `CustomTable`).
+     * Layout alignment of the table on the page (e.g. an editor's custom table node).
      * @example 'center'
      */
     align?: 'left' | 'center' | 'right';
@@ -1782,12 +1825,12 @@ export interface ImageMetadata {
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
     /**
-     * Display width of the image (e.g. inscript-editor's `CustomImage`), as a CSS length or percentage.
+     * Display width of the image (e.g. an editor's custom image node), as a CSS length or percentage.
      * @example "50%"
      */
     width?: string;
     /**
-     * Layout alignment of the image (e.g. inscript-editor's `CustomImage`).
+     * Layout alignment of the image (e.g. an editor's custom image node).
      * @example 'center'
      */
     align?: 'left' | 'center' | 'right';
@@ -1798,14 +1841,19 @@ export interface ImageMetadata {
  * Markdown has no native syntax for this - see `MarkdownGenerator`'s `embed` case.
  */
 export interface EmbedMetadata {
-    /** The kind of embed. Only 'youtube' is supported today; the shape is generic for future providers. */
-    embedType: 'youtube';
-    /** The provider-specific video ID (e.g. the 11-character YouTube video ID). */
-    videoId: string;
-    /** The original/canonical URL of the embedded media, if known. */
+    /**
+     * The kind of embed. 'youtube' is recognized from a `data-youtube-video` wrapper or a YouTube
+     * iframe; 'iframe' is a generic preserved iframe (opt-in via `HtmlParserConfig.preserveIframes`).
+     */
+    embedType: 'youtube' | 'iframe';
+    /** The provider-specific video ID (e.g. the 11-character YouTube video ID). Absent for generic iframes. */
+    videoId?: string;
+    /** The original/canonical URL of the embedded media, if known. For a generic iframe, its `src`. */
     url?: string;
     /** Display width, as a CSS length or percentage. */
     width?: string;
+    /** Display height, as a CSS length or percentage (generic iframes). */
+    height?: string;
     /** Layout alignment of the embed. */
     align?: 'left' | 'center' | 'right';
 }
@@ -1899,6 +1947,14 @@ export interface NoteMetadata {
     anchorIds?: string[];
     /** The slide number this note is associated with (used in PowerPoint). */
     slideNumber?: number;
+    /**
+     * True for a footnote/endnote definition that no reference points at (an "orphan").
+     * The Markdown parser sets this when it recovers a `[^id]: ...` definition with no matching
+     * `[^id]` reference so the definition is preserved rather than dropped. Generators route such
+     * notes into their footnotes section without a citation marker, and the HTML generator omits
+     * the (otherwise dangling) back-link.
+     */
+    unreferenced?: boolean;
 }
 
 /**
@@ -1914,8 +1970,11 @@ export interface BreakMetadata {
      * - 'lastRenderedPage': The editing application has inserted a soft break on the last save.
      * - 'textWrapping' (default, assumed when not specified): The next text will be placed on the next line.
      * - 'carriageReturn': An explicit carriage return (w:cr) equivalent to a hard line break.
+     * - 'thematic': A thematic break (Markdown `---`/`***`/`___`, HTML `<hr>`) - a horizontal
+     *   rule separating sections, distinct from a page break. Emitted as `---` in Markdown and
+     *   `<hr>` in HTML.
      */
-    breakType: 'column' | 'page' | 'lastRenderedPage' | 'textWrapping' | 'carriageReturn';
+    breakType: 'column' | 'page' | 'lastRenderedPage' | 'textWrapping' | 'carriageReturn' | 'thematic';
 
     /**
      * Specifies the location which shall be used as the next available line when breakType
@@ -1939,7 +1998,7 @@ export interface CodeMetadata {
     /**
      * When set, this node is a LaTeX math expression rather than a code block. `node.text`
      * holds the bare LaTeX (delimiters excluded); 'inline' round-trips as `$...$`,
-     * 'block' as `$$...$$`. Matches inscript-editor's math node (Roadmap Step 11.5).
+     * 'block' as `$$...$$`. Matches attribute-driven editors' math nodes.
      */
     math?: 'inline' | 'block';
 }

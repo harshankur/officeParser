@@ -22,7 +22,10 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
         // We reuse the current configuration but ensure standalone mode is on for HTML
         const htmlGenerator = new HtmlGenerator(this.ast, {
             ...this.config,
-            htmlConfig: { ...this.config.htmlConfig, standalone: true },
+            // Force sourceAttributes off: those data-* attributes are wire-format plumbing for
+            // structured consumers and change the mermaid shape's rendered appearance, neither of
+            // which belongs in a printed PDF.
+            htmlConfig: { ...this.config.htmlConfig, standalone: true, sourceAttributes: false },
         });
 
 
