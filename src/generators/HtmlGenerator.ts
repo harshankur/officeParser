@@ -125,14 +125,20 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let bodyContent = await this.processNodeArray(this.ast.content);
 
         if (this.collectedNotes.length > 0) {
+            // De-duplicate by node identity first. A table row with sparse column metadata
+            // re-processes its cells in `case 'row'` after they were already processed for
+            // `childrenOutput`, so a footnote referenced inside a cell gets pushed here twice -
+            // the same object reference both times, which a Set collapses back to one. Genuinely
+            // distinct notes (even two references to the same id) are different objects and stay.
+            const collectedNotes = [...new Set(this.collectedNotes)];
             // Footnotes/endnotes get their own <section data-footnotes> (the agreed
-            // contract with inscript-editor's footnote node); other note types (e.g.
+            // contract with attribute-driven editors' footnote nodes); other note types (e.g.
             // slide speaker notes) keep the existing generic notes wrapper.
-            const footnotes = this.collectedNotes.filter(n => {
+            const footnotes = collectedNotes.filter(n => {
                 const t = (n.metadata as any)?.noteType;
                 return t === 'footnote' || t === 'endnote';
             });
-            const otherNotes = this.collectedNotes.filter(n => !footnotes.includes(n));
+            const otherNotes = collectedNotes.filter(n => !footnotes.includes(n));
 
             if (footnotes.length > 0) {
                 let footnotesHtml = '';
@@ -482,6 +488,24 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 continue;
             }
 
+            // A top-level footnote/endnote note is an orphan definition (the MarkdownParser
+            // recovers unreferenced `[^id]: ...` defs as trailing note nodes). Route it into the
+            // collected footnotes so it renders inside `<section data-footnotes>` - where HtmlParser
+            // reads it back on import - instead of inline outside the section with a dead back-link.
+            const orphanMeta = node.metadata as NoteMetadata;
+            const orphanNoteType = orphanMeta?.noteType;
+            if (node.type === 'note' && orphanMeta?.unreferenced && (orphanNoteType === 'footnote' || orphanNoteType === 'endnote')) {
+                // Only an unreferenced (orphan) definition is hoisted into <section data-footnotes>.
+                // The `unreferenced` guard also keeps the generators in agreement at depth: this
+                // routing runs in every processNodeArray call, so without it a `note` sitting as a
+                // CHILD of a container (a consumer-built AST; no shipped parser emits this) would be
+                // hoisted here and then given an `<a href="#footnote-ref-N">` back-link with no
+                // anchor - the exact dangling link the orphan handling removes. MarkdownGenerator's
+                // equivalent routing is top-level only, so gating on the flag matches it.
+                this.collectedNotes.push(node);
+                continue;
+            }
+
             if (node.type === 'list') {
                 const meta = node.metadata as ListMetadata;
                 const type = meta?.listType === 'ordered' ? 'ordered' : 'unordered';
@@ -817,19 +841,38 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 return '';
             }
 
-            case 'break':
-                return (node.metadata as any)?.breakType === 'page' ? '<hr class="page-break">' : '<br>';
+            case 'break': {
+                const breakType = (node.metadata as any)?.breakType;
+                if (breakType === 'page') return '<hr class="page-break">';
+                // A thematic break is a plain rule; the parser reads a bare <hr> back as one.
+                if (breakType === 'thematic') return '<hr>';
+                return '<br>';
+            }
 
             case 'code': {
                 const meta = node.metadata as CodeMetadata;
                 if (meta?.math) {
-                    // No pinned editor contract yet (inscript-editor's math node is v1.2,
-                    // not built) - this is the proposed shape: data-math signals the
-                    // display mode, and the visible text keeps its $ delimiters so the
-                    // raw LaTeX degrades gracefully without a KaTeX renderer.
-                    const delimited = meta.math === 'block' ? `$$${node.text || ''}$$` : `$${node.text || ''}$`;
                     const tag = meta.math === 'block' ? 'div' : 'span';
+                    if (this.config.htmlConfig.sourceAttributes) {
+                        // Attribute-driven emission: the raw (undelimited) LaTeX lives in both
+                        // data-math and the text content, and the class token carries the mode.
+                        // The widened HtmlParser reads this back (a data-math value other than
+                        // inline/block is treated as LaTeX).
+                        const latex = node.text || '';
+                        return `${extraAnchors}<${tag} class="math math-${this.escape(meta.math)}" data-math="${this.escape(latex)}"${idAttr}${mappedAttrs}${styleAttr}>${this.escape(latex)}</${tag}>`;
+                    }
+                    // Default emission: data-math names the display mode, and the visible text
+                    // keeps its $ delimiters so the raw LaTeX degrades gracefully without a
+                    // KaTeX renderer.
+                    const delimited = meta.math === 'block' ? `$$${node.text || ''}$$` : `$${node.text || ''}$`;
                     return `${extraAnchors}<${tag} class="math math-${this.escape(meta.math)}" data-math="${this.escape(meta.math)}"${idAttr}${mappedAttrs}${styleAttr}>${this.escape(delimited)}</${tag}>`;
+                }
+                if (this.config.htmlConfig.sourceAttributes && meta?.language === 'mermaid') {
+                    // Attribute-driven emission: a <div class="mermaid" data-mermaid> the widened
+                    // parser maps back to a mermaid code node. escape() encodes '>' so diagram
+                    // arrows (-->), plus newlines and quotes, stay inside the tag and attribute.
+                    const code = node.text || '';
+                    return `${extraAnchors}<div class="mermaid" data-mermaid="${this.escape(code)}"${idAttr}${mappedAttrs}${styleAttr}>${this.escape(code)}</div>`;
                 }
                 const lang = meta?.language ? ` class="language-${this.escape(meta.language)}"` : '';
                 const codeHtml = `<code${lang}>${this.escape(node.text || '')}</code>`;
@@ -1119,16 +1162,34 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const meta = node.metadata as NoteMetadata;
                 if (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') {
                     const key = this.escape(this.getFootnoteKey(node));
-                    return `<p id="footnote-${key}" data-footnote-id="${key}">${childrenOutput} <a href="#footnote-ref-${key}">↩</a></p>`;
+                    // A <div> wrapper, not <p>: childrenOutput is block content, so a <p> wrapper
+                    // nests <p> inside <p> (every DOM parser splits it, leaving the wrapper empty),
+                    // and attribute-driven editors match `div[data-footnote-id]`. This changes the
+                    // default footnote-definition markup, which was broken-by-construction before.
+                    // An unreferenced (orphan) note has no citation anchor, so the back-link would
+                    // dangle - omit it.
+                    const backLink = meta?.unreferenced ? '' : ` <a href="#footnote-ref-${key}">↩</a>`;
+                    return `<div id="footnote-${key}" data-footnote-id="${key}">${childrenOutput}${backLink}</div>`;
                 }
                 const noteClass = meta?.noteType ? ` note-${this.escape(meta.noteType)}` : '';
                 return `${extraAnchors}<div class="slide-note${noteClass}"${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
             }
 
             case 'embed': {
-                // Match the Youtube extension's exact wrapper shape so a loaded embed
-                // re-hydrates the editor's Youtube node.
                 const meta = node.metadata as EmbedMetadata;
+                if (meta?.embedType === 'iframe') {
+                    // Generic preserved iframe. sanitizeUrl scheme-checks the src (only http/https
+                    // and the other non-executing schemes survive), so a javascript:/data: src is
+                    // dropped even with preservation on. The node only exists via opt-in parsing or
+                    // a programmatic AST, so this guard is unconditional.
+                    const src = sanitizeUrl(meta?.url || '');
+                    if (!src) return '';
+                    const w = meta?.width ? ` width="${this.escape(meta.width)}"` : '';
+                    const h = meta?.height ? ` height="${this.escape(meta.height)}"` : '';
+                    return `${extraAnchors}<iframe src="${src}"${w}${h}${idAttr}${mappedAttrs}${styleAttr}></iframe>`;
+                }
+                // Match the attribute-driven Youtube wrapper shape so a loaded embed re-hydrates
+                // an editor's Youtube node.
                 const id = meta?.videoId || '';
                 const width = meta?.width || '100%';
                 const align = meta?.align || 'center';
@@ -1141,8 +1202,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
 
             case 'admonition': {
-                // Match inscript-editor's Admonition node wrapper so a loaded admonition
-                // reaches the editor as that node instead of a plain blockquote.
+                // Match the attribute-driven admonition wrapper so a loaded admonition
+                // reaches an editor as that node instead of a plain blockquote.
                 const meta = node.metadata as AdmonitionMetadata;
                 const admonitionType = this.escape(meta?.admonitionType || 'note');
                 return `${extraAnchors}<div class="admonition admonition-${admonitionType}" data-type="${admonitionType}"${idAttr}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
@@ -1193,20 +1254,38 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             if (f.superscript) result = `<sup>${result}</sup>`;
 
             const styles = this.headingUniformSize
-                ? this.getInlineStyles(node, { skipFontSize: true })
-                : this.getInlineStyles(node);
+                ? this.getInlineStyles(node, { skipFontSize: true, skipBackgroundColor: true })
+                : this.getInlineStyles(node, { skipBackgroundColor: true });
             if (styles) {
                 result = `<span style="${styles}">${result}</span>`;
+            }
+            // Highlight -> <mark>, not a <span style="background-color">. Tiptap's Highlight
+            // extension parseHTML matches exactly `mark`, so an editor round trip only rehydrates
+            // the highlight from a <mark>; a bare span comes back as unhighlighted text. Kept
+            // outside the colour/size span above so a run carrying both still rehydrates both. The
+            // widened HtmlParser reads this shape back (style wins over data-color). Behaviour
+            // change (was a span), noted in the changelog.
+            if (f.backgroundColor) {
+                const safeBg = sanitizeCssValue(f.backgroundColor);
+                if (safeBg) {
+                    result = `<mark data-color="${this.escape(safeBg)}" style="background-color: ${safeBg}">${result}</mark>`;
+                }
             }
         }
 
         const meta = node.metadata as TextMetadata;
         if (meta?.wikilink) {
-            // No pinned editor contract yet for wikilinks - data-wikilink-page preserves the
-            // exact page name separately from the display text/alias and from href (which
-            // the host app's resolver may rewrite to a real URL).
+            // data-wikilink-page preserves the exact page name separately from the display
+            // text/alias and from href (which a host resolver may rewrite to a real URL).
             if (!this.config.ignoreInternalLinks) {
-                result = `<a href="#${this.escape(this.slugify(meta.link || ''))}" data-wikilink-page="${this.escape(meta.link || '')}">${result}</a>`;
+                // Attribute-driven emission adds data-wikilink/data-target (and data-alias when the
+                // display text differs from the page) alongside the default attributes. It is a
+                // superset - the widened parser still resolves via data-wikilink-page first.
+                const extra = this.config.htmlConfig.sourceAttributes
+                    ? ` data-wikilink="true" data-target="${this.escape(meta.link || '')}"`
+                        + (node.text && node.text !== meta.link ? ` data-alias="${this.escape(node.text)}"` : '')
+                    : '';
+                result = `<a href="#${this.escape(this.slugify(meta.link || ''))}" data-wikilink-page="${this.escape(meta.link || '')}"${extra}>${result}</a>`;
             }
         } else if (meta?.link) {
             const isInternal = meta.linkType !== 'external';
@@ -1218,17 +1297,18 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             result = `<abbr title="${this.escape(meta.abbreviationTitle)}">${result}</abbr>`;
         }
         if (meta?.citationKey) {
-            // No pinned editor contract yet for citations (unlike footnotes/admonitions) -
-            // this is the proposed shape: a <cite> carrying the bare key, matching Pandoc's
-            // [@citekey] on the Markdown side. Keep in sync if inscript-editor's citation
-            // node lands with a different attribute name.
-            result = `<cite data-citation-key="${this.escape(meta.citationKey)}">[@${this.escape(meta.citationKey)}]</cite>`;
+            result = this.config.htmlConfig.sourceAttributes
+                // Attribute-driven emission: a <span class="citation"> carrying data-key, which the
+                // widened parser reads back (the default <cite> shape is not attribute-keyed).
+                ? `<span class="citation" data-key="${this.escape(meta.citationKey)}">[@${this.escape(meta.citationKey)}]</span>`
+                // Default emission: a <cite> carrying the bare key, matching Pandoc's [@citekey].
+                : `<cite data-citation-key="${this.escape(meta.citationKey)}">[@${this.escape(meta.citationKey)}]</cite>`;
         }
 
         return result;
     }
 
-    private getInlineStyles(node: OfficeContentNode, options: { skipFontSize?: boolean } = {}): string {
+    private getInlineStyles(node: OfficeContentNode, options: { skipFontSize?: boolean, skipBackgroundColor?: boolean } = {}): string {
         const styles: string[] = [];
 
         // Colors/sizes/fonts/alignments are free strings from an untrusted document;
@@ -1255,7 +1335,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         if (node.formatting) {
             const f = node.formatting;
             if (f.color) pushSafe('color', f.color);
-            if (f.backgroundColor) pushSafe('background-color', f.backgroundColor);
+            // Highlights are emitted as <mark> by formatText (see there); when that path owns the
+            // background it passes skipBackgroundColor so the colour is not also duplicated here.
+            if (f.backgroundColor && !options.skipBackgroundColor) pushSafe('background-color', f.backgroundColor);
             if (f.size && !options.skipFontSize) pushSafe('font-size', f.size);
             if (f.font) {
                 const safeFont = sanitizeCssValue(f.font);

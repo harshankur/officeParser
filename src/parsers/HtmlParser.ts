@@ -2,7 +2,7 @@ import { AdmonitionMetadata, CellMetadata, CodeMetadata, EmbedMetadata, FullOffi
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { isEmptyMath, MathNode, mathmlTreeToLatex } from '../utils/mathUtils.js';
-import { isSafeHtmlAttributeName } from '../utils/sanitize.js';
+import { isSafeHtmlAttributeName, iframeAllowed } from '../utils/sanitize.js';
 
 /**
  * Maximum element nesting depth accepted from an HTML/XHTML source before the parser gives up
@@ -21,6 +21,20 @@ interface HtmlNode {
 }
 
 /**
+ * Decode the handful of HTML entities this parser leaves intact. Text nodes and attribute
+ * values are kept in their raw escaped form during parsing (see `parseAttributes`), so any
+ * branch that lifts text or an attribute into AST content has to decode first - `&lt;` inside
+ * a code/math body is a less-than operator, not markup.
+ */
+const decodeEntities = (s: string): string => s
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+
+/**
  * Presents an `HtmlNode` as a `MathNode` for the shared MathML converter.
  *
  * The shapes already line up field for field; the one thing that must happen here is entity
@@ -30,13 +44,7 @@ interface HtmlNode {
 const toMathNode = (node: HtmlNode): MathNode => ({
     tagName: node.tagName,
     attributes: node.attributes,
-    text: node.text === undefined ? undefined : node.text
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&amp;/g, '&')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'"),
+    text: node.text === undefined ? undefined : decodeEntities(node.text),
     children: (node.children || []).map(toMathNode),
 });
 
@@ -169,9 +177,33 @@ const parseHtmlTree = (html: string): HtmlNode => {
             continue;
         }
 
-        // indexOf (not substring().match) so scanning for the tag end is O(1) in
-        // allocation — a document with many "<" chars would otherwise be O(n^2).
-        const tagEndIdx = html.indexOf('>', tagStart);
+        // Scan for the tag's closing '>', skipping any that appear inside a quoted attribute value.
+        // Browsers do NOT escape '>' inside attribute values on serialization, so a literal '>' there
+        // (e.g. a mermaid diagram's `-->` in data-mermaid) must not be read as the tag end. The scan
+        // is linear in the tag's length and the cursor never rewinds, so the parse stays O(n) overall
+        // (no substring().match allocation per '<').
+        let tagEndIdx = -1;
+        let attrQuote = '';
+        for (let i = tagStart + 1; i < html.length; i++) {
+            const ch = html[i];
+            if (attrQuote) {
+                if (ch === attrQuote) attrQuote = '';
+            } else if (ch === '"' || ch === '\'') {
+                attrQuote = ch;
+            } else if (ch === '>') {
+                tagEndIdx = i;
+                break;
+            }
+        }
+        if (tagEndIdx === -1) {
+            // The quote-aware scan ran to the end without closing the tag. That is almost always an
+            // unbalanced quote from a stray unescaped '<' in prose (e.g. "a < b's weight"), not a
+            // genuinely truncated tag. Retry naively for the next literal '>': the resulting
+            // pseudo-tag is then dropped, so a malformed run degrades exactly as it did before the
+            // quote-aware scan existed instead of swallowing the rest of the document into one text
+            // node. Well-formed input with balanced quotes never reaches here.
+            tagEndIdx = html.indexOf('>', tagStart);
+        }
         if (tagEndIdx === -1) {
             const text = html.substring(tagStart);
             current.children.push({ type: 'text', text, children: [], parent: current });
@@ -355,6 +387,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
     // body loop, since references can appear anywhere earlier in the document) and
     // consulted by parseChildren's <sup data-footnote-ref> handling below.
     const footnoteDefinitions = new Map<string, OfficeContentNode[]>();
+    // Keys a `<sup data-footnote-ref>` actually consumed, so definitions in the section that no
+    // reference points at (orphans) can be recovered at the end instead of silently dropped.
+    const referencedFootnoteKeys = new Set<string>();
 
     // --- Generic attribute pass-through (htmlParserConfig.preserveAttributes) ---------------
     // Captures attributes no typed metadata field consumed, so they can be replayed on
@@ -414,13 +449,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED);
         }
         if (node.type === 'text') {
-            let decodedText = (node.text || '')
-                .replace(/&nbsp;/g, ' ')
-                .replace(/&lt;/g, '<')
-                .replace(/&gt;/g, '>')
-                .replace(/&amp;/g, '&')
-                .replace(/&quot;/g, '"')
-                .replace(/&#39;/g, "'");
+            let decodedText = decodeEntities(node.text || '');
 
             if (!config.preserveXmlWhitespace) {
                 decodedText = decodedText.replace(/\s+/g, ' ');
@@ -453,6 +482,12 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             if (tagName === 'sub') newFormatting.subscript = true;
             if (tagName === 'sup') newFormatting.superscript = true;
             if (tagName === 'code') newFormatting.font = 'monospace';
+            if (tagName === 'mark') {
+                // <mark> is a highlight. Use its data-color when present (an inline
+                // background-color style, read below, still wins); a bare <mark> falls back to the
+                // conventional yellow so it round-trips as a highlight rather than plain text.
+                newFormatting.backgroundColor = node.attributes?.['data-color'] || '#ffff00';
+            }
 
             const styleAttr = node.attributes?.style || '';
             const alignAttr = node.attributes?.align || '';
@@ -512,6 +547,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     // instead of inserting a visible node, matching WordParser's convention.
                     if (child.type === 'element' && child.tagName === 'sup' && child.attributes?.['data-footnote-ref'] !== undefined) {
                         const key = child.attributes['data-footnote-ref'];
+                        referencedFootnoteKeys.add(key);
                         const definition = footnoteDefinitions.get(key);
                         const noteNode: OfficeContentNode = {
                             type: 'note',
@@ -538,7 +574,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return kids;
             };
 
-            // YouTube embeds: inscript-editor's Youtube node renders
+            // YouTube embeds: attribute-driven editors render
             // <div data-youtube-video="ID" data-width="…" data-align="…">…<iframe…></div>.
             // Recognise both the wrapper div and a bare iframe so externally-authored HTML
             // (and a saved-then-reopened .md that fell back to raw HTML) both round-trip.
@@ -577,6 +613,26 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     if (config.includeRawContent) embedNode.rawContent = '<iframe>...</iframe>';
                     return embedNode;
                 }
+                // Non-YouTube iframes are dropped by default (a deliberate security posture).
+                // preserveIframes opts back in, keeping the src as a generic 'iframe' embed; the
+                // src is scheme-checked again on generation, so this only widens what is retained.
+                // Decode the src (attribute values are stored entity-encoded) so it isn't
+                // double-escaped when the generator re-escapes it, which would corrupt query strings.
+                const decodedSrc = decodeEntities(src);
+                if (iframeAllowed(decodedSrc, config.htmlParserConfig?.preserveIframes)) {
+                    const iframeNode: OfficeContentNode = {
+                        type: 'embed',
+                        text: decodedSrc,
+                        metadata: {
+                            embedType: 'iframe',
+                            url: decodedSrc,
+                            width: node.attributes?.width,
+                            height: node.attributes?.height
+                        } as EmbedMetadata
+                    };
+                    if (config.includeRawContent) iframeNode.rawContent = '<iframe>...</iframe>';
+                    return iframeNode;
+                }
                 return null;
             }
 
@@ -588,22 +644,41 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return null;
             }
 
-            // Math: proposed contract (no editor node built yet) - HtmlGenerator emits
-            // <span/div class="math math-inline|math-block" data-math="inline|block">
-            // with the $-delimited LaTeX as the visible (escaped) text content.
+            // Math. Two accepted shapes, disambiguated by the `data-math` value:
+            //   1. This library's own output - `data-math="inline|block"` names the mode, and the
+            //      LaTeX is the visible ($-delimited, escaped) text content.
+            //   2. Attribute-driven producers that put the raw LaTeX in `data-math` and signal the
+            //      mode through the class (`math-inline`/`math-block`) or the tag.
+            // Anything whose `data-math` is exactly `inline`/`block` takes path 1 unchanged; every
+            // other value is treated as LaTeX (path 2). LaTeX literally equal to `inline`/`block`
+            // is the only ambiguous input, and its text content wins there anyway.
             if ((tagName === 'div' || tagName === 'span') && node.attributes?.['data-math'] !== undefined) {
-                const mathMode: 'inline' | 'block' = node.attributes['data-math'] === 'block' ? 'block' : 'inline';
-                const rawText = node.children.map(c => c.text || '').join('')
-                    .replace(/&nbsp;/g, ' ')
-                    .replace(/&lt;/g, '<')
-                    .replace(/&gt;/g, '>')
-                    .replace(/&amp;/g, '&')
-                    .replace(/&quot;/g, '"')
-                    .replace(/&#39;/g, '\'');
-                const delimiter = mathMode === 'block' ? '$$' : '$';
-                const latex = rawText.startsWith(delimiter) && rawText.endsWith(delimiter)
-                    ? rawText.slice(delimiter.length, -delimiter.length)
-                    : rawText;
+                const dataMath = node.attributes['data-math'];
+                const modeIsExplicit = dataMath === 'inline' || dataMath === 'block';
+                const classTokens = (node.attributes?.class || '').split(/\s+/);
+                const rawText = decodeEntities(node.children.map(c => c.text || '').join(''));
+                // Prefer the text content; fall back to the attribute value (path 2 producers may
+                // emit an empty body).
+                const source = rawText || (modeIsExplicit ? '' : decodeEntities(dataMath));
+                // Strip whichever `$`/`$$` delimiters are actually present, independent of the
+                // resolved mode - a `$`-delimited body inside a <div> must not keep its delimiters.
+                // The delimiter also disambiguates the mode when neither an explicit `data-math` nor
+                // a `math-inline`/`math-block` class settles it (so `<div data-math="x">$x$</div>`
+                // reads as inline, not block-via-tag).
+                let latex = source;
+                let delimiterMode: 'inline' | 'block' | undefined;
+                if (source.length >= 4 && source.startsWith('$$') && source.endsWith('$$')) {
+                    latex = source.slice(2, -2);
+                    delimiterMode = 'block';
+                } else if (source.length >= 2 && source.startsWith('$') && source.endsWith('$')) {
+                    latex = source.slice(1, -1);
+                    delimiterMode = 'inline';
+                }
+                const mathMode: 'inline' | 'block' = modeIsExplicit
+                    ? (dataMath as 'inline' | 'block')
+                    : classTokens.includes('math-block') ? 'block'
+                        : classTokens.includes('math-inline') ? 'inline'
+                            : delimiterMode ?? (tagName === 'div' ? 'block' : 'inline');
                 return {
                     type: 'code',
                     text: latex,
@@ -630,7 +705,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 };
             }
 
-            // Admonition: inscript-editor's Admonition node renders
+            // Admonition: attribute-driven editors render
             // <div class="admonition admonition-note" data-type="note">…children…</div>.
             if (tagName === 'div' && (node.attributes?.class || '').split(/\s+/).includes('admonition')) {
                 const admonitionTypeAttr = node.attributes?.['data-type'];
@@ -644,6 +719,29 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 };
                 if (config.includeRawContent) admonitionNode.rawContent = '<div class="admonition">...</div>';
                 return admonitionNode;
+            }
+
+            // Mermaid diagrams. Attribute-driven producers render a
+            // <div class="mermaid" data-mermaid="<code>"> with the code also as text content.
+            // Map either shape to a fenced code node with language `mermaid`, so it round-trips as
+            // a ```mermaid block. Previously this div fell through to generic handling and its
+            // code flattened to paragraph text.
+            if (tagName === 'div' && (node.attributes?.['data-mermaid'] !== undefined || (node.attributes?.class || '').split(/\s+/).includes('mermaid'))) {
+                const code = decodeEntities(node.children.map(c => c.text || '').join('')).trim()
+                    || decodeEntities(node.attributes?.['data-mermaid'] || '');
+                // Only claim this as a mermaid code node when there is actual diagram source.
+                // A bare `class="mermaid"` div with nested elements (a mermaid.js-rendered <svg>,
+                // or a div merely reusing the class for styling) has no direct text and no
+                // data-mermaid; fall through to generic handling so its content is not dropped.
+                if (code) {
+                    const mermaidNode: OfficeContentNode = {
+                        type: 'code',
+                        text: code,
+                        metadata: { language: 'mermaid' } as CodeMetadata
+                    };
+                    if (config.includeRawContent) mermaidNode.rawContent = '<div data-mermaid>...</div>';
+                    return mermaidNode;
+                }
             }
 
             // Skip structural containers produced by HtmlGenerator to avoid deep AST nesting
@@ -750,6 +848,21 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     metadata: { citationKey } as TextMetadata
                 };
             }
+            // Attribute-driven citation shape: a <span> carrying the `citation` class token (among
+            // any others) and a non-empty data-key. Produces the same bare-key text node as the
+            // <cite> form above. An empty/absent data-key falls through to generic span handling,
+            // so the span's visible text still survives.
+            if (tagName === 'span'
+                && (node.attributes?.class || '').split(/\s+/).includes('citation')
+                && node.attributes?.['data-key']) {
+                const citationKey = decodeEntities(node.attributes['data-key']);
+                return {
+                    type: 'text',
+                    text: citationKey,
+                    formatting: Object.keys(newFormatting).length > 0 ? { ...newFormatting } : undefined,
+                    metadata: { citationKey } as TextMetadata
+                };
+            }
             if (tagName === 'ul' || tagName === 'ol') {
                 const isNewTopLevel = !listContext;
                 const newListContext: ListContext = {
@@ -811,7 +924,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return [selfNode, ...nestedLists];
             }
             if (tagName === 'table') {
-                // CustomTable (inscript-editor) renders data-align on the <table> itself.
+                // Attribute-driven editors render data-align on the <table> itself.
                 const tableAlignAttr = node.attributes?.['data-align'];
                 const tableAlign = (['left', 'center', 'right'] as const).includes(tableAlignAttr as any) ? tableAlignAttr as 'left' | 'center' | 'right' : undefined;
 
@@ -863,7 +976,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const src = node.attributes?.src;
                 const alt = node.attributes?.alt;
 
-                // CustomImage (inscript-editor) renders data-width/data-align, falling back to
+                // Attribute-driven editors render data-width/data-align, falling back to
                 // parsing the inline style for consumers that only emit the CSS.
                 const imgDecls = parseStyleDeclarations(node.attributes?.style || '');
                 // Exact lookup, so `max-width: 100%` - the standard responsive-image style, and by
@@ -952,6 +1065,22 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                             c.metadata = { ...c.metadata, link: wikilinkPage, linkType: 'internal', wikilink: true } as TextMetadata;
                         }
                     });
+                } else if (node.attributes?.['data-wikilink'] !== undefined) {
+                    // Attribute-driven wikilink shape: the page lives in data-target, the display
+                    // text is the anchor's own content (or data-alias/data-target when the anchor
+                    // is empty). data-wikilink-page above keeps precedence over this form.
+                    const page = decodeEntities(node.attributes['data-target'] || '');
+                    if (!children.some(c => c.type === 'text')) {
+                        children.push({
+                            type: 'text',
+                            text: decodeEntities(node.attributes['data-alias'] || node.attributes['data-target'] || ''),
+                        });
+                    }
+                    children.forEach(c => {
+                        if (c.type === 'text') {
+                            c.metadata = { ...c.metadata, link: page, linkType: 'internal', wikilink: true } as TextMetadata;
+                        }
+                    });
                 } else if (href) {
                     const linkType = href.startsWith('#') ? 'internal' : 'external';
                     children.forEach(c => {
@@ -969,6 +1098,17 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 }
                 return brNode;
             }
+            if (tagName === 'hr') {
+                // A horizontal rule is a thematic break. This library tags an office page break
+                // as <hr class="page-break"> on emission, so that variant round-trips back to a
+                // page break; every other <hr> is thematic. Previously <hr> was dropped entirely.
+                const isPageBreak = (node.attributes?.class || '').split(/\s+/).includes('page-break');
+                const hrNode: OfficeContentNode = { type: 'break', metadata: { breakType: isPageBreak ? 'page' : 'thematic' } };
+                if (config.includeRawContent) {
+                    hrNode.rawContent = '<hr/>';
+                }
+                return hrNode;
+            }
             if (tagName === 'pre') {
                 const codeNode = node.children.find(c => c.tagName === 'code');
                 let language;
@@ -977,9 +1117,19 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     const classAttr = codeNode.attributes?.class || '';
                     const langMatch = classAttr.split(' ').find((c: string) => c.startsWith('language-'));
                     if (langMatch) language = langMatch.replace('language-', '');
-                    codeText = codeNode.children.map(c => c.text || '').join('');
+                    // Decode entities: the code body is stored raw, so `&lt;`/`&gt;`/`&amp;` (e.g. a
+                    // mermaid `-->` arrow, or `a < b` in a snippet) must be turned back into text.
+                    codeText = decodeEntities(codeNode.children.map(c => c.text || '').join(''));
                 } else {
-                    codeText = node.children.map(c => c.text || '').join('');
+                    codeText = decodeEntities(node.children.map(c => c.text || '').join(''));
+                }
+                // A `mermaid` class token (on the <pre> or its <code>) names the language when no
+                // explicit language-* class is present - some producers emit <pre class="mermaid">.
+                if (!language && (
+                    (node.attributes?.class || '').split(/\s+/).includes('mermaid') ||
+                    (codeNode?.attributes?.class || '').split(/\s+/).includes('mermaid')
+                )) {
+                    language = 'mermaid';
                 }
 
                 const preNode: OfficeContentNode = {
@@ -1056,6 +1206,21 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 }
             }
         }
+    }
+
+    // Orphan footnote definitions: a `<section data-footnotes>` entry that no `<sup
+    // data-footnote-ref>` consumed would otherwise be dropped (it is skipped in the body walk and
+    // only materialised via a reference). Recover them as trailing `unreferenced` note nodes, the
+    // same shape MarkdownParser produces, so md -> html -> md preserves the definition instead of
+    // turning it into junk text with a dead back-link.
+    for (const [key, definition] of footnoteDefinitions) {
+        if (referencedFootnoteKeys.has(key)) continue;
+        content.push({
+            type: 'note',
+            text: (definition || []).map(d => d.text || '').join(''),
+            children: definition || [],
+            metadata: { noteType: 'footnote', noteId: key, unreferenced: true },
+        });
     }
 
     const toTextSync = () => content.map(n => {
