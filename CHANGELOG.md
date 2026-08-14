@@ -4,6 +4,10 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.6.1] - 2026-08-14
+### Fixed
+- **`test:cli` could not run on Windows.** The CLI test suite spawned `npx` directly through `child_process.spawnSync`; under modern Node's batch-file spawn hardening, spawning the `npx.cmd` shim this way fails, so `test:cli` - the last stage of `npm test` - still failed on Windows even after the rest of the 7.6.0 cross-platform fixes. It now launches the CLI as `node <tsx-cli> <script>`, which needs no shell and no batch file. Test-tooling only; the published package is unchanged from 7.6.0. (#111)
+
 ## [7.6.0] - 2026-08-14
 ### Added
 - **Attribute-driven HTML interop for wikilinks, citations, math and mermaid.** `HtmlParser` now accepts the on-the-wire shapes structured editors emit, with no change to default output: `a[data-wikilink]` (page in `data-target`, display text from the anchor body or `data-alias`), a `span.citation` carrying `data-key`, math whose `data-math` holds the raw LaTeX with the mode in the class token (the delimited `data-math="inline|block"` shape is still read exactly as before; any other `data-math` value, previously read as inline math with the attribute ignored, is now taken as the LaTeX source), and `div[data-mermaid]`/`div.mermaid`/`pre.mermaid` mapped to a `mermaid` code node (previously the div flattened to plain text).
