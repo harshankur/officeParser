@@ -47,7 +47,7 @@ import { parsePdf } from './parsers/PdfParser.js';
 import { parsePowerPoint } from './parsers/PowerPointParser.js';
 import { parseRtf } from './parsers/RtfParser.js';
 import { parseWord } from './parsers/WordParser.js';
-import { OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SupportedFileType } from './types.js';
+import { BlobLike, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SupportedFileType } from './types.js';
 import { resolveParserConfig } from './utils/configUtils.js';
 import { assertNode } from './utils/envUtils.js';
 import { getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
@@ -143,7 +143,7 @@ export class OfficeParser {
      * const text = ast.toText();
      * ```
      */
-    public static async parseOffice(file: string | Buffer | ArrayBuffer | Uint8Array, configOrCallback?: OfficeParserConfig | ((ast: OfficeParserAST, err?: any) => void), config?: OfficeParserConfig): Promise<OfficeParserAST> {
+    public static async parseOffice(file: string | Buffer | ArrayBuffer | Uint8Array | BlobLike, configOrCallback?: OfficeParserConfig | ((ast: OfficeParserAST, err?: any) => void), config?: OfficeParserConfig): Promise<OfficeParserAST> {
         let callback: ((ast: OfficeParserAST, err?: any) => void) | undefined;
         let actualConfig: OfficeParserConfig = {};
 
@@ -194,6 +194,15 @@ export class OfficeParser {
                 }
                 buffer = fs.readFileSync(file);
                 ext = ext || file.split('.').pop() || '';
+            } else if (file && typeof (file as BlobLike).arrayBuffer === 'function') {
+                // Web Blob/File (or any BlobLike). Read its bytes; if it carries a filename, use
+                // the extension for type detection - never as a filesystem path. A nameless blob
+                // still resolves through the magic-byte sniffing below.
+                buffer = Buffer.from(await (file as BlobLike).arrayBuffer());
+                const name = (file as BlobLike).name;
+                if (!ext && typeof name === 'string' && name.includes('.')) {
+                    ext = name.split('.').pop() || '';
+                }
             } else {
                 throw getOfficeError(OfficeErrorType.INVALID_INPUT, internalConfig);
             }

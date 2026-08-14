@@ -23,6 +23,68 @@ import {
 import { getOfficeError, checkAbortSignal } from '../utils/errorUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
+/** Node types whose text is block-level, so a boundary between two of them is a real break. */
+const BLOCK_NODE_TYPES = new Set<string>([
+    'paragraph', 'heading', 'list', 'table', 'row', 'cell', 'code', 'note', 'admonition',
+    'definitionList', 'definitionTerm', 'definitionDescription', 'sheet', 'slide', 'page', 'embed',
+]);
+
+/**
+ * The visible text of a content node: its own `.text` when set, otherwise its descendants' text,
+ * plus any footnote/endnote bodies hanging off `node.notes`.
+ * HTML- and Markdown-origin parsers build paragraphs as `{ children: [...] }` with no `.text`, so
+ * reading `node.text` alone dropped their content from every chunk. Block-level children are joined
+ * with a newline so words don't merge across paragraphs/list items (matching the text generator);
+ * inline runs join with no separator. Notes live on `node.notes`, off the children tree, and a
+ * content node is emitted as a chunk without recursing into them - so their text was silently
+ * absent from the RAG index. Fold them in here (joined as block content) so a footnote's body is
+ * searchable alongside the paragraph that references it.
+ */
+function collectNodeText(node: OfficeContentNode): string {
+    let out = '';
+    if (typeof node.text === 'string' && node.text.length > 0) {
+        out = node.text;
+        // The `.text` fast-path above skips the children walk, but DOCX/ODT/RTF set `.text` on the
+        // paragraph while the footnote hangs off a nested text child - so its body would be missed.
+        // Fold in descendant note bodies (visible text already covered by `.text`, not re-added).
+        const descendantNotes = collectDescendantNoteText(node);
+        if (descendantNotes) out += '\n' + descendantNotes;
+    } else if (node.children && node.children.length > 0) {
+        for (const child of node.children) {
+            if (out && BLOCK_NODE_TYPES.has(child.type)) out += '\n';
+            out += collectNodeText(child);
+        }
+    }
+    if (node.notes && node.notes.length > 0) {
+        for (const note of node.notes) {
+            const noteText = collectNodeText(note);
+            if (noteText) out += (out ? '\n' : '') + noteText;
+        }
+    }
+    return out;
+}
+
+/**
+ * Footnote/endnote bodies hanging off a node's descendants, without the descendants' own visible
+ * text (the caller already has that via `.text`). Only reached from the `.text` fast-path above, to
+ * recover notes that office-origin parsers attach to a nested text child of a `.text`-bearing node.
+ */
+function collectDescendantNoteText(node: OfficeContentNode): string {
+    if (!node.children || node.children.length === 0) return '';
+    let out = '';
+    for (const child of node.children) {
+        if (child.notes) {
+            for (const note of child.notes) {
+                const t = collectNodeText(note);
+                if (t) out += (out ? '\n' : '') + t;
+            }
+        }
+        const deeper = collectDescendantNoteText(child);
+        if (deeper) out += (out ? '\n' : '') + deeper;
+    }
+    return out;
+}
+
 /**
  * Generates a list of OfficeChunk objects from an AST for use in RAG pipelines.
  * Supports three strategies: 'fixed-size', 'document-structure', and 'semantic'.
@@ -57,7 +119,8 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
 
     /**
      * Main entry point. Routes to the correct strategy implementation.
-     * Note: ConversionResult.value is a JSON string of OfficeChunk[] for the 'chunks' destination.
+     * Note: ConversionResult.value is a real OfficeChunk[] array for the 'chunks' destination, not
+     * a JSON string. Consumers serialize it to JSON/JSONL themselves.
      */
     async generate(): Promise<ConversionResult<'chunks'>> {
         checkAbortSignal(this.config.abortSignal);
@@ -295,7 +358,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || (node.text && (!node.children || node.children.length === 0));
 
         if (isStructuralBoundary || isContentNode) {
-            const text = typeof override === 'string' ? override : (node.text ?? '');
+            const text = typeof override === 'string' ? override : collectNodeText(node);
             const isWhitespaceOnly = !text.trim() && !text.includes('\u00A0');
 
             if (isWhitespaceOnly && text.length > 0) {
@@ -367,8 +430,8 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         const strategy = config.tableSplitStrategy;
 
         if (strategy === 'flatten' || !node.children || node.children.length === 0) {
-            // Flatten: treat as plain text
-            const text = node.text ?? '';
+            // Flatten: treat as plain text (collect from children for HTML/MD-origin tables).
+            const text = collectNodeText(node);
             if (!text.trim()) return;
             chunks.push({
                 text,
@@ -609,7 +672,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'cell' || (node.text && (!node.children || node.children.length === 0));
 
             if (isContentNode) {
-                const text = (typeof override === 'string' ? override : (node.text ?? '')).trim();
+                const text = (typeof override === 'string' ? override : collectNodeText(node)).trim();
                 if (!text) return;
                 // Split paragraph text into individual sentences for finer-grained similarity
                 const sentences = this.splitIntoSentences(text);
@@ -670,7 +733,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || (node.text && (!node.children || node.children.length === 0));
 
             if (isContentNode) {
-                const nodeText = typeof override === 'string' ? override : (node.text || '');
+                const nodeText = typeof override === 'string' ? override : collectNodeText(node);
                 const txt = nodeText + '\n';
                 nodeMap.push({ offset, heading: currentHeading, slideNumber: currentSlide, pageNumber: currentPage, sheetName: currentSheet });
                 parts.push(txt);
