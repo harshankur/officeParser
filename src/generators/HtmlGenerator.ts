@@ -914,9 +914,13 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     );
 
                     if (isHeaderStyle || allBold) {
-                        // Re-process children with <thead> wrap for the first row
+                        // Re-process the first row as header cells, wrapped in a <tr>. Without the
+                        // <tr>, the header cells sit directly under <thead> (`<thead><th>…`), which
+                        // is invalid HTML that HtmlParser does not read back as a table row - so a
+                        // md -> HTML -> md round trip lost the header content. `<thead><tr><th>…` is
+                        // valid and self-idempotent.
                         const headOutput = await this.processNodeRecursive(firstRow, async (n, children) => {
-                            return children.replace(/<td/g, '<th').replace(/<\/td>/g, '</th>');
+                            return `<tr>${children.replace(/<td/g, '<th').replace(/<\/td>/g, '</th>')}</tr>`;
                         });
                         const bodyRows = rows.slice(1);
                         const bodyOutput = await this.processNodeArray(bodyRows);

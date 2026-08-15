@@ -271,6 +271,19 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // HTML tag (e.g. <script>) when the Markdown is rendered to HTML.
                     let text = markdownEscapeText(node.text || '');
                     if (this.config.includeFormatting && node.formatting) {
+                        // Inline code: re-wrap the RAW text in backticks. The content is literal
+                        // inside a code span, so the entity-escaped form above must not show through.
+                        // The fence is one backtick longer than the longest embedded run so an inner
+                        // backtick can't close the span early, padded when the content touches a
+                        // backtick. Done before emphasis so bold/italic wrap the span (`**`code`**`).
+                        // Previously a monospace text node emitted its bare text, dropping the code.
+                        if (node.formatting.font === 'monospace') {
+                            const raw = node.text || '';
+                            const longestRun = Math.max(0, ...(raw.match(/`+/g) || []).map(s => s.length));
+                            const fence = '`'.repeat(longestRun + 1);
+                            const pad = (raw.startsWith('`') || raw.endsWith('`')) ? ' ' : '';
+                            text = `${fence}${pad}${raw}${pad}${fence}`;
+                        }
                         const emphasisAsterisk = this.resolvedDialect.emphasisMarker === 'asterisk';
                         if (node.formatting.bold && !this.inImplicitBold) text = emphasisAsterisk ? `**${text}**` : `__${text}__`;
                         if (node.formatting.italic) text = emphasisAsterisk ? `*${text}*` : `_${text}_`;
@@ -489,17 +502,20 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         return this.resolvedDialect.math === 'dollar' ? `$${mathInline}$` : mathInline;
                     }
                     const lang = (meta?.language || '').replace(/[\r\n`]+/g, '');
-                    // Block code if it contains a line break, else inline. Testing only for `\n`
-                    // routed a CR-only string to the inline branch, where a renderer that
-                    // normalizes `\r` to a line ending sees a blank line, the span dies, and the
-                    // remainder is exposed as raw Markdown. The fence sizing below is correct and
-                    // needs no change; code content itself is not an HTML context.
-                    if (node.text && /[\r\n]/.test(node.text)) {
+                    // A `code` node is always block-level: genuinely inline code is a monospace
+                    // text node, never a `code` node. So emit a fenced block whenever the node
+                    // carries a language OR spans multiple lines. Previously the decision keyed only
+                    // off a line break, so a single-line code node with a language - `const x = 1;`
+                    // tagged `js`, or a one-line `mermaid` diagram - collapsed to an inline span,
+                    // silently dropping both its language and its block-ness. (Testing `[\r\n]`, not
+                    // just `\n`, still routes a CR-only body to the fenced branch, where a renderer
+                    // that normalizes `\r` to a line ending would otherwise kill an inline span.)
+                    if (lang || (node.text && /[\r\n]/.test(node.text))) {
                         // Fence with one more backtick than the longest run inside the content
                         // so an embedded ``` can't close the block early and inject markup.
-                        const longestRun = Math.max(0, ...(node.text.match(/`+/g) || []).map(s => s.length));
+                        const longestRun = Math.max(0, ...((node.text || '').match(/`+/g) || []).map(s => s.length));
                         const fence = '`'.repeat(Math.max(3, longestRun + 1));
-                        return `\n${fence}${lang}\n${node.text}\n${fence}\n\n`;
+                        return `\n${fence}${lang}\n${node.text || ''}\n${fence}\n\n`;
                     } else {
                         const t = node.text || '';
                         const longestRun = Math.max(0, ...(t.match(/`+/g) || []).map(s => s.length));

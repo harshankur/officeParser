@@ -1065,6 +1065,41 @@ async function testGeneratedOutput(): Promise<void> {
         assert.ok(/In paged media, footnotes/i.test(officeChunks), `6.E.2: a ${f} footnote body reaches the chunks`);
     }
 
+    // 7.E: a raw inline <br> round-trips symmetrically. MarkdownGenerator emits a raw <br> for a
+    // line break in a table cell (a GFM pipe cell cannot hold a newline); MarkdownParser must read
+    // it back as a break node rather than escaping it to literal `&lt;br&gt;` text and destroying it.
+    for (const brForm of ['a<br>b', 'a<br/>b', 'a<br />b']) {
+        const h = String((await OfficeGenerator.generate(await parseMd(brForm), 'html', { htmlConfig: { standalone: false } })).value).replace(/\n/g, '');
+        assert.ok(/a<br\s*\/?>b/.test(h) && !/&lt;br/.test(h), `7.E: raw inline ${brForm} becomes a real <br>, not escaped text`);
+    }
+    const cellBrHtml = String((await OfficeGenerator.generate(await parseMd('| a<br>b | c |\n| --- | --- |\n| x | y |'), 'html', { htmlConfig: { standalone: false } })).value);
+    const cellBrRoundtrip = String((await OfficeGenerator.generate(await parseHtml(cellBrHtml), 'md')).value);
+    assert.ok(/a<br>b/.test(cellBrRoundtrip), '7.E: a <br> inside a table cell survives md -> html -> md');
+
+    // 7.A: a single-line code node with a language stays a fenced block. The inline-vs-fenced
+    // decision used to key only off a newline, so a one-line code block with a language collapsed
+    // to an inline span, silently dropping the language and its block-ness. A `code` node is always
+    // block-level (inline code is a monospace text node), so a language always forces a fence.
+    const jsBlock = String((await OfficeGenerator.generate(await parseMd('```js\nconst x = 1;\n```'), 'md')).value);
+    assert.ok(/```js\nconst x = 1;\n```/.test(jsBlock), '7.A: a single-line ```js block stays fenced, keeping its language');
+    const merBlock = String((await OfficeGenerator.generate(await parseHtml('<div class="mermaid" data-mermaid="graph TD; A--&gt;B"></div>'), 'md')).value);
+    assert.ok(/```mermaid\ngraph TD; A-->B\n```/.test(merBlock), '7.A: a single-line mermaid diagram stays a fenced ```mermaid block');
+
+    // Inline code keeps its backticks. Inline code parses to a monospace text node, which had no
+    // backtick emission in MarkdownGenerator, so every inline `code` (and inline <code> from HTML)
+    // degraded to plain text on md->md and html->md. It is now re-wrapped and fence-sized.
+    assert.ok(/use `x` here/.test(String((await OfficeGenerator.generate(await parseMd('use `x` here'), 'md')).value)), 'inline code keeps its backticks on a md round trip');
+    assert.ok(/use `x` here/.test(String((await OfficeGenerator.generate(await parseHtml('<p>use <code>x</code> here</p>'), 'md')).value)), 'inline <code> keeps its backticks on html -> md');
+    assert.ok(/``x`y``/.test(String((await OfficeGenerator.generate(await parseMd('a ``x`y`` b'), 'md')).value)), 'inline code fence grows past an embedded backtick');
+
+    // 7.D: a generated table header is valid HTML and self-idempotent. The header cells used to sit
+    // as bare <th> directly under <thead> (no <tr>), which HtmlParser could not read back - so a
+    // md -> HTML -> md round trip lost the header content. It is now <thead><tr><th>.
+    const tblHtml = String((await OfficeGenerator.generate(await parseMd('| Feature | Status |\n| --- | --- |\n| A | ok |'), 'html', { htmlConfig: { standalone: false } })).value);
+    assert.ok(/<thead>\s*<tr>\s*<th/.test(tblHtml), '7.D: a table header row is wrapped in <tr> (valid <thead><tr><th>)');
+    const tblBack = String((await OfficeGenerator.generate(await parseHtml(tblHtml), 'md')).value);
+    assert.ok(/\|\s*Feature\s*\|\s*Status\s*\|/.test(tblBack), '7.D: a generated table survives md -> HTML -> md with its header intact');
+
     console.log('  Generated output: All assertions passed ✓');
 }
 
