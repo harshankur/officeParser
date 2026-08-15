@@ -1000,7 +1000,7 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `includeFormatting` | `boolean` | `true` | Include bold/italic/colors/sizes in output |
-| `generateIds` | `boolean` | `true` | Add slug-based `id` attributes to headings |
+| `generateIds` | `boolean` | `true` | Slug-based heading anchors: `id` attributes on HTML headings, and a `{#slug}` suffix on Markdown headings (`# Title {#title}`, kramdown/Pandoc). Set `false` to omit both — useful when the Markdown is rendered by GFM/CommonMark, which show `{#slug}` as literal text. Applies to all generator formats (it is a top-level option, not under `mdConfig`/`htmlConfig`). |
 | `renderMetadata` | `boolean` | `false` | Render title/author as visible header block |
 | `metadataOverrides` | `MetadataOverrides` | `{}` | Override the metadata embedded in the output, merged per field over `ast.metadata` |
 | `includeImages` | `boolean` | `true` | Include image nodes in output |
