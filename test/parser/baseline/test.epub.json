@@ -153,7 +153,7 @@
         {
           "type": "break",
           "metadata": {
-            "breakType": "textWrapping"
+            "breakType": "carriageReturn"
           },
           "rawContent": "<br/>"
         }
@@ -203,7 +203,7 @@
         {
           "type": "break",
           "metadata": {
-            "breakType": "textWrapping"
+            "breakType": "carriageReturn"
           },
           "rawContent": "<br/>"
         }
@@ -3648,7 +3648,8 @@
           "rawContent": "1",
           "metadata": {
             "link": "index_split_006.html#note_1",
-            "linkType": "external"
+            "linkType": "external",
+            "title": "1"
           }
         },
         {
@@ -3665,7 +3666,8 @@
           "rawContent": "2",
           "metadata": {
             "link": "index_split_007.html#note_2",
-            "linkType": "external"
+            "linkType": "external",
+            "title": "2"
           }
         },
         {
@@ -4730,7 +4732,8 @@
               "rawContent": "←1",
               "metadata": {
                 "link": "index_split_003.html#back_note_1",
-                "linkType": "external"
+                "linkType": "external",
+                "title": "1"
               }
             },
             {
@@ -4775,7 +4778,8 @@
               "rawContent": "←2",
               "metadata": {
                 "link": "index_split_003.html#back_note_2",
-                "linkType": "external"
+                "linkType": "external",
+                "title": "2"
               }
             },
             {

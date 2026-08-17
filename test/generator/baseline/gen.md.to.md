@@ -55,7 +55,7 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like this
 
 
 | ITEM | NEEDED |
-|  ---  |  ---  |
+| --- | --- |
 | Books | 1 |
 | Pens | 3 |
 | Pencils | 2 |
@@ -68,7 +68,7 @@ Now let’s look at a fancier table—one with alternating row colors and partia
 
 
 | City or Town | <div style="text-align: center">Point A</div> | <div style="text-align: center">Point B</div> | <div style="text-align: center">Point C</div> | <div style="text-align: center">Point D</div> | <div style="text-align: center">Point E</div> |
-|  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- | --- | --- |
 | Point A | <div style="text-align: center">—</div> |  |  |  |  |
 | Point B | <div style="text-align: center">87</div> | <div style="text-align: center">—</div> |  |  |  |
 | Point C | <div style="text-align: center">64</div> | <div style="text-align: center">56</div> | <div style="text-align: center">—</div> |  |  |
@@ -79,7 +79,7 @@ Next, we see a table with special formatting in various locations. Notice how th
 
 
 | College | New students | Graduating students | Change |
-|  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- |
 |  | *Undergraduate* |  |  |
 | Cedar University | 110 | 103 | +7 |
 | Oak Institute | 202 | 210 | -8 |
@@ -94,7 +94,7 @@ Next, we have something a little more complex, a nested table, i.e. a table insi
 
 
 | OneThree | Two |
-|  ---  |  ---  |
+| --- | --- |
 | Four |   |
 
 We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.

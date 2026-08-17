@@ -1102,6 +1102,47 @@ export interface CsvGeneratorConfig {
  */
 export type MarkdownDialectPreset = 'extended' | 'github' | 'gitlab' | 'obsidian' | 'pandoc' | 'commonmark';
 
+/*
+ * Per-capability syntax variants for `MarkdownDialectConfig`. Each is named for the *syntax* it
+ * selects, never for a product, so a convention shared by several flavors is a single value and a
+ * preset simply points at it (e.g. both the `obsidian` and `extended` presets select `'equals'`
+ * highlight). `'none'` is the explicit off switch, mirroring `math`'s existing `'dollar' | 'none'`;
+ * `undefined`/omitted means "inherit from the `extends` preset", never "off". Modelling these as
+ * unions rather than booleans lets a second syntax be added later without a breaking change.
+ */
+
+/** Admonition syntax: `'blockquote'` = GitHub `> [!NOTE]`, `'fence'` = GitLab `:::note`,
+ *  `'fence-attribute'` = Pandoc `::: {.note}`, `'none'` = plain bold-labeled blockquote. */
+export type AdmonitionSyntax = 'blockquote' | 'fence' | 'fence-attribute' | 'none';
+/** `==text==` highlight (`'equals'`), or `'none'` to disable. */
+export type HighlightSyntax = 'equals' | 'none';
+/** GFM `~~text~~` strikethrough (`'tilde'`), or `'none'`. */
+export type StrikethroughSyntax = 'tilde' | 'none';
+/** `Term`/`: Description` definition lists (`'colon'`), or `'none'`. */
+export type DefinitionListSyntax = 'colon' | 'none';
+/** `[^id]` footnotes (`'caret'`), or `'none'`. */
+export type FootnoteSyntax = 'caret' | 'none';
+/** `[@citekey]` citations (`'at'`), or `'none'`. */
+export type CitationSyntax = 'at' | 'none';
+/** `[[Page]]` wikilinks (`'double-bracket'`), or `'none'`. */
+export type WikilinkSyntax = 'double-bracket' | 'none';
+/** `{width=50%}` attribute lists (`'brace'`), or `'none'`. */
+export type AttributeListSyntax = 'brace' | 'none';
+
+/**
+ * @deprecated Legacy flavor names for `MarkdownDialectConfig.admonitions`. Use the syntax names
+ * instead: `'github'` -> `'blockquote'`, `'gitlab'` -> `'fence'`, `'pandoc'` -> `'fence-attribute'`.
+ * These aliases still resolve to the same output and will be removed in the next major version.
+ */
+export type DeprecatedAdmonitionFlavor = 'github' | 'gitlab' | 'pandoc';
+
+/**
+ * @deprecated Boolean toggles for dialect capability fields are deprecated in favor of the
+ * syntax-name unions: `true` maps to that field's on-value (e.g. `'tilde'`), `false` maps to
+ * `'none'`. Booleans keep working via coercion and will be removed in the next major version.
+ */
+export type DeprecatedDialectToggle = boolean;
+
 /**
  * Granular control over which native Markdown syntax the generator emits for constructs that
  * differ across real-world dialects (e.g. GitHub's `> [!NOTE]` vs GitLab's `:::note` vs Pandoc's
@@ -1113,25 +1154,60 @@ export type MarkdownDialectPreset = 'extended' | 'github' | 'gitlab' | 'obsidian
 export interface MarkdownDialectConfig {
     /** Base preset any omitted field inherits from. Defaults to 'extended'. */
     extends?: MarkdownDialectPreset;
-    /** Admonition syntax: GitHub `> [!NOTE]`, GitLab `:::note`, Pandoc `::: {.note}`, or `'none'`
-     *  to degrade to a plain bold-labeled blockquote with no special marker. */
-    admonitions?: 'github' | 'gitlab' | 'pandoc' | 'none';
-    /** Markdown Extra/Pandoc-style `Term\n: Description` definition lists. */
-    definitionLists?: boolean;
-    /** `[^id]` footnote references/definitions. When false, note content is inlined as a
-     *  parenthetical right at the reference point instead of using footnote syntax. */
-    footnotes?: boolean;
-    /** Pandoc-style `[@citekey]` citations. When false, emits `[citekey]` (brackets, no `@`). */
-    citations?: boolean;
-    /** Obsidian-style `[[Page]]`/`[[Page|Alias]]` wikilinks. When false, falls back to a plain
-     *  `[text](url)` link using the same target. */
-    wikilinks?: boolean;
-    /** Inline `$...$`/block `$$...$$` math delimiters, or `'none'` for bare LaTeX text. */
+    /**
+     * Admonition syntax: `'blockquote'` = GitHub `> [!NOTE]`, `'fence'` = GitLab `:::note`,
+     * `'fence-attribute'` = Pandoc `::: {.note}`, `'none'` = a plain bold-labeled blockquote with no
+     * special marker. Omit to inherit from the `extends` preset. The legacy flavor names
+     * `'github'`/`'gitlab'`/`'pandoc'` are accepted as deprecated aliases (see
+     * `DeprecatedAdmonitionFlavor`) and will be removed in the next major version.
+     */
+    admonitions?: AdmonitionSyntax | DeprecatedAdmonitionFlavor;
+    /**
+     * Markdown Extra/Pandoc-style `Term`/`: Description` definition lists (`'colon'`), or `'none'`
+     * to render terms and descriptions as plain paragraphs. Omit to inherit from `extends`. Passing
+     * a boolean is deprecated: `true` = `'colon'`, `false` = `'none'` (removed next major).
+     */
+    definitionLists?: DefinitionListSyntax | DeprecatedDialectToggle;
+    /**
+     * `[^id]` footnote references/definitions (`'caret'`), or `'none'` to inline note content as a
+     * parenthetical right at the reference point. Omit to inherit from `extends`. Passing a boolean
+     * is deprecated: `true` = `'caret'`, `false` = `'none'` (removed next major).
+     */
+    footnotes?: FootnoteSyntax | DeprecatedDialectToggle;
+    /**
+     * Pandoc-style `[@citekey]` citations (`'at'`), or `'none'` to emit `[citekey]` (brackets, no
+     * `@`). Omit to inherit from `extends`. Passing a boolean is deprecated: `true` = `'at'`,
+     * `false` = `'none'` (removed next major).
+     */
+    citations?: CitationSyntax | DeprecatedDialectToggle;
+    /**
+     * Obsidian-style `[[Page]]`/`[[Page|Alias]]` wikilinks (`'double-bracket'`), or `'none'` to fall
+     * back to a plain `[text](url)` link using the same target. Omit to inherit from `extends`.
+     * Passing a boolean is deprecated: `true` = `'double-bracket'`, `false` = `'none'` (removed next major).
+     */
+    wikilinks?: WikilinkSyntax | DeprecatedDialectToggle;
+    /** Inline `$...$`/block `$$...$$` math delimiters (`'dollar'`), or `'none'` for bare LaTeX text. */
     math?: 'dollar' | 'none';
-    /** Pandoc-style `{width=50% .centered}` attribute lists after images/tables. */
-    attributeLists?: boolean;
-    /** GFM `~~text~~` strikethrough (not part of base CommonMark). */
-    strikethrough?: boolean;
+    /**
+     * Pandoc-style `{width=50% .centered}` attribute lists after images/tables (`'brace'`), or
+     * `'none'`. Omit to inherit from `extends`. Passing a boolean is deprecated: `true` = `'brace'`,
+     * `false` = `'none'` (removed next major).
+     */
+    attributeLists?: AttributeListSyntax | DeprecatedDialectToggle;
+    /**
+     * GFM `~~text~~` strikethrough (`'tilde'`; not part of base CommonMark), or `'none'`. Omit to
+     * inherit from `extends`. Passing a boolean is deprecated: `true` = `'tilde'`, `false` = `'none'`
+     * (removed next major).
+     */
+    strikethrough?: StrikethroughSyntax | DeprecatedDialectToggle;
+    /**
+     * `==text==` highlight (`'equals'`; Obsidian/extended flavors, NOT GFM or CommonMark where `==`
+     * is literal text), or `'none'`. When `'equals'`, a highlighted run round-trips as `==text==`
+     * and `==text==` is read back as a highlight; when `'none'`, a highlight falls back to an HTML
+     * `<mark>`/`<span>` per `fallbackToHtml.inlineFormatting`, and `==text==` stays literal on parse.
+     * Omit to inherit from `extends`.
+     */
+    highlight?: HighlightSyntax;
     /** Unordered list bullet character. */
     bulletListMarker?: '-' | '*' | '+';
     /** Ordered list marker punctuation. */
@@ -1750,6 +1826,12 @@ export interface CellMetadata {
      */
     col: number;
     /**
+     * Text alignment for this cell's column, from the GFM pipe-table separator row
+     * (`:---` left, `:---:` center, `---:` right). All cells in a column carry the same value;
+     * the Markdown generator reads it from the header row to emit the separator.
+     */
+    align?: 'left' | 'center' | 'right';
+    /**
      * The number of rows this cell spans (merges).
      * @example 2 if the cell is merged with the one below it.
      */
@@ -1834,6 +1916,8 @@ export interface ImageMetadata {
      * @example 'center'
      */
     align?: 'left' | 'center' | 'right';
+    /** Advisory image title (Markdown `![alt](url "title")`, HTML `<img title>`), if any. */
+    title?: string;
 }
 
 /**
@@ -1926,6 +2010,8 @@ export interface TextMetadata {
      * officeParser always parses/generates the syntax.
      */
     wikilink?: boolean;
+    /** Advisory link title (Markdown `[text](url "title")`, HTML `<a title>`), if any. */
+    title?: string;
 }
 
 /**

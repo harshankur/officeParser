@@ -160,6 +160,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         mathBlocks.push(latex);
         return `\n\n${id}\n\n`;
     });
+    // Single-line `$$...$$` occupying its own line is display (block) math too. Without this it
+    // falls through to the inline `$...$` tokenizer, which matches the INNER `$\int$` and leaks
+    // the outer pair as two stray literal `$`. Runs after the multi-line pass, whose placeholders
+    // carry no `$$` and so can't be re-matched. `(?!\$)` rejects `$$$...`/empty `$$$$`.
+    textStr = textStr.replace(/^\$\$(?!\$)([^\n]+?)\$\$[ \t]*$/gm, (_match, latex) => {
+        const id = `__MATH_BLOCK_${mathBlocks.length}__`;
+        mathBlocks.push(latex);
+        return `\n\n${id}\n\n`;
+    });
 
     // Extract GLFM-style fenced-div admonitions (`:::note ... :::`) before block splitting,
     // since their body may itself contain blank lines that would otherwise fragment them.
@@ -253,7 +262,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Builds the same image/link node shape regardless of whether the URL came from
         // an inline `(url)` or a resolved reference definition - shared by the inline
         // image/link branch and the two reference-style branches below.
-        const buildLinkOrImageNodes = (isImage: boolean, altText: string, url: string, attrsStr?: string): OfficeContentNode[] => {
+        // Split a Markdown inline destination `url "title"` (also `'title'` / `(title)`) into its
+        // URL and optional title. The inline parser previously kept the whole thing as the URL, so
+        // `[t](u "T")` produced href `u "T"`; reference-style `[t][id]` already split it correctly.
+        const splitUrlTitle = (raw: string): { url: string; title?: string } => {
+            const m = raw.trim().match(/^(.*?)\s+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\))\s*$/);
+            return m ? { url: m[1].trim(), title: m[2] ?? m[3] ?? m[4] } : { url: raw };
+        };
+        const buildLinkOrImageNodes = (isImage: boolean, altText: string, rawUrl: string, attrsStr?: string): OfficeContentNode[] => {
+            const { url, title } = splitUrlTitle(rawUrl);
             if (isImage) {
                 // Pandoc-style attribute list immediately after an image, e.g. {width=50% .centered}
                 const attrs = attrsStr !== undefined ? parseAttributeList(attrsStr) : undefined;
@@ -270,15 +287,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                             name,
                             extension: mimeType.split('/')[1]
                         });
-                        return [{ type: 'image', metadata: { attachmentName: name, altText, ...attrs } as ImageMetadata }];
+                        return [{ type: 'image', metadata: { attachmentName: name, altText, title, ...attrs } as ImageMetadata }];
                     }
                 }
-                return [{ type: 'image', metadata: { url, altText, ...attrs } as ImageMetadata }];
+                return [{ type: 'image', metadata: { url, altText, title, ...attrs } as ImageMetadata }];
             }
             const linkNodes = parseInline(altText, currentFormatting);
             linkNodes.forEach(n => {
                 if (n.type === 'text') {
-                    n.metadata = { link: url, linkType: 'external' } as TextMetadata;
+                    n.metadata = { link: url, linkType: 'external', title } as TextMetadata;
                 }
             });
             return linkNodes;
@@ -309,7 +326,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Inline math requires no whitespace right after the opening $ or right before the
         // closing $, the common heuristic (matching Pandoc/KaTeX) for avoiding false
         // positives on currency like "$5 and $10".
-        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|(?<lineBreak><br\s*\/?>)|<span\s+style="(?<spanStyle>[^"]*)">(?<spanContent>.+?)<\/span>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
+        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|==(?<highlight>.+?)==|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|(?<lineBreak><br\s*\/?>)|<span\s+style="(?<spanStyle>[^"]*)">(?<spanContent>.+?)<\/span>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
         let lastIndex = 0;
         let match;
 
@@ -333,6 +350,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 nodes.push(...parseInline(g.italicUnderscore, { ...currentFormatting, italic: true }));
             } else if (g.strike !== undefined) { // Strikethrough
                 nodes.push(...parseInline(g.strike, { ...currentFormatting, strikethrough: true }));
+            } else if (g.highlight !== undefined) { // ==highlight== (Obsidian/extended); additive on import
+                nodes.push(...parseInline(g.highlight, { ...currentFormatting, backgroundColor: '#ffff00' }));
             } else if (g.codeContent !== undefined) { // Inline code (any matching backtick-run length)
                 nodes.push({ type: 'text', text: g.codeContent, formatting: { ...currentFormatting, font: 'monospace' } });
             } else if (g.underline !== undefined) { // Underline
@@ -978,11 +997,23 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             } else {
                 const lines = block.trim().split('\n');
                 const rows: OfficeContentNode[] = [];
+                // Pre-scan the separator row for per-column GFM alignment (`:--` left, `:-:` center,
+                // `--:` right; a bare `--` column has none), so every cell can carry its column's
+                // alignment on CellMetadata.align (the header row precedes the separator, so a
+                // per-cell pass alone could not see it).
+                const sepLine = lines.find(l => l.match(/^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/));
+                const columnAligns: ('left' | 'center' | 'right' | null)[] = sepLine
+                    ? sepLine.replace(/^\||\|$/g, '').split('|').map(c => {
+                        const t = c.trim();
+                        const l = t.startsWith(':'), r = t.endsWith(':');
+                        return (l && r) ? 'center' : r ? 'right' : l ? 'left' : null;
+                    })
+                    : [];
                 for (let i = 0; i < lines.length; i++) {
                     if (lines[i].match(/^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/)) continue; // Separator row (per-cell `:?-+:?`, GFM-style; accepts short cells like `|-|-|`)
 
                     const cellsStr = lines[i].replace(/^\||\|$/g, '').split('|');
-                    const cells: OfficeContentNode[] = cellsStr.map(c => {
+                    const cells: OfficeContentNode[] = cellsStr.map((c, colIdx) => {
                         // Recognize the MarkdownGenerator's own cell-alignment fallback,
                         // `<div style="text-align: X">…</div>`, and lift it into an aligned
                         // paragraph so it round-trips as alignment instead of being escaped to
@@ -994,17 +1025,25 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                             (_m, a: string, inner: string) => { cellAlign = a.toLowerCase() as any; return inner; }
                         );
                         const inline = parseInline(cellText, i === 0 ? { bold: true } : {});
+                        const colAlign = columnAligns[colIdx] ?? undefined;
+                        const cellMeta = colAlign ? { col: colIdx, align: colAlign } as any : undefined;
                         if (cellAlign && cellAlign !== 'left') {
                             return {
                                 type: 'cell',
+                                metadata: cellMeta,
                                 children: [{ type: 'paragraph', metadata: { alignment: cellAlign } as any, children: inline }]
                             } as OfficeContentNode;
                         }
-                        return { type: 'cell', children: inline } as OfficeContentNode;
+                        return { type: 'cell', metadata: cellMeta, children: inline } as OfficeContentNode;
                     });
                     rows.push({ type: 'row', children: cells });
                 }
-                content.push({ type: 'table', metadata: tableAlign ? { align: tableAlign } : undefined, children: rows });
+                // If every explicitly-aligned column agrees, also expose it as the table-level align,
+                // so an editor that models one alignment per table (and HTML data-align) round-trips.
+                const explicitAligns = columnAligns.filter((a): a is 'left' | 'center' | 'right' => a !== null);
+                const uniformAlign = explicitAligns.length > 0 && explicitAligns.every(a => a === explicitAligns[0]) ? explicitAligns[0] : undefined;
+                const resolvedTableAlign = tableAlign || uniformAlign;
+                content.push({ type: 'table', metadata: resolvedTableAlign ? { align: resolvedTableAlign } : undefined, children: rows });
                 continue;
             }
         }

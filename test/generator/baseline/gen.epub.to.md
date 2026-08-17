@@ -13,14 +13,14 @@ There is support for images, tables, lists, footnotes, endnotes, links, dropcaps
 
 To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books” **button and then click “**Convert”. ** Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**.
 
-
+  
 
 
 # Text Formatting {#id-toc2054249818}
 
 ### Inline formatting {#id-toc2137712100}
 
-Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
+Here, we demonstrate various types of inline text formatting and the use of embedded fonts.  
 
 
 Here is some **bold, ***italic, *bold-italic, underlined and struck out  text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
@@ -41,7 +41,7 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like this
 
 
 | ITEM | NEEDED |
-|  ---  |  ---  |
+| --- | --- |
 | Books | 1 |
 | Pens | 3 |
 | Pencils | 2 |
@@ -54,7 +54,7 @@ Now let’s look at a fancier table—one with alternating row colors and partia
 
 
 | City or Town | Point A | Point B | Point C | Point D | Point E |
-|  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- | --- | --- |
 | Point A | — |  |  |  |  |
 | Point B | 87 | — |  |  |  |
 | Point C | 64 | 56 | — |  |  |
@@ -65,7 +65,7 @@ Next, we see a table with special formatting in various locations. Notice how th
 
 
 | College | New students | Graduating students | Change |
-|  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- |
 |  | Undergraduate |  |  |
 | Cedar University | 110 | 103 | +7 |
 | Oak Institute | 202 | 210 | -8 |
@@ -290,7 +290,7 @@ Miscellaneous structural elements you can add to your document, like footnotes, 
 
 ## Footnotes & Endnotes {#id-toc201580556}
 
-Footnotes[<sup>1</sup>](index_split_006.html#note_1) and endnotes[<sup>2</sup>](index_split_007.html#note_2) are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.
+Footnotes[<sup>1</sup>](index_split_006.html#note_1 "1") and endnotes[<sup>2</sup>](index_split_007.html#note_2 "2") are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.
 
 ## Dropcaps {#id-toc1977424358}
 
@@ -398,10 +398,10 @@ An interruption in our regularly scheduled listing, for this essential and very 
 
 # Notes {#calibre-pb-5}
 
-[[←1](index_split_003.html#back_note_1)]
+[[←1](index_split_003.html#back_note_1 "1")]
 : In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.
 
 
 
-[[←2](index_split_003.html#back_note_2)]
+[[←2](index_split_003.html#back_note_2 "2")]
 : Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.

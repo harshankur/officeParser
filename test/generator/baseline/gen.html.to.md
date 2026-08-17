@@ -29,7 +29,7 @@ To see the DOCX conversion in action, simply add this file to calibre using the 
 
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts. 
 
-Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u> and ~~struck out ~~ text. Then, we have a super <sup>script</sup> and a sub <sub>script</sub> . Now we see some red , green and blue text. Some text with a yellow highlight . Some text in a box . Some text in inverse video . 
+Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u> and ~~struck out ~~ text. Then, we have a super <sup>script</sup> and a sub <sub>script</sub> . Now we see some red , green and blue text. Some text with a ==yellow highlight== . Some text in a box . Some text in ==inverse video== . 
 
 A paragraph with styled text: *subtle emphasis* f ollowed by **strong text ** a nd ***intense emphasis*** . This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease. 
 
@@ -39,7 +39,7 @@ This document has embedded the Ubuntu font family. The body text is in the Ubunt
 
 ## Paragraph level formatting {#paragraph-level-formatting}
 
-<div style="text-align: right">You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.</div>
+<div style="text-align: right">==You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.==</div>
 
 For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph. 
 
@@ -51,7 +51,7 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like this
 
 
 | ITEM | NEEDED |
-|  ---  |  ---  |
+| --- | --- |
 | Books | 1 |
 | Pens | 3 |
 | Pencils | 2 |
@@ -64,7 +64,7 @@ Now let’s look at a fancier table—one with alternating row colors and partia
 
 
 | City or Town | <div style="text-align: center">Point A</div> | <div style="text-align: center">Point B</div> | <div style="text-align: center">Point C</div> | <div style="text-align: center">Point D</div> | <div style="text-align: center">Point E</div> |
-|  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- | --- | --- |
 | Point A | <div style="text-align: center">— </div> |  |  |  |  |
 | Point B | <div style="text-align: center">87 </div> | <div style="text-align: center">— </div> |  |  |  |
 | Point C | <div style="text-align: center">64 </div> | <div style="text-align: center">56 </div> | <div style="text-align: center">— </div> |  |  |
@@ -77,7 +77,7 @@ Next, we see a table with special formatting in various locations. Notice how th
 
 
 | College | New students | Graduating students | Change |
-|  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- |
 |  | *Undergraduate* |  |  |
 | Cedar University | 110 | 103 | +7 |
 | Oak Institute | 202 | 210 | -8 |

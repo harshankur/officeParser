@@ -721,6 +721,22 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return admonitionNode;
             }
 
+            // Blockquote. Previously dropped entirely (its children were lifted out unquoted), so a
+            // <blockquote> lost its `> ` on the Markdown hop. Mark each block child with the 'Quote'
+            // style the styleMapper maps back to a blockquote; loose inline content is wrapped in one
+            // Quote-styled paragraph so it isn't emitted as an ordinary line.
+            if (tagName === 'blockquote') {
+                const kids = parseChildren(node, newFormatting, listContext);
+                const isBlock = (t: string) => t === 'paragraph' || t === 'heading' || t === 'list';
+                if (!kids.some(k => isBlock(k.type))) {
+                    return { type: 'paragraph', metadata: { style: 'Quote' } as any, children: kids };
+                }
+                kids.forEach(k => {
+                    if (isBlock(k.type)) k.metadata = { ...(k.metadata as any), style: 'Quote' };
+                });
+                return kids;
+            }
+
             // Mermaid diagrams. Attribute-driven producers render a
             // <div class="mermaid" data-mermaid="<code>"> with the code also as text content.
             // Map either shape to a fenced code node with language `mermaid`, so it round-trips as
@@ -958,11 +974,22 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const colSpan = colSpanAttr ? parseInt(colSpanAttr, 10) : undefined;
                 const rowSpan = rowSpanAttr ? parseInt(rowSpanAttr, 10) : undefined;
 
+                // Per-column GFM alignment: read the cell's own `text-align` (or a legacy `align=`
+                // attribute) into `CellMetadata.align`, so the `:---`/`:---:`/`---:` markers survive
+                // AST -> HTML -> AST. `justify` has no pipe-table marker, so it is not a cell align.
+                // The table-level `<table data-align>` form is read separately in the `table` branch.
+                const cellTextAlign = (getDeclaration(parseStyleDeclarations(node.attributes?.style || ''), 'text-align')
+                    || node.attributes?.align || '').toLowerCase();
+                const cellAlign = (['left', 'center', 'right'] as const).includes(cellTextAlign as any)
+                    ? cellTextAlign as 'left' | 'center' | 'right'
+                    : undefined;
+
                 const cellNode: OfficeContentNode = {
                     type: 'cell',
                     metadata: {
                         colSpan: colSpan && !isNaN(colSpan) ? colSpan : undefined,
-                        rowSpan: rowSpan && !isNaN(rowSpan) ? rowSpan : undefined
+                        rowSpan: rowSpan && !isNaN(rowSpan) ? rowSpan : undefined,
+                        align: cellAlign
                     } as CellMetadata,
                     children: parseChildren(node, newFormatting, listContext),
                     htmlAttributes: collectHtmlAttributes(node, ['colspan', 'rowspan', 'align'])
@@ -1022,6 +1049,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                             metadata: {
                                 attachmentName: name,
                                 altText: alt,
+                                title: node.attributes?.title,
                                 width,
                                 align
                             } as ImageMetadata
@@ -1032,6 +1060,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                             metadata: {
                                 url: src,
                                 altText: alt,
+                                title: node.attributes?.title,
                                 width,
                                 align
                             } as ImageMetadata
@@ -1043,6 +1072,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                         metadata: {
                             url: src,
                             altText: alt,
+                            title: node.attributes?.title,
                             anchorIds: anchorIds.length > 0 ? anchorIds : undefined,
                             width,
                             align
@@ -1083,16 +1113,20 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     });
                 } else if (href) {
                     const linkType = href.startsWith('#') ? 'internal' : 'external';
+                    const linkTitle = node.attributes?.title;
                     children.forEach(c => {
                         if (c.type === 'text') {
-                            c.metadata = { ...c.metadata, link: href, linkType } as TextMetadata;
+                            c.metadata = { ...c.metadata, link: href, linkType, title: linkTitle } as TextMetadata;
                         }
                     });
                 }
                 return children;
             }
             if (tagName === 'br') {
-                const brNode: OfficeContentNode = { type: 'break', metadata: { breakType: 'textWrapping' } };
+                // A <br> is a hard line break: `carriageReturn` so the Markdown generator emits a
+                // hard break (`  \n`, or a `<br>` inside a table cell) that re-imports as a <br>.
+                // `textWrapping` emitted a bare `\n` in a paragraph, which re-imports as a space.
+                const brNode: OfficeContentNode = { type: 'break', metadata: { breakType: 'carriageReturn' } };
                 if (config.includeRawContent) {
                     brNode.rawContent = '<br/>';
                 }

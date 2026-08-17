@@ -389,7 +389,9 @@ async function testHtml(): Promise<void> {
     // ── Break (<br>) ──────────────────────────────────────────────────────────
     const breaks = nodes.filter(n => n.type === 'break');
     assert.ok(breaks.length >= 1, 'HTML: Has break nodes');
-    assertExists(breaks, n => (n.metadata as any)?.breakType === 'textWrapping', 'HTML: textWrapping break');
+    // A <br> is a hard line break -> carriageReturn, so the md generator emits `  \n` (which
+    // re-imports as a <br>) rather than a bare `\n` that would collapse to a space (8.H).
+    assertExists(breaks, n => (n.metadata as any)?.breakType === 'carriageReturn', 'HTML: <br> is a carriageReturn (hard) break');
 
     // ── Lists (unordered/ordered) ─────────────────────────────────────────────
     const listNodes = nodes.filter(n => n.type === 'list');
@@ -1099,6 +1101,29 @@ async function testGeneratedOutput(): Promise<void> {
     assert.ok(/<thead>\s*<tr>\s*<th/.test(tblHtml), '7.D: a table header row is wrapped in <tr> (valid <thead><tr><th>)');
     const tblBack = String((await OfficeGenerator.generate(await parseHtml(tblHtml), 'md')).value);
     assert.ok(/\|\s*Feature\s*\|\s*Status\s*\|/.test(tblBack), '7.D: a generated table survives md -> HTML -> md with its header intact');
+
+    // 8.G: GFM per-column table alignment survives md -> HTML -> md. Alignment lives on
+    // CellMetadata.align; HtmlGenerator emits it as `text-align` on each <th>/<td> and HtmlParser
+    // reads it back, so the `:---`/`:---:`/`---:` markers are not lost when a table passes through
+    // HTML (the markdownwriter import path). There was no HTML-round-trip case before md<->md - which
+    // is exactly why 8.G slipped.
+    const alignHtml = String((await OfficeGenerator.generate(await parseMd('| A | B | C |\n|:--|:-:|--:|\n| 1 | 2 | 3 |'), 'html', { htmlConfig: { standalone: false } })).value);
+    assert.ok(/<t[hd][^>]*style="[^"]*text-align:\s*left/.test(alignHtml), '8.G: left column emits text-align:left');
+    assert.ok(/<t[hd][^>]*style="[^"]*text-align:\s*center/.test(alignHtml), '8.G: center column emits text-align:center');
+    assert.ok(/<t[hd][^>]*style="[^"]*text-align:\s*right/.test(alignHtml), '8.G: right column emits text-align:right');
+    const alignBack = String((await OfficeGenerator.generate(await parseHtml(alignHtml), 'md', { mdConfig: { dialect: 'extended' } })).value);
+    assert.ok(/\|\s*:---\s*\|\s*:---:\s*\|\s*---:\s*\|/.test(alignBack), '8.G: md -> HTML -> md preserves | :--- | :---: | ---: |');
+
+    // 8.G: an unaligned table injects no text-align (byte-identical to before this change).
+    const plainHtml = String((await OfficeGenerator.generate(await parseMd('| A | B |\n| --- | --- |\n| 1 | 2 |'), 'html', { htmlConfig: { standalone: false } })).value);
+    assert.ok(!/text-align/.test(plainHtml), '8.G: an unaligned table emits no text-align');
+
+    // 8.G: html -> md reads BOTH the new per-cell `text-align` form and the existing table-level
+    // `<table data-align>` form.
+    const fromCells = String((await OfficeGenerator.generate(await parseHtml('<table><thead><tr><th style="text-align:right">A</th></tr></thead><tbody><tr><td style="text-align:right">1</td></tr></tbody></table>'), 'md', { mdConfig: { dialect: 'extended' } })).value);
+    assert.ok(/\|\s*---:\s*\|/.test(fromCells), '8.G: html -> md reads per-cell text-align into the separator');
+    const fromTableAlign = String((await OfficeGenerator.generate(await parseHtml('<table data-align="center"><thead><tr><th>A</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>'), 'md', { mdConfig: { dialect: 'extended' } })).value);
+    assert.ok(/\|\s*:---:\s*\|/.test(fromTableAlign), '8.G: html -> md still reads the table-level data-align form');
 
     console.log('  Generated output: All assertions passed ✓');
 }

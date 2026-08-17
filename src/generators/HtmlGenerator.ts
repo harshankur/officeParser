@@ -756,7 +756,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 }
                 const imgStyleAttr = imgStyleParts.length > 0 ? ` style="${imgStyleParts.join('; ')}"` : '';
 
-                const img = `<img src="${sanitizeImageUrl(src)}" alt="${this.escape(node.text || meta?.altText || '')}"${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
+                const imgTitle = meta?.title ? ` title="${this.escape(meta.title)}"` : '';
+                const img = `<img src="${sanitizeImageUrl(src)}" alt="${this.escape(node.text || meta?.altText || '')}"${imgTitle}${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
                 const content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
                 return `${extraAnchors}<div${idAttr}>${content}</div>`;
             }
@@ -876,7 +877,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 }
                 const lang = meta?.language ? ` class="language-${this.escape(meta.language)}"` : '';
                 const codeHtml = `<code${lang}>${this.escape(node.text || '')}</code>`;
-                if (node.text && node.text.includes('\n')) {
+                // A `code` node is always block-level (inline code is a monospace text run, emitted
+                // as <code> by formatText). Wrap in <pre> whenever it carries a language or spans
+                // multiple lines; only a bare single-line, language-less code node stays a <span>.
+                // Previously a single-line block (e.g. a one-line ```js) emitted <span><code>, which
+                // re-imports as inline code and which strict CodeBlock parsers (only <pre><code>) miss.
+                if (meta?.language || (node.text && node.text.includes('\n'))) {
                     return `${extraAnchors}<pre${idAttr}${className}${mappedAttrs}${styleAttr}>${codeHtml}</pre>`;
                 } else {
                     return `${extraAnchors}<span${idAttr}${className}${mappedAttrs}${styleAttr}>${codeHtml}</span>`;
@@ -1245,6 +1251,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const f = node.formatting;
 
         if (this.config.includeFormatting && f) {
+            // Inline code: a monospace run becomes `<code>`, not a `font-family: monospace` span, so
+            // an editor keying on <code> sees it and it re-imports as inline code (HtmlParser maps
+            // <code> back to a monospace run). Innermost, so bold/italic wrap it (`<b><code>…`).
+            if (f.font === 'monospace') result = `<code>${result}</code>`;
             // Inside an `<hN>`, the heading's own styling is authoritative. A run that also carries
             // bold and a font size - the normal case for ODF, where a heading's paragraph style is
             // inherited by its runs - would wrap the text in `<b>` the heading already implies and,
@@ -1294,7 +1304,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         } else if (meta?.link) {
             const isInternal = meta.linkType !== 'external';
             if (!this.config.ignoreInternalLinks || !isInternal) {
-                result = `<a href="${sanitizeUrl(meta.link)}"${meta.linkType === 'external' ? ' target="_blank"' : ''}>${result}</a>`;
+                const linkTitle = meta.title ? ` title="${this.escape(meta.title)}"` : '';
+                result = `<a href="${sanitizeUrl(meta.link)}"${linkTitle}${meta.linkType === 'external' ? ' target="_blank"' : ''}>${result}</a>`;
             }
         }
         if (meta?.abbreviationTitle) {
@@ -1326,6 +1337,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         if (node.metadata) {
             const meta = node.metadata as any;
             if (meta.alignment) pushSafe('text-align', meta.alignment);
+            // A table cell's column alignment (GFM `:---`/`:---:`/`---:`) lives on
+            // `CellMetadata.align`, not `alignment`. Emit it as `text-align` on the `<th>`/`<td>`
+            // so `HtmlParser` reads it back and the pipe-table markers survive AST -> HTML -> AST.
+            // An unaligned cell (no `align`) adds nothing, keeping its HTML byte-identical.
+            if (node.type === 'cell' && meta.align) pushSafe('text-align', meta.align);
             if (meta.backgroundColor) pushSafe('background-color', meta.backgroundColor);
             if (meta.verticalAlign) pushSafe('vertical-align', meta.verticalAlign);
             if (meta.paragraphIndentation) {
@@ -1343,7 +1359,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // background it passes skipBackgroundColor so the colour is not also duplicated here.
             if (f.backgroundColor && !options.skipBackgroundColor) pushSafe('background-color', f.backgroundColor);
             if (f.size && !options.skipFontSize) pushSafe('font-size', f.size);
-            if (f.font) {
+            // A monospace run is emitted as <code> by formatText, so it must not also become a
+            // font-family style here (that was the old, non-semantic inline-code shape).
+            if (f.font && f.font !== 'monospace') {
                 const safeFont = sanitizeCssValue(f.font);
                 if (safeFont) styles.push(`font-family: ${safeFont}, sans-serif`);
             }
