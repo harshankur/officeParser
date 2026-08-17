@@ -780,6 +780,8 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 | Attribute lists | `![alt](img.png){width=50% .centered}` | `ImageMetadata.width` / `.align`, `TableMetadata.align` |
 | Citations | `[@smith2024]` | `TextMetadata.citationKey` |
 | Wikilinks | `[[Page]]` / `[[Page\|Alias]]` | `TextMetadata.wikilink`, `.link`, `.linkType` |
+| Highlight | `==text==` | `TextMetadata.backgroundColor` |
+| Link/image titles | `[text](url "Title")` / `![alt](img.png "Title")` | `TextMetadata.title` / `ImageMetadata.title` |
 | Inline/block math | `$E=mc^2$` / `` $$...$$ `` | `type: 'code'`, `CodeMetadata.math` (`'inline' \| 'block'`) |
 | Frontmatter arrays | `tags: [a, b]` or `tags: ["a","b"]` | Real array in `metadata.customProperties`/`nativeProperties` |
 | MDX components (import-only) | `<Component prop="x">...</Component>` | Stripped; inner Markdown is kept. Never generated back. |
@@ -795,7 +797,8 @@ save→reload cycle:
 | HTML attribute | AST field | Notes |
 |---|---|---|
 | `data-width` / `data-align` / inline `style="width:…"` on `<img>` | `ImageMetadata.width` / `.align` | |
-| `data-align` on `<table>` | `TableMetadata.align` | |
+| `data-align` on `<table>` | `TableMetadata.align` | Emitted/parsed as per-column GFM markers (`:---`, `:---:`, `---:`); alignment rides `CellMetadata.align` |
+| `title` on `<a>` / `<img>` | `TextMetadata.title` / `ImageMetadata.title` | Survives both directions (`[text](url "Title")` in Markdown) |
 | `colspan` / `rowspan` on `<td>`/`<th>` | `CellMetadata.colSpan` / `.rowSpan` | Previously dropped on HTML import — merged cells now survive a save→reload cycle |
 | `<div data-youtube-video="ID">` / `<iframe src="...youtube.com...">` | `type: 'embed'` | |
 | `<ul data-type="taskList">` / `<li data-checked>` | `ListMetadata.isTask` / `.checked` | |
@@ -1146,7 +1149,8 @@ Pass as `mdConfig` inside `GeneratorConfig`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `fallbackToHtml` | `boolean \| FallbackToHtmlConfig` | `true` | Use HTML tags for features Markdown cannot represent (underlines, merged table cells, embeds, etc.). Pass an object for per-feature control. `inlineFormatting` (default `false`, opt-in even when the boolean is `true`) additionally round-trips inline color/highlight/font-size as `<span style="...">` runs. |
+| `fallbackToHtml` | `boolean \| FallbackToHtmlConfig` | `true` | Use HTML tags for features Markdown cannot represent (underlines, merged table cells, embeds, etc.). Pass an object for per-feature control. `cellLineBreaks`/`itemLineBreaks` (default on) join multi-line table-cell / multi-paragraph list-item content with `<br>` instead of a space. `inlineFormatting` (default `false`, opt-in even when the boolean is `true`) additionally round-trips inline color/highlight/font-size as `<span style="...">` runs. |
+| `dialect` | `MarkdownDialectPreset \| MarkdownDialectConfig` | `'extended'` | Which native syntax to emit for constructs that differ across targets (GitHub/GitLab/Obsidian/Pandoc/CommonMark). Each capability is typed by the syntax it selects (e.g. `strikethrough: 'tilde'`, `highlight: 'equals'`, `admonitions: 'blockquote'`), with `'none'` to turn it off. See [Markdown Dialect Support](#markdown-dialect-support). The old `boolean` toggles and admonition flavour names (`'github'`/`'gitlab'`/`'pandoc'`) still work but are deprecated. |
 
 ### PdfGeneratorConfig
 

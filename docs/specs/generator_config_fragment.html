@@ -336,26 +336,28 @@
         </thead>
         <tbody>
             <tr><td><code>extends</code></td><td><code><a href="#markdowndialectconfig">MarkdownDialectPreset</a></code></td><td>Base preset for every field left unset. Defaults to <code>'extended'</code>. Note this is the base for <em>this object</em>, not "whatever preset was configured before" &mdash; config merging replaces the whole <code>dialect</code> field rather than layering onto a prior string.</td></tr>
-            <tr><td><code>admonitions</code></td><td><code>'github' | 'gitlab' | 'pandoc' | 'none'</code></td><td>Which admonition syntax to emit. <code>'none'</code> degrades to a bold-labelled blockquote.</td></tr>
+            <tr><td><code>admonitions</code></td><td><code>'blockquote' | 'fence' | 'fence-attribute' | 'none'</code></td><td>Which admonition syntax to emit: <code>'blockquote'</code> = GitHub <code>&gt; [!NOTE]</code>, <code>'fence'</code> = GitLab <code>:::note</code>, <code>'fence-attribute'</code> = Pandoc <code>::: {.note}</code>, <code>'none'</code> degrades to a bold-labelled blockquote. The flavour names <code>'github'</code>/<code>'gitlab'</code>/<code>'pandoc'</code> are accepted as <strong>deprecated</strong> aliases and will be removed in the next major.</td></tr>
+            <tr><td><code>highlight</code></td><td><code>'equals' | 'none'</code></td><td><code>==text==</code> highlight (Obsidian/extended flavours). <code>'none'</code> falls back to an HTML <code>&lt;mark&gt;</code>/<code>&lt;span&gt;</code> per <code>fallbackToHtml.inlineFormatting</code>, and <code>==</code> stays literal on parse.</td></tr>
             <tr><td><code>math</code></td><td><code>'dollar' | 'none'</code></td><td><code>$inline$</code> / <code>$$block$$</code> delimiters, or none (content emitted bare).</td></tr>
             <tr><td><code>tables</code></td><td><code>'native' | 'html'</code></td><td>Pipe tables, or an HTML <code>&lt;table&gt;</code>. Forced to <code>'html'</code> under <code>commonmark</code>.</td></tr>
             <tr><td><code>bulletListMarker</code></td><td><code>'-' | '*' | '+'</code></td><td>Marker for unordered list items.</td></tr>
             <tr><td><code>orderedListMarker</code></td><td><code>'.' | ')'</code></td><td><code>1.</code> or <code>1)</code> for ordered list items.</td></tr>
             <tr><td><code>emphasisMarker</code></td><td><code>'asterisk' | 'underscore'</code></td><td><code>*em*</code>/<code>**strong**</code> or <code>_em_</code>/<code>__strong__</code>.</td></tr>
-            <tr><td><code>definitionLists</code></td><td><code>boolean</code></td><td>Markdown&nbsp;Extra <code>Term\n: Definition</code> syntax. When off, definition lists degrade to plain paragraphs.</td></tr>
-            <tr><td><code>footnotes</code></td><td><code>boolean</code></td><td><code>[^id]</code> references with a definition block. When off, note content is inlined as a parenthetical at the reference point rather than being dropped.</td></tr>
-            <tr><td><code>citations</code></td><td><code>boolean</code></td><td>Pandoc <code>[@citekey]</code> syntax. When off, the key is emitted as plain <code>[key]</code>.</td></tr>
-            <tr><td><code>wikilinks</code></td><td><code>boolean</code></td><td>Obsidian <code>[[Page]]</code> / <code>[[Page|Alias]]</code> syntax. When off, wikilinks become ordinary links.</td></tr>
-            <tr><td><code>attributeLists</code></td><td><code>boolean</code></td><td>Pandoc-style <code>{width=50% align=center}</code> after an image or table.</td></tr>
-            <tr><td><code>strikethrough</code></td><td><code>boolean</code></td><td><code>~~struck~~</code>. When off, the formatting is dropped.</td></tr>
+            <tr><td><code>definitionLists</code></td><td><code>'colon' | 'none'</code></td><td>Markdown&nbsp;Extra <code>Term\n: Definition</code> syntax. <code>'none'</code> degrades to plain paragraphs.</td></tr>
+            <tr><td><code>footnotes</code></td><td><code>'caret' | 'none'</code></td><td><code>[^id]</code> references with a definition block. <code>'none'</code> inlines note content as a parenthetical at the reference point rather than dropping it.</td></tr>
+            <tr><td><code>citations</code></td><td><code>'at' | 'none'</code></td><td>Pandoc <code>[@citekey]</code> syntax. <code>'none'</code> emits the key as plain <code>[key]</code>.</td></tr>
+            <tr><td><code>wikilinks</code></td><td><code>'double-bracket' | 'none'</code></td><td>Obsidian <code>[[Page]]</code> / <code>[[Page|Alias]]</code> syntax. <code>'none'</code> makes wikilinks ordinary links.</td></tr>
+            <tr><td><code>attributeLists</code></td><td><code>'brace' | 'none'</code></td><td>Pandoc-style <code>{width=50% align=center}</code> after an image or table.</td></tr>
+            <tr><td><code>strikethrough</code></td><td><code>'tilde' | 'none'</code></td><td><code>~~struck~~</code>. <code>'none'</code> drops the formatting.</td></tr>
         </tbody>
     </table>
+    <p style="font-size: 0.9em; opacity: 0.85;">Each capability is named for the <em>syntax</em> it selects, with an explicit <code>'none'</code> to turn it off (an omitted field inherits from <code>extends</code>). The former <code>boolean</code> form of <code>definitionLists</code>, <code>footnotes</code>, <code>citations</code>, <code>wikilinks</code>, <code>attributeLists</code> and <code>strikethrough</code> is <strong>deprecated</strong> but still accepted: <code>true</code> maps to the syntax value, <code>false</code> to <code>'none'</code>. Both the boolean form and the admonition flavour aliases will be removed in the next major.</p>
     <pre><code>// A preset by name
 await ast.to('md', { mdConfig: { dialect: 'github' } });
 
 // GitHub, but with wikilinks and asterisk bullets
 await ast.to('md', {
-    mdConfig: { dialect: { extends: 'github', wikilinks: true, bulletListMarker: '*' } },
+    mdConfig: { dialect: { extends: 'github', wikilinks: 'double-bracket', bulletListMarker: '*' } },
 });</code></pre>
 
     <h4 id="fallbacktohtmlconfig">FallbackToHtmlConfig</h4>
@@ -377,6 +379,7 @@ await ast.to('md', {
             <tr><td><code>tables</code></td><td><code>boolean</code></td><td><code>&lt;table&gt;</code> for nested or merged-cell tables a pipe table cannot express. When off, nested tables are hoisted out and rendered sequentially.</td></tr>
             <tr><td><code>embeds</code></td><td><code>boolean</code></td><td>Raw HTML for video/embed nodes. When off, they degrade to a plain link.</td></tr>
             <tr><td><code>cellLineBreaks</code></td><td><code>boolean</code></td><td><code>&lt;br&gt;</code> inside a table cell, which a pipe table cannot otherwise contain.</td></tr>
+            <tr><td><code>itemLineBreaks</code></td><td><code>boolean</code></td><td><code>&lt;br&gt;</code> joining the paragraphs of a multi-paragraph list item, which stays on the item's single Markdown line. When off, they are joined with a space.</td></tr>
             <tr><td><code>inlineFormatting</code></td><td><code>boolean</code></td><td>Inline text color, highlight, and font size via a <code>&lt;span style="color:…;background-color:…;font-size:…"&gt;</code> run, which the Markdown parser reads back. These have no Markdown syntax and are otherwise lost silently. <strong>Off by default even when <code>fallbackToHtml</code> is <code>true</code></strong> (it changes default output). Enable it explicitly with <code>fallbackToHtml: { inlineFormatting: true }</code>.</td></tr>
         </tbody>
     </table>
