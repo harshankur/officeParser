@@ -121,6 +121,7 @@ function resolveFallbackToHtml(fallbackToHtml: boolean | FallbackToHtmlConfig | 
         // inlineFormatting is opt-in only: it is never enabled by the boolean form, since it changes
         // default output. Every other field follows the boolean.
         textFormatting: on, alignment: on, anchors: on, tables: on, embeds: on, cellLineBreaks: on,
+        itemLineBreaks: on,
         inlineFormatting: false,
     });
     if (fallbackToHtml === undefined || typeof fallbackToHtml === 'boolean') return uniform(fallbackToHtml ?? true);
@@ -132,6 +133,7 @@ function resolveFallbackToHtml(fallbackToHtml: boolean | FallbackToHtmlConfig | 
         tables: fallbackToHtml.tables ?? on.tables,
         embeds: fallbackToHtml.embeds ?? on.embeds,
         cellLineBreaks: fallbackToHtml.cellLineBreaks ?? on.cellLineBreaks,
+        itemLineBreaks: fallbackToHtml.itemLineBreaks ?? on.itemLineBreaks,
         inlineFormatting: fallbackToHtml.inlineFormatting ?? on.inlineFormatting,
     };
 }
@@ -476,7 +478,17 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         ? (meta.checked ? `${bullet}[x] ` : `${bullet}[ ] `)
                         : (meta?.listType === 'ordered' ? `${(meta.itemIndex ?? 0) + 1}${this.resolvedDialect.orderedListMarker} ` : bullet);
                     const anchors = this.renderAnchors(meta);
-                    return `${indent}${marker}${anchors}${childrenOutput}\n`;
+                    // A list item is a single Markdown line. HTML-origin items carry `paragraph`
+                    // children (e.g. `<li><p>a</p><ul>...`), whose renderer appends `\n\n`; dumped
+                    // verbatim that produces `- a\n\n\n    - a1`, whose blank line splits the list
+                    // apart and whose indent is then stripped on reparse, flattening the nesting.
+                    // Collapse the item's internal breaks the same way table cells do (see the
+                    // `cellLineBreaks` handling in renderMarkdownTable): join with `<br>` when the
+                    // fallback is on, a space when off. Block children (code fences, tables) inside
+                    // an item degrade under this join, exactly as they do inside a cell.
+                    const br = this.resolvedFallbackToHtml.itemLineBreaks ? '<br>' : ' ';
+                    const content = childrenOutput.trim().replace(/[ \t]*\n+/g, br);
+                    return `${indent}${marker}${anchors}${content}\n`;
                 }
 
                 case 'image': {

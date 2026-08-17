@@ -615,6 +615,31 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
     }
 
+    // Re-join a list block that a blank line tore away from its parent. The generator's older
+    // loose output (`- a\n\n\n    - a1`) and foreign editors both split a nested item into its
+    // own block; left apart, the child's leading indent is stripped by the per-block `trim()`
+    // below and it reparses as a flat top-level item under a fresh listId. Merge a block back
+    // into the preceding one only when the previous block is itself a list (its FIRST line is a
+    // marker - the sub-splitter guarantees such a block holds only marker/continuation lines) and
+    // the current block OPENS with an INDENTED marker. An unindented `- b` after a blank line is
+    // deliberately left split (a flat loose list keeps its own listId), and anything that is not
+    // an indented marker (continuation text, indented code, placeholders) never triggers a merge.
+    const listMarkerStart = /^(\s*)([-*+]|\d+[.)])\s+/;
+    const indentedMarkerStart = /^(?: {2,}|\t)\s*(?:[-*+]|\d+[.)])\s+/;
+    const mergedBlocks: string[] = [];
+    for (const block of blocks) {
+        const prev = mergedBlocks[mergedBlocks.length - 1];
+        if (prev !== undefined
+            && listMarkerStart.test(prev.split('\n', 1)[0])
+            && indentedMarkerStart.test(block.split('\n', 1)[0])) {
+            mergedBlocks[mergedBlocks.length - 1] = `${prev}\n${block}`;
+        } else {
+            mergedBlocks.push(block);
+        }
+    }
+    blocks.length = 0;
+    blocks.push(...mergedBlocks);
+
     let listIdCounter = 1;
     let currentAlignment: 'left' | 'center' | 'right' | 'justify' | undefined = undefined;
 

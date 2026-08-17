@@ -954,6 +954,7 @@ async function testGeneratedOutput(): Promise<void> {
         ['heading', '# Title\n\nBody paragraph.'],
         ['unordered list', '- one\n- two\n- three'],
         ['ordered list', '1. one\n2. two'],
+        ['nested list', '- a\n    - b'],
         ['fenced code', '```js\nconst x = 1;\nconst y = 2;\n```'],
         ['link', '[text](https://example.com)'],
         ['image', '![alt](https://example.com/i.png)'],
@@ -1101,6 +1102,39 @@ async function testGeneratedOutput(): Promise<void> {
     assert.ok(/<thead>\s*<tr>\s*<th/.test(tblHtml), '7.D: a table header row is wrapped in <tr> (valid <thead><tr><th>)');
     const tblBack = String((await OfficeGenerator.generate(await parseHtml(tblHtml), 'md')).value);
     assert.ok(/\|\s*Feature\s*\|\s*Status\s*\|/.test(tblBack), '7.D: a generated table survives md -> HTML -> md with its header intact');
+
+    // 8.D: a nested list survives html -> md. An HTML <li> with a <p> child used to emit
+    // `- a\n\n\n    - a1` (the paragraph's trailing blank line), which split the list apart and
+    // was then flattened on reparse. The item is now a single tight line, and the nesting and
+    // shared listId survive the reparse.
+    const nestedMd = String((await OfficeGenerator.generate(await parseHtml('<ul><li><p>a</p><ul><li><p>a1</p></li></ul></li></ul>'), 'md')).value).replace(/\n+$/, '');
+    assert.strictEqual(nestedMd, '- a\n    - a1', '8.D: nested html list exports to a tight `- a\\n    - a1`');
+    const nestedRe = (await parseMd(nestedMd)).content.filter(n => n.type === 'list');
+    assert.deepStrictEqual(nestedRe.map(n => (n.metadata as any).indentation), [0, 1], '8.D: reparsed nested list keeps indentations [0, 1]');
+    assert.strictEqual((nestedRe[0].metadata as any).listId, (nestedRe[1].metadata as any).listId, '8.D: reparsed nested items share one listId');
+
+    // 8.D: the loose shape a buggy older generator (or a foreign editor) wrote - a blank line
+    // between a parent item and its indented child - is re-joined so the child nests again.
+    const looseRe = (await parseMd('- a\n\n\n    - a1')).content.filter(n => n.type === 'list');
+    assert.deepStrictEqual(looseRe.map(n => (n.metadata as any).indentation), [0, 1], '8.D: loose `- a\\n\\n\\n    - a1` reparses as nested [0, 1]');
+    assert.strictEqual((looseRe[0].metadata as any).listId, (looseRe[1].metadata as any).listId, '8.D: re-joined loose list shares one listId');
+
+    // 8.D: an unindented sibling after a blank line stays a separate (flat) list - the merge is
+    // deliberately conservative and only pulls in indented children.
+    const flatRe = (await parseMd('- a\n\n- b')).content.filter(n => n.type === 'list');
+    assert.deepStrictEqual(flatRe.map(n => (n.metadata as any).indentation), [0, 0], '8.D: an unindented loose sibling stays flat [0, 0]');
+
+    // 8.D: a multi-paragraph item collapses its internal break to the item line. `<br>` when the
+    // fallback is on (default), a space when off - mirroring table cells under `cellLineBreaks`.
+    const multiP = await parseHtml('<ul><li><p>F</p><p>S</p></li></ul>');
+    assert.ok(/^- F<br>S/.test(String((await OfficeGenerator.generate(multiP, 'md')).value)), '8.D: multi-paragraph item joins with <br> by default');
+    assert.ok(/^- F S/.test(String((await OfficeGenerator.generate(multiP, 'md', { mdConfig: { fallbackToHtml: { itemLineBreaks: false } } })).value)), '8.D: itemLineBreaks:false joins with a space');
+
+    // 8.D: the generated HTML nests spec-validly - a nested list sits INSIDE its parent's still-open
+    // <li>, and no <ul>/<ol> directly contains another (the old invalid sibling shape).
+    const nestedListHtml = String((await OfficeGenerator.generate(await parseHtml('<ul><li><p>a</p><ul><li><p>a1</p></li></ul></li></ul>'), 'html', { htmlConfig: { standalone: false } })).value);
+    assert.ok(/<li[^>]*>(?:(?!<\/li>)[\s\S])*?<ul/.test(nestedListHtml), '8.D: nested <ul> sits inside an open <li>');
+    assert.ok(!/<[uo]l>\s*<[uo]l/.test(nestedListHtml), '8.D: no list directly contains another list');
 
     // 8.G: GFM per-column table alignment survives md -> HTML -> md. Alignment lives on
     // CellMetadata.align; HtmlGenerator emits it as `text-align` on each <th>/<td> and HtmlParser

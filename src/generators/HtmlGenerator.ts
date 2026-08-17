@@ -465,8 +465,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      */
     private async processNodeArray(nodes: OfficeContentNode[]): Promise<string> {
         let html = '';
-        // Stack to track active lists: { indentation, type, isTask }
-        const listStack: { indentation: number, type: 'ordered' | 'unordered', isTask: boolean }[] = [];
+        // Stack to track active lists. `liClose` is the currently-open item's deferred closing
+        // suffix (`</li>`, or `</div></li>` for a task item): a list item is rendered WITHOUT its
+        // close so a deeper list can land inside it (spec-valid `<li>a<ul>...</ul></li>` rather
+        // than the invalid `<li>a</li><ul>...</ul>` sibling shape). The close is emitted when a
+        // same-level sibling arrives, when the level is popped, or at the end.
+        const listStack: { indentation: number, type: 'ordered' | 'unordered', isTask: boolean, liClose: string }[] = [];
 
         const openListTag = (type: 'ordered' | 'unordered', isTask: boolean) => {
             if (isTask) return '<ul data-type="taskList">';
@@ -477,7 +481,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const closeListsToLevel = (level: number) => {
             while (listStack.length > 0 && listStack[listStack.length - 1].indentation > level) {
                 const list = listStack.pop();
-                html += closeListTag(list!.type) + '\n\n';
+                html += list!.liClose + closeListTag(list!.type) + '\n\n';
             }
         };
 
@@ -517,20 +521,31 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
                 // Handle current level
                 if (listStack.length > 0 && listStack[listStack.length - 1].indentation === indentation) {
-                    if (listStack[listStack.length - 1].type !== type || listStack[listStack.length - 1].isTask !== isTask) {
-                        // Type changed at same level
+                    const top = listStack[listStack.length - 1];
+                    if (top.type !== type || top.isTask !== isTask) {
+                        // Kind changed at the same level: close the open item and the old list,
+                        // then open the replacement list.
                         const last = listStack.pop();
-                        html += closeListTag(last!.type) + '\n';
+                        html += last!.liClose + closeListTag(last!.type) + '\n';
                         html += openListTag(type, isTask) + '\n';
-                        listStack.push({ indentation, type, isTask });
+                        listStack.push({ indentation, type, isTask, liClose: '' });
+                    } else {
+                        // Sibling at the same level: close the previous item before this one opens.
+                        html += top.liClose;
                     }
                 } else {
-                    // Start a new nested list
+                    // Deeper level (or the first list): open a nested list INSIDE the currently
+                    // open item, leaving the parent <li>'s close pending on its stack frame.
                     html += openListTag(type, isTask) + '\n';
-                    listStack.push({ indentation, type, isTask });
+                    listStack.push({ indentation, type, isTask, liClose: '' });
                 }
 
                 html += await this.processNodeRecursive(node, this.nodeProcessor.bind(this), override);
+                // Defer this item's close so a nested list can land inside it. A string override is
+                // a complete replacement item that already carries its own close, so add none.
+                listStack[listStack.length - 1].liClose = (typeof override === 'string')
+                    ? ''
+                    : (isTask ? '</div></li>' : '</li>');
             } else {
                 // Non-list node closes all active lists
                 closeListsToLevel(-1);
@@ -890,16 +905,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
 
             case 'list': {
+                // The closing suffix (`</div></li>` for a task item, `</li>` otherwise) is emitted
+                // by processNodeArray's list stack, not here, so a nested list can be placed inside
+                // this item before it closes. See `listStack`/`liClose` there.
                 const meta = node.metadata as ListMetadata;
                 if (meta?.isTask) {
                     const checkedAttr = ` data-checked="${meta.checked ? 'true' : 'false'}"`;
                     const checkedBool = meta.checked ? ' checked' : '';
-                    return `${extraAnchors}<li${checkedAttr}${idAttr}${className}${mappedAttrs}${styleAttr}><label><input type="checkbox"${checkedBool}><span></span></label><div>${childrenOutput}</div></li>`;
+                    return `${extraAnchors}<li${checkedAttr}${idAttr}${className}${mappedAttrs}${styleAttr}><label><input type="checkbox"${checkedBool}><span></span></label><div>${childrenOutput}`;
                 }
                 const value = (meta?.listType === 'ordered' && typeof meta.itemIndex === 'number')
                     ? ` value="${meta.itemIndex + 1}"`
                     : '';
-                return `${extraAnchors}<li${value}${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</li>`;
+                return `${extraAnchors}<li${value}${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}`;
             }
 
             case 'table': {

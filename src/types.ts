@@ -1239,6 +1239,13 @@ export interface FallbackToHtmlConfig {
     /** Multi-line table cell content joined with `<br>` instead of a space. */
     cellLineBreaks?: boolean;
     /**
+     * Multi-paragraph list-item content (an HTML `<li>` with several `<p>` children) joined with
+     * `<br>` instead of a space, so it stays on the item's single Markdown line. Block children of
+     * an item (a code fence or table inside `<li>`) degrade under this join, the same way they do
+     * inside a table cell under `cellLineBreaks`.
+     */
+    itemLineBreaks?: boolean;
+    /**
      * Inline text color, highlight, and font size via a `<span style="color:...;background-color:...;
      * font-size:...">` run, which the Markdown parser reads back. These have no Markdown syntax and
      * are silently lost otherwise. Unlike the other fields this is **off by default even when

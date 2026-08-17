@@ -386,37 +386,37 @@ All types of lists are supported by the conversion, with the exception of lists 
 
 ## Bulleted List {#toc1958162433}
 
-- One 
-- Two 
+- One
+- Two
 
 ## Numbered List {#toc415190676}
 
-1. One, with a very long line to demonstrate that the hanging indent for the list is working correctly 
-2. Two 
+1. One, with a very long line to demonstrate that the hanging indent for the list is working correctly
+2. Two
 
 ## Multi-level Lists {#toc1093260318}
 
-1. One 
-    1. Two 
-        1. Three 
-        2. Four with a very long line to demonstrate that the hanging indent for the list is working correctly. 
-        3. Five 
-2. Six 
+1. One
+    1. Two
+        1. Three
+        2. Four with a very long line to demonstrate that the hanging indent for the list is working correctly.
+        3. Five
+2. Six
 
 A Multi-level list with bullets: 
 
-- One 
-    - Two 
-        - This bullet uses an image as the bullet item 
-            - Four 
-- Five 
+- One
+    - Two
+        - This bullet uses an image as the bullet item
+            - Four
+- Five
 
 ## Continued Lists {#toc1471533984}
 
-1. One 
-2. Two 
+1. One
+2. Two
 
 An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement. 
 
-3. We now resume our normal programming 
-4. Four 
+3. We now resume our normal programming
+4. Four
