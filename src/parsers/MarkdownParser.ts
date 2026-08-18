@@ -255,6 +255,23 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return result;
     };
 
+    // Attribute list for an embed leaf directive `{id=... src=... width=... height=... align=...}`.
+    // Superset of parseAttributeList (adds id/src/height); space-separated `k=v` tokens.
+    const parseEmbedDirectiveAttrs = (attrStr: string): { id?: string; src?: string; width?: string; height?: string; align?: 'left' | 'center' | 'right' } => {
+        const result: { id?: string; src?: string; width?: string; height?: string; align?: 'left' | 'center' | 'right' } = {};
+        for (const token of attrStr.trim().split(/\s+/).filter(Boolean)) {
+            const kv = token.match(/^([a-zA-Z-]+)=(.+)$/);
+            if (!kv) continue;
+            const [, key, val] = kv;
+            if (key === 'id') result.id = val;
+            else if (key === 'src') result.src = val;
+            else if (key === 'width') result.width = val;
+            else if (key === 'height') result.height = val;
+            else if (key === 'align' && ['left', 'center', 'right'].includes(val)) result.align = val as 'left' | 'center' | 'right';
+        }
+        return result;
+    };
+
     const parseInline = (text: string, currentFormatting: TextFormatting = {}): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
         const plainText = (t: string): OfficeContentNode => ({ type: 'text', text: t, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined });
@@ -683,6 +700,38 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         if (alignMatch) {
             alignment = (alignMatch[1] || alignMatch[2]).toLowerCase() as any;
             block = alignMatch[3];
+        }
+
+        // Embed leaf directive (remark-directive family): `::youtube[Label]{id=... width=... align=...}`
+        // or `::embed[Label]{src=... width=... height=... align=...}`. Only these two names are
+        // recognised; any other `::name` stays literal text (no catch-all). `::youtube` renders from
+        // a validated id via a fixed template, so it is unconditional; `::embed` carries an arbitrary
+        // src, so it is gated behind `preserveIframes` (the trust input) exactly like a raw <iframe>,
+        // and stays literal text otherwise. New input only; nothing that parsed before changes.
+        const embedDirectiveMatch = block.match(/^::(youtube|embed)(?:\[([^\]]*)\])?\{([^}]*)\}$/);
+        if (embedDirectiveMatch) {
+            const kind = embedDirectiveMatch[1];
+            const label = (embedDirectiveMatch[2] || '').trim() || undefined;
+            const attrs = parseEmbedDirectiveAttrs(embedDirectiveMatch[3]);
+            if (kind === 'youtube' && attrs.id) {
+                const embedUrl = `https://www.youtube.com/watch?v=${attrs.id}`;
+                content.push({
+                    type: 'embed',
+                    text: embedUrl,
+                    metadata: { embedType: 'youtube', videoId: attrs.id, url: embedUrl, width: attrs.width, align: attrs.align, label } as EmbedMetadata
+                });
+                continue;
+            }
+            if (kind === 'embed' && attrs.src && iframeAllowed(attrs.src, config.htmlParserConfig?.preserveIframes)) {
+                content.push({
+                    type: 'embed',
+                    text: attrs.src,
+                    metadata: { embedType: 'iframe', url: attrs.src, width: attrs.width, height: attrs.height, align: attrs.align, label } as EmbedMetadata
+                });
+                continue;
+            }
+            // Recognised name but not a usable/allowed directive: fall through so the line becomes
+            // ordinary text rather than being dropped.
         }
 
         // YouTube embed fallback: MarkdownGenerator's 'embed' case emits a single-line

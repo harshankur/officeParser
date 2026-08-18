@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, StrikethroughSyntax, TableMetadata, TextMetadata, WikilinkSyntax } from '../types.js';
+import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, StrikethroughSyntax, TableMetadata, TextMetadata, WikilinkSyntax } from '../types.js';
 import { escapeHtml, markdownEscapeText, sanitizeCssValue, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -185,11 +185,20 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private collectedAbbreviations = new Map<string, string>();
     private resolvedDialect: ResolvedMarkdownDialect;
     private resolvedFallbackToHtml: ResolvedFallbackToHtml;
+    private resolvedEmbeds: EmbedSyntax;
 
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'md'>) {
         super('md', ast, config);
         this.resolvedDialect = resolveDialect(this.config.mdConfig.dialect);
         this.resolvedFallbackToHtml = resolveFallbackToHtml(this.config.mdConfig.fallbackToHtml);
+        // `dialect.embeds` is the authority for embed form. It lives in a different config object
+        // than the deprecated `fallbackToHtml.embeds` boolean, and an explicit boolean `false` must
+        // still win over the preset default, so it is resolved here rather than in `resolveDialect`:
+        // an embeds value set on the dialect OBJECT wins; otherwise the boolean maps (`true`/unset ->
+        // `'html'`, `false` -> `'link'`); otherwise the default `'html'`.
+        const dialectCfg = this.config.mdConfig.dialect;
+        const explicitEmbeds = (dialectCfg && typeof dialectCfg === 'object') ? dialectCfg.embeds : undefined;
+        this.resolvedEmbeds = explicitEmbeds ?? (this.resolvedFallbackToHtml.embeds ? 'html' : 'link');
     }
 
     /**
@@ -631,31 +640,66 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'embed': {
-                    // Markdown has no native embed syntax. When fallbackToHtml.embeds is on (our
-                    // save default), emit the exact single-line div MarkdownParser recognises on
-                    // reimport; otherwise degrade to a plain link.
+                    // Markdown has no native embed syntax. `this.resolvedEmbeds` (from
+                    // `dialect.embeds`, honoring the deprecated `fallbackToHtml.embeds` boolean)
+                    // selects the form: 'html' (the single-line block this library has always
+                    // emitted and re-recognises), 'directive' (a remark-directive leaf), 'link'
+                    // (a plain link), 'thumbnail' (YouTube-only clickable preview).
                     const meta = node.metadata as EmbedMetadata;
+                    const mode = this.resolvedEmbeds;
+                    // A directive label sits inside `::name[...]`; strip the `[]`/newline chars that
+                    // would break out of it. An attribute value sits inside `{...}`; percent-encode
+                    // the space/brace chars that would break out (widths/aligns/ids never contain
+                    // them, but a src can).
+                    const dirLabel = (meta?.label || '').replace(/[[\]\r\n]+/g, ' ').trim();
+                    const dirUrl = (u: string) => sanitizeMarkdownUrl(u).replace(/[{}\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+                    const attrList = (pairs: Array<[string, string | undefined]>) => {
+                        const kv = pairs.filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}=${v}`);
+                        return kv.length ? `{${kv.join(' ')}}` : '';
+                    };
+
                     if (meta?.embedType === 'iframe') {
-                        // sanitizeUrl scheme-checks and HTML-escapes the src (hostile schemes drop
-                        // the node). The single-line <iframe> is what MarkdownParser recognises on
-                        // reimport, gated there on preserveIframes.
-                        const safe = sanitizeUrl(meta?.url || '');
-                        if (!safe) return '';
-                        if (this.resolvedFallbackToHtml.embeds) {
+                        const rawUrl = meta?.url || '';
+                        if (mode === 'directive') {
+                            const src = dirUrl(rawUrl);
+                            if (!src) return '';
+                            const lbl = dirLabel ? `[${dirLabel}]` : '';
+                            return `::embed${lbl}${attrList([['src', src], ['width', meta?.width], ['height', meta?.height], ['align', meta?.align]])}\n\n`;
+                        }
+                        if (mode === 'html') {
+                            // sanitizeUrl scheme-checks and HTML-escapes the src (hostile schemes drop
+                            // the node). The single-line <iframe> is what MarkdownParser recognises on
+                            // reimport, gated there on preserveIframes.
+                            const safe = sanitizeUrl(rawUrl);
+                            if (!safe) return '';
                             const w = meta?.width ? ` width="${escapeHtml(meta.width)}"` : '';
                             const h = meta?.height ? ` height="${escapeHtml(meta.height)}"` : '';
                             return `\n<iframe src="${safe}"${w}${h}></iframe>\n\n`;
                         }
-                        return `[Embed](${sanitizeMarkdownUrl(meta?.url || '')})\n\n`;
+                        // 'link' and 'thumbnail' (thumbnail is YouTube-only, so a generic iframe
+                        // degrades to a link) both emit a plain link.
+                        const safe = sanitizeMarkdownUrl(rawUrl);
+                        return safe ? `[${meta?.label || 'Embed'}](${safe})\n\n` : '';
                     }
+
                     const id = meta?.videoId || '';
-                    if (this.resolvedFallbackToHtml.embeds) {
+                    if (mode === 'directive') {
+                        const lbl = dirLabel ? `[${dirLabel}]` : '';
+                        return `::youtube${lbl}${attrList([['id', id], ['width', meta?.width], ['align', meta?.align]])}\n\n`;
+                    }
+                    if (mode === 'html') {
                         const width = meta?.width ? ` data-width="${escapeHtml(meta.width)}"` : '';
                         const align = meta?.align ? ` data-align="${escapeHtml(meta.align)}"` : '';
                         return `\n<div data-youtube-video="${escapeHtml(id)}"${width}${align}></div>\n\n`;
                     }
+                    if (mode === 'thumbnail' && id) {
+                        const watch = sanitizeMarkdownUrl(`https://www.youtube.com/watch?v=${id}`);
+                        const thumb = sanitizeMarkdownUrl(`https://img.youtube.com/vi/${id}/hqdefault.jpg`);
+                        return `[![${meta?.label || 'YouTube'}](${thumb})](${watch})\n\n`;
+                    }
+                    // 'link' (and 'thumbnail' with no id): a plain link.
                     const url = meta?.url || (id ? `https://youtu.be/${id}` : '');
-                    return url ? `[YouTube](${sanitizeMarkdownUrl(url)})\n\n` : '';
+                    return url ? `[${meta?.label || 'YouTube'}](${sanitizeMarkdownUrl(url)})\n\n` : '';
                 }
 
                 case 'admonition': {

@@ -1128,6 +1128,20 @@ export type CitationSyntax = 'at' | 'none';
 export type WikilinkSyntax = 'double-bracket' | 'none';
 /** `{width=50%}` attribute lists (`'brace'`), or `'none'`. */
 export type AttributeListSyntax = 'brace' | 'none';
+/**
+ * How an `embed` node is written to Markdown:
+ * - `'html'` (default): the single-line `<div data-youtube-video="ID">` / `<iframe src=...>` block
+ *   this library has always emitted. Round-trips through officeParser, but renders as an invisible
+ *   empty box on GitHub.
+ * - `'directive'`: a remark-directive leaf, `::youtube[Label]{id=... width=... align=...}` /
+ *   `::embed[Label]{src=... width=... height=... align=...}`. Round-trips within an editor that
+ *   understands it; renders verbatim (not just the label) on GitHub, so it is an editor format, not
+ *   a GitHub-interop one.
+ * - `'link'`: a plain `[YouTube](url)` / `[Embed](url)`.
+ * - `'thumbnail'`: a YouTube-only clickable thumbnail `[![Label](.../vi/ID/hqdefault.jpg)](watch)`,
+ *   the best GitHub degrade; a non-YouTube embed falls back to `'link'`.
+ */
+export type EmbedSyntax = 'html' | 'directive' | 'link' | 'thumbnail';
 
 /**
  * @deprecated Legacy flavor names for `MarkdownDialectConfig.admonitions`. Use the syntax names
@@ -1217,6 +1231,13 @@ export interface MarkdownDialectConfig {
     /** Table syntax: native GFM pipe tables, or forced HTML `<table>` (required for strict
      *  CommonMark, which has no table syntax of its own). */
     tables?: 'native' | 'html';
+    /**
+     * How an `embed` node is written to Markdown (`'html'` | `'directive'` | `'link'` |
+     * `'thumbnail'`; see `EmbedSyntax`). This is the authority for embed form. When omitted, the
+     * deprecated `fallbackToHtml.embeds` boolean is honored (`true`/unset maps to `'html'`, `false`
+     * to `'link'`), then the default `'html'`.
+     */
+    embeds?: EmbedSyntax;
 }
 
 /**
@@ -1234,7 +1255,12 @@ export interface FallbackToHtmlConfig {
     anchors?: boolean;
     /** Nested-table and merged-cell (colspan/rowspan) HTML `<table>` fallback. */
     tables?: boolean;
-    /** YouTube embed `<div data-youtube-video>` vs. a plain link. */
+    /**
+     * YouTube embed `<div data-youtube-video>` vs. a plain link.
+     * @deprecated Use `mdConfig.dialect.embeds` (`EmbedSyntax`) instead, which also selects the
+     * `'directive'` and `'thumbnail'` forms. When `dialect.embeds` is unset this boolean is still
+     * honored (`true` maps to `'html'`, `false` to `'link'`); it will be removed in the next major.
+     */
     embeds?: boolean;
     /** Multi-line table cell content joined with `<br>` instead of a space. */
     cellLineBreaks?: boolean;
