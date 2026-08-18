@@ -4,6 +4,20 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.8.0] - 2026-08-18
+### Added
+- **A standard Markdown form for embeds, selected by `mdConfig.dialect.embeds`.** `'html'` (default; the `<div data-youtube-video>` / `<iframe>` single-line block this library has always emitted and re-recognises), `'directive'` (a remark-directive leaf `::youtube[Label]{id=…}` / `::embed[Label]{src=…}`, both parsed and generated), `'link'` (a plain link), or `'thumbnail'` (a YouTube-only clickable preview). `::youtube` parses unconditionally (rendered from a validated id via a fixed template); `::embed` carries an arbitrary src, so it is gated behind `preserveIframes` (the trust input) and stays literal text otherwise. Unknown `::names` stay literal (no catch-all). The default stays `'html'`, so existing output is byte-identical.
+- **`HtmlGeneratorConfig.gatedEmbeds`** (default `false`): emit a generic (non-YouTube) iframe as an inert `<div data-embed-gated data-embed-src>` placeholder that never auto-loads its src (an editor renders a click-to-load from it, and `HtmlParser` reads it back to the same `embed` node) instead of a live `<iframe>`. The src is scheme-checked on emit. Default output (a live `<iframe>`) is unchanged; YouTube embeds are unaffected.
+- **`HtmlParserConfig.embedFolkForms`** (default `false`): opt in to importing ambiguous "folk" embed forms in Markdown as safe YouTube embeds - a standalone Obsidian image whose URL is a YouTube link (`![](…watch?v=ID)`) and a clickable thumbnail-link (`[![](…/vi/ID/…)](watch)`). Off by default because auto-upgrading an image/link is a heuristic that could mangle a genuine image link; the unambiguous forms are always recognised regardless.
+- **`EmbedMetadata.label`**: the human label of a `::youtube[Label]` / `::embed[Label]` directive (and a gated embed's caption). It round-trips through the directive form, the generic gated `data-embed-label`, and the YouTube `<div data-youtube-video>` editor-HTML shape (the youtube div now carries `data-embed-label` when a label is present, at parity with the generic path; unlabeled youtube embeds are byte-identical).
+
+### Deprecated
+- **`fallbackToHtml.embeds` (boolean).** Use `mdConfig.dialect.embeds` instead, which also selects the `'directive'` and `'thumbnail'` forms. When `dialect.embeds` is unset the boolean is still honored (`true` maps to `'html'`, `false` to `'link'`); it will be removed in the next major.
+
+### Fixed
+- **A YouTube `<iframe>` in Markdown parsed differently than in HTML.** The Markdown parser read a YouTube iframe as a generic `'iframe'` embed with no `videoId`, and only under `preserveIframes`, while the HTML parser read it as `'youtube'` unconditionally. Both parsers now detect a YouTube src the same way (before the `preserveIframes` gate), so the same input yields the same `'youtube'` embed. The youtube-via-iframe HTML path now also carries the iframe's `width`/`height`.
+- **An inline link inside a paragraph was fenced by blank lines on `md -> HTML`.** `HtmlGenerator` appended a readability blank line after every node, including inline text/link runs, so `See this [video](url).` emitted a `<p>` with `\n\n` around the `<a>`, which reparsed as a stray space before the punctuation (`[video](url) .`). The blank line is now added only after block-level nodes; inline runs concatenate directly. Whitespace-only change to generated HTML (semantically identical); the `md -> HTML -> md` round trip is now correct.
+
 ## [7.7.0] - 2026-08-17
 ### Added
 - **`==text==` highlight round-trips through Markdown.** In a dialect that defines it (Obsidian/extended), a highlighted run now emits as `==text==` and `==text==` parses back to a highlight; other dialects keep the HTML `<mark>`/`<span>` fallback and leave `==` literal on parse. Import is purely additive; export of the default-yellow highlight becomes `==` under the `extended` dialect.
