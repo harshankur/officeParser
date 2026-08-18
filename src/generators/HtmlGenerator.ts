@@ -551,8 +551,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 closeListsToLevel(-1);
                 let result = await this.processNodeRecursive(node, this.nodeProcessor.bind(this), override);
 
-                // Add newlines for readability of the HTML source
-                if (!result.endsWith('\n\n')) {
+                // Add a blank line after BLOCK nodes for readable HTML source. Inline nodes (a
+                // paragraph's text/link runs) must concatenate with no separator: adding `\n\n`
+                // around an inline <a> put a blank line inside the <p>, which reparsed as a stray
+                // space before the following punctuation (`[video](url) .`).
+                if (node.type !== 'text' && !result.endsWith('\n\n')) {
                     if (result.endsWith('\n')) result += '\n';
                     else result += '\n\n';
                 }
