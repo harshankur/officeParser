@@ -1199,6 +1199,17 @@ async function testGeneratedOutput(): Promise<void> {
     const hostileGated = await parseHtml('<div data-embed-gated data-embed-src="javascript:alert(1)"></div>');
     assert.ok(!/javascript:/.test(String((await OfficeGenerator.generate(hostileGated, 'html', { htmlConfig: { standalone: false, gatedEmbeds: true } })).value)), '9.F: a hostile gated src is dropped on emit');
 
+    // 9.G: opt-in folk-form import (off by default so a genuine image link is never mangled).
+    const obsForm = '![Rick](https://www.youtube.com/watch?v=dQw4w9WgXcQ)';
+    assert.strictEqual(embedMeta(await parseMd(obsForm)), undefined, '9.G: an Obsidian youtube-image is not upgraded by default');
+    const obsEmbed = embedMeta(await OfficeParser.parseOffice(Buffer.from(obsForm), { fileType: 'md', htmlParserConfig: { embedFolkForms: true } }));
+    assert.strictEqual(obsEmbed?.embedType, 'youtube', '9.G: embedFolkForms upgrades an Obsidian youtube-image to a youtube embed');
+    assert.strictEqual(obsEmbed?.videoId, 'dQw4w9WgXcQ', '9.G: the folk-form embed carries the videoId');
+    const thumbForm = '[![Rick](https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg)](https://www.youtube.com/watch?v=dQw4w9WgXcQ)';
+    assert.strictEqual(embedMeta(await OfficeParser.parseOffice(Buffer.from(thumbForm), { fileType: 'md', htmlParserConfig: { embedFolkForms: true } }))?.videoId, 'dQw4w9WgXcQ', '9.G: embedFolkForms upgrades a thumbnail-link to a youtube embed');
+    const realImgNodes = collectAllNodes(await OfficeParser.parseOffice(Buffer.from('![pic](https://example.com/p.png)'), { fileType: 'md', htmlParserConfig: { embedFolkForms: true } }));
+    assert.ok(realImgNodes.some(n => n.type === 'image') && !realImgNodes.some(n => n.type === 'embed'), '9.G: a non-YouTube image stays an image even under embedFolkForms');
+
     console.log('  Generated output: All assertions passed ✓');
 }
 

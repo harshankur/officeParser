@@ -272,6 +272,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return result;
     };
 
+    // Extracts a YouTube video id from any of its URL shapes (watch?v=, youtu.be/, /embed/,
+    // img.youtube.com/vi/). Returns undefined for a non-YouTube URL. Used only by the opt-in
+    // folk-form import (embedFolkForms).
+    const extractYoutubeId = (url: string): string | undefined => {
+        if (!url || !/(?:youtu\.be|youtube(?:-nocookie)?\.com)/.test(url)) return undefined;
+        const m = url.match(/(?:youtu\.be\/|\/embed\/|[?&]v=|\/vi\/)([A-Za-z0-9_-]+)/);
+        return m ? m[1] : undefined;
+    };
+
     const parseInline = (text: string, currentFormatting: TextFormatting = {}): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
         const plainText = (t: string): OfficeContentNode => ({ type: 'text', text: t, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined });
@@ -732,6 +741,33 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
             // Recognised name but not a usable/allowed directive: fall through so the line becomes
             // ordinary text rather than being dropped.
+        }
+
+        // Ambiguous "folk" embed forms, imported only under the opt-in (embedFolkForms), since
+        // auto-upgrading an image/link to an embed is a heuristic that could mangle a genuine image
+        // link. Both become a safe youtube embed (rendered from the validated id). A standalone line
+        // only; anything not matching falls through to ordinary image/link parsing.
+        if (config.htmlParserConfig?.embedFolkForms) {
+            // Clickable thumbnail: [![alt](thumb)](watch), youtube when either URL is a youtube link.
+            const thumbMatch = block.match(/^\[!\[([^\]]*)\]\(([^)\s]+)\)\]\(([^)\s]+)\)$/);
+            if (thumbMatch) {
+                const fid = extractYoutubeId(thumbMatch[2]) || extractYoutubeId(thumbMatch[3]);
+                if (fid) {
+                    const embedUrl = `https://www.youtube.com/watch?v=${fid}`;
+                    content.push({ type: 'embed', text: embedUrl, metadata: { embedType: 'youtube', videoId: fid, url: embedUrl, label: thumbMatch[1].trim() || undefined } as EmbedMetadata });
+                    continue;
+                }
+            }
+            // Obsidian-style: a standalone image whose URL is a youtube link.
+            const obsMatch = block.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/);
+            if (obsMatch) {
+                const fid = extractYoutubeId(obsMatch[2]);
+                if (fid) {
+                    const embedUrl = `https://www.youtube.com/watch?v=${fid}`;
+                    content.push({ type: 'embed', text: embedUrl, metadata: { embedType: 'youtube', videoId: fid, url: embedUrl, label: obsMatch[1].trim() || undefined } as EmbedMetadata });
+                    continue;
+                }
+            }
         }
 
         // YouTube embed fallback: MarkdownGenerator's 'embed' case emits a single-line

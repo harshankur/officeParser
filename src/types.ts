@@ -419,6 +419,18 @@ export interface HtmlParserConfig {
      * Defaults to false.
      */
     preserveIframes?: boolean | string[];
+    /**
+     * Import ambiguous "folk" embed forms in Markdown as embeds: a standalone Obsidian-style image
+     * whose URL is a YouTube link (`![](https://youtube.com/watch?v=ID)`), and the clickable
+     * thumbnail-link (`[![alt](https://img.youtube.com/vi/ID/…)](watch-url)`). Both become a
+     * `embedType: 'youtube'` embed (rendered from the validated id, so it is safe). Off by default:
+     * auto-upgrading an image/link to an embed is a heuristic that could mangle a genuinely-intended
+     * image link, so a consumer opts in. The unambiguous forms (`<div data-youtube-video>`, a bare
+     * YouTube `<iframe>`, the `::youtube` directive) are always recognized, independent of this flag.
+     *
+     * Defaults to false.
+     */
+    embedFolkForms?: boolean;
 }
 
 /**
