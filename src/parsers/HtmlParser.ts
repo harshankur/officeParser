@@ -619,7 +619,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                         videoId,
                         url: embedUrl,
                         width,
-                        align: embedAlign
+                        align: embedAlign,
+                        label: node.attributes?.['data-embed-label']
                     } as EmbedMetadata
                 };
                 if (config.includeRawContent) embedNode.rawContent = '<div data-youtube-video>...</div>';

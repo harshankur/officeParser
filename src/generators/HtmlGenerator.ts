@@ -1238,7 +1238,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const iframe = id
                     ? `<iframe src="https://www.youtube.com/embed/${this.escape(id)}" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>`
                     : '';
-                return `${extraAnchors}<div data-youtube-video="${this.escape(id)}" data-width="${this.escape(width)}" data-align="${this.escape(align)}" class="youtube-embed"${idAttr}${mappedAttrs} style="width: ${sanitizeCssValue(width)}; margin-left: ${ml}; margin-right: ${mr};">${iframe}</div>`;
+                // Carry the human label so it survives AST -> editor-HTML -> AST, at parity with the
+                // generic gated path's data-embed-label. Only emitted when a label exists (from a
+                // `::youtube[Label]` directive), so unlabeled youtube embeds are byte-identical.
+                const ytLabel = meta?.label ? ` data-embed-label="${this.escape(meta.label)}"` : '';
+                return `${extraAnchors}<div data-youtube-video="${this.escape(id)}" data-width="${this.escape(width)}" data-align="${this.escape(align)}"${ytLabel} class="youtube-embed"${idAttr}${mappedAttrs} style="width: ${sanitizeCssValue(width)}; margin-left: ${ml}; margin-right: ${mr};">${iframe}</div>`;
             }
 
             case 'admonition': {

@@ -690,7 +690,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (mode === 'html') {
                         const width = meta?.width ? ` data-width="${escapeHtml(meta.width)}"` : '';
                         const align = meta?.align ? ` data-align="${escapeHtml(meta.align)}"` : '';
-                        return `\n<div data-youtube-video="${escapeHtml(id)}"${width}${align}></div>\n\n`;
+                        const lbl = meta?.label ? ` data-embed-label="${escapeHtml(meta.label)}"` : '';
+                        return `\n<div data-youtube-video="${escapeHtml(id)}"${width}${align}${lbl}></div>\n\n`;
                     }
                     if (mode === 'thumbnail' && id) {
                         const watch = sanitizeMarkdownUrl(`https://www.youtube.com/watch?v=${id}`);

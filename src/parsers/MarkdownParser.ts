@@ -779,6 +779,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const attrsStr = youtubeMatch[2];
             const widthMatch = attrsStr.match(/data-width="([^"]*)"/i);
             const youtubeAlignMatch = attrsStr.match(/data-align="([^"]*)"/i);
+            const youtubeLabelMatch = attrsStr.match(/data-embed-label="([^"]*)"/i);
             const embedAlign = youtubeAlignMatch && (['left', 'center', 'right'] as const).includes(youtubeAlignMatch[1] as any) ? youtubeAlignMatch[1] as 'left' | 'center' | 'right' : undefined;
             const embedUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined;
             content.push({
@@ -791,7 +792,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     videoId,
                     url: embedUrl,
                     width: widthMatch?.[1],
-                    align: embedAlign
+                    align: embedAlign,
+                    label: youtubeLabelMatch?.[1]
                 } as EmbedMetadata
             });
             continue;

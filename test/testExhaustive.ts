@@ -1210,6 +1210,18 @@ async function testGeneratedOutput(): Promise<void> {
     const realImgNodes = collectAllNodes(await OfficeParser.parseOffice(Buffer.from('![pic](https://example.com/p.png)'), { fileType: 'md', htmlParserConfig: { embedFolkForms: true } }));
     assert.ok(realImgNodes.some(n => n.type === 'image') && !realImgNodes.some(n => n.type === 'embed'), '9.G: a non-YouTube image stays an image even under embedFolkForms');
 
+    // 10.A: an inline link inside a paragraph is not fenced by blank lines on MD -> HTML, so a
+    // punctuation-adjacent link no longer gains a stray space on the round trip.
+    const linkHtml = String((await OfficeGenerator.generate(await parseMd('See this [video](https://ex.com/x).'), 'html', { htmlConfig: { standalone: false } })).value);
+    assert.ok(/>video<\/a>\./.test(linkHtml), '10.A: an inline <a> sits tight against the following punctuation (no blank line)');
+    assert.strictEqual(String((await OfficeGenerator.generate(await parseHtml(linkHtml), 'md')).value).trim(), 'See this [video](https://ex.com/x).', '10.A: md -> HTML -> md keeps the link tight to punctuation (no stray space)');
+
+    // 10.B: a youtube embed's label survives AST -> editor-HTML -> AST, at parity with the gated path.
+    const ytLabelHtml = String((await OfficeGenerator.generate(await parseMd('::youtube[Carl Sagan]{id=dQw4w9WgXcQ}'), 'html', { htmlConfig: { standalone: false } })).value);
+    assert.ok(/data-embed-label="Carl Sagan"/.test(ytLabelHtml), '10.B: youtube editor-HTML carries data-embed-label');
+    assert.strictEqual(embedMeta(await parseHtml(ytLabelHtml))?.label, 'Carl Sagan', '10.B: the youtube label round-trips through editor-HTML');
+    assert.ok(!/data-embed-label/.test(String((await OfficeGenerator.generate(await parseHtml('<div data-youtube-video="abc"></div>'), 'html', { htmlConfig: { standalone: false } })).value)), '10.B: an unlabeled youtube embed emits no label attribute (byte-identical)');
+
     console.log('  Generated output: All assertions passed ✓');
 }
 
