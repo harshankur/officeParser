@@ -608,7 +608,15 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     const embedNode: OfficeContentNode = {
                         type: 'embed',
                         text: embedUrl,
-                        metadata: { embedType: 'youtube', videoId: ytMatch[1], url: embedUrl } as EmbedMetadata
+                        // Carry the iframe's own width/height so a YouTube iframe's dimensions are not
+                        // dropped (metadata is unified across embedTypes; align has no source here).
+                        metadata: {
+                            embedType: 'youtube',
+                            videoId: ytMatch[1],
+                            url: embedUrl,
+                            width: node.attributes?.width,
+                            height: node.attributes?.height
+                        } as EmbedMetadata
                     };
                     if (config.includeRawContent) embedNode.rawContent = '<iframe>...</iframe>';
                     return embedNode;

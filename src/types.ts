@@ -1943,10 +1943,13 @@ export interface EmbedMetadata {
     url?: string;
     /** Display width, as a CSS length or percentage. */
     width?: string;
-    /** Display height, as a CSS length or percentage (generic iframes). */
+    /** Display height, as a CSS length or percentage. */
     height?: string;
     /** Layout alignment of the embed. */
     align?: 'left' | 'center' | 'right';
+    /** Human-readable label for the embed (e.g. the `[Label]` of a `::youtube[Label]{...}` leaf
+     *  directive, or a gated embed's caption). Purely descriptive; never a trust or render input. */
+    label?: string;
 }
 
 /**

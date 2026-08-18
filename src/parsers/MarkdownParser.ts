@@ -726,9 +726,29 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
                 .replace(/&#39;/g, '\'').replace(/&amp;/g, '&');
             const src = decodeAttr(attrsStr.match(/\bsrc="([^"]*)"/i)?.[1]);
+            const width = attrsStr.match(/\bwidth="([^"]*)"/i)?.[1];
+            const height = attrsStr.match(/\bheight="([^"]*)"/i)?.[1];
+            // A YouTube iframe is recognised the same way the HTML parser does it (host + id
+            // capture), BEFORE and INDEPENDENT of the preserveIframes gate, so the same iframe
+            // yields the same 'youtube' embed whichever parser sees it. Only a generic (non-YouTube)
+            // iframe is gated behind preserveIframes and kept as an 'iframe' embed.
+            const ytMatch = src && /youtube(?:-nocookie)?\.com/.test(src) ? src.match(/(?:embed\/|v=)([^&?/\s]+)/) : null;
+            if (ytMatch) {
+                const embedUrl = `https://www.youtube.com/watch?v=${ytMatch[1]}`;
+                content.push({
+                    type: 'embed',
+                    text: embedUrl,
+                    metadata: {
+                        embedType: 'youtube',
+                        videoId: ytMatch[1],
+                        url: embedUrl,
+                        width: width !== undefined ? decodeAttr(width) : undefined,
+                        height: height !== undefined ? decodeAttr(height) : undefined
+                    } as EmbedMetadata
+                });
+                continue;
+            }
             if (src && iframeAllowed(src, config.htmlParserConfig?.preserveIframes)) {
-                const width = attrsStr.match(/\bwidth="([^"]*)"/i)?.[1];
-                const height = attrsStr.match(/\bheight="([^"]*)"/i)?.[1];
                 content.push({
                     type: 'embed',
                     text: src,
