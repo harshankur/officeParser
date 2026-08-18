@@ -1159,6 +1159,46 @@ async function testGeneratedOutput(): Promise<void> {
     const fromTableAlign = String((await OfficeGenerator.generate(await parseHtml('<table data-align="center"><thead><tr><th>A</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>'), 'md', { mdConfig: { dialect: 'extended' } })).value);
     assert.ok(/\|\s*:---:\s*\|/.test(fromTableAlign), '8.G: html -> md still reads the table-level data-align form');
 
+    // ── Round 9: embeds (leaf directive, dialect.embeds modes, parser parity, gated contract) ──
+    const embedMeta = (ast: OfficeParserAST) => collectAllNodes(ast).find(n => n.type === 'embed')?.metadata as any;
+
+    // 9.C: the same YouTube iframe yields the same 'youtube' embed from both parsers (was: md gave
+    // a generic 'iframe' with no videoId, gated behind preserveIframes; html gave 'youtube').
+    const ytIframe = '<iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ" width="560" height="315"></iframe>';
+    const mdEmb = embedMeta(await parseMd(ytIframe));
+    const htmlEmb = embedMeta(await parseHtml(ytIframe));
+    assert.strictEqual(mdEmb?.embedType, 'youtube', '9.C: a YouTube iframe in .md parses as a youtube embed');
+    assert.strictEqual(mdEmb?.videoId, 'dQw4w9WgXcQ', '9.C: the md youtube embed carries the videoId');
+    assert.deepStrictEqual([htmlEmb?.embedType, htmlEmb?.videoId], [mdEmb?.embedType, mdEmb?.videoId], '9.C: md/html YouTube parity');
+
+    // 9.A/9.B: an embed leaf directive round-trips md -> AST -> md under dialect.embeds:'directive'.
+    const ytDir = '::youtube[Rick Astley]{id=dQw4w9WgXcQ width=80% align=center}';
+    assert.strictEqual(String((await OfficeGenerator.generate(await parseMd(ytDir), 'md', { mdConfig: { dialect: { embeds: 'directive' } } })).value).trim(), ytDir, '9.A/9.B: ::youtube directive round-trips stably');
+
+    // 9.B: default (html) embed output is byte-identical to before; the other modes emit their form.
+    const ytAst = await parseHtml('<div data-youtube-video="dQw4w9WgXcQ"></div>');
+    assert.strictEqual(String((await OfficeGenerator.generate(ytAst, 'md')).value).trim(), '<div data-youtube-video="dQw4w9WgXcQ"></div>', '9.B: default embed md output unchanged (html mode)');
+    assert.ok(/^\[YouTube\]\(https:\/\//.test(String((await OfficeGenerator.generate(ytAst, 'md', { mdConfig: { dialect: { embeds: 'link' } } })).value).trim()), '9.B: link mode emits a plain link');
+    assert.ok(/^\[!\[YouTube\]\(https:\/\/img\.youtube\.com/.test(String((await OfficeGenerator.generate(ytAst, 'md', { mdConfig: { dialect: { embeds: 'thumbnail' } } })).value).trim()), '9.B: thumbnail mode emits a clickable thumbnail');
+    assert.ok(/^\[YouTube\]\(https:\/\//.test(String((await OfficeGenerator.generate(ytAst, 'md', { mdConfig: { fallbackToHtml: { embeds: false } } })).value).trim()), '9.B: deprecated fallbackToHtml.embeds:false still maps to link');
+
+    // 9.A security: ::embed is gated behind preserveIframes (trust input); a hostile src stays inert.
+    const embDirVal = '::embed[App]{src=https://app.example.com/x width=100% height=400px}';
+    assert.strictEqual(embedMeta(await parseMd(embDirVal)), undefined, '9.A: ::embed is not parsed without preserveIframes (stays literal text)');
+    const embDirTrust = embedMeta(await OfficeParser.parseOffice(Buffer.from(embDirVal), { fileType: 'md', htmlParserConfig: { preserveIframes: true } }));
+    assert.strictEqual(embDirTrust?.embedType, 'iframe', '9.A: ::embed under preserveIframes parses to an iframe embed');
+    assert.strictEqual(embDirTrust?.url, 'https://app.example.com/x', '9.A: ::embed carries its src');
+
+    // 9.F: gatedEmbeds emits an inert placeholder that round-trips back to the same embed; a hostile
+    // src is dropped on emit; the default (a live <iframe>) is unchanged.
+    const genIframeAst = await OfficeParser.parseOffice(Buffer.from('<iframe src="https://app.example.com/x" width="100%" height="400"></iframe>'), { fileType: 'html', htmlParserConfig: { preserveIframes: true } });
+    assert.ok(/<iframe src="https:\/\/app\.example\.com\/x"/.test(String((await OfficeGenerator.generate(genIframeAst, 'html', { htmlConfig: { standalone: false } })).value)), '9.F: default keeps a live <iframe>');
+    const gatedHtml = String((await OfficeGenerator.generate(genIframeAst, 'html', { htmlConfig: { standalone: false, gatedEmbeds: true } })).value);
+    assert.ok(/<div data-embed-gated data-embed-src="https:\/\/app\.example\.com\/x"/.test(gatedHtml), '9.F: gatedEmbeds emits an inert placeholder div');
+    assert.strictEqual(embedMeta(await parseHtml(gatedHtml))?.url, 'https://app.example.com/x', '9.F: the gated placeholder round-trips back to an embed node');
+    const hostileGated = await parseHtml('<div data-embed-gated data-embed-src="javascript:alert(1)"></div>');
+    assert.ok(!/javascript:/.test(String((await OfficeGenerator.generate(hostileGated, 'html', { htmlConfig: { standalone: false, gatedEmbeds: true } })).value)), '9.F: a hostile gated src is dropped on emit');
+
     console.log('  Generated output: All assertions passed ✓');
 }
 

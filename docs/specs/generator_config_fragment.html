@@ -181,6 +181,16 @@
                     <code>data-math</code>, and a <code>&lt;div class="mermaid" data-mermaid&gt;</code> for mermaid. Off by default the
                     output is byte-identical to before, and the parser reads every shape it emits. Forced off for PDF and EPUB.</td>
             </tr>
+            <tr>
+                <td><code>gatedEmbeds</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Emit a generic (non-YouTube) iframe embed as an inert <code>&lt;div data-embed-gated data-embed-src&gt;</code>
+                    placeholder that never auto-loads its src (an editor renders a click-to-load from it, and the parser
+                    reads it back to the same <code>embed</code> node) instead of a live <code>&lt;iframe&gt;</code>. src is
+                    scheme-checked on emit. Off by default the output (a live <code>&lt;iframe&gt;</code>) is unchanged; YouTube
+                    embeds are unaffected.</td>
+            </tr>
         </tbody>
     </table>
 
@@ -349,6 +359,7 @@
             <tr><td><code>wikilinks</code></td><td><code>'double-bracket' | 'none'</code></td><td>Obsidian <code>[[Page]]</code> / <code>[[Page|Alias]]</code> syntax. <code>'none'</code> makes wikilinks ordinary links.</td></tr>
             <tr><td><code>attributeLists</code></td><td><code>'brace' | 'none'</code></td><td>Pandoc-style <code>{width=50% align=center}</code> after an image or table.</td></tr>
             <tr><td><code>strikethrough</code></td><td><code>'tilde' | 'none'</code></td><td><code>~~struck~~</code>. <code>'none'</code> drops the formatting.</td></tr>
+            <tr><td><code>embeds</code></td><td><code>'html' | 'directive' | 'link' | 'thumbnail'</code></td><td>How an <code>embed</code> node is written: <code>'html'</code> (default; the <code>&lt;div data-youtube-video&gt;</code> / <code>&lt;iframe&gt;</code> block), <code>'directive'</code> (a <code>::youtube[…]{…}</code> / <code>::embed[…]{…}</code> leaf directive; an editor round-trip form, rendered verbatim on GitHub), <code>'link'</code> (a plain link), <code>'thumbnail'</code> (YouTube-only clickable preview). Authority for embed form; supersedes the deprecated <code>fallbackToHtml.embeds</code> boolean.</td></tr>
         </tbody>
     </table>
     <p style="font-size: 0.9em; opacity: 0.85;">Each capability is named for the <em>syntax</em> it selects, with an explicit <code>'none'</code> to turn it off (an omitted field inherits from <code>extends</code>). The former <code>boolean</code> form of <code>definitionLists</code>, <code>footnotes</code>, <code>citations</code>, <code>wikilinks</code>, <code>attributeLists</code> and <code>strikethrough</code> is <strong>deprecated</strong> but still accepted: <code>true</code> maps to the syntax value, <code>false</code> to <code>'none'</code>. Both the boolean form and the admonition flavour aliases will be removed in the next major.</p>
@@ -377,7 +388,7 @@ await ast.to('md', {
             <tr><td><code>alignment</code></td><td><code>boolean</code></td><td><code>&lt;div align&gt;</code> wrappers for paragraph and image alignment.</td></tr>
             <tr><td><code>anchors</code></td><td><code>boolean</code></td><td><code>&lt;a id&gt;</code> anchors for internal link targets.</td></tr>
             <tr><td><code>tables</code></td><td><code>boolean</code></td><td><code>&lt;table&gt;</code> for nested or merged-cell tables a pipe table cannot express. When off, nested tables are hoisted out and rendered sequentially.</td></tr>
-            <tr><td><code>embeds</code></td><td><code>boolean</code></td><td>Raw HTML for video/embed nodes. When off, they degrade to a plain link.</td></tr>
+            <tr><td><code>embeds</code></td><td><code>boolean</code></td><td><strong>Deprecated</strong> (removed next major): use <code>dialect.embeds</code> instead. When <code>dialect.embeds</code> is unset this is still honored: <code>true</code> maps to <code>'html'</code>, <code>false</code> to <code>'link'</code>.</td></tr>
             <tr><td><code>cellLineBreaks</code></td><td><code>boolean</code></td><td><code>&lt;br&gt;</code> inside a table cell, which a pipe table cannot otherwise contain.</td></tr>
             <tr><td><code>itemLineBreaks</code></td><td><code>boolean</code></td><td><code>&lt;br&gt;</code> joining the paragraphs of a multi-paragraph list item, which stays on the item's single Markdown line. When off, they are joined with a space.</td></tr>
             <tr><td><code>inlineFormatting</code></td><td><code>boolean</code></td><td>Inline text color, highlight, and font size via a <code>&lt;span style="color:…;background-color:…;font-size:…"&gt;</code> run, which the Markdown parser reads back. These have no Markdown syntax and are otherwise lost silently. <strong>Off by default even when <code>fallbackToHtml</code> is <code>true</code></strong> (it changes default output). Enable it explicitly with <code>fallbackToHtml: { inlineFormatting: true }</code>.</td></tr>

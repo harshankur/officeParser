@@ -1214,6 +1214,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     if (!src) return '';
                     const w = meta?.width ? ` width="${this.escape(meta.width)}"` : '';
                     const h = meta?.height ? ` height="${this.escape(meta.height)}"` : '';
+                    if (this.config.htmlConfig.gatedEmbeds) {
+                        // Inert, never-auto-loading placeholder: the editor renders click-to-load from
+                        // it, and HtmlParser reads it back to the same embed node. src already sanitized.
+                        const a = meta?.align ? ` data-embed-align="${this.escape(meta.align)}"` : '';
+                        const l = meta?.label ? ` data-embed-label="${this.escape(meta.label)}"` : '';
+                        const dw = meta?.width ? ` data-embed-width="${this.escape(meta.width)}"` : '';
+                        const dh = meta?.height ? ` data-embed-height="${this.escape(meta.height)}"` : '';
+                        return `${extraAnchors}<div data-embed-gated data-embed-src="${src}"${dw}${dh}${a}${l}${idAttr}${mappedAttrs}${styleAttr}></div>`;
+                    }
                     return `${extraAnchors}<iframe src="${src}"${w}${h}${idAttr}${mappedAttrs}${styleAttr}></iframe>`;
                 }
                 // Match the attribute-driven Youtube wrapper shape so a loaded embed re-hydrates

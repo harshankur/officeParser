@@ -95,6 +95,7 @@ const DEFAULT_HTML_GENERATOR_CONFIG: DeepRequired<HtmlGeneratorConfig> = {
         bodyEnd: '',
     },
     sourceAttributes: false,
+    gatedEmbeds: false,
 };
 
 /**

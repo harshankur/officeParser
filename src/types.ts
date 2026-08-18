@@ -941,6 +941,15 @@ export interface HtmlGeneratorConfig {
      * `HtmlParser` reads every shape this emits, so output stays self-round-trippable.
      */
     sourceAttributes?: boolean;
+    /**
+     * Emit a generic (non-YouTube) iframe embed as a gated placeholder,
+     * `<div data-embed-gated data-embed-src="…" …>`, instead of a live `<iframe>`. The gated shape
+     * never auto-loads its src: an editor renders a click-to-load placeholder from it, and
+     * `HtmlParser` reads it back to the same `embed` node. The src is scheme-checked (`sanitizeUrl`)
+     * on emit. Off by default; the default output (a live `<iframe>`) is unchanged. YouTube embeds
+     * are unaffected (they already render from a validated id).
+     */
+    gatedEmbeds?: boolean;
 }
 
 /**

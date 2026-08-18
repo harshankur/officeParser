@@ -574,6 +574,31 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return kids;
             };
 
+            // Gated generic-iframe embed (HtmlGenerator's `gatedEmbeds` shape): an inert
+            // click-to-load placeholder that never auto-loads its src. Read it back to the same
+            // `embed` node unconditionally - capturing metadata is safe (the src is scheme-checked
+            // again on any re-emit); it is the trusted, already-gated counterpart to a raw <iframe>.
+            if (tagName === 'div' && node.attributes?.['data-embed-gated'] !== undefined) {
+                const gatedSrc = decodeEntities(node.attributes?.['data-embed-src'] || '');
+                if (!gatedSrc) return null;
+                const gatedAlignAttr = node.attributes?.['data-embed-align'];
+                const gatedAlign = (['left', 'center', 'right'] as const).includes(gatedAlignAttr as any) ? gatedAlignAttr as 'left' | 'center' | 'right' : undefined;
+                const gatedNode: OfficeContentNode = {
+                    type: 'embed',
+                    text: gatedSrc,
+                    metadata: {
+                        embedType: 'iframe',
+                        url: gatedSrc,
+                        width: node.attributes?.['data-embed-width'],
+                        height: node.attributes?.['data-embed-height'],
+                        align: gatedAlign,
+                        label: node.attributes?.['data-embed-label']
+                    } as EmbedMetadata
+                };
+                if (config.includeRawContent) gatedNode.rawContent = '<div data-embed-gated>...</div>';
+                return gatedNode;
+            }
+
             // YouTube embeds: attribute-driven editors render
             // <div data-youtube-video="ID" data-width="…" data-align="…">…<iframe…></div>.
             // Recognise both the wrapper div and a bare iframe so externally-authored HTML
