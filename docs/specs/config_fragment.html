@@ -254,6 +254,36 @@
                 <td><code>10000</code></td>
                 <td><strong>ZIP Entry Limit</strong>: Maximum number of files (entries) allowed inside the ZIP archive.</td>
             </tr>
+            <tr>
+                <td><code>decompressionLimits.maxTableCells</code></td>
+                <td><code>number</code></td>
+                <td><code>1000000</code></td>
+                <td><strong>Cell Expansion Limit</strong>: Maximum number of ODF spreadsheet cells materialized from <code>table:number-columns-repeated</code>/<code>table:number-rows-repeated</code>. Beyond it, expansion clamps and warns instead of allocating without bound.</td>
+            </tr>
+            <tr>
+                <td><code>htmlParserConfig</code></td>
+                <td><code>object</code></td>
+                <td><code>{}</code></td>
+                <td><strong>HTML/XHTML/EPUB parsing options.</strong></td>
+            </tr>
+            <tr>
+                <td><code>htmlParserConfig.preserveAttributes</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Keep generic source attributes no typed field consumed on <code>node.htmlAttributes</code> (sanitized in and out).</td>
+            </tr>
+            <tr>
+                <td><code>htmlParserConfig.preserveIframes</code></td>
+                <td><code>boolean | string[]</code></td>
+                <td><code>false</code></td>
+                <td>Preserve non-YouTube <code>&lt;iframe&gt;</code> embeds (otherwise dropped) as <code>embed</code> nodes. <code>true</code> preserves any; an array is a hostname allowlist (exact host or a <code>.</code>-suffix). The src is scheme-checked on generation, so a <code>javascript:</code>/<code>data:</code> src never survives. Also governs a raw <code>&lt;iframe&gt;</code> block in Markdown input.</td>
+            </tr>
+            <tr>
+                <td><code>htmlParserConfig.embedFolkForms</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Import ambiguous "folk" embed forms in Markdown as (safe, id-rendered) YouTube embeds: a standalone Obsidian image whose URL is a YouTube link (<code>![](…watch?v=ID)</code>), and the clickable thumbnail-link (<code>[![](…/vi/ID/…)](watch)</code>). Off by default because auto-upgrading an image/link is a heuristic that could mangle a genuine image link; the unambiguous forms (<code>data-youtube-video</code>, a YouTube <code>&lt;iframe&gt;</code>, the <code>::youtube</code> directive) are always recognized regardless.</td>
+            </tr>
         </tbody>
     </table>
 

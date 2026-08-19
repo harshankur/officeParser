@@ -1,6 +1,7 @@
 import { AdmonitionMetadata, BreakMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
+import { iframeAllowed } from '../utils/sanitize.js';
 
 // Sentinel node type for a standalone bookmark-anchor block (e.g. `<a id="x"></a>` on its
 // own line). A post-parse pass folds these into the following node's anchorIds so they
@@ -61,7 +62,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     const attachments: OfficeAttachment[] = [];
 
     // Parse YAML Front Matter
-    if (textStr.startsWith('---\n')) {
+    if (/^---\n---[ \t]*(?:\n|$)/.test(textStr)) {
+        // Empty frontmatter block: strip it so `---\n---` isn't misread as a setext `## ---`
+        // heading (empty metadata used to emit exactly this shape, and other producers do too).
+        textStr = textStr.replace(/^---\n---[ \t]*(?:\n|$)/, '');
+    } else if (textStr.startsWith('---\n')) {
         const endIdx = textStr.indexOf('\n---\n', 4);
         if (endIdx !== -1) {
             const frontMatter = textStr.substring(4, endIdx);
@@ -76,10 +81,16 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 if (match) {
                     const key = match[1].trim();
                     const rawVal = match[2].trim();
-                    const val = rawVal.replace(/^"(.*)"$/, '$1');
+                    // A quoted scalar is explicitly a string in YAML: strip the quotes but never
+                    // coerce it, so `version: "123"` / `flag: "true"` keep their string-ness across
+                    // a save/reload cycle instead of silently degrading to a number/boolean on the
+                    // next parse (which the generator would then re-emit unquoted, losing the type
+                    // permanently). Only bare, unquoted scalars coerce.
+                    const isQuoted = /^"(.*)"$/.test(rawVal) || /^'(.*)'$/.test(rawVal);
+                    const val = rawVal.replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
 
                     let parsedVal: any = val;
-                    if (rawVal.startsWith('[') && rawVal.endsWith(']')) {
+                    if (!isQuoted && rawVal.startsWith('[') && rawVal.endsWith(']')) {
                         // Flow-array (`tags: [a, b]`) or JSON-array (`tags: ["a","b"]`) value -
                         // parse into a real array instead of storing the literal bracket string,
                         // so it round-trips symmetrically with MarkdownGenerator's frontmatter output.
@@ -90,7 +101,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                             const inner = rawVal.slice(1, -1).trim();
                             parsedVal = inner === '' ? [] : splitFlowArrayItems(inner).map(item => item.replace(/^['"](.*)['"]$/, '$1'));
                         }
-                    } else if (val === 'true') parsedVal = true;
+                    } else if (isQuoted) parsedVal = val;
+                    else if (val === 'true') parsedVal = true;
                     else if (val === 'false') parsedVal = false;
                     else if (!isNaN(Number(val)) && val !== '') parsedVal = Number(val);
 
@@ -148,6 +160,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         mathBlocks.push(latex);
         return `\n\n${id}\n\n`;
     });
+    // Single-line `$$...$$` occupying its own line is display (block) math too. Without this it
+    // falls through to the inline `$...$` tokenizer, which matches the INNER `$\int$` and leaks
+    // the outer pair as two stray literal `$`. Runs after the multi-line pass, whose placeholders
+    // carry no `$$` and so can't be re-matched. `(?!\$)` rejects `$$$...`/empty `$$$$`.
+    textStr = textStr.replace(/^\$\$(?!\$)([^\n]+?)\$\$[ \t]*$/gm, (_match, latex) => {
+        const id = `__MATH_BLOCK_${mathBlocks.length}__`;
+        mathBlocks.push(latex);
+        return `\n\n${id}\n\n`;
+    });
 
     // Extract GLFM-style fenced-div admonitions (`:::note ... :::`) before block splitting,
     // since their body may itself contain blank lines that would otherwise fragment them.
@@ -164,11 +185,32 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
     // Extract footnote definitions (`[^id]: text`) before block splitting, since
     // definitions conventionally live at the end of the document, after every place
-    // they're referenced - inline parsing below needs the full map upfront. v1 only
-    // supports single-line definitions (MultiMarkdown/Pandoc/GLFM's common baseline).
+    // they're referenced - inline parsing below needs the full map upfront. The first line
+    // may be followed by continuation lines indented one level (4 spaces or a tab), which are
+    // dedented and joined onto the definition (Pandoc/GFM). A 4-space-indented block right after
+    // a definition is therefore read as its continuation rather than as a standalone code block.
+    // Supported (lossless) shape: contiguous continuation - the indented lines follow the
+    // definition with no blank line between them. Known limitation (6.E.1): a continuation
+    // separated from the definition by a BLANK line is not folded in - the regex below stops at
+    // the blank line, and the indented block after it re-parses as a fenced/indented code block on
+    // save. Multi-paragraph footnotes should therefore use the contiguous form.
     const footnoteDefinitions = new Map<string, string>();
-    textStr = textStr.replace(/^\[\^([^\]]+)\]:[ \t]*(.*)$/gm, (_match, id, definition) => {
-        footnoteDefinitions.set(id, definition.trim());
+    // Every id a `[^id]` reference consumes, so definitions that are never referenced can be
+    // detected at the end and preserved rather than silently dropped (see the orphan sweep below).
+    const referencedFootnoteIds = new Set<string>();
+    // One reused note node per referenced id. Repeated `[^id]` references are a single shared
+    // footnote in Markdown, so they must not each materialise a full copy of the body - the
+    // generators would otherwise renumber them to [^1]/[^2] and duplicate the definition. Office
+    // notes reach the generators as distinct objects even when they share a numeric id, so those
+    // stay separate; only genuinely shared Markdown references collapse.
+    const footnoteNodesById = new Map<string, OfficeContentNode>();
+    textStr = textStr.replace(/^\[\^([^\]]+)\]:[ \t]*(.*(?:\n(?: {4}|\t).*)*)$/gm, (_match, id, definition) => {
+        const dedented = String(definition)
+            .split('\n')
+            .map((line: string, i: number) => i === 0 ? line : line.replace(/^(?: {4}|\t)/, ''))
+            .join('\n')
+            .trim();
+        footnoteDefinitions.set(id, dedented);
         return '';
     });
 
@@ -213,6 +255,32 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return result;
     };
 
+    // Attribute list for an embed leaf directive `{id=... src=... width=... height=... align=...}`.
+    // Superset of parseAttributeList (adds id/src/height); space-separated `k=v` tokens.
+    const parseEmbedDirectiveAttrs = (attrStr: string): { id?: string; src?: string; width?: string; height?: string; align?: 'left' | 'center' | 'right' } => {
+        const result: { id?: string; src?: string; width?: string; height?: string; align?: 'left' | 'center' | 'right' } = {};
+        for (const token of attrStr.trim().split(/\s+/).filter(Boolean)) {
+            const kv = token.match(/^([a-zA-Z-]+)=(.+)$/);
+            if (!kv) continue;
+            const [, key, val] = kv;
+            if (key === 'id') result.id = val;
+            else if (key === 'src') result.src = val;
+            else if (key === 'width') result.width = val;
+            else if (key === 'height') result.height = val;
+            else if (key === 'align' && ['left', 'center', 'right'].includes(val)) result.align = val as 'left' | 'center' | 'right';
+        }
+        return result;
+    };
+
+    // Extracts a YouTube video id from any of its URL shapes (watch?v=, youtu.be/, /embed/,
+    // img.youtube.com/vi/). Returns undefined for a non-YouTube URL. Used only by the opt-in
+    // folk-form import (embedFolkForms).
+    const extractYoutubeId = (url: string): string | undefined => {
+        if (!url || !/(?:youtu\.be|youtube(?:-nocookie)?\.com)/.test(url)) return undefined;
+        const m = url.match(/(?:youtu\.be\/|\/embed\/|[?&]v=|\/vi\/)([A-Za-z0-9_-]+)/);
+        return m ? m[1] : undefined;
+    };
+
     const parseInline = (text: string, currentFormatting: TextFormatting = {}): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
         const plainText = (t: string): OfficeContentNode => ({ type: 'text', text: t, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined });
@@ -220,7 +288,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Builds the same image/link node shape regardless of whether the URL came from
         // an inline `(url)` or a resolved reference definition - shared by the inline
         // image/link branch and the two reference-style branches below.
-        const buildLinkOrImageNodes = (isImage: boolean, altText: string, url: string, attrsStr?: string): OfficeContentNode[] => {
+        // Split a Markdown inline destination `url "title"` (also `'title'` / `(title)`) into its
+        // URL and optional title. The inline parser previously kept the whole thing as the URL, so
+        // `[t](u "T")` produced href `u "T"`; reference-style `[t][id]` already split it correctly.
+        const splitUrlTitle = (raw: string): { url: string; title?: string } => {
+            const m = raw.trim().match(/^(.*?)\s+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\))\s*$/);
+            return m ? { url: m[1].trim(), title: m[2] ?? m[3] ?? m[4] } : { url: raw };
+        };
+        const buildLinkOrImageNodes = (isImage: boolean, altText: string, rawUrl: string, attrsStr?: string): OfficeContentNode[] => {
+            const { url, title } = splitUrlTitle(rawUrl);
             if (isImage) {
                 // Pandoc-style attribute list immediately after an image, e.g. {width=50% .centered}
                 const attrs = attrsStr !== undefined ? parseAttributeList(attrsStr) : undefined;
@@ -237,15 +313,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                             name,
                             extension: mimeType.split('/')[1]
                         });
-                        return [{ type: 'image', metadata: { attachmentName: name, altText, ...attrs } as ImageMetadata }];
+                        return [{ type: 'image', metadata: { attachmentName: name, altText, title, ...attrs } as ImageMetadata }];
                     }
                 }
-                return [{ type: 'image', metadata: { url, altText, ...attrs } as ImageMetadata }];
+                return [{ type: 'image', metadata: { url, altText, title, ...attrs } as ImageMetadata }];
             }
             const linkNodes = parseInline(altText, currentFormatting);
             linkNodes.forEach(n => {
                 if (n.type === 'text') {
-                    n.metadata = { link: url, linkType: 'external' } as TextMetadata;
+                    n.metadata = { link: url, linkType: 'external', title } as TextMetadata;
                 }
             });
             return linkNodes;
@@ -276,7 +352,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Inline math requires no whitespace right after the opening $ or right before the
         // closing $, the common heuristic (matching Pandoc/KaTeX) for avoiding false
         // positives on currency like "$5 and $10".
-        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
+        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|==(?<highlight>.+?)==|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|(?<lineBreak><br\s*\/?>)|<span\s+style="(?<spanStyle>[^"]*)">(?<spanContent>.+?)<\/span>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
         let lastIndex = 0;
         let match;
 
@@ -300,6 +376,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 nodes.push(...parseInline(g.italicUnderscore, { ...currentFormatting, italic: true }));
             } else if (g.strike !== undefined) { // Strikethrough
                 nodes.push(...parseInline(g.strike, { ...currentFormatting, strikethrough: true }));
+            } else if (g.highlight !== undefined) { // ==highlight== (Obsidian/extended); additive on import
+                nodes.push(...parseInline(g.highlight, { ...currentFormatting, backgroundColor: '#ffff00' }));
             } else if (g.codeContent !== undefined) { // Inline code (any matching backtick-run length)
                 nodes.push({ type: 'text', text: g.codeContent, formatting: { ...currentFormatting, font: 'monospace' } });
             } else if (g.underline !== undefined) { // Underline
@@ -308,16 +386,45 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 nodes.push(...parseInline(g.subscript, { ...currentFormatting, subscript: true }));
             } else if (g.superscript !== undefined) { // Superscript
                 nodes.push(...parseInline(g.superscript, { ...currentFormatting, superscript: true }));
+            } else if (g.lineBreak !== undefined) { // Raw inline <br>/<br/>/<br /> - a hard line break.
+                // MarkdownGenerator emits a raw <br> for a line break inside a table cell (a GFM pipe
+                // cell can't hold a newline), so the parser must read it back symmetrically as a break
+                // node instead of escaping it to literal `&lt;br&gt;` text and destroying it.
+                nodes.push({ type: 'break', metadata: { breakType: 'carriageReturn' } as BreakMetadata });
+            } else if (g.spanContent !== undefined) { // Inline styled span: color / highlight / font-size
+                const style = g.spanStyle || '';
+                const styled: TextFormatting = { ...currentFormatting };
+                // Anchor each property to a declaration boundary so `color` doesn't match inside
+                // `background-color`.
+                const prop = (name: string): string | undefined => {
+                    const m = style.match(new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`, 'i'));
+                    return m ? m[1].trim() : undefined;
+                };
+                const color = prop('color');
+                if (color) styled.color = color;
+                const background = prop('background-color');
+                if (background) styled.backgroundColor = background;
+                const size = prop('font-size');
+                if (size) styled.size = size;
+                nodes.push(...parseInline(g.spanContent, styled));
             } else if (g.footnoteId !== undefined) { // Footnote reference
                 const noteId = g.footnoteId;
-                const definition = footnoteDefinitions.get(noteId);
-                const noteChildren = definition !== undefined ? parseInline(definition) : [];
-                const noteNode: OfficeContentNode = {
-                    type: 'note',
-                    text: noteChildren.map(c => c.text || '').join(''),
-                    children: noteChildren,
-                    metadata: { noteType: 'footnote', noteId }
-                };
+                referencedFootnoteIds.add(noteId);
+                // Reuse the same note object across every reference to this id (see the map's
+                // declaration): the first reference builds the body, the rest share it, so the
+                // generators assign one key and emit one definition.
+                let noteNode = footnoteNodesById.get(noteId);
+                if (!noteNode) {
+                    const definition = footnoteDefinitions.get(noteId);
+                    const noteChildren = definition !== undefined ? parseInline(definition) : [];
+                    noteNode = {
+                        type: 'note',
+                        text: noteChildren.map(c => c.text || '').join(''),
+                        children: noteChildren,
+                        metadata: { noteType: 'footnote', noteId }
+                    };
+                    footnoteNodesById.set(noteId, noteNode);
+                }
                 // Notes attach to the preceding text node (matches WordParser's convention);
                 // fall back to an empty text node if the reference opens the inline run.
                 if (nodes.length > 0) {
@@ -534,6 +641,31 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
     }
 
+    // Re-join a list block that a blank line tore away from its parent. The generator's older
+    // loose output (`- a\n\n\n    - a1`) and foreign editors both split a nested item into its
+    // own block; left apart, the child's leading indent is stripped by the per-block `trim()`
+    // below and it reparses as a flat top-level item under a fresh listId. Merge a block back
+    // into the preceding one only when the previous block is itself a list (its FIRST line is a
+    // marker - the sub-splitter guarantees such a block holds only marker/continuation lines) and
+    // the current block OPENS with an INDENTED marker. An unindented `- b` after a blank line is
+    // deliberately left split (a flat loose list keeps its own listId), and anything that is not
+    // an indented marker (continuation text, indented code, placeholders) never triggers a merge.
+    const listMarkerStart = /^(\s*)([-*+]|\d+[.)])\s+/;
+    const indentedMarkerStart = /^(?: {2,}|\t)\s*(?:[-*+]|\d+[.)])\s+/;
+    const mergedBlocks: string[] = [];
+    for (const block of blocks) {
+        const prev = mergedBlocks[mergedBlocks.length - 1];
+        if (prev !== undefined
+            && listMarkerStart.test(prev.split('\n', 1)[0])
+            && indentedMarkerStart.test(block.split('\n', 1)[0])) {
+            mergedBlocks[mergedBlocks.length - 1] = `${prev}\n${block}`;
+        } else {
+            mergedBlocks.push(block);
+        }
+    }
+    blocks.length = 0;
+    blocks.push(...mergedBlocks);
+
     let listIdCounter = 1;
     let currentAlignment: 'left' | 'center' | 'right' | 'justify' | undefined = undefined;
 
@@ -579,6 +711,65 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             block = alignMatch[3];
         }
 
+        // Embed leaf directive (remark-directive family): `::youtube[Label]{id=... width=... align=...}`
+        // or `::embed[Label]{src=... width=... height=... align=...}`. Only these two names are
+        // recognised; any other `::name` stays literal text (no catch-all). `::youtube` renders from
+        // a validated id via a fixed template, so it is unconditional; `::embed` carries an arbitrary
+        // src, so it is gated behind `preserveIframes` (the trust input) exactly like a raw <iframe>,
+        // and stays literal text otherwise. New input only; nothing that parsed before changes.
+        const embedDirectiveMatch = block.match(/^::(youtube|embed)(?:\[([^\]]*)\])?\{([^}]*)\}$/);
+        if (embedDirectiveMatch) {
+            const kind = embedDirectiveMatch[1];
+            const label = (embedDirectiveMatch[2] || '').trim() || undefined;
+            const attrs = parseEmbedDirectiveAttrs(embedDirectiveMatch[3]);
+            if (kind === 'youtube' && attrs.id) {
+                const embedUrl = `https://www.youtube.com/watch?v=${attrs.id}`;
+                content.push({
+                    type: 'embed',
+                    text: embedUrl,
+                    metadata: { embedType: 'youtube', videoId: attrs.id, url: embedUrl, width: attrs.width, align: attrs.align, label } as EmbedMetadata
+                });
+                continue;
+            }
+            if (kind === 'embed' && attrs.src && iframeAllowed(attrs.src, config.htmlParserConfig?.preserveIframes)) {
+                content.push({
+                    type: 'embed',
+                    text: attrs.src,
+                    metadata: { embedType: 'iframe', url: attrs.src, width: attrs.width, height: attrs.height, align: attrs.align, label } as EmbedMetadata
+                });
+                continue;
+            }
+            // Recognised name but not a usable/allowed directive: fall through so the line becomes
+            // ordinary text rather than being dropped.
+        }
+
+        // Ambiguous "folk" embed forms, imported only under the opt-in (embedFolkForms), since
+        // auto-upgrading an image/link to an embed is a heuristic that could mangle a genuine image
+        // link. Both become a safe youtube embed (rendered from the validated id). A standalone line
+        // only; anything not matching falls through to ordinary image/link parsing.
+        if (config.htmlParserConfig?.embedFolkForms) {
+            // Clickable thumbnail: [![alt](thumb)](watch), youtube when either URL is a youtube link.
+            const thumbMatch = block.match(/^\[!\[([^\]]*)\]\(([^)\s]+)\)\]\(([^)\s]+)\)$/);
+            if (thumbMatch) {
+                const fid = extractYoutubeId(thumbMatch[2]) || extractYoutubeId(thumbMatch[3]);
+                if (fid) {
+                    const embedUrl = `https://www.youtube.com/watch?v=${fid}`;
+                    content.push({ type: 'embed', text: embedUrl, metadata: { embedType: 'youtube', videoId: fid, url: embedUrl, label: thumbMatch[1].trim() || undefined } as EmbedMetadata });
+                    continue;
+                }
+            }
+            // Obsidian-style: a standalone image whose URL is a youtube link.
+            const obsMatch = block.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/);
+            if (obsMatch) {
+                const fid = extractYoutubeId(obsMatch[2]);
+                if (fid) {
+                    const embedUrl = `https://www.youtube.com/watch?v=${fid}`;
+                    content.push({ type: 'embed', text: embedUrl, metadata: { embedType: 'youtube', videoId: fid, url: embedUrl, label: obsMatch[1].trim() || undefined } as EmbedMetadata });
+                    continue;
+                }
+            }
+        }
+
         // YouTube embed fallback: MarkdownGenerator's 'embed' case emits a single-line
         // <div data-youtube-video="ID" data-width="…" data-align="…"></div> when fallbackToHtml
         // is on; recognise it here so a saved-then-reopened .md keeps the video.
@@ -588,6 +779,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const attrsStr = youtubeMatch[2];
             const widthMatch = attrsStr.match(/data-width="([^"]*)"/i);
             const youtubeAlignMatch = attrsStr.match(/data-align="([^"]*)"/i);
+            const youtubeLabelMatch = attrsStr.match(/data-embed-label="([^"]*)"/i);
             const embedAlign = youtubeAlignMatch && (['left', 'center', 'right'] as const).includes(youtubeAlignMatch[1] as any) ? youtubeAlignMatch[1] as 'left' | 'center' | 'right' : undefined;
             const embedUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined;
             content.push({
@@ -600,10 +792,62 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     videoId,
                     url: embedUrl,
                     width: widthMatch?.[1],
-                    align: embedAlign
+                    align: embedAlign,
+                    label: youtubeLabelMatch?.[1]
                 } as EmbedMetadata
             });
             continue;
+        }
+
+        // Generic iframe fallback: MarkdownGenerator's 'embed' case emits a single-line
+        // <iframe src="…"></iframe> for a preserved iframe when fallbackToHtml is on. Recognise
+        // it only when the caller opted into iframe preservation, so default parsing is unchanged.
+        const iframeMatch = block.match(/^<iframe\s+([^>]*?)\/?>(?:\s*<\/iframe>)?$/i);
+        if (iframeMatch) {
+            const attrsStr = iframeMatch[1];
+            // The emitted <iframe> HTML-escapes its attribute values (sanitizeUrl -> escapeHtml), so
+            // decode them back; otherwise the src double-escapes (`&amp;` -> `&amp;amp;`) and its
+            // query string is corrupted a little more on every save/reload cycle. `&amp;` is decoded
+            // last so a genuinely double-escaped value only unwinds one level per parse.
+            const decodeAttr = (s: string | undefined) => (s || '')
+                .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+                .replace(/&#39;/g, '\'').replace(/&amp;/g, '&');
+            const src = decodeAttr(attrsStr.match(/\bsrc="([^"]*)"/i)?.[1]);
+            const width = attrsStr.match(/\bwidth="([^"]*)"/i)?.[1];
+            const height = attrsStr.match(/\bheight="([^"]*)"/i)?.[1];
+            // A YouTube iframe is recognised the same way the HTML parser does it (host + id
+            // capture), BEFORE and INDEPENDENT of the preserveIframes gate, so the same iframe
+            // yields the same 'youtube' embed whichever parser sees it. Only a generic (non-YouTube)
+            // iframe is gated behind preserveIframes and kept as an 'iframe' embed.
+            const ytMatch = src && /youtube(?:-nocookie)?\.com/.test(src) ? src.match(/(?:embed\/|v=)([^&?/\s]+)/) : null;
+            if (ytMatch) {
+                const embedUrl = `https://www.youtube.com/watch?v=${ytMatch[1]}`;
+                content.push({
+                    type: 'embed',
+                    text: embedUrl,
+                    metadata: {
+                        embedType: 'youtube',
+                        videoId: ytMatch[1],
+                        url: embedUrl,
+                        width: width !== undefined ? decodeAttr(width) : undefined,
+                        height: height !== undefined ? decodeAttr(height) : undefined
+                    } as EmbedMetadata
+                });
+                continue;
+            }
+            if (src && iframeAllowed(src, config.htmlParserConfig?.preserveIframes)) {
+                content.push({
+                    type: 'embed',
+                    text: src,
+                    metadata: {
+                        embedType: 'iframe',
+                        url: src,
+                        width: width !== undefined ? decodeAttr(width) : undefined,
+                        height: height !== undefined ? decodeAttr(height) : undefined
+                    } as EmbedMetadata
+                });
+                continue;
+            }
         }
 
         // Code Block
@@ -885,11 +1129,23 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             } else {
                 const lines = block.trim().split('\n');
                 const rows: OfficeContentNode[] = [];
+                // Pre-scan the separator row for per-column GFM alignment (`:--` left, `:-:` center,
+                // `--:` right; a bare `--` column has none), so every cell can carry its column's
+                // alignment on CellMetadata.align (the header row precedes the separator, so a
+                // per-cell pass alone could not see it).
+                const sepLine = lines.find(l => l.match(/^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/));
+                const columnAligns: ('left' | 'center' | 'right' | null)[] = sepLine
+                    ? sepLine.replace(/^\||\|$/g, '').split('|').map(c => {
+                        const t = c.trim();
+                        const l = t.startsWith(':'), r = t.endsWith(':');
+                        return (l && r) ? 'center' : r ? 'right' : l ? 'left' : null;
+                    })
+                    : [];
                 for (let i = 0; i < lines.length; i++) {
                     if (lines[i].match(/^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/)) continue; // Separator row (per-cell `:?-+:?`, GFM-style; accepts short cells like `|-|-|`)
 
                     const cellsStr = lines[i].replace(/^\||\|$/g, '').split('|');
-                    const cells: OfficeContentNode[] = cellsStr.map(c => {
+                    const cells: OfficeContentNode[] = cellsStr.map((c, colIdx) => {
                         // Recognize the MarkdownGenerator's own cell-alignment fallback,
                         // `<div style="text-align: X">…</div>`, and lift it into an aligned
                         // paragraph so it round-trips as alignment instead of being escaped to
@@ -901,17 +1157,25 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                             (_m, a: string, inner: string) => { cellAlign = a.toLowerCase() as any; return inner; }
                         );
                         const inline = parseInline(cellText, i === 0 ? { bold: true } : {});
+                        const colAlign = columnAligns[colIdx] ?? undefined;
+                        const cellMeta = colAlign ? { col: colIdx, align: colAlign } as any : undefined;
                         if (cellAlign && cellAlign !== 'left') {
                             return {
                                 type: 'cell',
+                                metadata: cellMeta,
                                 children: [{ type: 'paragraph', metadata: { alignment: cellAlign } as any, children: inline }]
                             } as OfficeContentNode;
                         }
-                        return { type: 'cell', children: inline } as OfficeContentNode;
+                        return { type: 'cell', metadata: cellMeta, children: inline } as OfficeContentNode;
                     });
                     rows.push({ type: 'row', children: cells });
                 }
-                content.push({ type: 'table', metadata: tableAlign ? { align: tableAlign } : undefined, children: rows });
+                // If every explicitly-aligned column agrees, also expose it as the table-level align,
+                // so an editor that models one alignment per table (and HTML data-align) round-trips.
+                const explicitAligns = columnAligns.filter((a): a is 'left' | 'center' | 'right' => a !== null);
+                const uniformAlign = explicitAligns.length > 0 && explicitAligns.every(a => a === explicitAligns[0]) ? explicitAligns[0] : undefined;
+                const resolvedTableAlign = tableAlign || uniformAlign;
+                content.push({ type: 'table', metadata: resolvedTableAlign ? { align: resolvedTableAlign } : undefined, children: rows });
                 continue;
             }
         }
@@ -933,9 +1197,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
         }
 
-        // Hr
+        // Hr - a thematic break (horizontal rule), not a page break, so it survives a save as
+        // `---` rather than collapsing to a bare newline.
         if (block.match(/^---+$|^\*\*\*+$|^___+$/)) {
-            content.push({ type: 'break', metadata: { breakType: 'page' } });
+            content.push({ type: 'break', metadata: { breakType: 'thematic' } });
             continue;
         }
 
@@ -972,6 +1237,23 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
         content.length = 0;
         content.push(...merged);
+    }
+
+    // Orphan footnote definitions (defined but never referenced) would otherwise vanish entirely -
+    // a user who deletes a `[^x]` reference but keeps its `[^x]: ...` definition loses the
+    // definition on the next save. Preserve them as trailing note nodes, marked `unreferenced` so
+    // the generators route them into their footnotes section (not inline) and emit no citation
+    // marker or dangling back-link. Both generators still emit the definition (md: a `[^x]:` line;
+    // html: a `div[data-footnote-id]` inside `section[data-footnotes]`, which re-parses on import).
+    for (const [id, definition] of footnoteDefinitions) {
+        if (referencedFootnoteIds.has(id)) continue;
+        const noteChildren = parseInline(definition);
+        content.push({
+            type: 'note',
+            text: noteChildren.map(c => c.text || '').join(''),
+            children: noteChildren,
+            metadata: { noteType: 'footnote', noteId: id, unreferenced: true },
+        });
     }
 
     const toTextSync = () => content.map(n => {

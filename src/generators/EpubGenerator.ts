@@ -196,7 +196,10 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
     async generate(): Promise<ConversionResult<'epub'>> {
         const htmlGenerator = new HtmlGenerator(this.ast, {
             ...this.config,
-            htmlConfig: { ...this.config.htmlConfig, standalone: false },
+            // Force sourceAttributes off: those data-* attributes are wire-format plumbing for
+            // structured consumers and change the mermaid shape's rendered appearance, neither of
+            // which belongs in a packaged EPUB.
+            htmlConfig: { ...this.config.htmlConfig, standalone: false, sourceAttributes: false },
         } as GeneratorConfig<'html'>);
         const htmlResult = await htmlGenerator.generate();
         let bodyHtml = typeof htmlResult.value === 'string' ? htmlResult.value : '';

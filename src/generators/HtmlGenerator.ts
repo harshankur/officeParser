@@ -125,14 +125,20 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let bodyContent = await this.processNodeArray(this.ast.content);
 
         if (this.collectedNotes.length > 0) {
+            // De-duplicate by node identity first. A table row with sparse column metadata
+            // re-processes its cells in `case 'row'` after they were already processed for
+            // `childrenOutput`, so a footnote referenced inside a cell gets pushed here twice -
+            // the same object reference both times, which a Set collapses back to one. Genuinely
+            // distinct notes (even two references to the same id) are different objects and stay.
+            const collectedNotes = [...new Set(this.collectedNotes)];
             // Footnotes/endnotes get their own <section data-footnotes> (the agreed
-            // contract with inscript-editor's footnote node); other note types (e.g.
+            // contract with attribute-driven editors' footnote nodes); other note types (e.g.
             // slide speaker notes) keep the existing generic notes wrapper.
-            const footnotes = this.collectedNotes.filter(n => {
+            const footnotes = collectedNotes.filter(n => {
                 const t = (n.metadata as any)?.noteType;
                 return t === 'footnote' || t === 'endnote';
             });
-            const otherNotes = this.collectedNotes.filter(n => !footnotes.includes(n));
+            const otherNotes = collectedNotes.filter(n => !footnotes.includes(n));
 
             if (footnotes.length > 0) {
                 let footnotesHtml = '';
@@ -459,8 +465,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      */
     private async processNodeArray(nodes: OfficeContentNode[]): Promise<string> {
         let html = '';
-        // Stack to track active lists: { indentation, type, isTask }
-        const listStack: { indentation: number, type: 'ordered' | 'unordered', isTask: boolean }[] = [];
+        // Stack to track active lists. `liClose` is the currently-open item's deferred closing
+        // suffix (`</li>`, or `</div></li>` for a task item): a list item is rendered WITHOUT its
+        // close so a deeper list can land inside it (spec-valid `<li>a<ul>...</ul></li>` rather
+        // than the invalid `<li>a</li><ul>...</ul>` sibling shape). The close is emitted when a
+        // same-level sibling arrives, when the level is popped, or at the end.
+        const listStack: { indentation: number, type: 'ordered' | 'unordered', isTask: boolean, liClose: string }[] = [];
 
         const openListTag = (type: 'ordered' | 'unordered', isTask: boolean) => {
             if (isTask) return '<ul data-type="taskList">';
@@ -471,7 +481,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const closeListsToLevel = (level: number) => {
             while (listStack.length > 0 && listStack[listStack.length - 1].indentation > level) {
                 const list = listStack.pop();
-                html += closeListTag(list!.type) + '\n\n';
+                html += list!.liClose + closeListTag(list!.type) + '\n\n';
             }
         };
 
@@ -479,6 +489,24 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // Check if node should be filtered out or overridden
             const override = await this.handleOnNode(node);
             if (override === false) {
+                continue;
+            }
+
+            // A top-level footnote/endnote note is an orphan definition (the MarkdownParser
+            // recovers unreferenced `[^id]: ...` defs as trailing note nodes). Route it into the
+            // collected footnotes so it renders inside `<section data-footnotes>` - where HtmlParser
+            // reads it back on import - instead of inline outside the section with a dead back-link.
+            const orphanMeta = node.metadata as NoteMetadata;
+            const orphanNoteType = orphanMeta?.noteType;
+            if (node.type === 'note' && orphanMeta?.unreferenced && (orphanNoteType === 'footnote' || orphanNoteType === 'endnote')) {
+                // Only an unreferenced (orphan) definition is hoisted into <section data-footnotes>.
+                // The `unreferenced` guard also keeps the generators in agreement at depth: this
+                // routing runs in every processNodeArray call, so without it a `note` sitting as a
+                // CHILD of a container (a consumer-built AST; no shipped parser emits this) would be
+                // hoisted here and then given an `<a href="#footnote-ref-N">` back-link with no
+                // anchor - the exact dangling link the orphan handling removes. MarkdownGenerator's
+                // equivalent routing is top-level only, so gating on the flag matches it.
+                this.collectedNotes.push(node);
                 continue;
             }
 
@@ -493,27 +521,41 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
                 // Handle current level
                 if (listStack.length > 0 && listStack[listStack.length - 1].indentation === indentation) {
-                    if (listStack[listStack.length - 1].type !== type || listStack[listStack.length - 1].isTask !== isTask) {
-                        // Type changed at same level
+                    const top = listStack[listStack.length - 1];
+                    if (top.type !== type || top.isTask !== isTask) {
+                        // Kind changed at the same level: close the open item and the old list,
+                        // then open the replacement list.
                         const last = listStack.pop();
-                        html += closeListTag(last!.type) + '\n';
+                        html += last!.liClose + closeListTag(last!.type) + '\n';
                         html += openListTag(type, isTask) + '\n';
-                        listStack.push({ indentation, type, isTask });
+                        listStack.push({ indentation, type, isTask, liClose: '' });
+                    } else {
+                        // Sibling at the same level: close the previous item before this one opens.
+                        html += top.liClose;
                     }
                 } else {
-                    // Start a new nested list
+                    // Deeper level (or the first list): open a nested list INSIDE the currently
+                    // open item, leaving the parent <li>'s close pending on its stack frame.
                     html += openListTag(type, isTask) + '\n';
-                    listStack.push({ indentation, type, isTask });
+                    listStack.push({ indentation, type, isTask, liClose: '' });
                 }
 
                 html += await this.processNodeRecursive(node, this.nodeProcessor.bind(this), override);
+                // Defer this item's close so a nested list can land inside it. A string override is
+                // a complete replacement item that already carries its own close, so add none.
+                listStack[listStack.length - 1].liClose = (typeof override === 'string')
+                    ? ''
+                    : (isTask ? '</div></li>' : '</li>');
             } else {
                 // Non-list node closes all active lists
                 closeListsToLevel(-1);
                 let result = await this.processNodeRecursive(node, this.nodeProcessor.bind(this), override);
 
-                // Add newlines for readability of the HTML source
-                if (!result.endsWith('\n\n')) {
+                // Add a blank line after BLOCK nodes for readable HTML source. Inline nodes (a
+                // paragraph's text/link runs) must concatenate with no separator: adding `\n\n`
+                // around an inline <a> put a blank line inside the <p>, which reparsed as a stray
+                // space before the following punctuation (`[video](url) .`).
+                if (node.type !== 'text' && !result.endsWith('\n\n')) {
                     if (result.endsWith('\n')) result += '\n';
                     else result += '\n\n';
                 }
@@ -732,7 +774,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 }
                 const imgStyleAttr = imgStyleParts.length > 0 ? ` style="${imgStyleParts.join('; ')}"` : '';
 
-                const img = `<img src="${sanitizeImageUrl(src)}" alt="${this.escape(node.text || meta?.altText || '')}"${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
+                const imgTitle = meta?.title ? ` title="${this.escape(meta.title)}"` : '';
+                const img = `<img src="${sanitizeImageUrl(src)}" alt="${this.escape(node.text || meta?.altText || '')}"${imgTitle}${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
                 const content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
                 return `${extraAnchors}<div${idAttr}>${content}</div>`;
             }
@@ -817,23 +860,47 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 return '';
             }
 
-            case 'break':
-                return (node.metadata as any)?.breakType === 'page' ? '<hr class="page-break">' : '<br>';
+            case 'break': {
+                const breakType = (node.metadata as any)?.breakType;
+                if (breakType === 'page') return '<hr class="page-break">';
+                // A thematic break is a plain rule; the parser reads a bare <hr> back as one.
+                if (breakType === 'thematic') return '<hr>';
+                return '<br>';
+            }
 
             case 'code': {
                 const meta = node.metadata as CodeMetadata;
                 if (meta?.math) {
-                    // No pinned editor contract yet (inscript-editor's math node is v1.2,
-                    // not built) - this is the proposed shape: data-math signals the
-                    // display mode, and the visible text keeps its $ delimiters so the
-                    // raw LaTeX degrades gracefully without a KaTeX renderer.
-                    const delimited = meta.math === 'block' ? `$$${node.text || ''}$$` : `$${node.text || ''}$`;
                     const tag = meta.math === 'block' ? 'div' : 'span';
+                    if (this.config.htmlConfig.sourceAttributes) {
+                        // Attribute-driven emission: the raw (undelimited) LaTeX lives in both
+                        // data-math and the text content, and the class token carries the mode.
+                        // The widened HtmlParser reads this back (a data-math value other than
+                        // inline/block is treated as LaTeX).
+                        const latex = node.text || '';
+                        return `${extraAnchors}<${tag} class="math math-${this.escape(meta.math)}" data-math="${this.escape(latex)}"${idAttr}${mappedAttrs}${styleAttr}>${this.escape(latex)}</${tag}>`;
+                    }
+                    // Default emission: data-math names the display mode, and the visible text
+                    // keeps its $ delimiters so the raw LaTeX degrades gracefully without a
+                    // KaTeX renderer.
+                    const delimited = meta.math === 'block' ? `$$${node.text || ''}$$` : `$${node.text || ''}$`;
                     return `${extraAnchors}<${tag} class="math math-${this.escape(meta.math)}" data-math="${this.escape(meta.math)}"${idAttr}${mappedAttrs}${styleAttr}>${this.escape(delimited)}</${tag}>`;
+                }
+                if (this.config.htmlConfig.sourceAttributes && meta?.language === 'mermaid') {
+                    // Attribute-driven emission: a <div class="mermaid" data-mermaid> the widened
+                    // parser maps back to a mermaid code node. escape() encodes '>' so diagram
+                    // arrows (-->), plus newlines and quotes, stay inside the tag and attribute.
+                    const code = node.text || '';
+                    return `${extraAnchors}<div class="mermaid" data-mermaid="${this.escape(code)}"${idAttr}${mappedAttrs}${styleAttr}>${this.escape(code)}</div>`;
                 }
                 const lang = meta?.language ? ` class="language-${this.escape(meta.language)}"` : '';
                 const codeHtml = `<code${lang}>${this.escape(node.text || '')}</code>`;
-                if (node.text && node.text.includes('\n')) {
+                // A `code` node is always block-level (inline code is a monospace text run, emitted
+                // as <code> by formatText). Wrap in <pre> whenever it carries a language or spans
+                // multiple lines; only a bare single-line, language-less code node stays a <span>.
+                // Previously a single-line block (e.g. a one-line ```js) emitted <span><code>, which
+                // re-imports as inline code and which strict CodeBlock parsers (only <pre><code>) miss.
+                if (meta?.language || (node.text && node.text.includes('\n'))) {
                     return `${extraAnchors}<pre${idAttr}${className}${mappedAttrs}${styleAttr}>${codeHtml}</pre>`;
                 } else {
                     return `${extraAnchors}<span${idAttr}${className}${mappedAttrs}${styleAttr}>${codeHtml}</span>`;
@@ -841,16 +908,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
 
             case 'list': {
+                // The closing suffix (`</div></li>` for a task item, `</li>` otherwise) is emitted
+                // by processNodeArray's list stack, not here, so a nested list can be placed inside
+                // this item before it closes. See `listStack`/`liClose` there.
                 const meta = node.metadata as ListMetadata;
                 if (meta?.isTask) {
                     const checkedAttr = ` data-checked="${meta.checked ? 'true' : 'false'}"`;
                     const checkedBool = meta.checked ? ' checked' : '';
-                    return `${extraAnchors}<li${checkedAttr}${idAttr}${className}${mappedAttrs}${styleAttr}><label><input type="checkbox"${checkedBool}><span></span></label><div>${childrenOutput}</div></li>`;
+                    return `${extraAnchors}<li${checkedAttr}${idAttr}${className}${mappedAttrs}${styleAttr}><label><input type="checkbox"${checkedBool}><span></span></label><div>${childrenOutput}`;
                 }
                 const value = (meta?.listType === 'ordered' && typeof meta.itemIndex === 'number')
                     ? ` value="${meta.itemIndex + 1}"`
                     : '';
-                return `${extraAnchors}<li${value}${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</li>`;
+                return `${extraAnchors}<li${value}${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}`;
             }
 
             case 'table': {
@@ -871,9 +941,13 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     );
 
                     if (isHeaderStyle || allBold) {
-                        // Re-process children with <thead> wrap for the first row
+                        // Re-process the first row as header cells, wrapped in a <tr>. Without the
+                        // <tr>, the header cells sit directly under <thead> (`<thead><th>…`), which
+                        // is invalid HTML that HtmlParser does not read back as a table row - so a
+                        // md -> HTML -> md round trip lost the header content. `<thead><tr><th>…` is
+                        // valid and self-idempotent.
                         const headOutput = await this.processNodeRecursive(firstRow, async (n, children) => {
-                            return children.replace(/<td/g, '<th').replace(/<\/td>/g, '</th>');
+                            return `<tr>${children.replace(/<td/g, '<th').replace(/<\/td>/g, '</th>')}</tr>`;
                         });
                         const bodyRows = rows.slice(1);
                         const bodyOutput = await this.processNodeArray(bodyRows);
@@ -1119,16 +1193,43 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const meta = node.metadata as NoteMetadata;
                 if (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') {
                     const key = this.escape(this.getFootnoteKey(node));
-                    return `<p id="footnote-${key}" data-footnote-id="${key}">${childrenOutput} <a href="#footnote-ref-${key}">↩</a></p>`;
+                    // A <div> wrapper, not <p>: childrenOutput is block content, so a <p> wrapper
+                    // nests <p> inside <p> (every DOM parser splits it, leaving the wrapper empty),
+                    // and attribute-driven editors match `div[data-footnote-id]`. This changes the
+                    // default footnote-definition markup, which was broken-by-construction before.
+                    // An unreferenced (orphan) note has no citation anchor, so the back-link would
+                    // dangle - omit it.
+                    const backLink = meta?.unreferenced ? '' : ` <a href="#footnote-ref-${key}">↩</a>`;
+                    return `<div id="footnote-${key}" data-footnote-id="${key}">${childrenOutput}${backLink}</div>`;
                 }
                 const noteClass = meta?.noteType ? ` note-${this.escape(meta.noteType)}` : '';
                 return `${extraAnchors}<div class="slide-note${noteClass}"${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
             }
 
             case 'embed': {
-                // Match the Youtube extension's exact wrapper shape so a loaded embed
-                // re-hydrates the editor's Youtube node.
                 const meta = node.metadata as EmbedMetadata;
+                if (meta?.embedType === 'iframe') {
+                    // Generic preserved iframe. sanitizeUrl scheme-checks the src (only http/https
+                    // and the other non-executing schemes survive), so a javascript:/data: src is
+                    // dropped even with preservation on. The node only exists via opt-in parsing or
+                    // a programmatic AST, so this guard is unconditional.
+                    const src = sanitizeUrl(meta?.url || '');
+                    if (!src) return '';
+                    const w = meta?.width ? ` width="${this.escape(meta.width)}"` : '';
+                    const h = meta?.height ? ` height="${this.escape(meta.height)}"` : '';
+                    if (this.config.htmlConfig.gatedEmbeds) {
+                        // Inert, never-auto-loading placeholder: the editor renders click-to-load from
+                        // it, and HtmlParser reads it back to the same embed node. src already sanitized.
+                        const a = meta?.align ? ` data-embed-align="${this.escape(meta.align)}"` : '';
+                        const l = meta?.label ? ` data-embed-label="${this.escape(meta.label)}"` : '';
+                        const dw = meta?.width ? ` data-embed-width="${this.escape(meta.width)}"` : '';
+                        const dh = meta?.height ? ` data-embed-height="${this.escape(meta.height)}"` : '';
+                        return `${extraAnchors}<div data-embed-gated data-embed-src="${src}"${dw}${dh}${a}${l}${idAttr}${mappedAttrs}${styleAttr}></div>`;
+                    }
+                    return `${extraAnchors}<iframe src="${src}"${w}${h}${idAttr}${mappedAttrs}${styleAttr}></iframe>`;
+                }
+                // Match the attribute-driven Youtube wrapper shape so a loaded embed re-hydrates
+                // an editor's Youtube node.
                 const id = meta?.videoId || '';
                 const width = meta?.width || '100%';
                 const align = meta?.align || 'center';
@@ -1137,12 +1238,16 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const iframe = id
                     ? `<iframe src="https://www.youtube.com/embed/${this.escape(id)}" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>`
                     : '';
-                return `${extraAnchors}<div data-youtube-video="${this.escape(id)}" data-width="${this.escape(width)}" data-align="${this.escape(align)}" class="youtube-embed"${idAttr}${mappedAttrs} style="width: ${sanitizeCssValue(width)}; margin-left: ${ml}; margin-right: ${mr};">${iframe}</div>`;
+                // Carry the human label so it survives AST -> editor-HTML -> AST, at parity with the
+                // generic gated path's data-embed-label. Only emitted when a label exists (from a
+                // `::youtube[Label]` directive), so unlabeled youtube embeds are byte-identical.
+                const ytLabel = meta?.label ? ` data-embed-label="${this.escape(meta.label)}"` : '';
+                return `${extraAnchors}<div data-youtube-video="${this.escape(id)}" data-width="${this.escape(width)}" data-align="${this.escape(align)}"${ytLabel} class="youtube-embed"${idAttr}${mappedAttrs} style="width: ${sanitizeCssValue(width)}; margin-left: ${ml}; margin-right: ${mr};">${iframe}</div>`;
             }
 
             case 'admonition': {
-                // Match inscript-editor's Admonition node wrapper so a loaded admonition
-                // reaches the editor as that node instead of a plain blockquote.
+                // Match the attribute-driven admonition wrapper so a loaded admonition
+                // reaches an editor as that node instead of a plain blockquote.
                 const meta = node.metadata as AdmonitionMetadata;
                 const admonitionType = this.escape(meta?.admonitionType || 'note');
                 return `${extraAnchors}<div class="admonition admonition-${admonitionType}" data-type="${admonitionType}"${idAttr}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
@@ -1180,6 +1285,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const f = node.formatting;
 
         if (this.config.includeFormatting && f) {
+            // Inline code: a monospace run becomes `<code>`, not a `font-family: monospace` span, so
+            // an editor keying on <code> sees it and it re-imports as inline code (HtmlParser maps
+            // <code> back to a monospace run). Innermost, so bold/italic wrap it (`<b><code>…`).
+            if (f.font === 'monospace') result = `<code>${result}</code>`;
             // Inside an `<hN>`, the heading's own styling is authoritative. A run that also carries
             // bold and a font size - the normal case for ODF, where a heading's paragraph style is
             // inherited by its runs - would wrap the text in `<b>` the heading already implies and,
@@ -1193,42 +1302,62 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             if (f.superscript) result = `<sup>${result}</sup>`;
 
             const styles = this.headingUniformSize
-                ? this.getInlineStyles(node, { skipFontSize: true })
-                : this.getInlineStyles(node);
+                ? this.getInlineStyles(node, { skipFontSize: true, skipBackgroundColor: true })
+                : this.getInlineStyles(node, { skipBackgroundColor: true });
             if (styles) {
                 result = `<span style="${styles}">${result}</span>`;
+            }
+            // Highlight -> <mark>, not a <span style="background-color">. Tiptap's Highlight
+            // extension parseHTML matches exactly `mark`, so an editor round trip only rehydrates
+            // the highlight from a <mark>; a bare span comes back as unhighlighted text. Kept
+            // outside the colour/size span above so a run carrying both still rehydrates both. The
+            // widened HtmlParser reads this shape back (style wins over data-color). Behaviour
+            // change (was a span), noted in the changelog.
+            if (f.backgroundColor) {
+                const safeBg = sanitizeCssValue(f.backgroundColor);
+                if (safeBg) {
+                    result = `<mark data-color="${this.escape(safeBg)}" style="background-color: ${safeBg}">${result}</mark>`;
+                }
             }
         }
 
         const meta = node.metadata as TextMetadata;
         if (meta?.wikilink) {
-            // No pinned editor contract yet for wikilinks - data-wikilink-page preserves the
-            // exact page name separately from the display text/alias and from href (which
-            // the host app's resolver may rewrite to a real URL).
+            // data-wikilink-page preserves the exact page name separately from the display
+            // text/alias and from href (which a host resolver may rewrite to a real URL).
             if (!this.config.ignoreInternalLinks) {
-                result = `<a href="#${this.escape(this.slugify(meta.link || ''))}" data-wikilink-page="${this.escape(meta.link || '')}">${result}</a>`;
+                // Attribute-driven emission adds data-wikilink/data-target (and data-alias when the
+                // display text differs from the page) alongside the default attributes. It is a
+                // superset - the widened parser still resolves via data-wikilink-page first.
+                const extra = this.config.htmlConfig.sourceAttributes
+                    ? ` data-wikilink="true" data-target="${this.escape(meta.link || '')}"`
+                        + (node.text && node.text !== meta.link ? ` data-alias="${this.escape(node.text)}"` : '')
+                    : '';
+                result = `<a href="#${this.escape(this.slugify(meta.link || ''))}" data-wikilink-page="${this.escape(meta.link || '')}"${extra}>${result}</a>`;
             }
         } else if (meta?.link) {
             const isInternal = meta.linkType !== 'external';
             if (!this.config.ignoreInternalLinks || !isInternal) {
-                result = `<a href="${sanitizeUrl(meta.link)}"${meta.linkType === 'external' ? ' target="_blank"' : ''}>${result}</a>`;
+                const linkTitle = meta.title ? ` title="${this.escape(meta.title)}"` : '';
+                result = `<a href="${sanitizeUrl(meta.link)}"${linkTitle}${meta.linkType === 'external' ? ' target="_blank"' : ''}>${result}</a>`;
             }
         }
         if (meta?.abbreviationTitle) {
             result = `<abbr title="${this.escape(meta.abbreviationTitle)}">${result}</abbr>`;
         }
         if (meta?.citationKey) {
-            // No pinned editor contract yet for citations (unlike footnotes/admonitions) -
-            // this is the proposed shape: a <cite> carrying the bare key, matching Pandoc's
-            // [@citekey] on the Markdown side. Keep in sync if inscript-editor's citation
-            // node lands with a different attribute name.
-            result = `<cite data-citation-key="${this.escape(meta.citationKey)}">[@${this.escape(meta.citationKey)}]</cite>`;
+            result = this.config.htmlConfig.sourceAttributes
+                // Attribute-driven emission: a <span class="citation"> carrying data-key, which the
+                // widened parser reads back (the default <cite> shape is not attribute-keyed).
+                ? `<span class="citation" data-key="${this.escape(meta.citationKey)}">[@${this.escape(meta.citationKey)}]</span>`
+                // Default emission: a <cite> carrying the bare key, matching Pandoc's [@citekey].
+                : `<cite data-citation-key="${this.escape(meta.citationKey)}">[@${this.escape(meta.citationKey)}]</cite>`;
         }
 
         return result;
     }
 
-    private getInlineStyles(node: OfficeContentNode, options: { skipFontSize?: boolean } = {}): string {
+    private getInlineStyles(node: OfficeContentNode, options: { skipFontSize?: boolean, skipBackgroundColor?: boolean } = {}): string {
         const styles: string[] = [];
 
         // Colors/sizes/fonts/alignments are free strings from an untrusted document;
@@ -1242,6 +1371,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         if (node.metadata) {
             const meta = node.metadata as any;
             if (meta.alignment) pushSafe('text-align', meta.alignment);
+            // A table cell's column alignment (GFM `:---`/`:---:`/`---:`) lives on
+            // `CellMetadata.align`, not `alignment`. Emit it as `text-align` on the `<th>`/`<td>`
+            // so `HtmlParser` reads it back and the pipe-table markers survive AST -> HTML -> AST.
+            // An unaligned cell (no `align`) adds nothing, keeping its HTML byte-identical.
+            if (node.type === 'cell' && meta.align) pushSafe('text-align', meta.align);
             if (meta.backgroundColor) pushSafe('background-color', meta.backgroundColor);
             if (meta.verticalAlign) pushSafe('vertical-align', meta.verticalAlign);
             if (meta.paragraphIndentation) {
@@ -1255,9 +1389,13 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         if (node.formatting) {
             const f = node.formatting;
             if (f.color) pushSafe('color', f.color);
-            if (f.backgroundColor) pushSafe('background-color', f.backgroundColor);
+            // Highlights are emitted as <mark> by formatText (see there); when that path owns the
+            // background it passes skipBackgroundColor so the colour is not also duplicated here.
+            if (f.backgroundColor && !options.skipBackgroundColor) pushSafe('background-color', f.backgroundColor);
             if (f.size && !options.skipFontSize) pushSafe('font-size', f.size);
-            if (f.font) {
+            // A monospace run is emitted as <code> by formatText, so it must not also become a
+            // font-family style here (that was the old, non-semantic inline-code shape).
+            if (f.font && f.font !== 'monospace') {
                 const safeFont = sanitizeCssValue(f.font);
                 if (safeFont) styles.push(`font-family: ${safeFont}, sans-serif`);
             }

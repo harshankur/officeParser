@@ -32,7 +32,7 @@ To see the DOCX conversion in action, simply add this file to calibre using th
 
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
 
-Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~struck out ~~ text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
+Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~struck out ~~ text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a ==yellow highlight.== Some text in a box. Some text in ==inverse video==.
 
 A paragraph with styled text: *subtle emphasis  *followed by **strong text **and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
 
@@ -59,7 +59,7 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like th
 
 
 | ITEM | NEEDED |
-|  ---  |  ---  |
+| --- | --- |
 | Books | 1 |
 | Pens | 3 |
 | Pencils | 2 |
@@ -72,7 +72,7 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like th
 
 
 | City or Town | Point A | Point B | Point C | Point D | Point E |
-|  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- | --- | --- |
 | Point A | — |  |  |  |  |
 | Point B | 87 | — |  |  |  |
 | Point C | 64 | 56 | — |  |  |
@@ -92,7 +92,7 @@ Next, we see a table with special formatting in various locations. Notice how th
 
 
 | College | New students | Graduating students | Change |
-|  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- |
 |  | *Undergraduate* |  |  |
 | Cedar University | 110 | 103 | +7 |
 | Oak Institute | 202 | 210 | -8 |
@@ -107,12 +107,12 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 
 
 | One <br>Three | Two |
-|  ---  |  ---  |
+| --- | --- |
 |  | Four |
 
 
 |  | To the left is a table inside a table, with some cells merged. |
-|  ---  |  ---  |
+| --- | --- |
 
 
 
@@ -131,7 +131,7 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 
 
 | December 2007 |  |  |  |  |  |  |  |  |  |  |  |  |  |
-|  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Sun |  | Mon |  | Tue |  | Wed |  | Thu |  | Fri |  | Sat |  |
 |  |  |  |  |  |  |  |  |  |  |  |  | 1 |  |
 |  |  |  |  |  |  |  |  |  |  |  |  |  |  |

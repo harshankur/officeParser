@@ -504,22 +504,13 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             }
         }
 
-        // Extract paragraph-level run properties
-        let paragraphRunFormatting: TextFormatting = { ...styleProps.formatting };
-        if (pPr) {
-            const pPrRPr = getFirstElementByTagName(pPr, "w:rPr");
-            if (pPrRPr) {
-                const pPrFormatting = extractFormattingFromXml(pPrRPr);
-                for (const key in pPrFormatting) {
-                    const value = pPrFormatting[key as keyof TextFormatting];
-                    if (value === false) {
-                        delete paragraphRunFormatting[key as keyof TextFormatting];
-                    } else if (value !== undefined) {
-                        (paragraphRunFormatting as any)[key] = value;
-                    }
-                }
-            }
-        }
+        // Runs inherit their base formatting from the style chain: the paragraph style (seeded
+        // here, and re-applied via the run-style path below), then any character style, then the
+        // run's own properties. The paragraph-mark run properties (`<w:pPr><w:rPr>`) format only
+        // the paragraph mark glyph itself per OOXML ISO 29500 §17.3.1.29, so they are deliberately
+        // NOT folded into the run base - doing so bled the paragraph mark's bold/italic/color/etc.
+        // onto every run in the paragraph (issue #109).
+        const paragraphRunFormatting: TextFormatting = { ...styleProps.formatting };
 
         // Extract text and children
         let text = '';

@@ -139,6 +139,29 @@ export function sanitizeUrl(url: string): string {
 }
 
 /**
+ * Decide whether a non-provider `<iframe>` should be preserved, per
+ * `HtmlParserConfig.preserveIframes`. `true` allows any src; an array is a hostname allowlist,
+ * where an entry matches the src's host exactly or as a `.`-suffix (so `"vimeo.com"` also matches
+ * `player.vimeo.com`). A relative or unparseable src is allowed only under `true`. This is a
+ * preservation gate, not a sanitizer - the src is still scheme-checked with `sanitizeUrl` on
+ * generation.
+ */
+export function iframeAllowed(src: string, preserve: boolean | string[] | undefined): boolean {
+    if (preserve === true) return true;
+    if (!Array.isArray(preserve) || preserve.length === 0) return false;
+    let host: string;
+    try {
+        host = new URL(src).hostname.toLowerCase();
+    } catch {
+        return false;
+    }
+    return preserve.some(entry => {
+        const e = String(entry).toLowerCase().trim();
+        return e.length > 0 && (host === e || host.endsWith('.' + e));
+    });
+}
+
+/**
  * Like sanitizeUrl but for an <img>/<source> src: additionally permits
  * `data:image/*` URIs (embedded document images) while still rejecting
  * script-executing schemes and non-image data URIs (e.g. data:text/html).

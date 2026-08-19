@@ -31,7 +31,7 @@ To see the DOCX conversion in action, simply add this file to calibre using the 
 
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
 
-Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~struck out ~~ text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
+Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~struck out ~~ text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a ==yellow highlight==. Some text in a box. Some text in ==inverse video==.
 
 A paragraph with styled text: *subtle emphasis  *followed by **strong text **and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
 
@@ -42,7 +42,7 @@ This document has embedded the Ubuntu font family. The body text is in the Ubunt
 <a name="paragraph-level-formatting"></a>
 ## Paragraph level formatting {#toc2022725662}
 
-<div style="text-align: right">You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.</div>
+<div style="text-align: right">==You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.==</div>
 
 For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.
 
@@ -54,7 +54,7 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like this
 
 
 | ITEM | NEEDED |
-|  ---  |  ---  |
+| --- | --- |
 | Books | 1 |
 | Pens | 3 |
 | Pencils | 2 |
@@ -67,7 +67,7 @@ Now let’s look at a fancier table—one with alternating row colors and partia
 
 
 | City or Town | <div style="text-align: center">Point A</div> | <div style="text-align: center">Point B</div> | <div style="text-align: center">Point C</div> | <div style="text-align: center">Point D</div> | <div style="text-align: center">Point E</div> |
-|  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- | --- | --- |
 | Point A | <div style="text-align: center">—</div> |  |  |  |  |
 | Point B | <div style="text-align: center">87</div> | <div style="text-align: center">—</div> |  |  |  |
 | Point C | <div style="text-align: center">64</div> | <div style="text-align: center">56</div> | <div style="text-align: center">—</div> |  |  |
@@ -80,7 +80,7 @@ Next, we see a table with special formatting in various locations. Notice how th
 
 
 | College | New students | Graduating students | Change |
-|  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- |
 |  | *Undergraduate* |  |  |
 | Cedar University | 110 | 103 | +7 |
 | Oak Institute | 202 | 210 | -8 |
@@ -311,7 +311,7 @@ Miscellaneous structural elements you can add to your document, like footnotes, 
 
 ## Footnotes & Endnotes {#toc201580556}
 
-Footnotes and endnotes are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.[^2][^1]
+Footnotes[^2] and endnotes[^1] are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.
 
 ## Dropcaps {#toc1977424358}
 
@@ -327,39 +327,39 @@ Two kinds of links are possible, those that refer to an external website and tho
 
  You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook. 
 
-[<u>Demonstration of DOCX support in calibre1</u>](#toc581531977)
+[<u>**Demonstration of DOCX support in calibre1**</u>](#toc581531977)
 
-[<u>Text Formatting1</u>](#toc2054249818)
+[<u>**Text Formatting1**</u>](#toc2054249818)
 
-[<u>Inline formatting2</u>](#toc2137712100)
+[<u>*Inline formatting2*</u>](#toc2137712100)
 
-[<u>Fun with fonts2</u>](#toc1074133965)
+[<u>*Fun with fonts2*</u>](#toc1074133965)
 
-[<u>Paragraph level formatting2</u>](#toc2022725662)
+[<u>*Paragraph level formatting2*</u>](#toc2022725662)
 
-[<u>Tables2</u>](#toc28114276)
+[<u>**Tables2**</u>](#toc28114276)
 
-[<u>Structural Elements4</u>](#toc54889875)
+[<u>**Structural Elements4**</u>](#toc54889875)
 
-[<u>Footnotes & Endnotes5</u>](#toc201580556)
+[<u>*Footnotes & Endnotes5*</u>](#toc201580556)
 
-[<u>Dropcaps5</u>](#toc1977424358)
+[<u>*Dropcaps5*</u>](#toc1977424358)
 
-[<u>Links5</u>](#toc1233048813)
+[<u>*Links5*</u>](#toc1233048813)
 
-[<u>Table of Contents5</u>](#toc64145348)
+[<u>*Table of Contents5*</u>](#toc64145348)
 
-[<u>Images6</u>](#toc484565143)
+[<u>**Images6**</u>](#toc484565143)
 
-[<u>Lists7</u>](#toc1359965655)
+[<u>**Lists7**</u>](#toc1359965655)
 
-[<u>Bulleted List8</u>](#toc1958162433)
+[<u>*Bulleted List8*</u>](#toc1958162433)
 
-[<u>Numbered List8</u>](#toc415190676)
+[<u>*Numbered List8*</u>](#toc415190676)
 
-[<u>Multi-level Lists8</u>](#toc1093260318)
+[<u>*Multi-level Lists8*</u>](#toc1093260318)
 
-[<u>Continued Lists8</u>](#toc1471533984)
+[<u>*Continued Lists8*</u>](#toc1471533984)
 
 
 
@@ -423,11 +423,6 @@ An interruption in our regularly scheduled listing, for this essential and very 
 
 3. We now resume our normal programming
 4. Four
-
-
----
-
-### Notes
 
 [^2]: In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.
 

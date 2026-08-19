@@ -31,7 +31,7 @@ To see the DOCX conversion in action, simply add this file to calibre using the 
 
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
 
-Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~struck out ~~ text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
+Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~struck out ~~ text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a ==yellow highlight==. Some text in a box. Some text in ==inverse video==.
 
 A paragraph with styled text: *subtle emphasis  *followed by **strong text **and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
 
@@ -54,7 +54,7 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like this
 
 
 | ITEM | NEEDED |
-|  ---  |  ---  |
+| --- | --- |
 | Books | 1 |
 | Pens | 3 |
 | Pencils | 2 |
@@ -67,7 +67,7 @@ Now let’s look at a fancier table—one with alternating row colors and partia
 
 
 | City or Town | <div style="text-align: center">Point A</div> | <div style="text-align: center">Point B</div> | <div style="text-align: center">Point C</div> | <div style="text-align: center">Point D</div> | <div style="text-align: center">Point E</div> |
-|  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- | --- | --- |
 | Point A | <div style="text-align: center">—</div> |  |  |  |  |
 | Point B | <div style="text-align: center">87</div> | <div style="text-align: center">—</div> |  |  |  |
 | Point C | <div style="text-align: center">64</div> | <div style="text-align: center">56</div> | <div style="text-align: center">—</div> |  |  |
@@ -80,7 +80,7 @@ Next, we see a table with special formatting in various locations. Notice how th
 
 
 | College | New students | Graduating students | Change |
-|  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- |
 |  | Undergraduate |  |  |
 | Cedar University | 110 | 103 | +7 |
 | Oak Institute | 202 | 210 | -8 |
@@ -424,11 +424,6 @@ An interruption in our regularly scheduled listing, for this essential and very 
 
 3. We now resume our normal programming
 4. Four
-
-
----
-
-### Notes
 
 [^_ftn0]: In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.
 

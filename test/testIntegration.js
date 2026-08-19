@@ -746,10 +746,20 @@ async function main() {
     // PART 3: Compiled CLI Standalone Binary Tests
     // -----------------------------------------------------------------------
     console.log('\n--- Testing Compiled CLI Standalone Binary ---');
-    const binaryPath = path.join(ROOT, 'dist', 'bin', 'officeparser-macos-arm64');
+    // Pick the compiled binary for the host platform. build-binaries.js names them
+    // `officeparser-<os>-<arch>` (with `.exe` on Windows); only macOS-arm64, win-x64 and
+    // linux-x64 are produced, so any other host - or a checkout without the binaries built -
+    // falls through to the graceful skip below rather than spawning a path that does not exist.
+    const BINARY_BY_PLATFORM = {
+        'darwin-arm64': 'officeparser-macos-arm64',
+        'win32-x64': 'officeparser-win-x64.exe',
+        'linux-x64': 'officeparser-linux-x64',
+    };
+    const binaryName = BINARY_BY_PLATFORM[`${process.platform}-${process.arch}`];
+    const binaryPath = binaryName ? path.join(ROOT, 'dist', 'bin', binaryName) : '';
 
-    if (!fs.existsSync(binaryPath)) {
-        console.warn(`⚠️ Warning: Compiled macOS binary not found at ${binaryPath}. Skipping CLI binary tests.`);
+    if (!binaryPath || !fs.existsSync(binaryPath)) {
+        console.warn(`⚠️ Warning: no compiled binary for ${process.platform}-${process.arch}${binaryPath ? ` at ${binaryPath}` : ''}. Skipping CLI binary tests.`);
     } else {
         try {
             // Test DOCX parsing

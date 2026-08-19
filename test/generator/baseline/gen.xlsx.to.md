@@ -11,7 +11,7 @@ TestBool: true
 
 
 | Demonstration of DOCX support in calibre |   |
-|  ---  |  ---  |
+| --- | --- |
 | This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action. |   |
 | There is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting. |   |
 | To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books” **button and then click “**Convert”. ** Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**. |   |
@@ -35,17 +35,17 @@ TestBool: true
 
 
 | Text Formatting |
-|  ---  |
+| --- |
 | **Inline formatting ** |
 | Here, we demonstrate various types of inline text formatting and the use of embedded fonts. |
 | Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~struck out ~~ text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in |
-| inverse video |
+| ==inverse video== |
 | . |
 | A paragraph with styled text: *subtle emphasis  *followed by **strong text **and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease. |
 | **Fun with fonts ** |
 | This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion. |
 | **Paragraph level formatting ** |
-| You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background. |
+| ==You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background. == |
 | For the lovers of poetry amongst you, paragraphs with hanging indents, like this often<br>come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph. |
 
 
@@ -55,8 +55,8 @@ TestBool: true
 
 
 | Tables |   |   |   |   |   |
-|  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
-| **ITEM ** | **NEEDED ** |   |   |   |   |
+| --- | --- | --- | --- | --- | --- |
+| ==**ITEM **== | ==**NEEDED **== |   |   |   |   |
 | Books | 1 |   |   |   |   |
 | Pens | 3 |   |   |   |   |
 | Pencils | 2 |   |   |   |   |
@@ -64,12 +64,12 @@ TestBool: true
 | Scissors | 1 pair |   |   |   |   |
 | Tables in Word can vary from the extremely simple to the extremely complex. calibre tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section. Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units.  To the left of this paragraph is a floating two column table with a nice green border and header row. |   |   |   |   |   |
 | Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width. |   |   |   |   |   |
-| City or Town | Point A | Point B | Point C | Point D | Point E |
-| Point A | — |  |  |  |  |
-| Point B | 87 | — |  |  |  |
-| Point C | 64 | 56 | — |  |  |
-| Point D | 37 | 32 | 91 | — |  |
-| Point E | 93 | 35 | 54 | 43 | — |
+| ==City or Town == | ==Point A == | ==Point B == | ==Point C == | ==Point D == | ==Point E == |
+| ==Point A == | ==— == | == == | == == | == == | == == |
+| ==Point B == | 87 | — |  |  |  |
+| ==Point C == | ==64 == | ==56 == | ==— == | == == | == == |
+| ==Point D == | 37 | 32 | 91 | — |  |
+| ==Point E == | ==93 == | ==35 == | ==54 == | ==43 == | ==— == |
 
 
 
@@ -78,15 +78,15 @@ TestBool: true
 
 
 | Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved. |   |   |   |
-|  ---  |  ---  |  ---  |  ---  |
-| **College ** | **New students ** | **Graduating students ** | **Change ** |
+| --- | --- | --- | --- |
+| ==**College **== | ==**New students **== | ==**Graduating students **== | ==**Change **== |
 |  | Undergraduate |  |  |
 | Cedar University | 110 | 103 | +7 |
 | Oak Institute | 202 | 210 | -8 |
 |  | Graduate |  |  |
 | Cedar University | 24 | 20 | +4 |
 | Elm College | 43 | 53 | -10 |
-| Total | 998 | 908 | 90 |
+| ==Total == | ==998 == | ==908 == | ==90 == |
 | Source: Fictitious data, for illustration purposes only |   |   |   |
 | Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered. |   |   |   |
 | One | Two | To the left is a table inside a table, with some cells merged. |   |
@@ -101,7 +101,7 @@ TestBool: true
 
 
 | We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks. |   |   |   |   |   |   |   |   |   |   |   |   |
-|  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | December 2007 |   |   |   |   |   |   |   |   |   |   |   |   |
 | Sun |  | Mon |  | Tue |  | Wed |  | Thu |  | Fri |  | Sat |
 |  |  |  |  |  |  |  |  |  |  |  |  | 1 |
@@ -123,7 +123,7 @@ TestBool: true
 
 
 | Structural Elements |
-|  ---  |
+| --- |
 | Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like. |
 | **Footnotes & Endnotes ** |
 | Footnotes<sup>1</sup> and endnotes<sup>i</sup> are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices. |
@@ -140,7 +140,7 @@ TestBool: true
 
 
 | Images |
-|  ---  |
+| --- |
 | Centered images like this are useful for large pictures that should be a focus of attention. |
 | There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was *inserted*, not necessarily where it appears on the page in Word. |
 |   |
@@ -152,7 +152,7 @@ TestBool: true
 
 
 | Lists |   |
-|  ---  |  ---  |
+| --- | --- |
 | All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets. |   |
 | **Bulleted List ** |   |
 | One |   |
@@ -187,7 +187,7 @@ TestBool: true
 
 
 | Charts |   |   |   |   |   |
-|  ---  |  ---  |  ---  |  ---  |  ---  |  ---  |
+| --- | --- | --- | --- | --- | --- |
 |   |   |  | Series 1 | Series 2 | Series 3 |
 |   |   | Category 1 | 4.3 | 2.4 | 2 |
 |   |   | Category 2 | 2.5 | 4.4000000000000004 | 2 |

@@ -38,7 +38,8 @@
       "maxTableCells": 1000000
     },
     "htmlParserConfig": {
-      "preserveAttributes": false
+      "preserveAttributes": false,
+      "preserveIframes": false
     }
   },
   "type": "docx",
@@ -7625,7 +7626,8 @@
           "type": "text",
           "text": "Demonstration of DOCX support in calibre",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7640,7 +7642,8 @@
           "type": "text",
           "text": "1",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7665,7 +7668,8 @@
           "type": "text",
           "text": "Text Formatting",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7680,7 +7684,8 @@
           "type": "text",
           "text": "1",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7705,7 +7710,8 @@
           "type": "text",
           "text": "Inline formatting",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7720,7 +7726,8 @@
           "type": "text",
           "text": "2",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7748,7 +7755,8 @@
           "type": "text",
           "text": "Fun with fonts",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7763,7 +7771,8 @@
           "type": "text",
           "text": "2",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7791,7 +7800,8 @@
           "type": "text",
           "text": "Paragraph level formatting",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7806,7 +7816,8 @@
           "type": "text",
           "text": "2",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7834,7 +7845,8 @@
           "type": "text",
           "text": "Tables",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7849,7 +7861,8 @@
           "type": "text",
           "text": "2",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7874,7 +7887,8 @@
           "type": "text",
           "text": "Structural Elements",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7889,7 +7903,8 @@
           "type": "text",
           "text": "4",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7914,7 +7929,8 @@
           "type": "text",
           "text": "Footnotes & Endnotes",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7929,7 +7945,8 @@
           "type": "text",
           "text": "5",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7957,7 +7974,8 @@
           "type": "text",
           "text": "Dropcaps",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -7972,7 +7990,8 @@
           "type": "text",
           "text": "5",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8000,7 +8019,8 @@
           "type": "text",
           "text": "Links",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8015,7 +8035,8 @@
           "type": "text",
           "text": "5",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8043,7 +8064,8 @@
           "type": "text",
           "text": "Table of Contents",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8058,7 +8080,8 @@
           "type": "text",
           "text": "5",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8086,7 +8109,8 @@
           "type": "text",
           "text": "Images",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8101,7 +8125,8 @@
           "type": "text",
           "text": "6",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8126,7 +8151,8 @@
           "type": "text",
           "text": "Lists",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8141,7 +8167,8 @@
           "type": "text",
           "text": "7",
           "formatting": {
-            "size": "12pt",
+            "bold": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8166,7 +8193,8 @@
           "type": "text",
           "text": "Bulleted List",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8181,7 +8209,8 @@
           "type": "text",
           "text": "8",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8209,7 +8238,8 @@
           "type": "text",
           "text": "Numbered List",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8224,7 +8254,8 @@
           "type": "text",
           "text": "8",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8252,7 +8283,8 @@
           "type": "text",
           "text": "Multi-level Lists",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8267,7 +8299,8 @@
           "type": "text",
           "text": "8",
           "formatting": {
-            "size": "12pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8295,7 +8328,8 @@
           "type": "text",
           "text": "Continued Lists",
           "formatting": {
-            "size": "11pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },
@@ -8310,7 +8344,8 @@
           "type": "text",
           "text": "8",
           "formatting": {
-            "size": "11pt",
+            "italic": true,
+            "size": "10pt",
             "underline": true,
             "color": "#0000FF"
           },

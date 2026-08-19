@@ -38,7 +38,8 @@
       "maxTableCells": 1000000
     },
     "htmlParserConfig": {
-      "preserveAttributes": false
+      "preserveAttributes": false,
+      "preserveIframes": false
     }
   },
   "type": "pptx",

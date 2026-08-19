@@ -134,6 +134,30 @@
     <div class="math block" data-math="block">$$a^2 + b^2 = c^2$$</div>
 
     <!--
+        Attribute-driven editor shapes: the parser widens to accept these without changing its
+        default output. Wikilink carries the page in data-target (display text from the body, or
+        synthesized from data-alias when the anchor is empty); citation is a span whose class list
+        includes `citation` plus a data-key; math puts the raw (undelimited) LaTeX in data-math with
+        the mode in the class token; mermaid maps div[data-mermaid]/div.mermaid/pre.mermaid to a
+        mermaid-language code node.
+    -->
+    <p>
+        <a data-wikilink="true" data-target="Target Page" data-alias="Alias Text">Alias Text</a>
+        <a data-wikilink="true" data-target="Bare Page">Bare Page</a>
+        <a data-wikilink="true" data-target="Empty Target" data-alias="Empty Alias"></a>
+    </p>
+    <p>
+        <span class="citation cursor-help bg-emerald-500/10 text-emerald-600" data-key="doe2021" data-label="Doe 2021" title="Doe, J. (2021)">[Doe 2021]</span>
+    </p>
+    <span data-math="\alpha+\beta" class="math-inline">\alpha+\beta</span>
+    <div data-math="\sum_{i=0}^n i" class="math-block">\sum_{i=0}^n i</div>
+    <span data-math="ignored-when-text-present" class="math-inline">$\delta$</span>
+    <div class="mermaid" data-mermaid="graph TD; A--&gt;B;">graph TD; A--&gt;B;</div>
+    <div data-mermaid="pie showData"></div>
+    <pre class="mermaid"><code>flowchart LR; X--&gt;Y</code></pre>
+    <div class="mermaid"><p>Not a diagram, just a styled block with nested content.</p></div>
+
+    <!--
         Native MathML, as opposed to the data-math round trip above. This is what real pages and
         every EPUB3 spine item carry (EpubParser routes them through HtmlParser), and it used to
         fall through to generic text concatenation: mfrac collapsed 1 over 2 into the number "12",

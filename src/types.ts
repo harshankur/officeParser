@@ -407,6 +407,30 @@ export interface HtmlParserConfig {
      * Defaults to false.
      */
     preserveAttributes?: boolean;
+    /**
+     * Preserve `<iframe>` embeds that aren't recognized as a known provider (YouTube is always
+     * recognized). By default every non-YouTube iframe is dropped, which is a deliberate security
+     * posture other consumers rely on; set this to opt back in. `true` preserves any iframe; an
+     * array is a hostname allowlist (an entry matches the src's host exactly or as a `.`-suffix,
+     * so `"vimeo.com"` also matches `player.vimeo.com`). Preserved iframes become `embed` nodes
+     * with `embedType: 'iframe'`; on generation the `src` is still scheme-checked (only http/https
+     * survive). This also governs a raw `<iframe>` block encountered in Markdown input.
+     *
+     * Defaults to false.
+     */
+    preserveIframes?: boolean | string[];
+    /**
+     * Import ambiguous "folk" embed forms in Markdown as embeds: a standalone Obsidian-style image
+     * whose URL is a YouTube link (`![](https://youtube.com/watch?v=ID)`), and the clickable
+     * thumbnail-link (`[![alt](https://img.youtube.com/vi/ID/…)](watch-url)`). Both become a
+     * `embedType: 'youtube'` embed (rendered from the validated id, so it is safe). Off by default:
+     * auto-upgrading an image/link to an embed is a heuristic that could mangle a genuinely-intended
+     * image link, so a consumer opts in. The unambiguous forms (`<div data-youtube-video>`, a bare
+     * YouTube `<iframe>`, the `::youtube` directive) are always recognized, independent of this flag.
+     *
+     * Defaults to false.
+     */
+    embedFolkForms?: boolean;
 }
 
 /**
@@ -917,6 +941,27 @@ export interface HtmlGeneratorConfig {
      * Granular injection points for custom HTML, scripts, and styles.
      */
     injections?: HtmlInjectionConfig;
+    /**
+     * Carry each rich node's raw source in a `data-*` attribute, with undelimited text content,
+     * so attribute-driven structured consumers (rich-text editors, custom viewers) can rehydrate
+     * the node from the markup rather than re-parsing the display text. Affects wikilinks
+     * (adds `data-wikilink`/`data-target`/`data-alias`), citations (a `<span class="citation">`
+     * carrying `data-key` instead of `<cite>`), math (the LaTeX in `data-math`, undelimited) and
+     * mermaid (a `<div class="mermaid" data-mermaid>` instead of `<pre><code>`).
+     *
+     * Off by default; the default output is byte-identical to previous releases. The widened
+     * `HtmlParser` reads every shape this emits, so output stays self-round-trippable.
+     */
+    sourceAttributes?: boolean;
+    /**
+     * Emit a generic (non-YouTube) iframe embed as a gated placeholder,
+     * `<div data-embed-gated data-embed-src="…" …>`, instead of a live `<iframe>`. The gated shape
+     * never auto-loads its src: an editor renders a click-to-load placeholder from it, and
+     * `HtmlParser` reads it back to the same `embed` node. The src is scheme-checked (`sanitizeUrl`)
+     * on emit. Off by default; the default output (a live `<iframe>`) is unchanged. YouTube embeds
+     * are unaffected (they already render from a validated id).
+     */
+    gatedEmbeds?: boolean;
 }
 
 /**
@@ -1078,6 +1123,61 @@ export interface CsvGeneratorConfig {
  */
 export type MarkdownDialectPreset = 'extended' | 'github' | 'gitlab' | 'obsidian' | 'pandoc' | 'commonmark';
 
+/*
+ * Per-capability syntax variants for `MarkdownDialectConfig`. Each is named for the *syntax* it
+ * selects, never for a product, so a convention shared by several flavors is a single value and a
+ * preset simply points at it (e.g. both the `obsidian` and `extended` presets select `'equals'`
+ * highlight). `'none'` is the explicit off switch, mirroring `math`'s existing `'dollar' | 'none'`;
+ * `undefined`/omitted means "inherit from the `extends` preset", never "off". Modelling these as
+ * unions rather than booleans lets a second syntax be added later without a breaking change.
+ */
+
+/** Admonition syntax: `'blockquote'` = GitHub `> [!NOTE]`, `'fence'` = GitLab `:::note`,
+ *  `'fence-attribute'` = Pandoc `::: {.note}`, `'none'` = plain bold-labeled blockquote. */
+export type AdmonitionSyntax = 'blockquote' | 'fence' | 'fence-attribute' | 'none';
+/** `==text==` highlight (`'equals'`), or `'none'` to disable. */
+export type HighlightSyntax = 'equals' | 'none';
+/** GFM `~~text~~` strikethrough (`'tilde'`), or `'none'`. */
+export type StrikethroughSyntax = 'tilde' | 'none';
+/** `Term`/`: Description` definition lists (`'colon'`), or `'none'`. */
+export type DefinitionListSyntax = 'colon' | 'none';
+/** `[^id]` footnotes (`'caret'`), or `'none'`. */
+export type FootnoteSyntax = 'caret' | 'none';
+/** `[@citekey]` citations (`'at'`), or `'none'`. */
+export type CitationSyntax = 'at' | 'none';
+/** `[[Page]]` wikilinks (`'double-bracket'`), or `'none'`. */
+export type WikilinkSyntax = 'double-bracket' | 'none';
+/** `{width=50%}` attribute lists (`'brace'`), or `'none'`. */
+export type AttributeListSyntax = 'brace' | 'none';
+/**
+ * How an `embed` node is written to Markdown:
+ * - `'html'` (default): the single-line `<div data-youtube-video="ID">` / `<iframe src=...>` block
+ *   this library has always emitted. Round-trips through officeParser, but renders as an invisible
+ *   empty box on GitHub.
+ * - `'directive'`: a remark-directive leaf, `::youtube[Label]{id=... width=... align=...}` /
+ *   `::embed[Label]{src=... width=... height=... align=...}`. Round-trips within an editor that
+ *   understands it; renders verbatim (not just the label) on GitHub, so it is an editor format, not
+ *   a GitHub-interop one.
+ * - `'link'`: a plain `[YouTube](url)` / `[Embed](url)`.
+ * - `'thumbnail'`: a YouTube-only clickable thumbnail `[![Label](.../vi/ID/hqdefault.jpg)](watch)`,
+ *   the best GitHub degrade; a non-YouTube embed falls back to `'link'`.
+ */
+export type EmbedSyntax = 'html' | 'directive' | 'link' | 'thumbnail';
+
+/**
+ * @deprecated Legacy flavor names for `MarkdownDialectConfig.admonitions`. Use the syntax names
+ * instead: `'github'` -> `'blockquote'`, `'gitlab'` -> `'fence'`, `'pandoc'` -> `'fence-attribute'`.
+ * These aliases still resolve to the same output and will be removed in the next major version.
+ */
+export type DeprecatedAdmonitionFlavor = 'github' | 'gitlab' | 'pandoc';
+
+/**
+ * @deprecated Boolean toggles for dialect capability fields are deprecated in favor of the
+ * syntax-name unions: `true` maps to that field's on-value (e.g. `'tilde'`), `false` maps to
+ * `'none'`. Booleans keep working via coercion and will be removed in the next major version.
+ */
+export type DeprecatedDialectToggle = boolean;
+
 /**
  * Granular control over which native Markdown syntax the generator emits for constructs that
  * differ across real-world dialects (e.g. GitHub's `> [!NOTE]` vs GitLab's `:::note` vs Pandoc's
@@ -1089,25 +1189,60 @@ export type MarkdownDialectPreset = 'extended' | 'github' | 'gitlab' | 'obsidian
 export interface MarkdownDialectConfig {
     /** Base preset any omitted field inherits from. Defaults to 'extended'. */
     extends?: MarkdownDialectPreset;
-    /** Admonition syntax: GitHub `> [!NOTE]`, GitLab `:::note`, Pandoc `::: {.note}`, or `'none'`
-     *  to degrade to a plain bold-labeled blockquote with no special marker. */
-    admonitions?: 'github' | 'gitlab' | 'pandoc' | 'none';
-    /** Markdown Extra/Pandoc-style `Term\n: Description` definition lists. */
-    definitionLists?: boolean;
-    /** `[^id]` footnote references/definitions. When false, note content is inlined as a
-     *  parenthetical right at the reference point instead of using footnote syntax. */
-    footnotes?: boolean;
-    /** Pandoc-style `[@citekey]` citations. When false, emits `[citekey]` (brackets, no `@`). */
-    citations?: boolean;
-    /** Obsidian-style `[[Page]]`/`[[Page|Alias]]` wikilinks. When false, falls back to a plain
-     *  `[text](url)` link using the same target. */
-    wikilinks?: boolean;
-    /** Inline `$...$`/block `$$...$$` math delimiters, or `'none'` for bare LaTeX text. */
+    /**
+     * Admonition syntax: `'blockquote'` = GitHub `> [!NOTE]`, `'fence'` = GitLab `:::note`,
+     * `'fence-attribute'` = Pandoc `::: {.note}`, `'none'` = a plain bold-labeled blockquote with no
+     * special marker. Omit to inherit from the `extends` preset. The legacy flavor names
+     * `'github'`/`'gitlab'`/`'pandoc'` are accepted as deprecated aliases (see
+     * `DeprecatedAdmonitionFlavor`) and will be removed in the next major version.
+     */
+    admonitions?: AdmonitionSyntax | DeprecatedAdmonitionFlavor;
+    /**
+     * Markdown Extra/Pandoc-style `Term`/`: Description` definition lists (`'colon'`), or `'none'`
+     * to render terms and descriptions as plain paragraphs. Omit to inherit from `extends`. Passing
+     * a boolean is deprecated: `true` = `'colon'`, `false` = `'none'` (removed next major).
+     */
+    definitionLists?: DefinitionListSyntax | DeprecatedDialectToggle;
+    /**
+     * `[^id]` footnote references/definitions (`'caret'`), or `'none'` to inline note content as a
+     * parenthetical right at the reference point. Omit to inherit from `extends`. Passing a boolean
+     * is deprecated: `true` = `'caret'`, `false` = `'none'` (removed next major).
+     */
+    footnotes?: FootnoteSyntax | DeprecatedDialectToggle;
+    /**
+     * Pandoc-style `[@citekey]` citations (`'at'`), or `'none'` to emit `[citekey]` (brackets, no
+     * `@`). Omit to inherit from `extends`. Passing a boolean is deprecated: `true` = `'at'`,
+     * `false` = `'none'` (removed next major).
+     */
+    citations?: CitationSyntax | DeprecatedDialectToggle;
+    /**
+     * Obsidian-style `[[Page]]`/`[[Page|Alias]]` wikilinks (`'double-bracket'`), or `'none'` to fall
+     * back to a plain `[text](url)` link using the same target. Omit to inherit from `extends`.
+     * Passing a boolean is deprecated: `true` = `'double-bracket'`, `false` = `'none'` (removed next major).
+     */
+    wikilinks?: WikilinkSyntax | DeprecatedDialectToggle;
+    /** Inline `$...$`/block `$$...$$` math delimiters (`'dollar'`), or `'none'` for bare LaTeX text. */
     math?: 'dollar' | 'none';
-    /** Pandoc-style `{width=50% .centered}` attribute lists after images/tables. */
-    attributeLists?: boolean;
-    /** GFM `~~text~~` strikethrough (not part of base CommonMark). */
-    strikethrough?: boolean;
+    /**
+     * Pandoc-style `{width=50% .centered}` attribute lists after images/tables (`'brace'`), or
+     * `'none'`. Omit to inherit from `extends`. Passing a boolean is deprecated: `true` = `'brace'`,
+     * `false` = `'none'` (removed next major).
+     */
+    attributeLists?: AttributeListSyntax | DeprecatedDialectToggle;
+    /**
+     * GFM `~~text~~` strikethrough (`'tilde'`; not part of base CommonMark), or `'none'`. Omit to
+     * inherit from `extends`. Passing a boolean is deprecated: `true` = `'tilde'`, `false` = `'none'`
+     * (removed next major).
+     */
+    strikethrough?: StrikethroughSyntax | DeprecatedDialectToggle;
+    /**
+     * `==text==` highlight (`'equals'`; Obsidian/extended flavors, NOT GFM or CommonMark where `==`
+     * is literal text), or `'none'`. When `'equals'`, a highlighted run round-trips as `==text==`
+     * and `==text==` is read back as a highlight; when `'none'`, a highlight falls back to an HTML
+     * `<mark>`/`<span>` per `fallbackToHtml.inlineFormatting`, and `==text==` stays literal on parse.
+     * Omit to inherit from `extends`.
+     */
+    highlight?: HighlightSyntax;
     /** Unordered list bullet character. */
     bulletListMarker?: '-' | '*' | '+';
     /** Ordered list marker punctuation. */
@@ -1117,6 +1252,13 @@ export interface MarkdownDialectConfig {
     /** Table syntax: native GFM pipe tables, or forced HTML `<table>` (required for strict
      *  CommonMark, which has no table syntax of its own). */
     tables?: 'native' | 'html';
+    /**
+     * How an `embed` node is written to Markdown (`'html'` | `'directive'` | `'link'` |
+     * `'thumbnail'`; see `EmbedSyntax`). This is the authority for embed form. When omitted, the
+     * deprecated `fallbackToHtml.embeds` boolean is honored (`true`/unset maps to `'html'`, `false`
+     * to `'link'`), then the default `'html'`.
+     */
+    embeds?: EmbedSyntax;
 }
 
 /**
@@ -1134,10 +1276,30 @@ export interface FallbackToHtmlConfig {
     anchors?: boolean;
     /** Nested-table and merged-cell (colspan/rowspan) HTML `<table>` fallback. */
     tables?: boolean;
-    /** YouTube embed `<div data-youtube-video>` vs. a plain link. */
+    /**
+     * YouTube embed `<div data-youtube-video>` vs. a plain link.
+     * @deprecated Use `mdConfig.dialect.embeds` (`EmbedSyntax`) instead, which also selects the
+     * `'directive'` and `'thumbnail'` forms. When `dialect.embeds` is unset this boolean is still
+     * honored (`true` maps to `'html'`, `false` to `'link'`); it will be removed in the next major.
+     */
     embeds?: boolean;
     /** Multi-line table cell content joined with `<br>` instead of a space. */
     cellLineBreaks?: boolean;
+    /**
+     * Multi-paragraph list-item content (an HTML `<li>` with several `<p>` children) joined with
+     * `<br>` instead of a space, so it stays on the item's single Markdown line. Block children of
+     * an item (a code fence or table inside `<li>`) degrade under this join, the same way they do
+     * inside a table cell under `cellLineBreaks`.
+     */
+    itemLineBreaks?: boolean;
+    /**
+     * Inline text color, highlight, and font size via a `<span style="color:...;background-color:...;
+     * font-size:...">` run, which the Markdown parser reads back. These have no Markdown syntax and
+     * are silently lost otherwise. Unlike the other fields this is **off by default even when
+     * `fallbackToHtml` is `true`**, because it changes default output; enable it explicitly with
+     * `fallbackToHtml: { inlineFormatting: true }`.
+     */
+    inlineFormatting?: boolean;
 }
 
 /**
@@ -1443,6 +1605,17 @@ export interface OfficeChunk {
 export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods' | 'pdf' | 'rtf' | 'md' | 'html' | 'csv' | 'epub';
 
 /**
+ * A structural stand-in for the web `Blob`/`File` so `parseOffice`/`convert` accept them in the
+ * browser without pulling the DOM lib into this package's types. Any object with an
+ * `arrayBuffer()` method qualifies. When `name` is present (as on a `File`) it is used only for
+ * extension-based type detection, never as a filesystem path.
+ */
+export interface BlobLike {
+    arrayBuffer(): Promise<ArrayBuffer>;
+    name?: string;
+}
+
+/**
  * Types of content nodes in the AST.
  */
 export type OfficeContentNodeType = 'paragraph' | 'heading' | 'table' | 'list' | 'text' | 'image' | 'chart' | 'drawing' | 'slide' | 'note' | 'sheet' | 'row' | 'cell' | 'page' | 'break' | 'code' | 'comment' | 'header' | 'footer' | 'slideMaster' | 'embed' | 'admonition' | 'definitionList' | 'definitionTerm' | 'definitionDescription';
@@ -1707,6 +1880,12 @@ export interface CellMetadata {
      */
     col: number;
     /**
+     * Text alignment for this cell's column, from the GFM pipe-table separator row
+     * (`:---` left, `:---:` center, `---:` right). All cells in a column carry the same value;
+     * the Markdown generator reads it from the header row to emit the separator.
+     */
+    align?: 'left' | 'center' | 'right';
+    /**
      * The number of rows this cell spans (merges).
      * @example 2 if the cell is merged with the one below it.
      */
@@ -1731,7 +1910,7 @@ export interface TableMetadata {
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
     /**
-     * Layout alignment of the table on the page (e.g. inscript-editor's `CustomTable`).
+     * Layout alignment of the table on the page (e.g. an editor's custom table node).
      * @example 'center'
      */
     align?: 'left' | 'center' | 'right';
@@ -1782,15 +1961,17 @@ export interface ImageMetadata {
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
     /**
-     * Display width of the image (e.g. inscript-editor's `CustomImage`), as a CSS length or percentage.
+     * Display width of the image (e.g. an editor's custom image node), as a CSS length or percentage.
      * @example "50%"
      */
     width?: string;
     /**
-     * Layout alignment of the image (e.g. inscript-editor's `CustomImage`).
+     * Layout alignment of the image (e.g. an editor's custom image node).
      * @example 'center'
      */
     align?: 'left' | 'center' | 'right';
+    /** Advisory image title (Markdown `![alt](url "title")`, HTML `<img title>`), if any. */
+    title?: string;
 }
 
 /**
@@ -1798,16 +1979,24 @@ export interface ImageMetadata {
  * Markdown has no native syntax for this - see `MarkdownGenerator`'s `embed` case.
  */
 export interface EmbedMetadata {
-    /** The kind of embed. Only 'youtube' is supported today; the shape is generic for future providers. */
-    embedType: 'youtube';
-    /** The provider-specific video ID (e.g. the 11-character YouTube video ID). */
-    videoId: string;
-    /** The original/canonical URL of the embedded media, if known. */
+    /**
+     * The kind of embed. 'youtube' is recognized from a `data-youtube-video` wrapper or a YouTube
+     * iframe; 'iframe' is a generic preserved iframe (opt-in via `HtmlParserConfig.preserveIframes`).
+     */
+    embedType: 'youtube' | 'iframe';
+    /** The provider-specific video ID (e.g. the 11-character YouTube video ID). Absent for generic iframes. */
+    videoId?: string;
+    /** The original/canonical URL of the embedded media, if known. For a generic iframe, its `src`. */
     url?: string;
     /** Display width, as a CSS length or percentage. */
     width?: string;
+    /** Display height, as a CSS length or percentage. */
+    height?: string;
     /** Layout alignment of the embed. */
     align?: 'left' | 'center' | 'right';
+    /** Human-readable label for the embed (e.g. the `[Label]` of a `::youtube[Label]{...}` leaf
+     *  directive, or a gated embed's caption). Purely descriptive; never a trust or render input. */
+    label?: string;
 }
 
 /**
@@ -1878,6 +2067,8 @@ export interface TextMetadata {
      * officeParser always parses/generates the syntax.
      */
     wikilink?: boolean;
+    /** Advisory link title (Markdown `[text](url "title")`, HTML `<a title>`), if any. */
+    title?: string;
 }
 
 /**
@@ -1899,6 +2090,14 @@ export interface NoteMetadata {
     anchorIds?: string[];
     /** The slide number this note is associated with (used in PowerPoint). */
     slideNumber?: number;
+    /**
+     * True for a footnote/endnote definition that no reference points at (an "orphan").
+     * The Markdown parser sets this when it recovers a `[^id]: ...` definition with no matching
+     * `[^id]` reference so the definition is preserved rather than dropped. Generators route such
+     * notes into their footnotes section without a citation marker, and the HTML generator omits
+     * the (otherwise dangling) back-link.
+     */
+    unreferenced?: boolean;
 }
 
 /**
@@ -1914,8 +2113,11 @@ export interface BreakMetadata {
      * - 'lastRenderedPage': The editing application has inserted a soft break on the last save.
      * - 'textWrapping' (default, assumed when not specified): The next text will be placed on the next line.
      * - 'carriageReturn': An explicit carriage return (w:cr) equivalent to a hard line break.
+     * - 'thematic': A thematic break (Markdown `---`/`***`/`___`, HTML `<hr>`) - a horizontal
+     *   rule separating sections, distinct from a page break. Emitted as `---` in Markdown and
+     *   `<hr>` in HTML.
      */
-    breakType: 'column' | 'page' | 'lastRenderedPage' | 'textWrapping' | 'carriageReturn';
+    breakType: 'column' | 'page' | 'lastRenderedPage' | 'textWrapping' | 'carriageReturn' | 'thematic';
 
     /**
      * Specifies the location which shall be used as the next available line when breakType
@@ -1939,7 +2141,7 @@ export interface CodeMetadata {
     /**
      * When set, this node is a LaTeX math expression rather than a code block. `node.text`
      * holds the bare LaTeX (delimiters excluded); 'inline' round-trips as `$...$`,
-     * 'block' as `$$...$$`. Matches inscript-editor's math node (Roadmap Step 11.5).
+     * 'block' as `$$...$$`. Matches attribute-driven editors' math nodes.
      */
     math?: 'inline' | 'block';
 }

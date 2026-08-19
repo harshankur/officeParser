@@ -1,6 +1,6 @@
 import { OfficeGenerator } from './OfficeGenerator.js';
 import { OfficeParser } from './OfficeParser.js';
-import { ConversionResult, GeneratorConfig, OfficeConverterConfig, OfficeParserConfig, SupportedDestination, SupportedFileType } from './types.js';
+import { BlobLike, ConversionResult, GeneratorConfig, OfficeConverterConfig, OfficeParserConfig, SupportedDestination, SupportedFileType } from './types.js';
 
 /**
  * Utility type to infer the file type from a file path string literal.
@@ -49,7 +49,7 @@ export class OfficeConverter {
      * ```
      */
     public static async convert<
-        F extends string | Buffer | ArrayBuffer | Uint8Array,
+        F extends string | Buffer | ArrayBuffer | Uint8Array | BlobLike,
         T extends SupportedFileType = InferFileTypeFromPath<F>,
         D extends SupportedDestination<T> = SupportedDestination<T>
     >(

@@ -188,14 +188,23 @@ officeParser.parseOffice('/path/to/file.docx', function(ast, err) {
 });
 ```
 
-### File Buffers & ArrayBuffers
+### File Buffers, ArrayBuffers & Blobs
 
-Pass a `Buffer`, `ArrayBuffer`, or `Uint8Array` instead of a file path:
+Pass a `Buffer`, `ArrayBuffer`, `Uint8Array`, or a web `Blob`/`File` instead of a file path:
 
 ```js
 const fs = require('fs');
 const buffer = fs.readFileSync('/path/to/file.pdf');
 const ast = await officeParser.parseOffice(buffer);
+```
+
+In the browser you can hand a `File`/`Blob` straight from an `<input type="file">` — no need to
+read it into a buffer first. A `File`'s name drives type detection, so no `fileType` hint is
+needed when the name has a recognizable extension:
+
+```js
+// input.files[0] is a File (e.g. "report.docx")
+const ast = await officeParser.parseOffice(input.files[0]);
 ```
 
 > [!IMPORTANT]
@@ -475,6 +484,8 @@ const { value: chunks } = await OfficeConverter.convert('report.docx', 'chunks',
 
 ### The `OfficeChunk` Object
 
+`generate(ast, 'chunks')` (and `ast.to('chunks')`) resolves to a real `OfficeChunk[]` **array**, not a JSON string - serialize it to JSON/JSONL yourself if your pipeline needs that.
+
 Every chunk contains text and rich metadata for citations and filtered retrieval:
 
 ```ts
@@ -738,7 +749,7 @@ Admonition Node (type: 'admonition')
 └── children: [ Paragraph | List | ... ]   (block content)
 
 Embed Node (type: 'embed')
-└── metadata: { embedType: 'youtube', videoId: string, url?: string, width?: string, align?: string }
+└── metadata: { embedType: 'youtube' | 'iframe', videoId?: string, url?: string, width?: string, height?: string, align?: string }
 
 Definition List Node (type: 'definitionList')
 └── children:
@@ -747,7 +758,7 @@ Definition List Node (type: 'definitionList')
 ```
 
 - `admonition` round-trips through both Markdown (`> [!NOTE]` / `:::note ... :::`) and HTML (`<div class="admonition admonition-note" data-type="note">`)
-- `embed` currently models YouTube videos; HTML round-trips via `<div data-youtube-video="ID">`, Markdown falls back to a raw HTML block or a plain link
+- `embed` models YouTube videos and generic iframes. Markdown form is selected by `mdConfig.dialect.embeds`: `'html'` (default; the `<div data-youtube-video>` / `<iframe>` block), `'directive'` (a `::youtube[…]{…}` / `::embed[…]{…}` leaf directive), `'link'`, or `'thumbnail'` (YouTube-only clickable preview). A generic iframe is captured only under `htmlParserConfig.preserveIframes` (the trust input) and can be emitted as an inert click-to-load placeholder via `htmlConfig.gatedEmbeds`. The `'directive'` form is an editor round-trip format, not GitHub-rendered
 - Abbreviations (`*[HTML]: Hypertext Markup Language`) are stored as `TextMetadata.abbreviationTitle` on the abbreviated text node rather than as a separate node type
 
 ---
@@ -769,7 +780,10 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 | Attribute lists | `![alt](img.png){width=50% .centered}` | `ImageMetadata.width` / `.align`, `TableMetadata.align` |
 | Citations | `[@smith2024]` | `TextMetadata.citationKey` |
 | Wikilinks | `[[Page]]` / `[[Page\|Alias]]` | `TextMetadata.wikilink`, `.link`, `.linkType` |
+| Highlight | `==text==` | `TextMetadata.backgroundColor` |
+| Link/image titles | `[text](url "Title")` / `![alt](img.png "Title")` | `TextMetadata.title` / `ImageMetadata.title` |
 | Inline/block math | `$E=mc^2$` / `` $$...$$ `` | `type: 'code'`, `CodeMetadata.math` (`'inline' \| 'block'`) |
+| Embeds | `::youtube[Label]{id=… width=… align=…}` / `::embed[Label]{src=… …}` (leaf directive; see `mdConfig.dialect.embeds`) | `type: 'embed'`, `EmbedMetadata` |
 | Frontmatter arrays | `tags: [a, b]` or `tags: ["a","b"]` | Real array in `metadata.customProperties`/`nativeProperties` |
 | MDX components (import-only) | `<Component prop="x">...</Component>` | Stripped; inner Markdown is kept. Never generated back. |
 
@@ -784,7 +798,8 @@ save→reload cycle:
 | HTML attribute | AST field | Notes |
 |---|---|---|
 | `data-width` / `data-align` / inline `style="width:…"` on `<img>` | `ImageMetadata.width` / `.align` | |
-| `data-align` on `<table>` | `TableMetadata.align` | |
+| `data-align` on `<table>` | `TableMetadata.align` | Emitted/parsed as per-column GFM markers (`:---`, `:---:`, `---:`); alignment rides `CellMetadata.align` |
+| `title` on `<a>` / `<img>` | `TextMetadata.title` / `ImageMetadata.title` | Survives both directions (`[text](url "Title")` in Markdown) |
 | `colspan` / `rowspan` on `<td>`/`<th>` | `CellMetadata.colSpan` / `.rowSpan` | Previously dropped on HTML import — merged cells now survive a save→reload cycle |
 | `<div data-youtube-video="ID">` / `<iframe src="...youtube.com...">` | `type: 'embed'` | |
 | `<ul data-type="taskList">` / `<li data-checked>` | `ListMetadata.isTask` / `.checked` | |
@@ -973,7 +988,8 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal cross-references from AST |
 | `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`) as these lack magic bytes. |
 | `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
-| `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000 }` | **New**: Limits applied during ZIP extraction to protect against excessive memory and resource usage |
+| `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000, maxTableCells: 1000000 }` | **New**: Limits applied during ZIP extraction (and ODF cell expansion) to protect against excessive memory and resource usage |
+| `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes — `true` for any, or a hostname allowlist; the src is scheme-checked on generation. `embedFolkForms` (`boolean`, default `false`): opt in to importing ambiguous folk embed forms (Obsidian `![](youtube-url)`, thumbnail-link) as YouTube embeds |
 | `pdfWorkerSrc` | `string` | CDN (jsDelivr) | Path/URL to `pdf.worker.min.mjs` (required in browser) |
 | `onWarning` | `(issue: OfficeIssue) => void` | — | Callback for non-fatal parsing issues |
 | `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel parsing (rejects with AbortError) |
@@ -988,7 +1004,7 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `includeFormatting` | `boolean` | `true` | Include bold/italic/colors/sizes in output |
-| `generateIds` | `boolean` | `true` | Add slug-based `id` attributes to headings |
+| `generateIds` | `boolean` | `true` | Slug-based heading anchors: `id` attributes on HTML headings, and a `{#slug}` suffix on Markdown headings (`# Title {#title}`, kramdown/Pandoc). Set `false` to omit both — useful when the Markdown is rendered by GFM/CommonMark, which show `{#slug}` as literal text. Applies to all generator formats (it is a top-level option, not under `mdConfig`/`htmlConfig`). |
 | `renderMetadata` | `boolean` | `false` | Render title/author as visible header block |
 | `metadataOverrides` | `MetadataOverrides` | `{}` | Override the metadata embedded in the output, merged per field over `ast.metadata` |
 | `includeImages` | `boolean` | `true` | Include image nodes in output |
@@ -1083,6 +1099,7 @@ Pass as `htmlConfig` inside `GeneratorConfig`.
 | `injections.headEnd` | `string` | `''` | Raw HTML injected before `</head>` |
 | `injections.bodyStart` | `string` | `''` | Raw HTML injected after `<body>` |
 | `injections.bodyEnd` | `string` | `''` | Raw HTML injected before `</body>` |
+| `sourceAttributes` | `boolean` | `false` | Carry each rich node's raw source in a `data-*` attribute (undelimited text), so attribute-driven consumers can rehydrate it: `data-wikilink`/`data-target`/`data-alias` on wikilinks, a `<span class="citation" data-key>` for citations, the LaTeX in `data-math`, and a `<div class="mermaid" data-mermaid>` for mermaid. Off = byte-identical to before; the parser reads every shape it emits. Forced off for PDF/EPUB |
 
 #### `standalone`: granular envelope control
 
@@ -1133,7 +1150,8 @@ Pass as `mdConfig` inside `GeneratorConfig`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `fallbackToHtml` | `boolean` | `true` | Use HTML tags for features Markdown cannot represent (underlines, merged table cells, etc.) |
+| `fallbackToHtml` | `boolean \| FallbackToHtmlConfig` | `true` | Use HTML tags for features Markdown cannot represent (underlines, merged table cells, embeds, etc.). Pass an object for per-feature control. `cellLineBreaks`/`itemLineBreaks` (default on) join multi-line table-cell / multi-paragraph list-item content with `<br>` instead of a space. `inlineFormatting` (default `false`, opt-in even when the boolean is `true`) additionally round-trips inline color/highlight/font-size as `<span style="...">` runs. |
+| `dialect` | `MarkdownDialectPreset \| MarkdownDialectConfig` | `'extended'` | Which native syntax to emit for constructs that differ across targets (GitHub/GitLab/Obsidian/Pandoc/CommonMark). Each capability is typed by the syntax it selects (e.g. `strikethrough: 'tilde'`, `highlight: 'equals'`, `admonitions: 'blockquote'`), with `'none'` to turn it off. See [Markdown Dialect Support](#markdown-dialect-support). The old `boolean` toggles and admonition flavour names (`'github'`/`'gitlab'`/`'pandoc'`) still work but are deprecated. |
 
 ### PdfGeneratorConfig
 

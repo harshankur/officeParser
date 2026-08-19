@@ -1,9 +1,28 @@
-import { AdmonitionMetadata, BreakMetadata, CodeMetadata, ConversionResult, EmbedMetadata, FallbackToHtmlConfig, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, TableMetadata, TextMetadata } from '../types.js';
-import { escapeHtml, markdownEscapeText, sanitizeCssValue, sanitizeMarkdownUrl } from '../utils/sanitize.js';
+import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, StrikethroughSyntax, TableMetadata, TextMetadata, WikilinkSyntax } from '../types.js';
+import { escapeHtml, markdownEscapeText, sanitizeCssValue, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 
-type ResolvedMarkdownDialect = Required<Omit<MarkdownDialectConfig, 'extends'>>;
+/**
+ * A fully-resolved dialect: every capability collapsed to its canonical syntax variant (or `'none'`).
+ * Deprecated boolean/flavor inputs never reach this shape - `resolveDialect` coerces them first - so
+ * generator call sites test capabilities with `=== 'none'`, not truthiness (`'none'` is truthy).
+ */
+type ResolvedMarkdownDialect = {
+    admonitions: AdmonitionSyntax;
+    definitionLists: DefinitionListSyntax;
+    footnotes: FootnoteSyntax;
+    citations: CitationSyntax;
+    wikilinks: WikilinkSyntax;
+    math: 'dollar' | 'none';
+    attributeLists: AttributeListSyntax;
+    strikethrough: StrikethroughSyntax;
+    highlight: HighlightSyntax;
+    bulletListMarker: '-' | '*' | '+';
+    orderedListMarker: '.' | ')';
+    emphasisMarker: 'asterisk' | 'underscore';
+    tables: 'native' | 'html';
+};
 type ResolvedFallbackToHtml = Required<FallbackToHtmlConfig>;
 
 /**
@@ -33,12 +52,12 @@ const foldLines = (value: unknown): string => String(value ?? '').replace(/[\r\n
  * exactly (every feature on, GitHub-style admonitions) - the backward-compatibility anchor.
  */
 const MARKDOWN_DIALECT_PRESETS: Record<MarkdownDialectPreset, ResolvedMarkdownDialect> = {
-    extended: { admonitions: 'github', definitionLists: true, footnotes: true, citations: true, wikilinks: true, math: 'dollar', attributeLists: true, strikethrough: true, bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
-    github: { admonitions: 'github', definitionLists: false, footnotes: true, citations: false, wikilinks: false, math: 'dollar', attributeLists: false, strikethrough: true, bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
-    gitlab: { admonitions: 'gitlab', definitionLists: false, footnotes: true, citations: false, wikilinks: false, math: 'dollar', attributeLists: false, strikethrough: true, bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
-    obsidian: { admonitions: 'github', definitionLists: false, footnotes: true, citations: false, wikilinks: true, math: 'dollar', attributeLists: false, strikethrough: true, bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
-    pandoc: { admonitions: 'pandoc', definitionLists: true, footnotes: true, citations: true, wikilinks: false, math: 'dollar', attributeLists: true, strikethrough: true, bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
-    commonmark: { admonitions: 'none', definitionLists: false, footnotes: false, citations: false, wikilinks: false, math: 'none', attributeLists: false, strikethrough: false, bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'html' },
+    extended: { admonitions: 'blockquote', definitionLists: 'colon', footnotes: 'caret', citations: 'at', wikilinks: 'double-bracket', math: 'dollar', attributeLists: 'brace', strikethrough: 'tilde', highlight: 'equals', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
+    github: { admonitions: 'blockquote', definitionLists: 'none', footnotes: 'caret', citations: 'none', wikilinks: 'none', math: 'dollar', attributeLists: 'none', strikethrough: 'tilde', highlight: 'none', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
+    gitlab: { admonitions: 'fence', definitionLists: 'none', footnotes: 'caret', citations: 'none', wikilinks: 'none', math: 'dollar', attributeLists: 'none', strikethrough: 'tilde', highlight: 'none', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
+    obsidian: { admonitions: 'blockquote', definitionLists: 'none', footnotes: 'caret', citations: 'none', wikilinks: 'double-bracket', math: 'dollar', attributeLists: 'none', strikethrough: 'tilde', highlight: 'equals', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
+    pandoc: { admonitions: 'fence-attribute', definitionLists: 'colon', footnotes: 'caret', citations: 'at', wikilinks: 'none', math: 'dollar', attributeLists: 'brace', strikethrough: 'tilde', highlight: 'none', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
+    commonmark: { admonitions: 'none', definitionLists: 'none', footnotes: 'none', citations: 'none', wikilinks: 'none', math: 'none', attributeLists: 'none', strikethrough: 'none', highlight: 'none', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'html' },
 };
 
 /**
@@ -47,20 +66,44 @@ const MARKDOWN_DIALECT_PRESETS: Record<MarkdownDialectPreset, ResolvedMarkdownDi
  * omitted field falls back to - NOT "whatever preset was ambient before", since config merging
  * replaces the whole `dialect` field rather than layering an object on top of a prior string.
  */
+/**
+ * Coerces a per-capability field to its canonical syntax variant. An omitted value inherits `base`;
+ * a deprecated boolean maps `true` -> `onValue` and `false` -> `'none'` (the two are the only legacy
+ * inputs, dropped next major); an explicit syntax string passes through unchanged.
+ */
+function resolveToggle<T extends string>(value: T | boolean | undefined, onValue: T, base: T): T {
+    if (value === undefined) return base;
+    if (value === true) return onValue;
+    if (value === false) return 'none' as T;
+    return value;
+}
+
+/** Maps the deprecated admonition flavor aliases to their syntax names; passes syntax names through. */
+function resolveAdmonitions(value: AdmonitionSyntax | DeprecatedAdmonitionFlavor | undefined, base: AdmonitionSyntax): AdmonitionSyntax {
+    switch (value) {
+        case undefined: return base;
+        case 'github': return 'blockquote';
+        case 'gitlab': return 'fence';
+        case 'pandoc': return 'fence-attribute';
+        default: return value;
+    }
+}
+
 function resolveDialect(dialect: MarkdownDialectPreset | MarkdownDialectConfig | undefined): ResolvedMarkdownDialect {
     if (dialect === undefined) return MARKDOWN_DIALECT_PRESETS.extended;
     if (typeof dialect === 'string') return MARKDOWN_DIALECT_PRESETS[dialect] ?? MARKDOWN_DIALECT_PRESETS.extended;
 
     const base = MARKDOWN_DIALECT_PRESETS[dialect.extends ?? 'extended'] ?? MARKDOWN_DIALECT_PRESETS.extended;
     return {
-        admonitions: dialect.admonitions ?? base.admonitions,
-        definitionLists: dialect.definitionLists ?? base.definitionLists,
-        footnotes: dialect.footnotes ?? base.footnotes,
-        citations: dialect.citations ?? base.citations,
-        wikilinks: dialect.wikilinks ?? base.wikilinks,
+        admonitions: resolveAdmonitions(dialect.admonitions, base.admonitions),
+        definitionLists: resolveToggle(dialect.definitionLists, 'colon', base.definitionLists),
+        footnotes: resolveToggle(dialect.footnotes, 'caret', base.footnotes),
+        citations: resolveToggle(dialect.citations, 'at', base.citations),
+        wikilinks: resolveToggle(dialect.wikilinks, 'double-bracket', base.wikilinks),
         math: dialect.math ?? base.math,
-        attributeLists: dialect.attributeLists ?? base.attributeLists,
-        strikethrough: dialect.strikethrough ?? base.strikethrough,
+        attributeLists: resolveToggle(dialect.attributeLists, 'brace', base.attributeLists),
+        strikethrough: resolveToggle(dialect.strikethrough, 'tilde', base.strikethrough),
+        highlight: dialect.highlight ?? base.highlight,
         bulletListMarker: dialect.bulletListMarker ?? base.bulletListMarker,
         orderedListMarker: dialect.orderedListMarker ?? base.orderedListMarker,
         emphasisMarker: dialect.emphasisMarker ?? base.emphasisMarker,
@@ -75,7 +118,11 @@ function resolveDialect(dialect: MarkdownDialectPreset | MarkdownDialectConfig |
  */
 function resolveFallbackToHtml(fallbackToHtml: boolean | FallbackToHtmlConfig | undefined): ResolvedFallbackToHtml {
     const uniform = (on: boolean): ResolvedFallbackToHtml => ({
+        // inlineFormatting is opt-in only: it is never enabled by the boolean form, since it changes
+        // default output. Every other field follows the boolean.
         textFormatting: on, alignment: on, anchors: on, tables: on, embeds: on, cellLineBreaks: on,
+        itemLineBreaks: on,
+        inlineFormatting: false,
     });
     if (fallbackToHtml === undefined || typeof fallbackToHtml === 'boolean') return uniform(fallbackToHtml ?? true);
     const on = uniform(true);
@@ -86,6 +133,8 @@ function resolveFallbackToHtml(fallbackToHtml: boolean | FallbackToHtmlConfig | 
         tables: fallbackToHtml.tables ?? on.tables,
         embeds: fallbackToHtml.embeds ?? on.embeds,
         cellLineBreaks: fallbackToHtml.cellLineBreaks ?? on.cellLineBreaks,
+        itemLineBreaks: fallbackToHtml.itemLineBreaks ?? on.itemLineBreaks,
+        inlineFormatting: fallbackToHtml.inlineFormatting ?? on.inlineFormatting,
     };
 }
 
@@ -136,11 +185,20 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private collectedAbbreviations = new Map<string, string>();
     private resolvedDialect: ResolvedMarkdownDialect;
     private resolvedFallbackToHtml: ResolvedFallbackToHtml;
+    private resolvedEmbeds: EmbedSyntax;
 
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'md'>) {
         super('md', ast, config);
         this.resolvedDialect = resolveDialect(this.config.mdConfig.dialect);
         this.resolvedFallbackToHtml = resolveFallbackToHtml(this.config.mdConfig.fallbackToHtml);
+        // `dialect.embeds` is the authority for embed form. It lives in a different config object
+        // than the deprecated `fallbackToHtml.embeds` boolean, and an explicit boolean `false` must
+        // still win over the preset default, so it is resolved here rather than in `resolveDialect`:
+        // an embeds value set on the dialect OBJECT wins; otherwise the boolean maps (`true`/unset ->
+        // `'html'`, `false` -> `'link'`); otherwise the default `'html'`.
+        const dialectCfg = this.config.mdConfig.dialect;
+        const explicitEmbeds = (dialectCfg && typeof dialectCfg === 'object') ? dialectCfg.embeds : undefined;
+        this.resolvedEmbeds = explicitEmbeds ?? (this.resolvedFallbackToHtml.embeds ? 'html' : 'link');
     }
 
     /**
@@ -171,9 +229,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
      * ImageMetadata/TableMetadata's width/align fields - the canonical form is always
      * `key=value`, matching MarkdownParser's own vocabulary (MARKDOWN_DIALECT.md §15).
      */
-    private renderAttributeList(meta: { width?: string; align?: string } | undefined): string {
-        if (!this.resolvedDialect.attributeLists) return '';
-        if (!meta?.width && !meta?.align) return '';
+    private renderAttributeList(meta: { width?: string; align?: string } | undefined, options: { skipAlign?: boolean } = {}): string {
+        if (this.resolvedDialect.attributeLists === 'none') return '';
+        if (!meta) return '';
+        const align = options.skipAlign ? undefined : meta.align;
+        if (!meta.width && !align) return '';
         const parts: string[] = [];
         // Allowlist, not escape. These land in `metadata.width`/`align` on reparse, which the
         // parser does NOT entity-decode, so encoding here would not round-trip - and stripping
@@ -188,8 +248,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         if (meta.width && MD_LENGTH_PATTERN.test(String(meta.width).trim())) {
             parts.push(`width=${String(meta.width).trim()}`);
         }
-        if (meta.align && MD_ALIGN_VALUES.has(String(meta.align).trim().toLowerCase())) {
-            parts.push(`align=${String(meta.align).trim().toLowerCase()}`);
+        if (align && MD_ALIGN_VALUES.has(String(align).trim().toLowerCase())) {
+            parts.push(`align=${String(align).trim().toLowerCase()}`);
         }
         if (parts.length === 0) return '';
         return `{${parts.join(' ')}}`;
@@ -214,29 +274,35 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         // Add Metadata (YAML Front Matter)
         const meta = this.effectiveMetadata;
         if (meta) {
-            output += '---\n';
-            // JSON-encode scalar values so a title/author/description containing a
-            // quote or newline can't break out of the YAML string and inject
-            // arbitrary front-matter keys. (JSON.stringify of a benign value yields
-            // the same `"..."` form as before, so normal output is unchanged.)
-            if (meta.title) output += `title: ${JSON.stringify(meta.title)}\n`;
-            if (meta.author) output += `author: ${JSON.stringify(meta.author)}\n`;
+            // Build the field lines first. JSON-encode scalar values so a title/author/description
+            // containing a quote or newline can't break out of the YAML string and inject arbitrary
+            // front-matter keys. (JSON.stringify of a benign value yields the same `"..."` form as
+            // before, so normal output is unchanged.)
+            let fields = '';
+            if (meta.title) fields += `title: ${JSON.stringify(meta.title)}\n`;
+            if (meta.author) fields += `author: ${JSON.stringify(meta.author)}\n`;
             const createdIso = this.toIsoDate(meta.created);
-            if (createdIso) output += `created: ${createdIso}\n`;
+            if (createdIso) fields += `created: ${createdIso}\n`;
             const modifiedIso = this.toIsoDate(meta.modified);
-            if (modifiedIso) output += `modified: ${modifiedIso}\n`;
-            if (meta.description) output += `description: ${JSON.stringify(meta.description)}\n`;
-            if (meta.subject) output += `subject: ${JSON.stringify(meta.subject)}\n`;
-            if (meta.keywords) output += `keywords: ${JSON.stringify(meta.keywords)}\n`;
+            if (modifiedIso) fields += `modified: ${modifiedIso}\n`;
+            if (meta.description) fields += `description: ${JSON.stringify(meta.description)}\n`;
+            if (meta.subject) fields += `subject: ${JSON.stringify(meta.subject)}\n`;
+            if (meta.keywords) fields += `keywords: ${JSON.stringify(meta.keywords)}\n`;
 
             if (meta.customProperties) {
                 for (const [key, val] of Object.entries(meta.customProperties)) {
                     // Strip newlines/colons from the key so it can't inject a new mapping.
                     const safeKey = String(key).replace(/[\r\n:]+/g, ' ').trim();
-                    output += `${safeKey}: ${Array.isArray(val) ? this.serializeFrontmatterArray(val) : JSON.stringify(val)}\n`;
+                    fields += `${safeKey}: ${Array.isArray(val) ? this.serializeFrontmatterArray(val) : JSON.stringify(val)}\n`;
                 }
             }
-            output += '---\n\n';
+
+            // Only emit the frontmatter fence when at least one field is present. Empty metadata
+            // (a bare Tiptap/HTML fragment with no <head>) would otherwise emit `---\n---`, which
+            // reparses as a setext `## ---` heading and corrupts the document on every save/reload.
+            if (fields) {
+                output += `---\n${fields}---\n\n`;
+            }
         }
 
         const processor = async (node: OfficeContentNode, childrenOutput: string): Promise<string> => {
@@ -261,10 +327,33 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // HTML tag (e.g. <script>) when the Markdown is rendered to HTML.
                     let text = markdownEscapeText(node.text || '');
                     if (this.config.includeFormatting && node.formatting) {
+                        // Inline code: re-wrap the RAW text in backticks. The content is literal
+                        // inside a code span, so the entity-escaped form above must not show through.
+                        // The fence is one backtick longer than the longest embedded run so an inner
+                        // backtick can't close the span early, padded when the content touches a
+                        // backtick. Done before emphasis so bold/italic wrap the span (`**`code`**`).
+                        // Previously a monospace text node emitted its bare text, dropping the code.
+                        if (node.formatting.font === 'monospace') {
+                            const raw = node.text || '';
+                            const longestRun = Math.max(0, ...(raw.match(/`+/g) || []).map(s => s.length));
+                            const fence = '`'.repeat(longestRun + 1);
+                            const pad = (raw.startsWith('`') || raw.endsWith('`')) ? ' ' : '';
+                            text = `${fence}${pad}${raw}${pad}${fence}`;
+                        }
                         const emphasisAsterisk = this.resolvedDialect.emphasisMarker === 'asterisk';
                         if (node.formatting.bold && !this.inImplicitBold) text = emphasisAsterisk ? `**${text}**` : `__${text}__`;
                         if (node.formatting.italic) text = emphasisAsterisk ? `*${text}*` : `_${text}_`;
-                        if (node.formatting.strikethrough && this.resolvedDialect.strikethrough) text = `~~${text}~~`;
+                        if (node.formatting.strikethrough && this.resolvedDialect.strikethrough !== 'none') text = `~~${text}~~`;
+                        // `==text==` highlight, in dialects that define it (Obsidian/extended). A plain
+                        // highlight (the default yellow) always becomes `==text==`; a highlight carrying
+                        // a SPECIFIC colour stays a background-color <span> when `inlineFormatting` is on,
+                        // so its exact colour survives. With `inlineFormatting` off (no span to hold it)
+                        // even a coloured highlight degrades to `==` rather than being dropped. In
+                        // GFM/CommonMark `==` is literal, so a highlight falls through to the <span> path.
+                        const isDefaultHighlight = node.formatting.backgroundColor === '#ffff00';
+                        const emitHighlightMark = !!node.formatting.backgroundColor && this.resolvedDialect.highlight !== 'none'
+                            && (isDefaultHighlight || !this.resolvedFallbackToHtml.inlineFormatting);
+                        if (emitHighlightMark) text = `==${text}==`;
 
                         // Use HTML tags for formatting not natively supported by standard Markdown
                         if (this.resolvedFallbackToHtml.textFormatting) {
@@ -272,9 +361,28 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             if (node.formatting.subscript) text = `<sub>${text}</sub>`;
                             if (node.formatting.superscript) text = `<sup>${text}</sup>`;
                         }
+
+                        // Inline color / highlight / font size have no Markdown syntax; emit a styled
+                        // <span> (outermost, so the inner Markdown markers survive) only when opted in,
+                        // so default output is unchanged. Values are CSS-sanitized against injection.
+                        if (this.resolvedFallbackToHtml.inlineFormatting) {
+                            const styles: string[] = [];
+                            const pushStyle = (prop: string, val: string | undefined) => {
+                                if (!val) return;
+                                const safe = sanitizeCssValue(val); // drops url()/expression()/<>/quotes
+                                if (safe) styles.push(`${prop}: ${safe}`);
+                            };
+                            pushStyle('color', node.formatting.color);
+                            // Skip the background-color only when it was already emitted as `==text==`
+                            // above; a specific-colour highlight in a highlight dialect still keeps its
+                            // exact colour here.
+                            if (!emitHighlightMark) pushStyle('background-color', node.formatting.backgroundColor);
+                            pushStyle('font-size', node.formatting.size);
+                            if (styles.length) text = `<span style="${styles.join('; ')}">${text}</span>`;
+                        }
                     }
                     const meta = node.metadata as TextMetadata;
-                    if (meta?.wikilink && this.resolvedDialect.wikilinks) {
+                    if (meta?.wikilink && this.resolvedDialect.wikilinks !== 'none') {
                         // Obsidian syntax: bare page name, or page|alias when the display
                         // text differs from the page name. Strip the `[]|`/newline chars
                         // that would break out of the `[[...]]` wrapper.
@@ -299,8 +407,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                                 link = '#' + this.slugify(target);
                             }
                             // Reject javascript:/data: schemes and encode `()`/whitespace so the
-                            // URL can't break out of `](...)` or inject a script link.
-                            text = `[${text}](${sanitizeMarkdownUrl(link)})`;
+                            // URL can't break out of `](...)` or inject a script link. An advisory
+                            // title follows as `"title"` (quotes inside it escaped), matching what
+                            // the parser reads back.
+                            const linkTitle = meta.title ? ` "${meta.title.replace(/"/g, '\\"')}"` : '';
+                            text = `[${text}](${sanitizeMarkdownUrl(link)}${linkTitle})`;
                         }
                     }
                     if (meta?.abbreviationTitle) {
@@ -317,7 +428,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         // this branch also replaces `text` wholesale, so a strip that left `<`
                         // behind discarded the escaping applied earlier.
                         const key = String(meta.citationKey).replace(/[^a-zA-Z0-9_:.-]/g, '');
-                        text = this.resolvedDialect.citations ? `[@${key}]` : `[${key}]`;
+                        text = this.resolvedDialect.citations !== 'none' ? `[@${key}]` : `[${key}]`;
                     }
                     return text;
                 }
@@ -376,7 +487,17 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         ? (meta.checked ? `${bullet}[x] ` : `${bullet}[ ] `)
                         : (meta?.listType === 'ordered' ? `${(meta.itemIndex ?? 0) + 1}${this.resolvedDialect.orderedListMarker} ` : bullet);
                     const anchors = this.renderAnchors(meta);
-                    return `${indent}${marker}${anchors}${childrenOutput}\n`;
+                    // A list item is a single Markdown line. HTML-origin items carry `paragraph`
+                    // children (e.g. `<li><p>a</p><ul>...`), whose renderer appends `\n\n`; dumped
+                    // verbatim that produces `- a\n\n\n    - a1`, whose blank line splits the list
+                    // apart and whose indent is then stripped on reparse, flattening the nesting.
+                    // Collapse the item's internal breaks the same way table cells do (see the
+                    // `cellLineBreaks` handling in renderMarkdownTable): join with `<br>` when the
+                    // fallback is on, a space when off. Block children (code fences, tables) inside
+                    // an item degrade under this join, exactly as they do inside a cell.
+                    const br = this.resolvedFallbackToHtml.itemLineBreaks ? '<br>' : ' ';
+                    const content = childrenOutput.trim().replace(/[ \t]*\n+/g, br);
+                    return `${indent}${marker}${anchors}${content}\n`;
                 }
 
                 case 'image': {
@@ -397,7 +518,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // Strip `[]` from alt (would close the `![...]`) and neutralize the URL scheme.
                     const safeAlt = markdownEscapeText(alt).replace(/[[\]]/g, '');
                     const safeSrc = sanitizeMarkdownUrl(src, { allowDataImage: true });
-                    return `${anchors}${anchors ? '\n' : ''}![${safeAlt}](${safeSrc})${this.renderAttributeList(meta)}`;
+                    const imgTitle = meta?.title ? ` "${meta.title.replace(/"/g, '\\"')}"` : '';
+                    return `${anchors}${anchors ? '\n' : ''}![${safeAlt}](${safeSrc}${imgTitle})${this.renderAttributeList(meta)}`;
                 }
 
                 case 'table': {
@@ -408,7 +530,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // only the plain pipe-table form needs the attribute-list syntax for alignment.
                     const usedHtmlFallback = this.resolvedDialect.tables === 'html' ||
                         (this.resolvedFallbackToHtml.tables && (this.hasNestedTable(node) || this.hasColspanOrRowspan(node)));
-                    const attrList = usedHtmlFallback ? '' : this.renderAttributeList(node.metadata as TableMetadata);
+                    const attrList = usedHtmlFallback ? '' : this.renderAttributeList(node.metadata as TableMetadata, { skipAlign: true });
                     if (attrList) {
                         // Must glue directly below the last row with no blank line, or
                         // MarkdownParser's block splitter won't see it as part of the same block.
@@ -424,12 +546,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'break': {
-                    // A hard line break (CommonMark: two trailing spaces before the
-                    // newline) round-trips back to a distinct 'break' node on reparse;
-                    // every other breakType (including 'page', used for a thematic-break
-                    // HR) keeps emitting a bare newline, unchanged.
+                    // A hard line break (CommonMark: two trailing spaces before the newline)
+                    // round-trips back to a distinct 'break' node on reparse. A thematic break
+                    // emits `---` as its own block (the top-level loop supplies the surrounding
+                    // blank lines), so a Markdown `---` / HTML `<hr>` survives a save instead of
+                    // collapsing to whitespace. Every other breakType - notably 'page', which
+                    // Markdown has no syntax for - keeps emitting a bare newline, unchanged.
                     const meta = node.metadata as BreakMetadata | undefined;
                     if (meta?.breakType === 'carriageReturn') return '  \n';
+                    if (meta?.breakType === 'thematic') return '---';
                     return '\n';
                 }
 
@@ -460,17 +585,20 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         return this.resolvedDialect.math === 'dollar' ? `$${mathInline}$` : mathInline;
                     }
                     const lang = (meta?.language || '').replace(/[\r\n`]+/g, '');
-                    // Block code if it contains a line break, else inline. Testing only for `\n`
-                    // routed a CR-only string to the inline branch, where a renderer that
-                    // normalizes `\r` to a line ending sees a blank line, the span dies, and the
-                    // remainder is exposed as raw Markdown. The fence sizing below is correct and
-                    // needs no change; code content itself is not an HTML context.
-                    if (node.text && /[\r\n]/.test(node.text)) {
+                    // A `code` node is always block-level: genuinely inline code is a monospace
+                    // text node, never a `code` node. So emit a fenced block whenever the node
+                    // carries a language OR spans multiple lines. Previously the decision keyed only
+                    // off a line break, so a single-line code node with a language - `const x = 1;`
+                    // tagged `js`, or a one-line `mermaid` diagram - collapsed to an inline span,
+                    // silently dropping both its language and its block-ness. (Testing `[\r\n]`, not
+                    // just `\n`, still routes a CR-only body to the fenced branch, where a renderer
+                    // that normalizes `\r` to a line ending would otherwise kill an inline span.)
+                    if (lang || (node.text && /[\r\n]/.test(node.text))) {
                         // Fence with one more backtick than the longest run inside the content
                         // so an embedded ``` can't close the block early and inject markup.
-                        const longestRun = Math.max(0, ...(node.text.match(/`+/g) || []).map(s => s.length));
+                        const longestRun = Math.max(0, ...((node.text || '').match(/`+/g) || []).map(s => s.length));
                         const fence = '`'.repeat(Math.max(3, longestRun + 1));
-                        return `\n${fence}${lang}\n${node.text}\n${fence}\n\n`;
+                        return `\n${fence}${lang}\n${node.text || ''}\n${fence}\n\n`;
                     } else {
                         const t = node.text || '';
                         const longestRun = Math.max(0, ...(t.match(/`+/g) || []).map(s => s.length));
@@ -497,30 +625,82 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 case 'note': {
                     const meta = node.metadata as NoteMetadata;
                     if (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') {
-                        if (!this.resolvedDialect.footnotes) {
+                        if (this.resolvedDialect.footnotes === 'none') {
                             // Dialect has no footnote syntax - the caller inlines this bare body
                             // as a parenthetical at the reference point instead of collecting it
                             // into an end-of-document "### Notes" section under a [^id] marker.
                             return childrenOutput.trim();
                         }
-                        return `[^${this.getFootnoteKey(node)}]: ${childrenOutput.trim()}\n\n`;
+                        // Indent continuation lines one level so a multi-line body re-parses as a
+                        // single definition (a bare newline would end it). Single-line bodies, the
+                        // common case, are unaffected.
+                        return `[^${this.getFootnoteKey(node)}]: ${childrenOutput.trim().replace(/\n/g, '\n    ')}\n\n`;
                     }
                     return `> **Note:** ${childrenOutput.trim()}\n\n`;
                 }
 
                 case 'embed': {
-                    // Markdown has no native embed syntax. When fallbackToHtml.embeds is on (our
-                    // save default), emit the exact single-line div MarkdownParser recognises on
-                    // reimport; otherwise degrade to a plain link.
+                    // Markdown has no native embed syntax. `this.resolvedEmbeds` (from
+                    // `dialect.embeds`, honoring the deprecated `fallbackToHtml.embeds` boolean)
+                    // selects the form: 'html' (the single-line block this library has always
+                    // emitted and re-recognises), 'directive' (a remark-directive leaf), 'link'
+                    // (a plain link), 'thumbnail' (YouTube-only clickable preview).
                     const meta = node.metadata as EmbedMetadata;
+                    const mode = this.resolvedEmbeds;
+                    // A directive label sits inside `::name[...]`; strip the `[]`/newline chars that
+                    // would break out of it. An attribute value sits inside `{...}`; percent-encode
+                    // the space/brace chars that would break out (widths/aligns/ids never contain
+                    // them, but a src can).
+                    const dirLabel = (meta?.label || '').replace(/[[\]\r\n]+/g, ' ').trim();
+                    const dirUrl = (u: string) => sanitizeMarkdownUrl(u).replace(/[{}\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+                    const attrList = (pairs: Array<[string, string | undefined]>) => {
+                        const kv = pairs.filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}=${v}`);
+                        return kv.length ? `{${kv.join(' ')}}` : '';
+                    };
+
+                    if (meta?.embedType === 'iframe') {
+                        const rawUrl = meta?.url || '';
+                        if (mode === 'directive') {
+                            const src = dirUrl(rawUrl);
+                            if (!src) return '';
+                            const lbl = dirLabel ? `[${dirLabel}]` : '';
+                            return `::embed${lbl}${attrList([['src', src], ['width', meta?.width], ['height', meta?.height], ['align', meta?.align]])}\n\n`;
+                        }
+                        if (mode === 'html') {
+                            // sanitizeUrl scheme-checks and HTML-escapes the src (hostile schemes drop
+                            // the node). The single-line <iframe> is what MarkdownParser recognises on
+                            // reimport, gated there on preserveIframes.
+                            const safe = sanitizeUrl(rawUrl);
+                            if (!safe) return '';
+                            const w = meta?.width ? ` width="${escapeHtml(meta.width)}"` : '';
+                            const h = meta?.height ? ` height="${escapeHtml(meta.height)}"` : '';
+                            return `\n<iframe src="${safe}"${w}${h}></iframe>\n\n`;
+                        }
+                        // 'link' and 'thumbnail' (thumbnail is YouTube-only, so a generic iframe
+                        // degrades to a link) both emit a plain link.
+                        const safe = sanitizeMarkdownUrl(rawUrl);
+                        return safe ? `[${meta?.label || 'Embed'}](${safe})\n\n` : '';
+                    }
+
                     const id = meta?.videoId || '';
-                    if (this.resolvedFallbackToHtml.embeds) {
+                    if (mode === 'directive') {
+                        const lbl = dirLabel ? `[${dirLabel}]` : '';
+                        return `::youtube${lbl}${attrList([['id', id], ['width', meta?.width], ['align', meta?.align]])}\n\n`;
+                    }
+                    if (mode === 'html') {
                         const width = meta?.width ? ` data-width="${escapeHtml(meta.width)}"` : '';
                         const align = meta?.align ? ` data-align="${escapeHtml(meta.align)}"` : '';
-                        return `\n<div data-youtube-video="${escapeHtml(id)}"${width}${align}></div>\n\n`;
+                        const lbl = meta?.label ? ` data-embed-label="${escapeHtml(meta.label)}"` : '';
+                        return `\n<div data-youtube-video="${escapeHtml(id)}"${width}${align}${lbl}></div>\n\n`;
                     }
+                    if (mode === 'thumbnail' && id) {
+                        const watch = sanitizeMarkdownUrl(`https://www.youtube.com/watch?v=${id}`);
+                        const thumb = sanitizeMarkdownUrl(`https://img.youtube.com/vi/${id}/hqdefault.jpg`);
+                        return `[![${meta?.label || 'YouTube'}](${thumb})](${watch})\n\n`;
+                    }
+                    // 'link' (and 'thumbnail' with no id): a plain link.
                     const url = meta?.url || (id ? `https://youtu.be/${id}` : '');
-                    return url ? `[YouTube](${sanitizeMarkdownUrl(url)})\n\n` : '';
+                    return url ? `[${meta?.label || 'YouTube'}](${sanitizeMarkdownUrl(url)})\n\n` : '';
                 }
 
                 case 'admonition': {
@@ -539,12 +719,12 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const body = childrenOutput.trim();
 
                     switch (this.resolvedDialect.admonitions) {
-                        case 'gitlab':
+                        case 'fence':
                             // GLFM fenced-div: no dedicated title syntax, so a custom title (if
                             // any) is folded into the body as a bold first line.
                             return `:::${type}\n${title ? `**${title}**\n\n` : ''}${body}\n:::\n\n`;
-                        case 'pandoc':
-                            // Pandoc's own fenced-div-with-class syntax; same title handling as gitlab.
+                        case 'fence-attribute':
+                            // Pandoc's own fenced-div-with-class syntax; same title handling as fence.
                             return `::: {.${type}}\n${title ? `**${title}**\n\n` : ''}${body}\n:::\n\n`;
                         case 'none': {
                             // Degrade to a plain bold-labeled blockquote, no special marker.
@@ -552,7 +732,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             const heading = title || label.charAt(0) + label.slice(1).toLowerCase();
                             return `> **${heading}:**\n${quotedLines}\n\n`;
                         }
-                        case 'github':
+                        case 'blockquote':
                         default: {
                             // Canonical GitHub blockquote form. No dedicated title syntax either
                             // (matches this library's historical output).
@@ -563,15 +743,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'definitionList':
-                    if (!this.resolvedDialect.definitionLists) return `${childrenOutput}\n`;
+                    if (this.resolvedDialect.definitionLists === 'none') return `${childrenOutput}\n`;
                     return `${childrenOutput}\n`;
 
                 case 'definitionTerm':
-                    if (!this.resolvedDialect.definitionLists) return `**${childrenOutput}**\n\n`;
+                    if (this.resolvedDialect.definitionLists === 'none') return `**${childrenOutput}**\n\n`;
                     return `${childrenOutput}\n`;
 
                 case 'definitionDescription':
-                    if (!this.resolvedDialect.definitionLists) return `${childrenOutput}\n\n`;
+                    if (this.resolvedDialect.definitionLists === 'none') return `${childrenOutput}\n\n`;
                     return `: ${childrenOutput}\n`;
 
                 case 'chart':
@@ -588,6 +768,16 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         for (let i = 0; i < optimizedContent.length; i++) {
             const node = optimizedContent[i];
             const nextNode = optimizedContent[i + 1];
+
+            // A top-level footnote/endnote note is an orphan definition (unreferenced `[^id]: ...`
+            // the MarkdownParser recovered). Collect it so it's emitted with the other definitions
+            // at the document end rather than inline before them.
+            const orphanNoteType = (node.metadata as NoteMetadata)?.noteType;
+            if (node.type === 'note' && (orphanNoteType === 'footnote' || orphanNoteType === 'endnote')) {
+                this.collectedNotes.push(node);
+                continue;
+            }
+
             let result = await this.processNodeRecursive(node, processor);
 
             // Ensure lists and other block elements are separated from non-similar content by a blank line
@@ -605,8 +795,21 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         }
 
         if (this.collectedNotes.length > 0) {
-            let notesMd = '\n\n---\n\n### Notes\n\n';
-            for (const note of this.collectedNotes) {
+            // No decorative `---\n\n### Notes` preamble: `[^id]:` definitions are valid on their own
+            // (GitHub/Pandoc render the footnotes section and its rule automatically), and the
+            // literal heading round-tripped as a real `###` node - so every save/reload re-emitted
+            // the parsed heading AND a fresh one, growing the document unbounded. Emitting the bare
+            // definitions makes the cycle byte-stable. Behaviour change, noted in the changelog.
+            // Collapse the preceding block's trailing blank lines so exactly one blank line separates
+            // the body from the definitions (rather than the doubled `\n\n\n\n` the concatenation
+            // would otherwise leave).
+            output = output.replace(/\n+$/, '');
+            let notesMd = '\n\n';
+            // De-duplicate by node identity: a footnote referenced more than once shares a single
+            // note object (see MarkdownParser), pushed here once per reference. Emit its definition
+            // just once. Distinct notes - even two office notes that happen to share a numeric id -
+            // are separate objects and are all kept.
+            for (const note of [...new Set(this.collectedNotes)]) {
                 notesMd += await this.processNodeRecursive(note, processor);
             }
             output += notesMd;
@@ -675,7 +878,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         // end-of-document "### Notes" section, or its content would be duplicated.
         const isInlinedFootnote = (note: OfficeContentNode): boolean => {
             const meta = note.metadata as NoteMetadata;
-            return (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') && !this.resolvedDialect.footnotes;
+            return (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') && this.resolvedDialect.footnotes === 'none';
         };
 
         this.collectNotesFrom(node);
@@ -720,6 +923,12 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
         for (const node of nodes) {
             if (node.type === 'text' && current && current.type === 'text' &&
+                // A note anchors to the end of its text run and its `[^id]` marker is emitted there;
+                // merging a following run onto a note-carrying run would slide the marker past it
+                // (`Body[^1].` -> `Body.[^1]`). Keep such runs separate so the marker stays put and
+                // matches where HtmlGenerator emits it.
+                (!current.notes || current.notes.length === 0) &&
+                (!node.notes || node.notes.length === 0) &&
                 this.areFormattingEqual(node.formatting, current.formatting) &&
                 JSON.stringify(node.metadata) === JSON.stringify(current.metadata)) {
                 current.text = (current.text || '') + (node.text || '');
@@ -786,7 +995,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         if (node.type === 'slide') return;
         const isInlinedFootnote = (note: OfficeContentNode): boolean => {
             const meta = note.metadata as NoteMetadata;
-            return (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') && !this.resolvedDialect.footnotes;
+            return (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') && this.resolvedDialect.footnotes === 'none';
         };
         this.collectedNotes.push(...node.notes.filter(note => !isInlinedFootnote(note)));
     }
@@ -834,7 +1043,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         let cellContent = await this.processNodeRecursive(cellNode, processor);
                         // Use <br> fallback only if allowed, otherwise space
                         const br = this.resolvedFallbackToHtml.cellLineBreaks ? '<br>' : ' ';
-                        cellContent = cellContent.trim().replace(/\n+/g, br).replace(/\|/g, '\\|');
+                        // Consume any trailing spaces before the newline(s) too, so a hard-break's
+                        // `  \n` collapses to a single `<br>` instead of leaving `  <br>` in the cell.
+                        cellContent = cellContent.trim().replace(/[ \t]*\n+/g, br).replace(/\|/g, '\\|');
                         rowCells.push(cellContent);
 
                         // Handle colspan by adding empty cells
@@ -852,7 +1063,17 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             }
         }
 
-        // Second pass: Build table string with separator
+        // Second pass: Build table string with separator. The separator carries standard GFM
+        // per-column alignment (`:---`/`:---:`/`---:`) from columnAlignments, or the single table-level
+        // align applied to every column, rather than a non-standard trailing `{align}` attribute list.
+        const tableMeta = node.metadata as TableMetadata | undefined;
+        // Column alignment lives on each cell (CellMetadata.align); read it off the header row.
+        // Fall back to the single table-level align (an editor's data-align) for every column.
+        const headerCells = (node.children?.[0]?.children || []).filter(c => c.type === 'cell');
+        const alignMarker = (i: number): string => {
+            const a = (headerCells[i]?.metadata as any)?.align ?? tableMeta?.align;
+            return a === 'center' ? ':---:' : a === 'left' ? ':---' : a === 'right' ? '---:' : '---';
+        };
         for (let i = 0; i < processedRows.length; i++) {
             const row = processedRows[i];
             // Pad row with empty cells if it has fewer than maxCols
@@ -862,7 +1083,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
             if (i === 0) {
                 // Header separator
-                tableOutput += `| ${Array(maxCols).fill(' --- ').join(' | ')} |\n`;
+                tableOutput += `| ${Array.from({ length: maxCols }, (_, i) => alignMarker(i)).join(' | ')} |\n`;
             }
         }
 

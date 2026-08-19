@@ -3,10 +3,19 @@ import * as path from 'url';
 import * as fsPath from 'path';
 import * as child_process from 'child_process';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = fsPath.dirname(__filename);
 const ROOT = fsPath.join(__dirname, '..', '..');
+
+// Resolve tsx's own CLI entry so the CLI can be launched as `node <tsx-cli> <script>` directly.
+// Spawning `npx` (a `.cmd` shim on Windows) through child_process fails under modern Node's
+// batch-file spawn hardening, which left `test:cli` - the last stage of `npm test` - failing on
+// Windows even after the rest of #111 was fixed. Going straight through node needs no shell and
+// no batch file, so it is portable.
+const require = createRequire(import.meta.url);
+const TSX_CLI = require.resolve('tsx/cli');
 
 /**
  * Formats fast mode leaves out - see the matching block in `test/parser/testOfficeParser.ts` for
@@ -53,28 +62,48 @@ class DualLogger {
     }
 }
 
-function runCli(args: string[]): { stdout: string; stderr: string; status: number } {
-    const result = child_process.spawnSync('npx', ['tsx', CLI_SRC, SAMPLE_HTML, ...args], {
-        encoding: 'utf8',
-        timeout: 30000,
-    });
+/** Default per-command wall-clock budget. Flag tests finish in well under 2s. */
+const CLI_TIMEOUT_MS = 30000;
+/**
+ * A generous budget for the OCR-heavy PDF parity run, which takes ~27-30s (and more on a cold
+ * cache) - the 30s default clipped it, killing the child mid-run. See `normalizeCliResult` for why
+ * that kill used to masquerade as a content mismatch instead of the timeout it is.
+ */
+const CLI_OCR_TIMEOUT_MS = 120000;
+
+type CliResult = { stdout: string; stderr: string; status: number; timedOut: boolean };
+
+/**
+ * Normalizes a `spawnSync` result. When `timeout` elapses, `spawnSync` kills the child with SIGTERM
+ * and returns `status: null` (with `error.code === 'ETIMEDOUT'`). Coercing that null straight to 0 -
+ * as `status ?? 0` did - makes a timed-out run read as a clean exit 0 with empty stdout, so the
+ * parity check reports `0.0% similarity ... Got: 0 words` (a phantom content bug) rather than the
+ * timeout it actually was. Surface it instead: a distinct non-zero status (124, the conventional
+ * timeout code) and a `timedOut` flag callers can report on.
+ */
+function normalizeCliResult(result: child_process.SpawnSyncReturns<string>): CliResult {
+    const timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT'
+        || (result.status === null && result.signal === 'SIGTERM');
     return {
         stdout: result.stdout || '',
         stderr: result.stderr || '',
-        status: result.status ?? 0
+        status: result.status ?? (timedOut ? 124 : 0),
+        timedOut
     };
 }
 
-function runCliRaw(args: string[]): { stdout: string; stderr: string; status: number } {
-    const result = child_process.spawnSync('npx', ['tsx', CLI_SRC, ...args], {
+function runCli(args: string[], timeout: number = CLI_TIMEOUT_MS): CliResult {
+    return normalizeCliResult(child_process.spawnSync(process.execPath, [TSX_CLI, CLI_SRC, SAMPLE_HTML, ...args], {
         encoding: 'utf8',
-        timeout: 30000,
-    });
-    return {
-        stdout: result.stdout || '',
-        stderr: result.stderr || '',
-        status: result.status ?? 0
-    };
+        timeout,
+    }));
+}
+
+function runCliRaw(args: string[], timeout: number = CLI_TIMEOUT_MS): CliResult {
+    return normalizeCliResult(child_process.spawnSync(process.execPath, [TSX_CLI, CLI_SRC, ...args], {
+        encoding: 'utf8',
+        timeout,
+    }));
 }
 
 function assertContains(output: string, expected: string, testName: string, duration: number) {
@@ -301,14 +330,14 @@ async function runTests() {
     // 10. Help / Usage output
     console.log('Test 10: Usage output (no args)');
     const t10 = Date.now();
-    const res10 = child_process.spawnSync('npx', ['tsx', CLI_SRC], { encoding: 'utf8' });
+    const res10 = child_process.spawnSync(process.execPath, [TSX_CLI, CLI_SRC], { encoding: 'utf8' });
     const d10 = Date.now() - t10;
     assertContains(res10.stdout, 'Usage: officeparser <file>', 'Usage output', d10);
 
     // 11. File not found
     console.log('Test 11: File not found error');
     const t11 = Date.now();
-    const res11 = child_process.spawnSync('npx', ['tsx', CLI_SRC, 'non_existent.docx'], { encoding: 'utf8' });
+    const res11 = child_process.spawnSync(process.execPath, [TSX_CLI, CLI_SRC, 'non_existent.docx'], { encoding: 'utf8' });
     const d11 = Date.now() - t11;
     assertContains(res11.stderr, 'Error parsing file', 'File not found error', d11);
 
@@ -541,7 +570,8 @@ async function runTests() {
         const tStart = Date.now();
         const testFile = fsPath.join(ROOT, 'test', 'files', `test.${ext}`);
         
-        // Check plain text parity via --to=text
+        // Check plain text parity via --to=text. OCR (pdf) can run ~30s on a cold cache, so this
+        // one call gets the larger budget rather than the 30s default.
         const resText = runCliRaw([
             testFile,
             '--to=text',
@@ -549,14 +579,16 @@ async function runTests() {
             '--includeBreakNodes=true',
             '--includeRawContent=true',
             '--extractAttachments=true'
-        ]);
+        ], CLI_OCR_TIMEOUT_MS);
         const dText = Date.now() - tStart;
-        
+
         if (resText.status !== 0) {
             results.push({
                 name: `CLI text parity: ${ext}`,
                 status: 'FAIL',
-                details: `CLI command failed with exit code ${resText.status}. Error: ${resText.stderr}`,
+                details: resText.timedOut
+                    ? `CLI command timed out (killed after ${CLI_OCR_TIMEOUT_MS}ms). This reads as an empty output, not a parser regression.`
+                    : `CLI command failed with exit code ${resText.status}. Error: ${resText.stderr}`,
                 duration: dText
             });
             continue;

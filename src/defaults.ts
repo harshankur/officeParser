@@ -44,6 +44,8 @@ const DEFAULT_OCR_CONFIG: DeepRequired<OcrConfig> = {
  */
 const DEFAULT_HTML_PARSER_CONFIG: DeepRequired<HtmlParserConfig> = {
     preserveAttributes: false,
+    preserveIframes: false,
+    embedFolkForms: false,
 };
 
 /**
@@ -92,7 +94,9 @@ const DEFAULT_HTML_GENERATOR_CONFIG: DeepRequired<HtmlGeneratorConfig> = {
         headEnd: '',
         bodyStart: '',
         bodyEnd: '',
-    }
+    },
+    sourceAttributes: false,
+    gatedEmbeds: false,
 };
 
 /**
