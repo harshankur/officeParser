@@ -1973,6 +1973,130 @@ async function testLatexGeneration(): Promise<void> {
     assert.ok(etex.endsWith('\\begin{document}\n\n\n\n\\end{document}\n') && !etex.includes('\\title'), 'TEX empty: bare document, no title');
 }
 
+async function testLatexParsing(): Promise<void> {
+    // ── Tier 1: hand-written exhaustive fixture ───────────────────────────────
+    const warnings: any[] = [];
+    const ast = await OfficeParser.parseOffice(path.join(__dirname, 'files/exhaustive/latex.tex'), { onWarning: (w: any) => warnings.push(w) } as any);
+    const nodes = collectAllNodes(ast);
+    const texts = (n: OfficeContentNode) => (n.children || []).map(c => c.text || '').join('');
+    assert.strictEqual(ast.type, 'tex', 'TEX parse: AST type');
+    // Metadata from \title/\author/\date/\hypersetup and the class.
+    assert.strictEqual(ast.metadata.title, 'Exhaustive LaTeX Test', 'TEX parse: \\title (with \\thanks dropped, \\LaTeX expanded)');
+    assert.strictEqual(ast.metadata.author, 'Ada Lovelace, Alan Turing', 'TEX parse: \\author split on \\and');
+    assert.strictEqual(ast.metadata.subject, 'Parser coverage', 'TEX parse: pdfsubject');
+    assert.strictEqual(ast.metadata.keywords, 'latex, parser', 'TEX parse: pdfkeywords');
+    assert.strictEqual(ast.metadata.language, 'en-GB', 'TEX parse: pdflang');
+    assert.deepStrictEqual(ast.metadata.customProperties, { Reviewer: 'Grace Hopper' }, 'TEX parse: pdfinfo custom entries');
+    assert.ok(ast.metadata.description?.startsWith('This document exercises the officeParser LaTeX parser, version 8.1.'), 'TEX parse: abstract -> description, macros expanded');
+    assert.strictEqual(ast.metadata.nativeProperties?.documentClass, 'article', 'TEX parse: document class');
+    assert.strictEqual(ast.metadata.formatting?.size, '12pt', 'TEX parse: class size is the body size');
+    // Preamble text never reaches the content; text after \end{document} is ignored.
+    assert.ok(!JSON.stringify(ast.content).includes('Text after the document end'), 'TEX parse: stops at \\end{document}');
+    // Headings, levels, labels.
+    const headings = nodes.filter(n => n.type === 'heading');
+    assert.deepStrictEqual(headings.map(h => [(h.metadata as any).level, h.text]).slice(0, 5),
+        [[1, 'Introduction'], [2, 'Links and references'], [3, 'Deep heading'], [4, 'Paragraph heading'], [1, 'Lists']], 'TEX parse: sectioning levels');
+    assert.deepStrictEqual((headings[0].metadata as any).anchorIds, ['sec:intro'], 'TEX parse: \\label after a heading names it');
+    // Inline formatting, colours, sizes, ligatures, accents, symbols, macros.
+    const intro = nodes.find(n => n.type === 'paragraph' && (n.text || '').startsWith('Plain paragraph'))!;
+    const fmt = (t: string) => intro.children!.find(c => c.text === t)?.formatting;
+    assert.deepStrictEqual(fmt('bold'), { bold: true }, 'TEX parse: \\textbf');
+    assert.deepStrictEqual(fmt('emphasis'), { italic: true }, 'TEX parse: \\emph');
+    assert.deepStrictEqual(fmt('strikeout'), { strikethrough: true }, 'TEX parse: \\sout');
+    assert.deepStrictEqual(fmt('typewriter'), { font: 'monospace' }, 'TEX parse: \\texttt');
+    assert.deepStrictEqual(fmt('bold group'), { bold: true }, 'TEX parse: {\\bfseries ...} declaration scoped to its group');
+    assert.deepStrictEqual(fmt('brand'), { color: '#1F6FEB' }, 'TEX parse: \\definecolor');
+    assert.deepStrictEqual(fmt('soft brand'), { color: '#8FB7F5' }, 'TEX parse: \\colorlet with an xcolor mix');
+    assert.deepStrictEqual(fmt('highlighted'), { backgroundColor: '#FFFF00' }, 'TEX parse: \\hl');
+    assert.deepStrictEqual(fmt('large'), { size: '14.4pt' }, 'TEX parse: \\large against the 12pt class');
+    assert.deepStrictEqual(fmt('twenty'), { size: '20pt' }, 'TEX parse: \\fontsize');
+    const lig = nodes.find(n => n.type === 'paragraph' && (n.text || '').startsWith('Ligatures'))!.text!;
+    for (const frag of ['“double”', '‘single’', 'en–dash', 'em—dash', 'don’t', 'café', 'naïve', 'ça', 'š', 'í', 'å', 'ß', 'Ø', '§3', '©', '50%', '$5', '& more', '# tag', 'a_b', '\\', '…', 'non breaking', 'Hello, World!', 'Hi, there!', '\\raw{x}', 'hy­phen', 'thin space', 'forced\nline']) {
+        assert.ok(lig.includes(frag), `TEX parse: text contains ${JSON.stringify(frag)}`);
+    }
+    // Links, references, citations, notes, comments.
+    const links = nodes.filter(n => (n.metadata as any)?.link);
+    assert.ok(links.some(l => (l.metadata as any).link === 'https://example.com/a_b?x=1&y=2' && l.text === 'the example site'), 'TEX parse: \\href with escaped URL characters');
+    assert.ok(links.some(l => (l.metadata as any).link === '#sec:intro' && l.text === '1'), 'TEX parse: \\ref resolves to the section number');
+    assert.ok(links.some(l => (l.metadata as any).link === '#sec:links' && l.text === 'Links and references'), 'TEX parse: \\nameref resolves to the heading title');
+    assert.ok(links.some(l => (l.metadata as any).link === '#tab:main' && l.text === '1') && links.some(l => (l.metadata as any).link === '#fig:diagram' && l.text === '1'), 'TEX parse: table/figure refs resolve to their numbers');
+    assert.deepStrictEqual(nodes.filter(n => (n.metadata as any)?.citationKey).map(n => (n.metadata as any).citationKey), ['knuth1984', 'lamport1994', 'mittelbach2004'], 'TEX parse: \\cite and \\citep keys');
+    const notes = nodes.flatMap(n => n.notes || []);
+    assert.deepStrictEqual(notes.map(n => (n.metadata as any).noteType), ['footnote', 'endnote'], 'TEX parse: \\footnote and \\endnote');
+    assert.strictEqual(notes[0].text, 'The footnote body.', 'TEX parse: footnote body');
+    const comment = nodes.flatMap(n => n.comments || [])[0];
+    assert.deepStrictEqual([comment?.text, (comment?.metadata as any)?.author, (comment?.metadata as any)?.date], ['Please expand this section.\nIt needs more detail.', 'Reviewer', '2024-02-02'], 'TEX parse: comment lines read back as a comment');
+    // Lists.
+    const items = nodes.filter(n => n.type === 'list');
+    assert.deepStrictEqual(items.slice(0, 6).map(i => [(i.metadata as any).listType, (i.metadata as any).indentation, i.text]),
+        [['unordered', 0, 'First bullet'], ['unordered', 0, 'Second bullet with a nested list:'], ['ordered', 1, 'Nested one'], ['ordered', 1, 'Nested two'], ['unordered', 0, 'Open task'], ['unordered', 0, 'Done task']], 'TEX parse: nested lists');
+    assert.deepStrictEqual([(items[4].metadata as any).isTask, (items[4].metadata as any).checked, (items[5].metadata as any).checked], [true, false, true], 'TEX parse: task items');
+    assert.strictEqual((items.find(i => i.text === 'Fifth item')!.metadata as any).itemIndex, 4, 'TEX parse: \\setcounter{enumi} continues numbering');
+    const dl = nodes.find(n => n.type === 'definitionList')!;
+    assert.deepStrictEqual(dl.children!.map(c => [c.type, c.text]), [['definitionTerm', 'Term A'], ['definitionDescription', 'Description A.'], ['definitionTerm', 'Term [B]'], ['definitionDescription', 'Description B.']], 'TEX parse: description list');
+    // Tables.
+    const [booktabs, longtable] = nodes.filter(n => n.type === 'table');
+    assert.deepStrictEqual((booktabs.metadata as any).anchorIds, ['tab:main'], 'TEX parse: float label names its table');
+    const cellOf = (t: OfficeContentNode, r: number, c: number) => t.children![r].children!.find(x => (x.metadata as any).col === c)!;
+    assert.deepStrictEqual(cellOf(booktabs, 0, 1).metadata, { row: 0, col: 1, align: 'center', style: 'header' }, 'TEX parse: header row above \\midrule, column alignment');
+    assert.deepStrictEqual([(cellOf(booktabs, 1, 0).metadata as any).colSpan, (cellOf(booktabs, 2, 0).metadata as any).rowSpan], [2, 2], 'TEX parse: \\multicolumn / \\multirow');
+    assert.strictEqual(booktabs.children![3].children!.length, 2, 'TEX parse: a \\multirow-covered cell is not a cell of its own');
+    assert.strictEqual((cellOf(booktabs, 3, 2).metadata as any).backgroundColor, '#FFFF00', 'TEX parse: \\cellcolor');
+    assert.ok(longtable.children![0].children!.every(c => (c.metadata as any).style === 'header') && longtable.children!.length === 3, 'TEX parse: longtable \\endhead rows are header rows');
+    // Figures, code, math.
+    const img = nodes.find(n => n.type === 'image')!;
+    assert.deepStrictEqual(img.metadata, { width: '50%', url: 'figures/diagram', align: 'center', anchorIds: ['fig:diagram'] }, 'TEX parse: \\includegraphics in a centred figure');
+    const code = nodes.filter(n => n.type === 'code');
+    assert.deepStrictEqual(code[0].metadata, { language: 'python' }, 'TEX parse: lstlisting language');
+    assert.strictEqual(code[1].text, 'raw \\text{is} kept & literal', 'TEX parse: verbatim body is literal');
+    const math = code.filter(c => (c.metadata as any).math).map(c => [(c.metadata as any).math, c.text]);
+    assert.deepStrictEqual(math.slice(0, 4), [['inline', 'E = mc^2'], ['inline', 'a^2 + b^2'], ['inline', 'x \\in \\mathbb{R}'], ['block', '\\int_0^1 x\\,dx = \\frac{1}{2}']], 'TEX parse: math, with user macros expanded');
+    assert.ok(math.some(([m, t]) => m === 'block' && t!.startsWith('\\begin{align*}')), 'TEX parse: a multi-line environment keeps its environment');
+    // Blocks, bibliography, header/footer, warnings.
+    assert.ok(nodes.some(n => n.type === 'paragraph' && (n.metadata as any)?.alignment === 'center' && n.text === 'Centered text.'), 'TEX parse: center environment');
+    assert.ok(nodes.some(n => n.type === 'paragraph' && (n.metadata as any)?.style === 'Quote' && texts(n).startsWith('Tip: Custom')), 'TEX parse: user environment expanded');
+    assert.ok(nodes.some(n => n.type === 'break' && (n.metadata as any)?.breakType === 'thematic'), 'TEX parse: \\rule -> thematic break');
+    const bib = items.filter(i => (i.metadata as any).anchorIds?.[0] === 'knuth1984');
+    assert.ok(bib.length === 1 && headings.some(h => h.text === 'References'), 'TEX parse: thebibliography -> References list with citation anchors');
+    assert.deepStrictEqual(ast.auxiliary?.headers?.[0].children!.map(p => [p.text, (p.metadata as any).alignment]), [['Running Title', 'left'], ['Draft', 'right']], 'TEX parse: fancyhdr header fields');
+    assert.strictEqual(ast.auxiliary?.footers, undefined, 'TEX parse: a footer holding only \\thepage is no footer');
+    assert.deepStrictEqual(warnings.map(w => w.code).sort(), ['LATEX_CONSTRUCT_NOT_INTERPRETED', 'LATEX_FILE_NOT_FOUND'], 'TEX parse: warnings');
+    assert.strictEqual(warnings.find(w => w.code === 'LATEX_CONSTRUCT_NOT_INTERPRETED').message, `The LaTeX input uses 'tikzpicture environment', which the parser does not interpret. Text inside it was kept where there was any; drawing environments (such as TikZ pictures) were omitted.`, 'TEX parse: LATEX_CONSTRUCT_NOT_INTERPRETED exact message');
+    assert.strictEqual(warnings.find(w => w.code === 'LATEX_FILE_NOT_FOUND').message, `The LaTeX input references files the parser could not read ('figures/diagram', 'chapters/missing'). A .tex file does not contain the files it includes or the images it shows; parse the project as a .zip (for example an Overleaf download) to include them. Images were kept as references to their path.`, 'TEX parse: LATEX_FILE_NOT_FOUND exact message');
+
+    // ── Tier 2: project zip (includes and images) ─────────────────────────────
+    const zipOf = (files: Record<string, string | Uint8Array>) => Buffer.from(zipSync(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, typeof v === 'string' ? strToU8(v) : v]))));
+    const project = zipOf({
+        'paper/main.tex': '\\documentclass{article}\\graphicspath{{img/}}\\begin{document}\\input{sections/intro}\\includegraphics{logo}\\end{document}',
+        'paper/sections/intro.tex': '\\section{Intro} Included text.',
+        'paper/img/logo.png': decodeBase64(TINY_PNG_B64),
+    });
+    const pAst = await OfficeParser.parseOffice(project, { extractAttachments: true });
+    assert.strictEqual(pAst.type, 'tex', 'TEX project: a zip with a LaTeX main file is detected as tex');
+    assert.ok(collectAllNodes(pAst).some(n => n.type === 'heading' && n.text === 'Intro'), 'TEX project: \\input resolved relative to the main file');
+    const pImg = collectAllNodes(pAst).find(n => n.type === 'image')!;
+    assert.strictEqual((pImg.metadata as any).attachmentName, 'paper/img/logo.png', 'TEX project: image found through \\graphicspath');
+    assert.deepStrictEqual(pAst.attachments.map(a => [a.name, a.mimeType]), [['paper/img/logo.png', 'image/png']], 'TEX project: image extracted as an attachment');
+
+    // ── Tier 3: beamer ────────────────────────────────────────────────────────
+    const deck = await OfficeParser.parseOffice(Buffer.from('\\documentclass{beamer}\\begin{document}\\frame{\\titlepage}\\begin{frame}{First}{Sub}\\begin{itemize}\\item<1-> One\\end{itemize}\\note{Say hi.}\\end{frame}\\begin{frame}[fragile]\\frametitle{Code}\\begin{block}{Idea}Body\\end{block}\\end{frame}\\end{document}'), { fileType: 'tex' });
+    assert.deepStrictEqual(deck.content.map(s => [s.type, (s.metadata as any).slideNumber]), [['slide', 1], ['slide', 2]], 'TEX beamer: frames -> slides (the title frame is not a slide)');
+    assert.deepStrictEqual(deck.content[0].children!.map(c => [c.type, c.text]), [['heading', 'First'], ['heading', 'Sub'], ['list', 'One']], 'TEX beamer: frame title, subtitle, overlay spec dropped');
+    assert.strictEqual(deck.content[0].notes?.[0].text, 'Say hi.', 'TEX beamer: \\note -> slide notes');
+    assert.deepStrictEqual(deck.content[1].children!.map(c => c.type), ['heading', 'admonition'], 'TEX beamer: block -> admonition');
+
+    // ── Tier 4: round trip with the generator reaches a fixed point ───────────
+    const docx = await OfficeParser.parseOffice(path.join(__dirname, 'files/test.docx'), { extractAttachments: true });
+    const pin = { metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') } } as any;
+    const t1 = (await docx.to('tex', pin)).value as string;
+    const t2 = (await (await OfficeParser.parseOffice(Buffer.from(t1), { fileType: 'tex' })).to('tex', pin)).value as string;
+    const t3 = (await (await OfficeParser.parseOffice(Buffer.from(t2), { fileType: 'tex' })).to('tex', pin)).value as string;
+    assert.strictEqual(t3, t2, 'TEX round trip: generate -> parse -> generate is stable after one cycle');
+    const back = await OfficeParser.parseOffice(Buffer.from(t1), { fileType: 'tex' });
+    const count = (a: any, t: string) => collectAllNodes(a).filter(n => n.type === t).length;
+    for (const t of ['heading', 'table', 'list', 'image']) assert.strictEqual(count(back, t), count(docx, t), `TEX round trip: ${t} count preserved`);
+}
+
 /**
  * Unit coverage for the shared package-generator helpers. `lengthToPt` in particular pins the
  * units contract: a bare number/string is pixels, so a font size must carry 'pt' or it shrinks to
@@ -2200,6 +2324,7 @@ async function runTests(): Promise<void> {
         ['DOCX', testDocxGeneration],
         ['ODT', testOdtGeneration],
         ['LaTeX', testLatexGeneration],
+        ['LaTeX parsing', testLatexParsing],
         ['OfficeGenUtils', testOfficeGenUtils],
         ['NativePdfEngine', testNativePdfEngine],
         ['Template', testTemplate],

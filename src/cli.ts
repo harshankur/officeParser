@@ -402,5 +402,6 @@ if (fileArg && !showHelp) {
     console.log('  officeparser document.docx --extractAttachments --to epub --output document.epub');
     console.log('  officeparser notes.md --extractAttachments --to odt --output notes.odt');
     console.log('  officeparser report.docx --extractAttachments --to tex --texConfig.bundle --output report.zip');
+    console.log('  officeparser paper.tex --to docx --output paper.docx         (or an Overleaf project .zip)');
     console.log('  officeparser image_doc --fileType docx --to json');
 }

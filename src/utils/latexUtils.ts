@@ -150,3 +150,46 @@ export function planLatexUnicode(text: string): LatexUnicodePlan {
     plan.pdfTexOnly.sort();
     return plan;
 }
+
+/**
+ * Code-block languages `listings` ships a definition for, keyed by the names documents use. A
+ * language `listings` does not know is an error ("Couldn't load requested language"), so anything
+ * missing here is written as plain `verbatim`.
+ */
+export const LISTINGS_LANGUAGES: Record<string, string> = {
+    python: 'Python', py: 'Python', java: 'Java', c: 'C', h: 'C', cpp: 'C++', 'c++': 'C++', cc: 'C++', cxx: 'C++', hpp: 'C++',
+    csharp: '[Sharp]C', cs: '[Sharp]C', 'c#': '[Sharp]C', ruby: 'Ruby', rb: 'Ruby', php: 'PHP', perl: 'Perl', pl: 'Perl',
+    sql: 'SQL', bash: 'bash', sh: 'sh', shell: 'bash', zsh: 'bash', ksh: 'ksh', csh: 'csh', html: 'HTML', xml: 'XML',
+    xslt: 'XSLT', tex: 'TeX', latex: '[LaTeX]TeX', r: 'R', matlab: 'Matlab', octave: 'Octave', haskell: 'Haskell', hs: 'Haskell',
+    lisp: 'Lisp', elisp: 'Lisp', fortran: 'Fortran', pascal: 'Pascal', delphi: 'Delphi', erlang: 'erlang', scilab: 'Scilab',
+    ocaml: '[Objective]Caml', ml: 'ML', make: 'make', makefile: 'make', awk: 'Awk', tcl: 'tcl', vbscript: 'VBScript',
+    verilog: 'Verilog', vhdl: 'VHDL', gnuplot: 'Gnuplot', prolog: 'Prolog', cobol: 'Cobol', ada: 'Ada', mathematica: 'Mathematica',
+    sparql: 'SPARQL', postscript: 'PostScript', ps: 'PostScript', lua: '[5.3]Lua', go: 'Go',
+};
+
+/**
+ * The name documents conventionally use for each `listings` language, for reading a `lstlisting`
+ * back: the first key mapped to that language in {@link LISTINGS_LANGUAGES} (so `Python` reads
+ * as `python`, `[Sharp]C` as `csharp`). Keyed case-insensitively.
+ */
+export const LISTINGS_LANGUAGE_NAMES: ReadonlyMap<string, string> = (() => {
+    const map = new Map<string, string>();
+    for (const [name, listings] of Object.entries(LISTINGS_LANGUAGES)) {
+        const key = listings.toLowerCase();
+        if (!map.has(key)) map.set(key, name);
+    }
+    return map;
+})();
+
+/**
+ * The character each engine-independent fallback in {@link SYMBOL_FALLBACKS} stands for, keyed by
+ * the replacement's LaTeX (`\ding{170}` reads back as the heart), so a document using those
+ * commands directly parses to the same characters.
+ */
+export const LATEX_SYMBOL_CHARACTERS: ReadonlyMap<string, string> = (() => {
+    const map = new Map<string, string>();
+    for (const [cp, fallback] of SYMBOL_FALLBACKS) {
+        if (!map.has(fallback.tex)) map.set(fallback.tex, String.fromCodePoint(cp));
+    }
+    return map;
+})();

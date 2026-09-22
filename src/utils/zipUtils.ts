@@ -355,7 +355,7 @@ export const detectOfficeTypeFromZip = async (
     try {
         files = await extractFiles(
             zipInput,
-            name => name === OOXML_CONTENT_TYPES_PATH || name === ODF_MIMETYPE_PATH,
+            name => name === OOXML_CONTENT_TYPES_PATH || name === ODF_MIMETYPE_PATH || isRootTexFile(name),
             // Never inflate more for a sniff than the caller already allows for the parse, and
             // never more than a sniff could legitimately need.
             {
@@ -387,5 +387,17 @@ export const detectOfficeTypeFromZip = async (
         if (match) return match[1];
     }
 
+    // A LaTeX project (an Overleaf download, the LaTeX generator's bundle) declares nothing, but
+    // its main file sits at the top level and starts a document.
+    if (files.some(file => isRootTexFile(file.path) && /\\documentclass/.test(file.content.toString('utf8')))) return 'tex';
+
     return undefined;
 };
+
+/**
+ * A `.tex` file at the top level of an archive, or one folder down (a repository download wraps the
+ * project in a folder): where a LaTeX project keeps its main file.
+ */
+function isRootTexFile(name: string): boolean {
+    return name.split('/').length <= 2 && name.toLowerCase().endsWith('.tex');
+}

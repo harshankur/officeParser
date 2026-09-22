@@ -14,6 +14,7 @@
 *.yml text
 *.html text
 *.css text
+*.tex text
 
 # Mark binary files to prevent Git from attempting line-ending normalization
 # 'binary' is a macro representing -diff -merge -text, treating it as raw data

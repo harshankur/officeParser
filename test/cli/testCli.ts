@@ -812,6 +812,24 @@ async function runTests() {
     }
     results.push({ name: 'CLI: --texConfig.bundle writes main.tex plus its images', status: bundleOk ? 'PASS' : 'FAIL', details: bundleDetail, duration: 0 });
 
+    // 47. LaTeX input: a .tex file parses and converts (here to DOCX), and a LaTeX project zip
+    //     named .zip is routed by what it holds.
+    console.log('Test 47: LaTeX input --to docx / project .zip');
+    const t47 = Date.now();
+    const texIn = fsPath.join(ROOT, 'test', 'files', 'test.tex');
+    const texDocx = fsPath.join(RESULTS_DIR, 'from_tex.docx');
+    if (fs.existsSync(texDocx)) fs.unlinkSync(texDocx);
+    const res47 = runCliRaw([texIn, '--to=docx', `--output=${texDocx}`]);
+    let docxOk = false;
+    if (res47.status === 0 && fs.existsSync(texDocx)) {
+        const doc = strFromU8(unzipSync(new Uint8Array(fs.readFileSync(texDocx)))['word/document.xml'] ?? new Uint8Array());
+        docxOk = doc.includes('Demonstration of DOCX support in calibre') && /w:val="Heading1"/.test(doc);
+    }
+    results.push({ name: 'CLI: a .tex file converts to DOCX', status: docxOk ? 'PASS' : 'FAIL', details: docxOk ? 'headings and text carried over' : `exit ${res47.status}, stderr: ${res47.stderr.slice(0, 160)}`, duration: Date.now() - t47 });
+    const res47zip = runCliRaw([texBundleOut, '--to=text']);
+    const zipOk = res47zip.status === 0 && res47zip.stdout.includes('Demonstration of DOCX support');
+    results.push({ name: 'CLI: a LaTeX project .zip is parsed as LaTeX', status: zipOk ? 'PASS' : 'FAIL', details: zipOk ? 'routed by archive contents' : `exit ${res47zip.status}, stderr: ${res47zip.stderr.slice(0, 160)}`, duration: 0 });
+
     // Print summary report
     const logger = new DualLogger();
     const failedCount = generateReport(results, logger);

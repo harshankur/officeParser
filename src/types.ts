@@ -131,7 +131,13 @@ export enum OfficeWarningType {
     /** A math expression used an unsafe LaTeX command or was malformed, so it was written to LaTeX output as literal text rather than typeset math */
     MATH_WRITTEN_AS_TEXT = 'MATH_WRITTEN_AS_TEXT',
     /** LaTeX output references image files that were not bundled with it (`texConfig.bundle` is off); they must be shipped alongside the `.tex` */
-    IMAGES_NOT_BUNDLED = 'IMAGES_NOT_BUNDLED'
+    IMAGES_NOT_BUNDLED = 'IMAGES_NOT_BUNDLED',
+    /** LaTeX input used commands or environments the parser does not interpret; their text content was kept where it had any */
+    LATEX_CONSTRUCT_NOT_INTERPRETED = 'LATEX_CONSTRUCT_NOT_INTERPRETED',
+    /** LaTeX input hit a macro-expansion or file-inclusion limit; the rest of the affected construct was not expanded */
+    LATEX_EXPANSION_LIMIT_REACHED = 'LATEX_EXPANSION_LIMIT_REACHED',
+    /** LaTeX input referenced files (`\input`, `\include`, `\includegraphics`) that were not available to the parser */
+    LATEX_FILE_NOT_FOUND = 'LATEX_FILE_NOT_FOUND'
 }
 
 /**
@@ -2048,7 +2054,7 @@ export interface TemplateConfig {
 /**
  * Supported file types for parsing.
  */
-export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods' | 'odg' | 'pdf' | 'rtf' | 'md' | 'html' | 'csv' | 'epub';
+export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods' | 'odg' | 'pdf' | 'rtf' | 'md' | 'html' | 'csv' | 'epub' | 'tex';
 
 /**
  * A structural stand-in for the web `Blob`/`File` so `parseOffice`/`convert` accept them in the

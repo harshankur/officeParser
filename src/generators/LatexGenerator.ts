@@ -2,7 +2,7 @@ import { zipSync, Zippable } from 'fflate';
 import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { ADMONITION_COLOR, decodeBase64, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
-import { LatexUnicodePlan, planLatexUnicode } from '../utils/latexUtils.js';
+import { LatexUnicodePlan, LISTINGS_LANGUAGES, planLatexUnicode } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
@@ -107,21 +107,6 @@ const MONOSPACE_FONTS = new Set([
     'jetbrains mono', 'sf mono', 'cascadia code', 'cascadia mono', 'inconsolata', 'andale mono', 'noto sans mono',
 ]);
 
-/**
- * Code-block languages `listings` ships a definition for, keyed by the names documents use. A
- * language `listings` does not know is an error ("Couldn't load requested language"), so anything
- * missing here is written as plain `verbatim`.
- */
-const LISTINGS_LANGUAGES: Record<string, string> = {
-    python: 'Python', py: 'Python', java: 'Java', c: 'C', h: 'C', cpp: 'C++', 'c++': 'C++', cc: 'C++', cxx: 'C++', hpp: 'C++',
-    csharp: '[Sharp]C', cs: '[Sharp]C', 'c#': '[Sharp]C', ruby: 'Ruby', rb: 'Ruby', php: 'PHP', perl: 'Perl', pl: 'Perl',
-    sql: 'SQL', bash: 'bash', sh: 'sh', shell: 'bash', zsh: 'bash', ksh: 'ksh', csh: 'csh', html: 'HTML', xml: 'XML',
-    xslt: 'XSLT', tex: 'TeX', latex: '[LaTeX]TeX', r: 'R', matlab: 'Matlab', octave: 'Octave', haskell: 'Haskell', hs: 'Haskell',
-    lisp: 'Lisp', elisp: 'Lisp', fortran: 'Fortran', pascal: 'Pascal', delphi: 'Delphi', erlang: 'erlang', scilab: 'Scilab',
-    ocaml: '[Objective]Caml', ml: 'ML', make: 'make', makefile: 'make', awk: 'Awk', tcl: 'tcl', vbscript: 'VBScript',
-    verilog: 'Verilog', vhdl: 'VHDL', gnuplot: 'Gnuplot', prolog: 'Prolog', cobol: 'Cobol', ada: 'Ada', mathematica: 'Mathematica',
-    sparql: 'SPARQL', postscript: 'PostScript', ps: 'PostScript', lua: '[5.3]Lua', go: 'Go',
-};
 
 /**
  * Where content is being written, which decides what LaTeX constructs are legal there. The same
@@ -387,7 +372,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const names: string[] = [];
         for (const id of ((node.metadata as any)?.anchorIds || []) as string[]) names.push(labelName(id));
         if (node.type === 'heading' && this.config.generateIds) names.push(this.headingSlugLabel(node));
-        const fresh = names.filter(l => l && this.definedLabels.has(l) && !this.emittedLabels.has(l));
+        const fresh = [...new Set(names)].filter(l => l && this.definedLabels.has(l) && !this.emittedLabels.has(l));
         if (fresh.length === 0) return '';
         for (const l of fresh) this.emittedLabels.add(l);
         return (phantom ? '\\phantomsection' : '') + fresh.map(l => `\\label{${l}}`).join('');

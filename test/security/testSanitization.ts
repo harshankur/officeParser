@@ -1772,6 +1772,57 @@ async function latexSanitizationTests() {
     check('latex bundle: entry names cannot traverse or escape', names.every(n => n === 'main.tex' || /^images\/[A-Za-z0-9-]+\.[a-z]+$/.test(n)), names.join(', '));
 }
 
+async function latexParserTests() {
+    console.log('- LaTeX parser (expansion bombs, include cycles, traversal, nesting)...');
+    const parse = async (src: string | Buffer) => {
+        const codes: string[] = [];
+        const started = Date.now();
+        const ast = await OfficeParser.parseOffice(typeof src === 'string' ? Buffer.from(src) : src,
+            { fileType: 'tex', extractAttachments: true, onWarning: (w: any) => codes.push(w.code) } as any);
+        return { ast, codes, ms: Date.now() - started, json: JSON.stringify(ast.content) };
+    };
+    const zip = (files: Record<string, string>) => Buffer.from(zipSync(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, new TextEncoder().encode(v)]))));
+    const TIME_BUDGET_MS = 5000;
+    const SIZE_BUDGET = 5_000_000;
+
+    const tenfold = (a: string, b: string) => `\\def\\${b}{${`\\${a}`.repeat(10)}}`;
+    const bomb = `\\def\\a{xx}${tenfold('a', 'b')}${tenfold('b', 'c')}${tenfold('c', 'd')}${tenfold('d', 'e')}${tenfold('e', 'f')}${tenfold('f', 'g')}${tenfold('g', 'h')}\\h`;
+    for (const [label, src] of [
+        ['exponential \\def', bomb],
+        ['self-recursive macro', '\\newcommand{\\loop}{a\\loop}\\loop'],
+        ['argument-doubling macro', '\\newcommand{\\x}[1]{\\x{#1#1}}\\x{a}'],
+        ['recursive macro in math', '\\newcommand{\\m}{\\m\\m}$\\m$'],
+        ['self-opening environment', '\\newenvironment{r}{\\begin{r}}{}\\begin{r}x\\end{r}'],
+    ] as const) {
+        const r = await parse(src);
+        check(`latex parser: ${label} is bounded`, r.ms < TIME_BUDGET_MS && r.json.length < SIZE_BUDGET && r.codes.includes('LATEX_EXPANSION_LIMIT_REACHED'),
+            `${r.ms}ms, ${r.json.length} bytes, ${r.codes.join(',')}`);
+    }
+    for (const [label, src] of [
+        ['50k nested groups', '{'.repeat(50000) + 'deep' + '}'.repeat(50000)],
+        ['3k nested environments', '\\begin{quote}'.repeat(3000) + 'deep' + '\\end{quote}'.repeat(3000)],
+        ['2k nested lists', '\\begin{itemize}\\item deep '.repeat(2000) + '\\end{itemize}'.repeat(2000)],
+    ] as const) {
+        const r = await parse(src);
+        check(`latex parser: ${label} parse without recursion blow-up and keep the text`, r.ms < TIME_BUDGET_MS && r.json.includes('deep'), `${r.ms}ms`);
+    }
+    const unclosed = await parse('\\begin{itemize}\\item a \\textbf{b \\begin{tabular}{ll} x & y');
+    check('latex parser: unclosed groups and environments do not throw', unclosed.json.includes('a'));
+
+    // No file system access, ever: a lone .tex cannot reach outside itself, and a project zip only its own files.
+    const single = await parse('\\input{/etc/passwd}\\input{../../../etc/passwd}\\includegraphics{/etc/passwd}');
+    check('latex parser: \\input of a system path reads nothing', !single.json.includes('root:') && single.codes.includes('LATEX_FILE_NOT_FOUND') && single.ast.attachments.length === 0);
+    const traversal = await parse(zip({ 'main.tex': '\\documentclass{article}\\begin{document}\\input{../outside}\\input{/abs}\\includegraphics{../x.png}\\end{document}', 'x.png': 'png' }));
+    check('latex parser: project paths cannot leave the project', traversal.ast.attachments.length === 0 && traversal.codes.includes('LATEX_FILE_NOT_FOUND'));
+    const cycle = await parse(zip({ 'main.tex': '\\documentclass{article}\\begin{document}A\\input{b}\\end{document}', 'b.tex': 'B\\input{main}' }));
+    check('latex parser: include cycle stops with a warning', cycle.ms < TIME_BUDGET_MS && cycle.codes.includes('LATEX_EXPANSION_LIMIT_REACHED') && cycle.json.includes('B'));
+
+    // Parsed text is data: a document spelling out LaTeX commands in \verb is not re-executed on regeneration.
+    const verb = await parse('\\verb|\\input{/etc/passwd}|');
+    const regenerated = (await verb.ast.to('tex')).value as string;
+    check('latex parser: verbatim command text regenerates escaped', regenerated.includes('\\textbackslash{}input') && !liveControlWords(regenerated).includes('input'));
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
@@ -1789,6 +1840,7 @@ async function main() {
     await docxSanitizationTests();
     await odtSanitizationTests();
     await latexSanitizationTests();
+    await latexParserTests();
     await odfRepeatExpansionTests();
     await abortSignalTests();
     await corruptArchiveTests();

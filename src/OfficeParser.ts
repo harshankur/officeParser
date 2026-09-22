@@ -41,6 +41,7 @@ import { parseCsv } from './parsers/CsvParser.js';
 import { parseEpub } from './parsers/EpubParser.js';
 import { parseExcel } from './parsers/ExcelParser.js';
 import { parseHtml } from './parsers/HtmlParser.js';
+import { parseLatex } from './parsers/LatexParser.js';
 import { parseMarkdown } from './parsers/MarkdownParser.js';
 import { parseOpenOffice } from './parsers/OpenOfficeParser.js';
 import { parsePdf } from './parsers/PdfParser.js';
@@ -60,7 +61,7 @@ import { detectOfficeTypeFromZip } from './utils/zipUtils.js';
 const GENERIC_ZIP_EXTENSION = 'zip';
 
 /** The formats that are ZIP archives, and so cannot be contradicted by a bare `zip` result. */
-const ZIP_BACKED_FILE_TYPES: ReadonlySet<string> = new Set(['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub']);
+const ZIP_BACKED_FILE_TYPES: ReadonlySet<string> = new Set(['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex']);
 
 /**
  * Upgrades a magic-byte result of `zip` (or none at all) into the specific office format the
@@ -262,7 +263,9 @@ export class OfficeParser {
                     // A bare `zip` says only that the bytes are an archive, which every format
                     // on this path already is. Reporting it as a mismatch against the caller's
                     // own extension is noise, so only a resolved format is worth comparing.
-                    if (detected && detected !== GENERIC_ZIP_EXTENSION && detected.toLowerCase() !== ext.toLowerCase()) {
+                    // Nor is an archive named `.zip`: that extension names no format, and routing below
+                    // reads the archive for what it actually holds.
+                    if (detected && detected !== GENERIC_ZIP_EXTENSION && ext.toLowerCase() !== GENERIC_ZIP_EXTENSION && detected.toLowerCase() !== ext.toLowerCase()) {
                         // Mismatch found between authoritative extension and detected content
                         logWarning(OfficeWarningType.BUFFER_TYPE_MISMATCH, internalConfig, { detected, expected: ext });
                     }
@@ -279,8 +282,14 @@ export class OfficeParser {
             // ODF template packages (.ott/.ots/.otp/.otg) are the same format as their document
             // counterparts and share one parser; normalize them so a file routed by its filename
             // extension dispatches correctly, matching how buffer detection resolves the mimetype.
-            const ODF_TEMPLATE_EXT: Record<string, string> = { ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg' };
-            const routedExt = ODF_TEMPLATE_EXT[ext.toLowerCase()] || ext.toLowerCase();
+            // `.latex`/`.ltx` are the other LaTeX source extensions.
+            const ODF_TEMPLATE_EXT: Record<string, string> = { ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg', latex: 'tex', ltx: 'tex' };
+            let routedExt = ODF_TEMPLATE_EXT[ext.toLowerCase()] || ext.toLowerCase();
+            // A file named `.zip` is routed by what the archive holds (a LaTeX project, a renamed
+            // office package), since `zip` itself is not a format.
+            if (routedExt === GENERIC_ZIP_EXTENSION) {
+                routedExt = (await detectOfficeTypeFromZip(buffer, internalConfig.decompressionLimits ?? {})) ?? routedExt;
+            }
 
             // OCR runs over extracted images in EVERY format (not just PDF), so `ocr: true` without
             // `extractAttachments: true` performs no OCR anywhere. Warn once, centrally, so the no-op is
@@ -330,6 +339,9 @@ export class OfficeParser {
                     break;
                 case 'md':
                     result = await parseMarkdown(buffer, internalConfig);
+                    break;
+                case 'tex':
+                    result = await parseLatex(buffer, internalConfig);
                     break;
                 case 'epub':
                     result = await parseEpub(buffer, internalConfig);

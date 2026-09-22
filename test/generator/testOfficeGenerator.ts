@@ -43,11 +43,11 @@ const GENERATOR_FORMATS = ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub',
 type GeneratorFormat = typeof GENERATOR_FORMATS[number];
 
 /** Formats that support roundtrip testing (parse → generate → re-parse) */
-const ROUNDTRIP_FORMATS: GeneratorFormat[] = ['html', 'md', 'rtf', 'docx', 'odt'];
+const ROUNDTRIP_FORMATS: GeneratorFormat[] = ['html', 'md', 'rtf', 'docx', 'odt', 'tex'];
 
 /** Source baseline formats used to drive generation tests */
 const SOURCE_FORMATS = {
-    documents: ['docx', 'odt', 'pptx', 'odp', 'odg', 'pdf', 'rtf', 'html', 'md', 'epub'] as const,
+    documents: ['docx', 'odt', 'pptx', 'odp', 'odg', 'pdf', 'rtf', 'html', 'md', 'epub', 'tex'] as const,
     spreadsheets: ['xlsx', 'ods', 'csv'] as const,
 };
 
