@@ -50,8 +50,9 @@
                 <td><code>ignoreNotes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Note Filtering</strong>: Specifically targets PowerPoint (PPTX/ODP) speaker notes and
-                    document footnotes/endnotes (DOCX, RTF). If <code>true</code>, notes are entirely omitted from the
+                <td><strong>Note Filtering</strong>: Specifically targets PowerPoint (PPTX/ODP) and LaTeX
+                    <code>beamer</code> (<code>\note</code>) speaker notes and document footnotes/endnotes (DOCX, RTF,
+                    LaTeX <code>\footnote</code>/<code>\endnote</code>). If <code>true</code>, notes are entirely omitted from the
                     AST output.
                 </td>
             </tr>
@@ -60,7 +61,9 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Comment Filtering</strong>: When <code>true</code>, inline comments and annotations are
-                    excluded from parsing. Affects DOCX, XLSX, PPTX and ODF (ODT/ODS/ODP). By default comments are attached to their
+                    excluded from parsing. Affects DOCX, XLSX, PPTX, ODF (ODT/ODS/ODP) and LaTeX (a
+                    <code>% Comment (Author, date): text</code> line, the shape the LaTeX generator writes; other
+                    <code>%</code> comments are always discarded). By default comments are attached to their
                     target node via <code>node.comments[]</code>.</td>
             </tr>
             <tr>
@@ -68,7 +71,7 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Layout Element Filtering</strong>: When <code>true</code>, headers and footers are
-                    not parsed. Applies to DOCX, PDF and ODF (ODT master pages only). When <code>false</code> (default), they are extracted into
+                    not parsed. Applies to DOCX, PDF, ODF (ODT master pages only) and LaTeX (<code>fancyhdr</code>). When <code>false</code> (default), they are extracted into
                     <code>ast.auxiliary.headers</code> and <code>ast.auxiliary.footers</code>.</td>
             </tr>
             <tr>
@@ -86,7 +89,9 @@
                 <td><strong>Resource Extraction</strong>: Enables the collection of images, charts, and embedded
                     objects.
                     Populates the root <code>attachments</code> array and ensures <code>image</code> nodes have
-                    <code>attachmentName</code> metadata.
+                    <code>attachmentName</code> metadata. For LaTeX, image bytes exist only when parsing a project
+                    <code>.zip</code>; images in a bare <code>.tex</code> stay references to their path
+                    (<code>metadata.url</code>).
                 </td>
             </tr>
             <tr>
@@ -187,8 +192,8 @@
                 <td><code>includeBreakNodes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Line/Page Break Parsing</strong>: Supported for Word (DOCX) and OpenDocument (ODT/ODP/ODS)
-                    files. ODF carries page and column breaks on the paragraph style
+                <td><strong>Line/Page Break Parsing</strong>: Supported for Word (DOCX), OpenDocument (ODT/ODP/ODS)
+                    and LaTeX (<code>\newpage</code>/<code>\clearpage</code> as <code>page</code> breaks) files. ODF carries page and column breaks on the paragraph style
                     (<code>fo:break-before</code>/<code>fo:break-after</code>) rather than as an inline element, so
                     those surface as breaks emitted around the paragraph. When set to
                     true, <code>officeParser</code> will extract physical breaks into the AST as <code>break</code>
@@ -201,7 +206,8 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Link Filtering</strong>: When true, all bookmarks, cross-references, and internal document
-                    jumps are stripped from the AST. Only external URLs will be preserved. Honored for PDF as of v8.</td>
+                    jumps are stripped from the AST. Only external URLs will be preserved. Honored for PDF as of v8, and for LaTeX <code>\label</code>,
+                    <code>\ref</code>/<code>\eqref</code>/<code>\autoref</code> and <code>\hyperref</code>.</td>
             </tr>
             <tr>
                 <td><code>ignorePageGeometry</code></td>
@@ -249,8 +255,10 @@
                 <td><code>SupportedFileType | null</code></td>
                 <td><code>null</code></td>
                 <td><strong>Authoritative Hint</strong>: Manually specify the source format. Essential when parsing
-                    <code>md</code>, <code>html</code>, or <code>csv</code> from a Buffer / ArrayBuffer / Uint8Array, as these lack magic byte
-                    markers.</td>
+                    <code>md</code>, <code>html</code>, <code>csv</code>, or <code>tex</code> from a Buffer / ArrayBuffer / Uint8Array, as these lack magic byte
+                    markers. <code>.latex</code>/<code>.ltx</code> files route to <code>tex</code>, and a file named
+                    <code>.zip</code> is routed by what the archive holds (an Overleaf project or
+                    <code>texConfig.bundle</code> zip parses as <code>tex</code>).</td>
             </tr>
             <tr>
                 <td><code>csvDelimiter</code></td>
@@ -263,7 +271,7 @@
                 <td><code>decompressionLimits</code></td>
                 <td><code>object</code></td>
                 <td><code>{}</code></td>
-                <td><strong>Archive Limits</strong>: Settings to limit resources used during ZIP extraction to protect against excessive memory and resource usage.</td>
+                <td><strong>Archive Limits</strong>: Settings to limit resources used during ZIP extraction to protect against excessive memory and resource usage. Apply to every ZIP-backed input, LaTeX project zips included.</td>
             </tr>
             <tr>
                 <td><code>decompressionLimits.maxUncompressedBytes</code></td>

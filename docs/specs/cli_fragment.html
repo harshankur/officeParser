@@ -36,9 +36,11 @@
             </tr>
             <tr>
                 <td><code>--fileType</code></td>
-                <td><code>docx | xlsx | pptx | odt | odp | ods | odg | pdf | rtf | csv | md | html | epub</code></td>
+                <td><code>docx | xlsx | pptx | odt | odp | ods | odg | pdf | rtf | csv | md | html | epub | tex</code></td>
                 <td>(none)</td>
-                <td>Explicitly override input file type detection (useful when input file lacks extension).</td>
+                <td>Explicitly override input file type detection (useful when input file lacks extension).
+                    <code>.latex</code>/<code>.ltx</code> files route to <code>tex</code>, and a <code>.zip</code> is
+                    routed by what it holds (an Overleaf project parses as <code>tex</code>).</td>
             </tr>
             <tr>
                 <td><code>--password</code></td>
@@ -158,7 +160,7 @@
                 <td><code>--includeBreakNodes</code></td>
                 <td>boolean</td>
                 <td><code>false</code></td>
-                <td>Include explicit page/column break nodes (DOCX and ODF).</td>
+                <td>Include explicit page/column break nodes (DOCX, ODF and LaTeX).</td>
             </tr>
             <tr>
                 <td><code>--verbose</code></td>
@@ -305,6 +307,15 @@
 
     <h3>Plain Text Extraction</h3>
     <pre><code>npx officeparser data.pdf --to text --ignoreNotes</code></pre>
+
+    <h3>Convert LaTeX to DOCX</h3>
+    <pre><code>npx officeparser paper.tex --to docx --output paper.docx
+
+# An Overleaf "Download source" zip also brings its \input files and images
+npx officeparser overleaf-project.zip --extractAttachments --to docx --output paper.docx</code></pre>
+    <p>A bare <code>.tex</code> cannot contain the files it includes or the images it shows: those are reported
+        with the <code>LATEX_FILE_NOT_FOUND</code> warning and images are kept as references to their path. Parse the
+        project <code>.zip</code> to include them.</p>
 
     <h3>Convert DOCX to EPUB</h3>
     <pre><code>npx officeparser book.docx --extractAttachments --to epub --output book.epub</code></pre>

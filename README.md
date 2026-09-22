@@ -2,7 +2,7 @@
 
 A robust, strictly-typed **Node.js and Browser** library for parsing office files into a rich **Abstract Syntax Tree (AST)** and generating high-fidelity output in multiple formats.
 
-**Parses:** [`docx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`odt`](https://en.wikipedia.org/wiki/OpenDocument) · [`odp`](https://en.wikipedia.org/wiki/OpenDocument) · [`ods`](https://en.wikipedia.org/wiki/OpenDocument) · [`odg`](https://en.wikipedia.org/wiki/OpenDocument) · [`pdf`](https://en.wikipedia.org/wiki/PDF) · [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format) · [`csv`](https://en.wikipedia.org/wiki/Comma-separated_values) · [`md`](https://en.wikipedia.org/wiki/Markdown) · [`html`](https://en.wikipedia.org/wiki/HTML) · [`epub`](https://en.wikipedia.org/wiki/EPUB)
+**Parses:** [`docx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`odt`](https://en.wikipedia.org/wiki/OpenDocument) · [`odp`](https://en.wikipedia.org/wiki/OpenDocument) · [`ods`](https://en.wikipedia.org/wiki/OpenDocument) · [`odg`](https://en.wikipedia.org/wiki/OpenDocument) · [`pdf`](https://en.wikipedia.org/wiki/PDF) · [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format) · [`csv`](https://en.wikipedia.org/wiki/Comma-separated_values) · [`md`](https://en.wikipedia.org/wiki/Markdown) · [`html`](https://en.wikipedia.org/wiki/HTML) · [`epub`](https://en.wikipedia.org/wiki/EPUB) · [`tex`](https://en.wikipedia.org/wiki/LaTeX) (LaTeX, including Overleaf project zips)
 
 **Generates:** `DOCX` · `ODT` · `LaTeX` · `Markdown` · `HTML` · `CSV` · `RTF` · `PDF` · `EPUB` · `Plain Text` · `RAG Chunks`
 
@@ -33,7 +33,7 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 - **Password-protected documents.** Encrypted PDF, OOXML (`docx`/`xlsx`/`pptx`) and ODF (`odt`/`ods`/`odp`/`odg`) open through one unified `password` / `onPassword` option, across parsing, conversion and templating.
 - **Native DOCX & ODT generation**, plus a **native PDF engine** (`pdfConfig.engine: 'native'`, built on `pdf-lib`) that produces real PDF bytes with no headless browser, in Node and the browser alike.
 - **Templates / mail-merge** via `OfficeTemplate.render` (fill a DOCX template's `{{placeholders}}`, single or batch), and **ODG parsing** (LibreOffice Draw).
-- **LaTeX generation** (8.1): `to('tex')` turns any parsed document into LaTeX source that compiles unmodified with pdfLaTeX, XeLaTeX and LuaLaTeX, presentations included (as `beamer` frames), with a zip bundle mode that packages the images. See [TexGeneratorConfig](#texgeneratorconfig).
+- **LaTeX in both directions** (8.1): `.tex` files and Overleaf project zips parse into the same AST as every other format (sections, lists, tables with merged cells, figures, math, footnotes, citations, cross-references, user macros, `beamer` slides), so LaTeX converts to DOCX, ODT, HTML, Markdown and the rest. And `to('tex')` turns any parsed document into LaTeX source that compiles unmodified with pdfLaTeX, XeLaTeX and LuaLaTeX, presentations included (as `beamer` frames), with a zip bundle mode that packages the images. See [LaTeX Support](#latex-support).
 
 See the [full changelog](CHANGELOG.md) for the complete list, including breaking changes.
 
@@ -58,6 +58,7 @@ See the [full changelog](CHANGELOG.md) for the complete list, including breaking
 - [Deep Dive: Document Components](#deep-dive-document-components)
 - [Markdown Dialect Support](#markdown-dialect-support)
 - [EPUB Support](#epub-support)
+- [LaTeX Support](#latex-support)
 - [Performance Highlights](#performance-highlights)
 - [Advanced AST Usage](#advanced-ast-usage)
 - [Configuration Reference](#configuration-reference)
@@ -130,6 +131,10 @@ npx officeparser report.docx --extractAttachments --to=odt --output=report.odt
 npx officeparser paper.docx --to=tex --output=paper.tex
 npx officeparser paper.docx --extractAttachments --to=tex --texConfig.bundle --output=paper.zip
 
+# Convert LaTeX to Word: a single .tex, or an Overleaf project zip (which brings its \input files and images)
+npx officeparser paper.tex --to=docx --output=paper.docx
+npx officeparser overleaf-project.zip --extractAttachments --to=docx --output=paper.docx
+
 # Overriding file extension mapping
 npx officeparser my_document --fileType=docx --to=json
 ```
@@ -146,7 +151,7 @@ npx officeparser my_document --fileType=docx --to=json
 |------|--------|---------|-------------|
 | `--to` | `json\|text\|md\|html\|csv\|rtf\|pdf\|docx\|odt\|tex\|epub\|chunks` | `json` | Output format (`latex` is accepted as an alias of `tex`) |
 | `--output` | path | (none) | Write output to a file |
-| `--fileType` | `docx\|xlsx\|pptx\|odt\|odp\|ods\|odg\|pdf\|rtf\|csv\|md\|html\|epub` | (none) | Explicitly override input file type detection |
+| `--fileType` | `docx\|xlsx\|pptx\|odt\|odp\|ods\|odg\|pdf\|rtf\|csv\|md\|html\|epub\|tex` | (none) | Explicitly override input file type detection |
 | `--ocr` | boolean | `false` | Enable OCR for images (also requires `--extractAttachments`; OCR runs over extracted images) |
 | `--ocrConfig.language` | string | `eng` | Tesseract language(s), e.g. `deu` or `eng+fra` |
 | `--ocrConfig.preserveLayout` | boolean | `true` | Keep the line layout of recognized text |
@@ -162,7 +167,7 @@ npx officeparser my_document --fileType=docx --to=json
 | `--includeRawContent` | boolean | `false` | Include raw XML/RTF in nodes |
 | `--serializeRawContent` | boolean | `true` | Include stringified XML in metadata |
 | `--preserveXmlWhitespace` | boolean | `false` | Keep raw formatting space |
-| `--includeBreakNodes` | boolean | `false` | Include break nodes (DOCX and ODF) |
+| `--includeBreakNodes` | boolean | `false` | Include break nodes (DOCX, ODF and LaTeX page breaks) |
 | `--ignorePageGeometry` | boolean | `false` | Omit per-node bounding boxes and page dimensions |
 | `--pdfParserConfig.useTags` | boolean | `true` | Use the PDF tag tree; `false` forces geometry-only structure |
 | `--pdfParserConfig.detectColumns` | boolean | `true` | Multi-column reading-order detection |
@@ -262,7 +267,7 @@ const ast = await officeParser.parseOffice(input.files[0]);
 
 > [!IMPORTANT]
 > **Text-based formats from buffers need a `fileType` hint.**
-> Formats like `md`, `html`, and `csv` have no magic bytes, so the parser cannot
+> Formats like `md`, `html`, `csv` and `tex` have no magic bytes, so the parser cannot
 > auto-detect them from a buffer. You **must** provide `fileType` in that case:
 > ```js
 > const ast = await officeParser.parseOffice(markdownBuffer, { fileType: 'md' });
@@ -274,6 +279,9 @@ const ast = await officeParser.parseOffice(input.files[0]);
 > archives written by streaming producers or holding very many parts. When the byte signature is
 > inconclusive, the archive is opened and the format is read from its own declaration
 > (`[Content_Types].xml`, or the `mimetype` entry), so these parse from a buffer without a hint.
+> A LaTeX project zip is recognized the same way, by a `.tex` file with a `\documentclass` near the
+> archive root, and so is a file named `.zip`: that extension names no format, so the archive's
+> contents decide which parser runs.
 > Supplying `fileType` remains the fastest and most certain route: it decides which parser runs,
 > and for these formats no archive inspection is done at all.
 
@@ -610,7 +618,7 @@ interface OfficeChunk {
 
 ```text
 OfficeParserAST
-├── type: 'docx' | 'pdf' | 'xlsx' | 'csv' | 'md' | 'epub' | ...  (13 formats)
+├── type: 'docx' | 'pdf' | 'xlsx' | 'csv' | 'md' | 'epub' | 'tex' | ...  (14 formats)
 ├── metadata: { author, title, created, modified, keywords, customProperties, nativeProperties, styleMap, ... }
 ├── content: [ OfficeContentNode ]
 │   ├── type: 'paragraph' | 'heading' | 'table' | 'list' | 'image' | 'chart' | 'comment' | 'admonition' | 'embed' | 'definitionList' | ...
@@ -621,8 +629,8 @@ OfficeParserAST
 │   ├── formatting: { bold, italic, underline, color, size, font, alignment, ... }
 │   └── metadata: { level, listId, row, col, rowSpan, colSpan, backgroundColor, style, ... }
 ├── auxiliary?: OfficeAuxiliaryContent   (out-of-band layout elements)
-│   ├── headers?: OfficeContentNode[]   (DOCX, PDF top band, ODT master pages)
-│   ├── footers?: OfficeContentNode[]   (DOCX, PDF bottom band, ODT master pages)
+│   ├── headers?: OfficeContentNode[]   (DOCX, PDF top band, ODT master pages, LaTeX fancyhdr)
+│   ├── footers?: OfficeContentNode[]   (DOCX, PDF bottom band, ODT master pages, LaTeX fancyhdr)
 │   ├── slideMasters?: OfficeContentNode[] (PPTX slide masters)
 │   └── outline?: OfficeContentNode[]   (PDF bookmark outline)
 ├── attachments: [ OfficeAttachment ]  (populated when extractAttachments: true)
@@ -696,6 +704,9 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `IMAGE_EXTRACTION_FAILED` / `IMAGE_PROCESSING_FAILED` / `ATTACHMENT_EXTRACTION_FAILED` | parse | An image/attachment could not be extracted or decoded; it was skipped or degraded. |
 | `ANNOTATION_EXTRACTION_FAILED` / `CHART_DATA_EXTRACTION_FAILED` | parse | A PDF annotation / a chart's data could not be read. |
 | `OCR_FAILED` | parse | OCR ran but failed for an image (see `details`). |
+| `LATEX_CONSTRUCT_NOT_INTERPRETED` | parse | The LaTeX input used commands or environments the parser does not interpret (the message names them). Text inside them was kept; drawings such as TikZ pictures were omitted. |
+| `LATEX_EXPANSION_LIMIT_REACHED` | parse | A LaTeX document hit a bound on macro expansion or file inclusion (the guard against expansion bombs and include cycles); macros or files past it were not expanded. |
+| `LATEX_FILE_NOT_FOUND` | parse | The LaTeX input includes files or images the parser could not read (a bare `.tex` carries none). Parse the project as a `.zip` to include them; images are kept as path references. |
 | `FILE_TYPE_DETECTION_FAILED` / `BUFFER_TYPE_MISMATCH` | parse | Type could not be sniffed / disagreed with the `fileType` hint. |
 | `PASSWORD_REQUIRED` / `PASSWORD_INCORRECT` | parse | Encrypted input; supply `password`/`onPassword` (these also throw when parsing cannot continue). |
 | `UNRECOGNIZED_CONFIG_OPTION` | config | A config key this version does not know (often a typo or a removed/renamed option); it had no effect. |
@@ -737,6 +748,7 @@ extracted (the matching `ignore*` flag is then a no-op).
 | MD   | – | footnotes/endnotes | – | – | Y (`data:` only) | – | Y (HTML-table fallback) |
 | CSV  | `#`-rows become `comment` nodes* | – | – | – | – | – | rows |
 | EPUB | – | footnotes/endnotes | – | – | Y | – | Y |
+| TEX  | Y (`% Comment (Author, date):` lines) | footnotes/endnotes | Y (`fancyhdr`) | – | Y (from a project zip) | – | Y |
 
 Notes: comments land on `node.comments[]` (with `author`/`date`) except CSV, whose leading-`#` rows
 become top-level `comment` nodes and are *not* governed by `ignoreComments`. `ignoreNotes` /
@@ -1022,6 +1034,55 @@ EPUB 3 (`mimetype`, `META-INF/container.xml`, an OPF manifest, a nav document, a
 > npx officeparser book.docx --extractAttachments --to=epub --output=book.epub
 > ```
 
+## LaTeX Support
+
+LaTeX is supported in both directions, zero extra dependencies, in Node and the browser.
+
+**Parsing.** A `.tex` file (or `.latex`/`.ltx`) parses into the same AST as every other format, so a
+paper converts to DOCX, ODT, HTML, Markdown, EPUB or chunks like any Word document would. So does a
+**project zip**, such as Overleaf's "Download source": the main file (`main.tex`, else the top-level
+`.tex` with a `\documentclass`) is read, and its `\input`/`\include`/`\subfile` files and
+`\includegraphics` images are taken from the archive (respecting `\graphicspath`). Nothing is ever
+read from the filesystem, and no path can leave the project.
+
+```js
+const ast = await OfficeParser.parseOffice('paper.tex');
+const { value: docx } = await ast.to('docx');
+
+// A whole project, images included
+const project = await OfficeParser.parseOffice('overleaf-project.zip', { extractAttachments: true });
+```
+
+| LaTeX | AST |
+|---|---|
+| `\section` ... `\subparagraph`, `\chapter`, `\part` | `heading` nodes, `\label`s as heading ids |
+| `\textbf`, `\emph`, `\underline`, `\sout`, `\texttt`, `\textsc`, `\textcolor`, `\hl`, `\large`, `{\bfseries ...}`, accents, ligatures | formatted text runs |
+| `itemize`, `enumerate` (nested, `\setcounter`), `description`, `\item[$\square$]` | lists, definition lists, task items |
+| `tabular`, `tabularx`, `longtable`, `\multicolumn`, `\multirow`, `\cellcolor`, booktabs | `table` with `colSpan`/`rowSpan`, alignment and cell colours |
+| `figure`/`table` floats, `\caption`, `\includegraphics` | images (bytes from a project zip) and captions |
+| `$...$`, `\[...\]`, `equation`, `align`, `gather` | math, as LaTeX, with your macros expanded |
+| `\footnote`, `\endnote` | `note` nodes |
+| `\href`, `\url`, `\ref`, `\eqref`, `\nameref`, `\hyperref` | links; references resolve to section, table, figure and equation numbers |
+| `\cite` and `thebibliography` | citations and the bibliography list |
+| `verbatim`, `lstlisting`, `minted`, `\verb` | `code` nodes with their language |
+| `quote`, `quotation`, `verse` | quotes |
+| `fancyhdr` headers and footers | `ast.auxiliary` |
+| `\title`, `\author`, `\date`, `\hypersetup{pdf...}` | `ast.metadata` |
+| `beamer` frames, `\framesubtitle`, `\note`, overlays | `slide` nodes with speaker notes |
+| `\newcommand`, `\renewcommand`, `\def`, `\newenvironment` | expanded |
+
+LaTeX is a programming language, so the parser is a bounded interpreter: macro expansion, expanded
+text, include depth and nesting all have hard limits (past one, expansion stops with
+`LATEX_EXPANSION_LIMIT_REACHED`, and include cycles are cut), nothing is executed, and zip reading
+obeys `decompressionLimits`. Constructs it does not interpret keep their text and are named once in
+`LATEX_CONSTRUCT_NOT_INTERPRETED`; drawings (TikZ) are omitted. Review comments survive a round trip:
+a `% Comment (Author, date): text` line, which is how the generator writes a comment, becomes a
+comment on the node that follows.
+
+**Generation.** `to('tex')` writes LaTeX from any parsed document; see
+[TexGeneratorConfig](#texgeneratorconfig). The two directions agree: LaTeX that officeParser writes
+parses back to the same structure, and generating from that parse reproduces the LaTeX exactly.
+
 ---
 
 ## Performance Highlights
@@ -1164,9 +1225,9 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `newlineDelimiter` | `string` | `'\n'` | Joins multi-line text inside the AST's pre-flattened `.text` (RTF table cells, chart text, PDF page text); also the default for `textConfig.newlineDelimiter` in `.to('text')` when that is not set explicitly. Not read by the Word parser |
 | `password` | `string` | `''` | Password for a password-protected document. Applies to every encryptable format: PDF, encrypted OOXML (`.docx`/`.xlsx`/`.pptx`, ECMA-376 agile or standard AES), and encrypted ODF (`.odt`/`.ods`/`.odp`/`.odg`, AES-CBC with PBKDF2). A missing password rejects with `PASSWORD_REQUIRED`, a wrong one with `PASSWORD_INCORRECT`. Ignored for unencrypted files. *ODF note:* LibreOffice 24.8+ defaults to AES-256-GCM with Argon2id key derivation ("wholesome encryption"), which is not supported and rejects with `DOCUMENT_DECRYPTION_FAILED`; re-save with the classic AES-CBC/PBKDF2 scheme (or an earlier LibreOffice) to parse it |
 | `onPassword` | `(reason: 'required' \| 'incorrect') => string \| undefined \| Promise<...>` | (none) | Called when an encrypted document needs a password `password` did not satisfy, so it can be supplied lazily or interactively (prompt, vault). Return a password to retry (capped), or `undefined` to reject as above. Works for every encryptable format (PDF/OOXML/ODF); mirrors pdf.js's `onPassword` |
-| `ignoreNotes` | `boolean` | `false` | Ignore footnotes/endnotes (DOCX, ODT, RTF, PDF, HTML, Markdown, EPUB) and speaker notes (PPTX/ODP). See the [capability matrix](#per-format-capability-matrix) |
-| `ignoreComments` | `boolean` | `false` | Ignore comments/annotations, attached by default via `node.comments[]`. Applies to DOCX, XLSX, PPTX and every ODF type (ODT/ODS/ODP/ODG). See the [capability matrix](#per-format-capability-matrix) |
-| `ignoreHeadersAndFooters` | `boolean` | `false` | Skip headers & footers (populated in `ast.auxiliary.headers/footers` by default). Extracted for DOCX, PDF and ODT only; a no-op for ODS/ODP/ODG, XLSX, PPTX and RTF. See the [capability matrix](#per-format-capability-matrix) |
+| `ignoreNotes` | `boolean` | `false` | Ignore footnotes/endnotes (DOCX, ODT, RTF, PDF, HTML, Markdown, EPUB, LaTeX) and speaker notes (PPTX/ODP, LaTeX `beamer` `\note`). See the [capability matrix](#per-format-capability-matrix) |
+| `ignoreComments` | `boolean` | `false` | Ignore comments/annotations, attached by default via `node.comments[]`. Applies to DOCX, XLSX, PPTX, every ODF type (ODT/ODS/ODP/ODG) and LaTeX (`% Comment (Author, date): text` lines). See the [capability matrix](#per-format-capability-matrix) |
+| `ignoreHeadersAndFooters` | `boolean` | `false` | Skip headers & footers (populated in `ast.auxiliary.headers/footers` by default). Extracted for DOCX, PDF, ODT and LaTeX (`fancyhdr`) only; a no-op for ODS/ODP/ODG, XLSX, PPTX and RTF. See the [capability matrix](#per-format-capability-matrix) |
 | `ignoreSlideMasters` | `boolean` | `false` | Skip PPTX slide masters (populated in `ast.auxiliary.slideMasters` by default). PPTX only; ODP masters are not extracted |
 | `extractAttachments` | `boolean` | `false` | Populate `ast.attachments` with Base64 images/charts |
 | `ocr` | `boolean` | `false` | Run Tesseract OCR on images (requires `extractAttachments: true`) |
@@ -1174,10 +1235,10 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `includeRawContent` | `boolean` | `false` | Attach raw XML/RTF source to each node |
 | `serializeRawContent` | `boolean` | `true` | Re-serialize XML to clean strings (only if `includeRawContent: true`) |
 | `preserveXmlWhitespace` | `boolean` | `false` | Preserve original XML whitespace during serialization |
-| `includeBreakNodes` | `boolean` | `false` | Include typed break nodes: DOCX `w:br`/`w:cr`, ODF `fo:break-before`/`fo:break-after` and `text:soft-page-break` |
+| `includeBreakNodes` | `boolean` | `false` | Include typed break nodes: DOCX `w:br`/`w:cr`, ODF `fo:break-before`/`fo:break-after` and `text:soft-page-break`, LaTeX `\newpage`/`\clearpage` (a LaTeX line break, `\\` or `\newline`, is always kept inside its paragraph) |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal cross-references from AST (now honored for PDF too) |
 | `ignorePageGeometry` | `boolean` | `false` | Omit the geometric layout data: per-node bounding boxes (`node.bounds`) and page dimensions. Currently produced by the PDF parser |
-| `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`) as these lack magic bytes. |
+| `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`, `'tex'`) as these lack magic bytes. |
 | `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
 | `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000, maxTableCells: 1000000 }` | **New**: Limits applied during ZIP extraction (and ODF cell expansion) to protect against excessive memory and resource usage |
 | `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options **(and Markdown input: `preserveIframes`/`embedFolkForms` govern raw `<iframe>` blocks and folk embeds in `.md` too)**. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes: `true` for any, or a hostname allowlist; the src is scheme-checked on generation. `embedFolkForms` (`boolean`, default `false`): opt in to importing ambiguous folk embed forms (Obsidian `![](youtube-url)`, thumbnail-link) as YouTube embeds |
@@ -1715,7 +1776,8 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer, {
 | `"Worker not found"` in browser for PDF | Verify `pdfWorkerSrc` points to `pdf.worker.min.mjs` matching `pdfjs-dist@6.2.108` |
 | Low OCR accuracy | Verify `ocrConfig.language` matches the document language; quality depends on image resolution |
 | Out of memory on large Excel files | Call `await ast.to('text')` early and discard the AST object to allow garbage collection |
-| `md`/`html`/`csv` buffer not detected | Add `fileType: 'md'` (or `'html'`, `'csv'`) to config (these formats have no magic bytes) |
+| `md`/`html`/`csv`/`tex` buffer not detected | Add `fileType: 'md'` (or `'html'`, `'csv'`, `'tex'`) to config (these formats have no magic bytes) |
+| LaTeX images or `\input` chapters missing (`LATEX_FILE_NOT_FOUND`) | A `.tex` file does not contain the files it includes. Parse the whole project as a `.zip` (e.g. Overleaf's "Download source"), with `extractAttachments: true` for the images |
 | `IMPROPER_BUFFERS` error | Usually means no file extension and no `fileType` hint was provided for a buffer input |
 | PDF generation fails | The default engine needs the optional peer dependency (`npm install puppeteer`); or switch to the dependency-free native engine with `pdfConfig: { engine: 'native' }` (bundled `pdf-lib`, lighter output, no Chromium) |
 
@@ -1729,7 +1791,8 @@ For a full debugging guide, visit the [Live Documentation](https://harshankur.gi
 2. **PDF Images**: Extracted and re-encoded as PNG (`pdf_image_p<page>_<n>.png`, `image/png`) on both Node and the browser, since a PDF stores image data in formats no viewer opens directly. v7 emitted BMP; code that filters attachments by `.bmp` must be updated.
 3. **PDF structure without tags**: Tables, lists and headings come from the PDF's tag tree when present. For untagged PDFs they are recovered geometrically, which is best-effort: complex float-beside-text layouts and tables without a tag tree may not separate perfectly. Column reading order, paragraphs and word spacing are handled on both paths.
 4. **PDF text decoration and spans**: text colour is extracted by default (`pdfParserConfig.extractTextColor`); set it `false` to skip the extra operator-list pass on a throughput-focused text path. Underline and strikethrough are still not extracted: they are drawn as separate graphics operators rather than carried as text properties. Vertical (top-to-bottom) writing is read but not laid out spatially. Table cell `colSpan`/`rowSpan` are recovered best-effort on the tagged path, from the geometry of the empty placeholder cells the tag tree pads a merge with; untagged PDFs expose no spans.
-5. **LaTeX output** is a faithful conversion, not a typesetting clone of the source: named font families are not carried over (only monospace), images in formats LaTeX cannot include (GIF, BMP, TIFF, WebP, SVG, EMF) are packaged but drawn as placeholders, `\cite` keys are emitted without a bibliography (add your own `.bib`), and very wide spreadsheets continue in 16-column bands.
+5. **LaTeX input** is interpreted, not compiled: officeParser reads the document the way a converter does (structure, text, formatting, macros you define) rather than running TeX, so drawings (TikZ, pgfplots, `picture`) are omitted, packages are not loaded (their commands keep their text when unknown), `\cite` keys stay as keys unless the document has a `thebibliography` (`.bib` files are not processed), and `\maketitle` puts the title in `ast.metadata` rather than in the content (set the generator's `renderMetadata` to show it).
+6. **LaTeX output** is a faithful conversion, not a typesetting clone of the source: named font families are not carried over (only monospace), images in formats LaTeX cannot include (GIF, BMP, TIFF, WebP, SVG, EMF) are packaged but drawn as placeholders, `\cite` keys are emitted without a bibliography (add your own `.bib`), and very wide spreadsheets continue in 16-column bands.
 
 ---
 
@@ -1741,7 +1804,8 @@ user upload, an email attachment, a scraped document). A parser that accepts arb
 has a large and inherently open attack surface.
 
 I do sanitize output and apply hardening where I can: injection escaping across the
-HTML/CSS/URL/script/CSV/RTF/Markdown sinks, decompression limits, some resource and recursion
+HTML/CSS/URL/script/CSV/RTF/Markdown/LaTeX sinks, bounded macro expansion when reading LaTeX (which
+never executes anything or touches the filesystem), decompression limits, some resource and recursion
 bounds, and SSRF precautions during PDF rendering. I fix issues as I learn of them (see
 [CHANGELOG.md](CHANGELOG.md)). But this is **best-effort, not a guarantee.** A document parser of
 this size will have attack vectors I have not found or have not yet addressed, and no amount of

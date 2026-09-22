@@ -17,6 +17,12 @@ const { value, messages } = await OfficeConverter.convert('report.docx', 'pdf', 
     }
 });</code></pre>
 
+    <p>LaTeX input converts the same way. A <code>.zip</code> is routed by what it holds, so an Overleaf "Download
+        source" zip (or a <code>texConfig.bundle</code> zip) parses as LaTeX, with its <code>\input</code>/<code>\include</code>
+        files and <code>\includegraphics</code> images read from the archive:</p>
+    <pre><code>const { value: docx } = await OfficeConverter.convert('paper.tex', 'docx');
+const { value: fromProject } = await OfficeConverter.convert('overleaf-project.zip', 'docx'); // images included</code></pre>
+
     <h3>Arguments</h3>
     <table>
         <thead>

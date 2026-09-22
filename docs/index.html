@@ -11,7 +11,7 @@
     <meta property="og:title"
         content="officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser">
     <meta property="og:description"
-        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 13 formats (including EPUB) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
+        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
     <meta property="og:image"
         content="https://raw.githubusercontent.com/harshankur/officeParser/master/docs/favicon.png">
     <meta property="og:url" content="https://officeparser.harshankur.com">
@@ -79,6 +79,7 @@
     <link id="hljs-theme" rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/latex.min.js"></script>
     <script>
         // Pre-load theme to avoid flash
         (function () {
@@ -1010,6 +1011,56 @@
 
         .visual-panel-window.full-width {
             grid-column: 1 / -1;
+        }
+
+        .export-intro {
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            margin: 0 0 1.25rem;
+        }
+
+        .export-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 0.6rem;
+        }
+
+        .export-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.15rem;
+            padding: 0.6rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-main);
+            font-family: 'Outfit', sans-serif;
+            text-align: left;
+            cursor: pointer;
+            transition: border-color 0.2s ease, background 0.2s ease;
+        }
+
+        .export-btn:hover:not(:disabled) {
+            border-color: var(--primary);
+            background: rgba(0, 113, 227, 0.06);
+        }
+
+        .export-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .export-btn .export-name {
+            font-size: 0.85rem;
+            font-weight: 700;
+        }
+
+        .export-btn .export-ext {
+            font-family: 'Ubuntu Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--text-dim);
         }
 
         .panel-header {
@@ -2835,6 +2886,12 @@
             }
         });
 
+        /**
+         * Every output window, in page order. The one list the render, toggle, copy/download and
+         * re-render code iterates, so adding a window means adding it here and nowhere else.
+         */
+        window.FORMAT_WINDOWS = ['html', 'md', 'chunks', 'csv', 'rtf', 'tex', 'text', 'ast'];
+
         window.CONFIG_SCHEMAS = {
             parser: [
                 // `formats` scopes an item to specific INPUT file types (matched against the
@@ -2842,11 +2899,11 @@
                 // extension). An item with no `formats` is GENERAL and always shown. All items
                 // are still rendered into the DOM so their values persist and the parse-config
                 // read sites can read them; only visibility is toggled. See applyParserFormatFilter.
-                { id: 'cfg_fileType', label: 'File Type Hint', type: 'select', options: ['', 'docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub'], names: ['Auto', 'DOCX', 'XLSX', 'PPTX', 'PDF', 'RTF', 'CSV', 'Markdown', 'HTML', 'ODT', 'ODS', 'ODP', 'ODG', 'EPUB'], width: '100px' },
+                { id: 'cfg_fileType', label: 'File Type Hint', type: 'select', options: ['', 'docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'], names: ['Auto', 'DOCX', 'XLSX', 'PPTX', 'PDF', 'RTF', 'CSV', 'Markdown', 'HTML', 'ODT', 'ODS', 'ODP', 'ODG', 'EPUB', 'LaTeX'], width: '100px' },
                 { id: 'cfg_extractAttachments', label: 'Extract Attachments', type: 'switch', default: true },
-                { id: 'cfg_ocr', label: 'Enable OCR', type: 'switch', default: false, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg'] },
+                { id: 'cfg_ocr', label: 'Enable OCR', type: 'switch', default: false, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg', 'tex'] },
                 { id: 'cfg_ocrPreserveLayout', label: 'OCR Preserve Layout', type: 'switch', default: true, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_ignoreInternalLinks_parser', label: 'Ignore Internal Links', type: 'switch', default: false, formats: ['pdf', 'docx', 'odt', 'ods', 'odp', 'odg'] },
+                { id: 'cfg_ignoreInternalLinks_parser', label: 'Ignore Internal Links', type: 'switch', default: false, formats: ['pdf', 'docx', 'odt', 'ods', 'odp', 'odg', 'tex'] },
                 { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formats: ['pdf'] },
                 { id: 'cfg_pdfUseTags', label: 'PDF Use Tags', type: 'switch', default: true, formats: ['pdf'] },
                 { id: 'cfg_pdfDetectColumns', label: 'PDF Detect Columns', type: 'switch', default: true, formats: ['pdf'] },
@@ -2856,8 +2913,8 @@
                 { id: 'cfg_includeRawContent', label: 'Include Raw Source', type: 'switch', default: false, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'html', 'rtf', 'csv'] },
                 { id: 'cfg_serializeRawContent', label: 'Serialize Raw XML', type: 'switch', default: true, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'html'] },
                 { id: 'cfg_preserveXmlWhitespace', label: 'Preserve XML Space', type: 'switch', default: false, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub', 'html'] },
-                { id: 'cfg_ignoreNotes', label: 'Ignore Notes', type: 'switch', default: false, formats: ['pdf', 'docx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_includeBreakNodes', label: 'Include Break Nodes', type: 'switch', default: true, formats: ['docx', 'odt', 'ods', 'odp', 'odg'] },
+                { id: 'cfg_ignoreNotes', label: 'Ignore Notes', type: 'switch', default: false, formats: ['pdf', 'docx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg', 'tex'] },
+                { id: 'cfg_includeBreakNodes', label: 'Include Break Nodes', type: 'switch', default: true, formats: ['docx', 'odt', 'ods', 'odp', 'odg', 'tex'] },
                 { id: 'cfg_preserveAttributes', label: 'Preserve HTML Attributes', type: 'switch', default: false, formats: ['html', 'md'] },
                 { id: 'cfg_preserveIframes', label: 'Preserve Iframes', type: 'switch', default: false, formats: ['html', 'md'] },
                 { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: ',', width: '60px', formats: ['csv'] },
@@ -2865,7 +2922,7 @@
                 { id: 'cfg_ocrWorkerLoad', label: 'OCR Worker Load (s)', type: 'number', default: 60, width: '70px', min: 0, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg'] },
                 { id: 'cfg_ocrRecognition', label: 'OCR Recog (s)', type: 'number', default: 30, width: '70px', min: 0, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg'] },
                 { id: 'cfg_maxUncompressedBytes', label: 'Max Uncompressed Size (MB)', type: 'number', default: 512, width: '80px', min: 0, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub'] },
-                { id: 'cfg_maxZipEntries', label: 'Max ZIP Entries', type: 'number', default: 10000, width: '80px', min: 0, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub'] },
+                { id: 'cfg_maxZipEntries', label: 'Max ZIP Entries', type: 'number', default: 10000, width: '80px', min: 0, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'] },
                 { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs', fullWidth: true, formats: ['pdf'] }
             ],
             generator: [
@@ -2904,6 +2961,11 @@
                 { id: 'cfg_csv_sheets', label: 'Sheets', type: 'inline-text', default: '', placeholder: '1,2...', width: '85px' },
                 { id: 'cfg_csv_mergeSheets', label: 'Merge', type: 'inline-switch', default: true },
                 { id: 'cfg_csv_columnDelimiter', label: 'Delim', type: 'inline-text', default: ',', width: '60px' }
+            ],
+            tex: [
+                { id: 'cfg_tex_documentClass', label: 'Class', type: 'inline-select', options: ['auto', 'article', 'report', 'book', 'beamer'], names: ['Auto', 'Article', 'Report', 'Book', 'Beamer'], default: 'auto' },
+                { id: 'cfg_tex_standalone', label: 'Standalone', type: 'inline-switch', default: true },
+                { id: 'cfg_tex_numberSections', label: 'Numbered', type: 'inline-switch', default: false }
             ],
             text: [
                 { id: 'cfg_text_preserveLayout', label: 'Layout', type: 'inline-switch', default: true },
@@ -3121,7 +3183,7 @@
                     </a>
                 </div>
                 <div class="stat-item">
-                    <h3>13</h3>
+                    <h3>14</h3>
                     <p>Formats Supported</p>
                 </div>
             </div>
@@ -3291,6 +3353,18 @@
                     <h3>EPUB</h3>
                     <p>eBooks</p>
                 </div>
+                <div class="support-card">
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#008080" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="5" y="15.5" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="4.5">TeX</text>
+                        </svg>
+                    </span>
+                    <h3>TEX</h3>
+                    <p>LaTeX &amp; Overleaf Projects</p>
+                </div>
             </div>
         </section>
 
@@ -3342,7 +3416,8 @@
                 <div class="feature-card">
                     <span class="feature-icon">🌍</span>
                     <h3>Universal Parser</h3>
-                    <p>Now supports **CSV, HTML, and Markdown** as input formats, enabling true any-to-any document
+                    <p>Parses <strong>CSV, HTML, Markdown and LaTeX</strong> (a <code>.tex</code> file or a whole
+                        Overleaf project <code>.zip</code>) as input formats, enabling true any-to-any document
                         pipelines.</p>
                 </div>
                 <div class="feature-card">
@@ -3497,7 +3572,7 @@
                         <p>Drag & Drop your file here or <span>Click to Browse</span></p>
                         <p style="font-size: 0.8rem; margin-top: 1rem; opacity: 0.6;">DOCX, PPTX, XLSX, PDF, RTF, CSV,
                             MD,
-                            HTML, ODT, ODP, ODS, ODG, EPUB</p>
+                            HTML, ODT, ODP, ODS, ODG, EPUB, LaTeX (.tex, or an Overleaf project .zip)</p>
                     </div>
                     <div id="file-selected-info" class="file-info hidden">
                         <span class="file-icon">📄</span>
@@ -3506,7 +3581,7 @@
                         </div>
                     </div>
                     <input type="file" id="file-input" class="hidden-input"
-                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.odg,.ott,.ots,.otp,.otg,.pdf,.rtf,.csv,.md,.html,.epub">
+                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.odg,.ott,.ots,.otp,.otg,.pdf,.rtf,.csv,.md,.html,.epub,.tex,.latex,.ltx,.zip">
                 </div>
 
                 <!-- Sample Document Picker -->
@@ -3726,8 +3801,6 @@
                                 <button class="dropdown-menu-item" data-export-fmt="pdf">PDF (print)</button>
                                 <button class="dropdown-menu-item" data-export-fmt="docx">DOCX (.docx)</button>
                                 <button class="dropdown-menu-item" data-export-fmt="odt">ODT (.odt)</button>
-                                <button class="dropdown-menu-item" data-export-fmt="tex">LaTeX (.tex)</button>
-                                <button class="dropdown-menu-item" data-export-fmt="texbundle">LaTeX + images (.zip)</button>
                                 <button class="dropdown-menu-item" data-export-fmt="epub">EPUB (.epub)</button>
                             </div>
                         </div>
@@ -3962,6 +4035,52 @@
                 <div class="panel-body" id="visual-rtf" style="position: relative;"></div>
             </div>
 
+            <!-- LaTeX Window -->
+            <div class="visual-panel-window" id="window-tex">
+                <div class="panel-header" style="justify-content: space-between;">
+                    <h4 style="margin:0;">LATEX</h4>
+                    <div class="viewer-toggle" id="toggle-tex">
+                        <div class="toggle-slider"></div>
+                        <button class="toggle-btn" data-state="preview">Preview</button>
+                        <button class="toggle-btn active" data-state="raw">Raw</button>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn-outline btn-maximize" onclick="openFullscreenPreview('tex')"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.25rem;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                style="width: 0.75rem; height: 0.75rem;">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                            </svg>
+                            Enlarge
+                        </button>
+                        <button id="copy-tex-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                        <div class="download-dropdown" style="position: relative; display: inline-block;">
+                            <button id="download-tex-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.3rem;"
+                                onclick="window.toggleConfigPopover('download-tex-popover', this)">
+                                Download
+                                <svg style="width:9px;height:9px;opacity:0.7;" viewBox="0 0 24 24" fill="none"
+                                    stroke="currentColor" stroke-width="2.5">
+                                    <path d="M6 9l6 6 6-6" />
+                                </svg>
+                            </button>
+                            <div id="download-tex-popover" class="config-popover"
+                                style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 220px; padding: 0.35rem;">
+                                <button class="dropdown-menu-item" data-export-fmt="tex">LaTeX (.tex)</button>
+                                <button class="dropdown-menu-item" data-export-fmt="texbundle">LaTeX + images (.zip)</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="panel-sub-header">
+                    <div class="window-config-group">
+                        <script>renderConfigItems('tex');</script>
+                    </div>
+                </div>
+                <div class="panel-body" id="visual-tex" style="position: relative; padding: 0;"></div>
+            </div>
+
             <!-- Text Window -->
             <div class="visual-panel-window" id="window-text">
                 <div class="panel-header" style="justify-content: space-between;">
@@ -3992,6 +4111,19 @@
                     </div>
                 </div>
                 <div class="panel-body" id="visual-text" style="position: relative; padding: 0;"></div>
+            </div>
+
+            <!-- Export Window: every generator as a download, including formats with no preview window -->
+            <div class="visual-panel-window" id="window-export">
+                <div class="panel-header" style="justify-content: space-between;">
+                    <h4 style="margin:0;">EXPORT</h4>
+                </div>
+                <div class="panel-body" id="visual-export">
+                    <p class="export-intro">Convert the loaded document to any format officeParser generates. Each
+                        download uses the options set in the matching window above (the HTML window's for PDF, EPUB,
+                        DOCX and ODT).</p>
+                    <div class="export-grid" id="export-grid"></div>
+                </div>
             </div>
 
             <!-- AST Window -->
@@ -4370,6 +4502,7 @@
                 md: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#0ea5e9"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="5">MD</text></svg>`,
                 html: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#f43f5e"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5" y="15.5" fill="white" font-family="Outfit" font-weight="800" font-size="4.5">&lt;/&gt;</text></svg>`,
                 epub: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#8b5cf6"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="4.5" y="15.5" fill="white" font-family="Outfit" font-weight="800" font-size="4.5">EPUB</text></svg>`,
+                tex: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#008080"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5" y="15.5" fill="white" font-family="Outfit" font-weight="800" font-size="4.5">TeX</text></svg>`,
                 default: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#94a3b8"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/></svg>`
             };
 
@@ -4442,7 +4575,7 @@
 
                 // Re-render active format windows if window.currentAst exists
                 if (window.currentAst) {
-                    const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                    const formats = window.FORMAT_WINDOWS;
                     formats.forEach(f => {
                         const win = document.getElementById(`window-${f}`);
                         if (win && win.style.display !== 'none') {
@@ -4459,6 +4592,7 @@
                 chunks: 'preview',
                 csv: 'preview',
                 rtf: 'preview',
+                tex: 'raw',
                 text: 'preview',
                 ast: 'preview'
             };
@@ -4482,7 +4616,7 @@
             }
 
             // Initialize toggles
-            ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].forEach(fmt => {
+            window.FORMAT_WINDOWS.forEach(fmt => {
                 const toggle = document.getElementById(`toggle-${fmt}`);
                 if (toggle) {
                     toggle.querySelectorAll('.toggle-btn').forEach(btn => {
@@ -4499,7 +4633,7 @@
 
             // Adjust toggle sliders on window resize
             window.addEventListener('resize', () => {
-                ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].forEach(fmt => updateToggleUI(fmt));
+                window.FORMAT_WINDOWS.forEach(fmt => updateToggleUI(fmt));
             });
 
             // --- Custom Tooltip Logic ---
@@ -4727,7 +4861,7 @@
             // --- Sample Document Picker ---
             const samplePickerGrid = document.getElementById('sample-picker-grid');
             if (samplePickerGrid) {
-                const sampleFormats = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub'];
+                const sampleFormats = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'];
                 sampleFormats.forEach(fmt => {
                     const btn = document.createElement('button');
                     btn.className = 'sample-btn';
@@ -4837,7 +4971,7 @@
 
             /** Metadata reaches every format that embeds it, so refresh each open output window. */
             function refreshMetadataDependentWindows() {
-                ['html', 'md', 'text', 'csv', 'rtf'].forEach(f => {
+                ['html', 'md', 'text', 'csv', 'rtf', 'tex'].forEach(f => {
                     if (document.getElementById('visual-' + f)) window.renderFormatWindow(f);
                 });
             }
@@ -4943,9 +5077,9 @@
             function normalizeParserFormat(ext) {
                 if (!ext) return null;
                 ext = String(ext).toLowerCase();
-                const map = { ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg', htm: 'html', markdown: 'md' };
+                const map = { ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg', htm: 'html', markdown: 'md', latex: 'tex', ltx: 'tex' };
                 if (map[ext]) return map[ext];
-                const known = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub'];
+                const known = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'];
                 return known.includes(ext) ? ext : null;
             }
 
@@ -5031,13 +5165,13 @@
             applyParserFormatFilter();
 
             // Instant re-render for generator and format-specific settings
-            ['generator', 'html', 'md', 'chunks', 'csv', 'text'].forEach(key => {
+            ['generator', 'html', 'md', 'chunks', 'csv', 'tex', 'text'].forEach(key => {
                 window.CONFIG_SCHEMAS[key].forEach(item => {
                     const el = document.getElementById(item.id);
                     if (el) {
                         el.addEventListener('change', async () => {
                             if (window.currentAst) {
-                                const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                                const formats = window.FORMAT_WINDOWS;
                                 await Promise.all(formats.map(f => window.renderFormatWindow(f)));
                             }
                         });
@@ -5048,7 +5182,7 @@
             // Special handling for styleMap (which triggers re-render via hidden textarea)
             document.getElementById('cfg_styleMap').addEventListener('change', async () => {
                 if (window.currentAst) {
-                    const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                    const formats = window.FORMAT_WINDOWS;
                     await Promise.all(formats.map(f => window.renderFormatWindow(f)));
                 }
             });
@@ -5307,7 +5441,7 @@
                 }
 
                 statusMsg.textContent = `Parsing ${filename}...`;
-                const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                const formats = window.FORMAT_WINDOWS;
                 formats.forEach(f => {
                     document.getElementById(`visual-${f}`).innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">Parsing document structure...</div>';
                 });
@@ -5364,11 +5498,15 @@
                     updateReparseButtonState();
 
                     const startTime = performance.now();
-                    const ast = await window.officeParser.parseOffice(buffer, config);
+                    // Pass the bytes as a named File so the library can route by extension: text formats
+                    // (Markdown, HTML, CSV, LaTeX) have no magic bytes to detect them by.
+                    const input = filename ? new File([buffer], filename) : buffer;
+                    const ast = await window.officeParser.parseOffice(input, config);
                     const endTime = performance.now();
                     const duration = ((endTime - startTime) / 1000).toFixed(2);
 
                     window.currentAst = ast;
+                    window.updateExportPanel();
                     statusMsg.textContent = `Successfully parsed ${filename} in ${duration}s. Generating views...`;
 
                     await Promise.all(formats.map(f => window.renderFormatWindow(f)));
@@ -5491,6 +5629,74 @@
                 }
             });
 
+            /**
+             * Parse generated source (RTF or LaTeX) back into an AST and render that AST as HTML in an
+             * iframe inside `container`. Used by the windows whose output has no browser renderer.
+             */
+            async function renderReparsedPreview(source, fileType, container) {
+                const bytes = new TextEncoder().encode(source);
+                const reparsed = await window.officeParser.parseOffice(bytes, { fileType });
+                const htmlResult = await reparsed.to('html');
+
+                const contentFrame = document.createElement('iframe');
+                contentFrame.className = 'html-iframe';
+                contentFrame.style.width = '100%';
+                contentFrame.style.border = 'none';
+                container.style.padding = '2rem';
+                container.appendChild(contentFrame);
+                const doc = contentFrame.contentDocument || contentFrame.contentWindow.document;
+                doc.open();
+
+                const isModal = container.closest('.preview-modal-body') !== null;
+                let widthVal = document.getElementById('cfg_html_containerWidth').value.trim() || 'auto';
+                if (widthVal === 'auto') {
+                    widthVal = '900px';
+                } else if (/^\d+$/.test(widthVal)) {
+                    widthVal = widthVal + 'px';
+                }
+                const maxWidth = isModal ? '100%' : widthVal;
+
+                const styledHtml = /<body/i.test(htmlResult.value)
+                    ? htmlResult.value.replace(/<body[^>]*>/i, `<body style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
+                    : `<div style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${htmlResult.value}</div>`;
+                doc.write(styledHtml);
+                doc.close();
+
+                contentFrame.style.height = '100%';
+                contentFrame.style.display = 'block';
+
+                setupIframeScrollForwarding(contentFrame, container);
+
+                // Dynamically resize iframe to content height using ResizeObserver to allow native container scrollbar
+                if (!isModal) {
+                    setTimeout(() => {
+                        try {
+                            const win = contentFrame.contentWindow;
+                            const doc = win.document;
+                            if (win && doc && doc.body) {
+                                const observer = new win.ResizeObserver(() => {
+                                    const height = doc.body.scrollHeight || doc.documentElement.scrollHeight;
+                                    contentFrame.style.height = (height + 40) + 'px';
+                                    container.style.overflow = 'auto';
+                                });
+                                observer.observe(doc.body);
+                            }
+                        } catch (e) {
+                            console.error('Failed to setup ResizeObserver:', e);
+                        }
+                    }, 50);
+                }
+            }
+
+            /** The LaTeX window's generator options, as a texConfig. */
+            function readTexPanelConfig() {
+                return {
+                    documentClass: document.getElementById('cfg_tex_documentClass').value,
+                    standalone: document.getElementById('cfg_tex_standalone').checked,
+                    numberSections: document.getElementById('cfg_tex_numberSections').checked
+                };
+            }
+
             window.renderFormatWindow = async function (format) {
                 if (!window.currentAst) return;
                 const container = document.getElementById(`visual-${format}`);
@@ -5529,6 +5735,8 @@
                                 renderNotes: document.getElementById('cfg_text_renderNotes').checked,
                                 newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n')
                             };
+                        } else if (format === 'tex') {
+                            genConfig.texConfig = readTexPanelConfig();
                         }
                         result = await window.officeParser.OfficeGenerator.generate(window.currentAst, format, genConfig);
                     }
@@ -5661,70 +5869,23 @@
                         }
                     }
                 }
-                else if (format === 'rtf') {
-                    if (window.viewerStates['rtf'] === 'preview') {
+                else if (format === 'rtf' || format === 'tex') {
+                    // Both are source formats with no native browser renderer: the preview parses the
+                    // generated source back with officeParser and shows the result as HTML, which also
+                    // shows how faithfully the format round-trips.
+                    if (window.viewerStates[format] === 'preview') {
                         try {
-                            // Parse the generated RTF string back into an AST
-                            // Use TextEncoder to pass content as a Uint8Array
-                            const rtfContent = new TextEncoder().encode(result.value);
-                            const rtfAst = await window.officeParser.parseOffice(rtfContent, { fileType: 'rtf' });
-                            // Generate HTML from that AST using the helper method on the AST
-                            const htmlResult = await rtfAst.to('html');
-
-                            const contentFrame = document.createElement('iframe');
-                            contentFrame.className = 'html-iframe';
-                            contentFrame.style.width = '100%';
-                            contentFrame.style.border = 'none';
-                            container.style.padding = '2rem';
-                            container.appendChild(contentFrame);
-                            const doc = contentFrame.contentDocument || contentFrame.contentWindow.document;
-                            doc.open();
-
-                            const isModal = container.closest('.preview-modal-body') !== null;
-                            let widthVal = document.getElementById('cfg_html_containerWidth').value.trim() || 'auto';
-                            if (widthVal === 'auto') {
-                                widthVal = '900px';
-                            } else if (/^\d+$/.test(widthVal)) {
-                                widthVal = widthVal + 'px';
-                            }
-                            const maxWidth = isModal ? '100%' : widthVal;
-
-                            const styledHtml = /<body/i.test(htmlResult.value)
-                                ? htmlResult.value.replace(/<body[^>]*>/i, `<body style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
-                                : `<div style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${htmlResult.value}</div>`;
-                            doc.write(styledHtml);
-                            doc.close();
-
-                            contentFrame.style.height = '100%';
-                            contentFrame.style.display = 'block';
-
-                            setupIframeScrollForwarding(contentFrame, container);
-
-                            // Dynamically resize iframe to content height using ResizeObserver to allow native container scrollbar
-                            if (!isModal) {
-                                setTimeout(() => {
-                                    try {
-                                        const win = contentFrame.contentWindow;
-                                        const doc = win.document;
-                                        if (win && doc && doc.body) {
-                                            const observer = new win.ResizeObserver(() => {
-                                                const height = doc.body.scrollHeight || doc.documentElement.scrollHeight;
-                                                contentFrame.style.height = (height + 40) + 'px';
-                                                container.style.overflow = 'auto';
-                                            });
-                                            observer.observe(doc.body);
-                                        }
-                                    } catch (e) {
-                                        console.error('Failed to setup ResizeObserver:', e);
-                                    }
-                                }, 50);
-                            }
+                            await renderReparsedPreview(result.value, format, container);
                         } catch (e) {
-                            container.innerHTML = `<div style="color: #ef4444; padding: 2rem;">Error generating RTF preview: ${e.message}</div>`;
+                            container.innerHTML = '';
+                            const err = document.createElement('div');
+                            err.style.cssText = 'color: #ef4444; padding: 2rem;';
+                            err.textContent = `Error generating ${format === 'tex' ? 'LaTeX' : 'RTF'} preview: ${e.message}`;
+                            container.appendChild(err);
                         }
                     } else {
                         container.style.padding = '0';
-                        renderRawCode(result.value, 'language-plaintext', container);
+                        renderRawCode(result.value, format === 'tex' ? 'language-latex' : 'language-plaintext', container);
                     }
                 }
                 else if (format === 'chunks') {
@@ -6080,10 +6241,18 @@
                     };
                     return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'rtf', genConfig)).value;
                 },
+                'tex': async () => {
+                    const genConfig = {
+                        ...getGeneratorConfig(),
+                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                        texConfig: readTexPanelConfig()
+                    };
+                    return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'tex', genConfig)).value;
+                },
                 'ast': async () => JSON.stringify(window.currentAst, null, 2)
             };
 
-            ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].forEach(fmt => {
+            window.FORMAT_WINDOWS.forEach(fmt => {
                 document.getElementById(`copy-${fmt}-btn`).addEventListener('click', async (e) => {
                     if (!window.currentAst) return;
                     const btn = e.target;
@@ -6100,9 +6269,9 @@
                     }
                 });
 
-                // The HTML panel's download button is a "Download ▾" dropdown trigger (HTML/PDF/EPUB),
-                // wired separately below alongside its menu items - not a direct single-format download.
-                if (fmt === 'html') return;
+                // A panel with a "Download ▾" dropdown (one that also offers DERIVED_EXPORTS) has no direct
+                // single-format download; its menu items are wired separately below.
+                if (document.getElementById(`download-${fmt}-popover`)) return;
 
                 document.getElementById(`download-${fmt}-btn`).addEventListener('click', async (e) => {
                     if (!window.currentAst) return;
@@ -6177,6 +6346,12 @@
                     const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.txt';
                     downloadFile(content, name, 'text/plain');
                 },
+                'tex': async () => {
+                    // Images are referenced as images/<name>; the "LaTeX + images" export packages them.
+                    const content = await copyHandlers['tex']();
+                    const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.tex';
+                    downloadFile(content, name, 'application/x-tex');
+                },
                 'ast': async () => {
                     const content = await copyHandlers['ast']();
                     const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '_ast.json';
@@ -6184,11 +6359,20 @@
                 }
             };
 
-            // Binary/whole-file exports that are just packagings of a preview panel's own output
-            // (e.g. PDF and EPUB are both the HTML panel's generated HTML, repackaged) - these have
-            // no preview of their own, so they hang off their basis panel's "Download ▾" dropdown
-            // instead of a standalone action button. Add an entry here (keyed by basis panel) once
-            // a new binary generator (DOCX/XLSX/PPTX/ODT/ODS/ODP, ...) actually exists.
+            /** Download a window's own format (used where its Download button is a dropdown trigger). */
+            window.downloadPanelFormat = async (format) => {
+                if (!window.currentAst) return;
+                try {
+                    await downloadHandlers[format]();
+                } catch (err) {
+                    console.error(`${format} download failed`, err);
+                    statusMsg.textContent = `Error: ${err.message}`;
+                }
+            };
+
+            // Exports with no preview window of their own, keyed by the panel whose options they use and
+            // whose "Download ▾" dropdown lists them (PDF, EPUB, DOCX and ODT take the HTML panel's
+            // options; the LaTeX + images zip takes the LaTeX panel's). The Export panel lists them too.
             const DERIVED_EXPORTS = {
                 html: {
                     pdf: {
@@ -6239,23 +6423,18 @@
                             const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.odt';
                             downloadFile(result.value, name, 'application/vnd.oasis.opendocument.text');
                         }
-                    },
-                    tex: {
-                        kind: 'binary',
-                        run: async () => {
-                            // LatexGenerator writes LaTeX source straight from the AST; images are referenced
-                            // as images/<name>, which the bundle export below packages alongside.
-                            const genConfig = htmlDerivedConfig(false);
-                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'tex', genConfig);
-                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.tex';
-                            downloadFile(result.value, name, 'application/x-tex');
-                        }
-                    },
+                    }
+                },
+                tex: {
                     texbundle: {
                         kind: 'binary',
                         run: async () => {
                             // texConfig.bundle returns a zip of main.tex plus every referenced image.
-                            const genConfig = { ...htmlDerivedConfig(false), texConfig: { bundle: true } };
+                            const genConfig = {
+                                ...getGeneratorConfig(),
+                                ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                                texConfig: { ...readTexPanelConfig(), bundle: true }
+                            };
                             const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'tex', genConfig);
                             const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '-latex.zip';
                             downloadFile(result.value, name, 'application/zip');
@@ -6292,6 +6471,60 @@
                     });
                 });
             });
+
+            // --- Export panel: one download button per generator, including formats with no window ---
+            const EXPORT_TARGETS = [
+                { name: 'Word', ext: '.docx', run: () => DERIVED_EXPORTS.html.docx.run() },
+                { name: 'OpenDocument Text', ext: '.odt', run: () => DERIVED_EXPORTS.html.odt.run() },
+                { name: 'LaTeX', ext: '.tex', run: () => downloadHandlers.tex() },
+                { name: 'LaTeX + images', ext: '.zip', run: () => DERIVED_EXPORTS.tex.texbundle.run() },
+                { name: 'EPUB', ext: '.epub', run: () => DERIVED_EXPORTS.html.epub.run() },
+                { name: 'PDF', ext: 'print', run: () => DERIVED_EXPORTS.html.pdf.run() },
+                { name: 'HTML', ext: '.html', run: () => downloadHandlers.html() },
+                { name: 'Markdown', ext: '.md', run: () => downloadHandlers.md() },
+                { name: 'Rich Text', ext: '.rtf', run: () => downloadHandlers.rtf() },
+                { name: 'Plain text', ext: '.txt', run: () => downloadHandlers.text() },
+                { name: 'CSV', ext: '.csv / .zip', run: () => downloadHandlers.csv() },
+                { name: 'RAG chunks', ext: '.json', run: () => downloadHandlers.chunks() },
+                { name: 'AST', ext: '.json', run: () => downloadHandlers.ast() }
+            ];
+
+            const exportGrid = document.getElementById('export-grid');
+            const exportButtons = EXPORT_TARGETS.map(target => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'export-btn';
+                btn.disabled = true;
+                const nameEl = document.createElement('span');
+                nameEl.className = 'export-name';
+                nameEl.textContent = target.name;
+                const extEl = document.createElement('span');
+                extEl.className = 'export-ext';
+                extEl.textContent = target.ext;
+                btn.append(nameEl, extEl);
+                btn.addEventListener('click', async () => {
+                    if (!window.currentAst) return;
+                    btn.disabled = true;
+                    extEl.textContent = 'Generating...';
+                    try {
+                        await target.run();
+                        extEl.textContent = target.ext;
+                    } catch (err) {
+                        console.error(`${target.name} export failed`, err);
+                        extEl.textContent = 'Failed';
+                        statusMsg.textContent = `Error: ${err.message}`;
+                        setTimeout(() => extEl.textContent = target.ext, 2000);
+                    }
+                    btn.disabled = !window.currentAst;
+                });
+                exportGrid.appendChild(btn);
+                return btn;
+            });
+
+            /** Enable the Export panel's buttons once a document is loaded (they need an AST to generate from). */
+            window.updateExportPanel = function () {
+                exportButtons.forEach(btn => { btn.disabled = !window.currentAst; });
+            };
 
             // --- Live Download Stats ---
             async function updateDownloadStats() {
@@ -6368,7 +6601,7 @@
 
 
             // Initialize windows with placeholder
-            const initialFormats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+            const initialFormats = window.FORMAT_WINDOWS;
             initialFormats.forEach(f => {
                 document.getElementById(`visual-${f}`).innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">Waiting for file upload...</div>';
             });
@@ -6381,7 +6614,7 @@
                 const filenameEl = document.getElementById('modal-filename');
                 const bodyContent = document.getElementById('modal-body-content');
 
-                if (titleEl) titleEl.textContent = format.toUpperCase() + (format === 'ast' ? ' (JSON)' : ' PREVIEW');
+                if (titleEl) titleEl.textContent = (format === 'tex' ? 'LATEX' : format.toUpperCase()) + (format === 'ast' ? ' (JSON)' : ' PREVIEW');
                 if (filenameEl) filenameEl.textContent = lastFileName || 'No file selected';
 
                 if (bodyContent) {
@@ -6431,7 +6664,13 @@
                         if (origCopyBtn) origCopyBtn.click();
                     });
                     newDownloadBtn.addEventListener('click', () => {
-                        if (origDownloadBtn) origDownloadBtn.click();
+                        // A dropdown trigger would open its menu behind the modal: download the
+                        // window's own format directly instead.
+                        if (origDownloadBtn && origDownloadBtn.closest('.download-dropdown')) {
+                            window.downloadPanelFormat(format);
+                        } else if (origDownloadBtn) {
+                            origDownloadBtn.click();
+                        }
                     });
                 }
 
@@ -6724,8 +6963,9 @@
                     const dp = $('drop-zone-prompt'); if (dp) dp.classList.add('hidden');
                     const sm = $('status-msg'); if (sm) sm.textContent = 'Loaded the rendered document from Template Studio: ' + name;
                     window.currentAst = await window.officeParser.parseOffice(bytes, { onWarning: () => { } });
+                    if (typeof window.updateExportPanel === 'function') window.updateExportPanel();
                     if (typeof window.renderFormatWindow === 'function') {
-                        await Promise.all(['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].map(f => window.renderFormatWindow(f)));
+                        await Promise.all(window.FORMAT_WINDOWS.map(f => window.renderFormatWindow(f)));
                     }
                 } catch (e) { /* best effort; still scroll so the user sees the visualizer */ }
                 location.hash = '#visualizer';

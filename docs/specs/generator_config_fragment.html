@@ -619,7 +619,9 @@ await ast.to('md', {
         LuaLaTeX</strong>: the preamble selects fonts per engine and loads only the packages the document uses. The
         value is a <code>string</code>, or a <code>Uint8Array</code> zip when <code>bundle</code> is set. Adds no
         dependencies and runs identically in Node and the browser. Destination <code>'tex'</code> (alias
-        <code>'latex'</code>).</p>
+        <code>'latex'</code>). It is the round-trip partner of the LaTeX parser: the <code>.tex</code> (or the
+        <code>bundle</code> zip, images included) parses back, and a generate, parse, generate cycle reaches a fixed
+        point after one round.</p>
     <table>
         <thead>
             <tr>

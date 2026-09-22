@@ -23,7 +23,7 @@
                 <td><code>SupportedFileType</code></td>
                 <td>The type of the parsed file (<code>docx</code>, <code>xlsx</code>, <code>pptx</code>,
                     <code>pdf</code>, <code>rtf</code>, <code>odt</code>, <code>ods</code>, <code>odp</code>, <code>odg</code>,
-                    <code>csv</code>, <code>md</code>, <code>html</code>, <code>epub</code>).</td>
+                    <code>csv</code>, <code>md</code>, <code>html</code>, <code>epub</code>, <code>tex</code>).</td>
             </tr>
             <tr>
                 <td><code>metadata</code></td>
@@ -44,7 +44,7 @@
                 <td><code>auxiliary</code></td>
                 <td><code>OfficeAuxiliaryContent</code> | <code>undefined</code></td>
                 <td>Out-of-band layout / template elements that are <em>not</em> part of the main content flow.
-                    Contains <code>headers</code>, <code>footers</code> (from DOCX), <code>slideMasters</code> (from PPTX),
+                    Contains <code>headers</code>, <code>footers</code> (from DOCX, or LaTeX <code>fancyhdr</code>), <code>slideMasters</code> (from PPTX),
                     and <code>outline</code> (a PDF bookmark/TOC tree).
                     Only populated when the respective <code>ignoreHeadersAndFooters</code> / <code>ignoreSlideMasters</code> flags are <code>false</code>.
                 </td>
@@ -172,7 +172,7 @@
     <h3>3. Structural Containers</h3>
     <p>These nodes represent large-scale document sections:</p>
     <ul>
-        <li><strong><code>slide</code></strong>: Container for PPTX/ODP slides. <code>metadata.slideNumber</code>
+        <li><strong><code>slide</code></strong>: Container for PPTX/ODP slides and LaTeX <code>beamer</code> frames. <code>metadata.slideNumber</code>
             provides the position. Slide speaker notes are now attached via <code>slideNode.notes[]</code> instead of
             being inserted as top-level <code>note</code> nodes.</li>
         <li><strong><code>page</code></strong>: Container for PDF pages. <code>metadata.pageNumber</code> provides the
@@ -208,7 +208,8 @@
         embeds, definition lists) and round-trip symmetrically between Markdown, HTML, and EPUB.</p>
     <ul>
         <li><strong><code>admonition</code></strong>: A callout/alert block (GitHub <code>&gt; [!NOTE]</code> or
-            GLFM <code>:::note ... :::</code> on import). Carries <code>AdmonitionMetadata.admonitionType</code>
+            GLFM <code>:::note ... :::</code> on import; LaTeX <code>beamer</code> blocks and the LaTeX generator's
+            coloured admonition boxes read back the same way). Carries <code>AdmonitionMetadata.admonitionType</code>
             (<code>'note' | 'tip' | 'important' | 'warning' | 'caution'</code>) and an optional <code>title</code>.
             Has <code>children</code> for its block content.</li>
         <li><strong><code>embed</code></strong>: A rich embed such as a YouTube video. Carries
@@ -227,8 +228,10 @@
             <code>CodeMetadata.math</code> (<code>'inline' | 'block'</code>), with
             <code>node.text</code> holding bare LaTeX. Every format that can carry an equation
             produces this same node: OOXML <code>&lt;m:oMath&gt;</code> (DOCX, PPTX), MathML
-            <code>&lt;math&gt;</code> (ODT/ODP/ODS embedded objects, HTML, EPUB3), and Markdown
-            <code>$...$</code>/<code>$$...$$</code>.</li>
+            <code>&lt;math&gt;</code> (ODT/ODP/ODS embedded objects, HTML, EPUB3), Markdown
+            <code>$...$</code>/<code>$$...$$</code>, and LaTeX <code>$...$</code>/<code>\(...\)</code>,
+            <code>\[...\]</code> and the <code>equation</code>/<code>align</code>/<code>gather</code> environments
+            (user macros expanded).</li>
     </ul>
 
     <h3>4. Rich Content</h3>
@@ -244,7 +247,7 @@
     </ul>
 
     <h3>5. Breaks (The <code>break</code> Node)</h3>
-    <p>Breaks are added as <code>break</code> nodes when <code>includeBreakNodes</code> is enabled in the configuration. They represent physical layout changes within the document flow. DOCX writes them inline (<code>w:br</code>/<code>w:cr</code>), so they appear as children of the paragraph; ODF carries page and column breaks on the paragraph style (<code>fo:break-before</code>/<code>fo:break-after</code>), so those are emitted as siblings around the paragraph.</p>
+    <p>Breaks are added as <code>break</code> nodes when <code>includeBreakNodes</code> is enabled in the configuration. They represent physical layout changes within the document flow. DOCX writes them inline (<code>w:br</code>/<code>w:cr</code>), so they appear as children of the paragraph; ODF carries page and column breaks on the paragraph style (<code>fo:break-before</code>/<code>fo:break-after</code>), so those are emitted as siblings around the paragraph. LaTeX <code>\newpage</code>/<code>\clearpage</code> become <code>page</code> breaks between blocks, and <code>\\</code>/<code>\newline</code> stay inside the paragraph as line breaks.</p>
     <ul>
         <li><strong><code>breakType</code></strong>: 
             <ul>
@@ -328,6 +331,7 @@
                 <li><strong>XLSX</strong>: <code>docProps/app.xml</code> entries</li>
                 <li><strong>PDF</strong>: Raw <code>pdfjs</code> document info dict and XMP metadata object</li>
                 <li><strong>Markdown</strong>: YAML frontmatter key-value pairs</li>
+                <li><strong>LaTeX</strong>: <code>documentClass</code>, <code>classOptions</code>, <code>packages</code>, plus <code>date</code>/<code>subtitle</code> (the <code>\date</code>/<code>\subtitle</code> text)</li>
             </ul>
         </li>
     </ul>
