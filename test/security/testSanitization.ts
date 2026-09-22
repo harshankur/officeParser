@@ -16,7 +16,8 @@ import { OfficeParserAST, OfficeWarningType } from '../../src/types';
 import { resolveGeneratorConfig, resolveParserConfig } from '../../src/utils/configUtils';
 import {
     escapeHtml, escapeXml, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl,
-    serializeForInlineScript, csvSafeCell, escapeRtf, markdownEscapeText, sanitizeMarkdownUrl, sanitizeRtfUrl
+    serializeForInlineScript, csvSafeCell, escapeRtf, markdownEscapeText, sanitizeMarkdownUrl, sanitizeRtfUrl,
+    escapeLatex, latexComment, sanitizeLatexUrl, sanitizeLatexMath
 } from '../../src/utils/sanitize';
 import { extractFiles } from '../../src/utils/zipUtils';
 import { parseXmlString } from '../../src/utils/xmlUtils';
@@ -1163,7 +1164,7 @@ async function abortSignalTests() {
     if (!fs.existsSync(src)) { check('abort: docx fixture present', false, 'missing test.docx'); return; }
     const ast = await OfficeParser.parseOffice(src, { extractAttachments: true } as any);
 
-    for (const fmt of ['html', 'md', 'text', 'rtf', 'csv']) {
+    for (const fmt of ['html', 'md', 'text', 'rtf', 'csv', 'tex']) {
         const aborted = new AbortController();
         aborted.abort();
         let threw = false;
@@ -1632,6 +1633,145 @@ async function mdInlineFormattingTests() {
     check('md inline: legitimate color emitted', /<span style="color: ?#c00/.test(ok), ok.slice(0, 200));
 }
 
+/**
+ * Control words TeX will execute in a piece of LaTeX, in order: tokenized the way TeX reads the
+ * source (a backslash followed by letters is a control word; a backslash followed by any other
+ * character is a control symbol, so `\\input` is a line break then the letters "input"), skipping
+ * verbatim/lstlisting bodies and `%` comments, which TeX does not interpret.
+ */
+function liveLatexSource(tex: string): string {
+    return tex
+        .replace(/\\begin\{(verbatim|lstlisting)\}(\[[^\]\n]*\])?\n[\s\S]*?\n\\end\{\1\}/g, '')
+        .replace(/(^|[^\\])((?:\\\\)*)%.*$/gm, '$1$2');
+}
+
+function liveControlWords(tex: string): string[] {
+    const live = liveLatexSource(tex);
+    const words: string[] = [];
+    for (let i = 0; i < live.length; i++) {
+        if (live[i] !== '\\') continue;
+        let j = i + 1;
+        while (j < live.length && /[A-Za-z@]/.test(live[j])) j++;
+        if (j > i + 1) { words.push(live.slice(i + 1, j)); i = j - 1; } else { i++; }
+    }
+    return words;
+}
+
+/**
+ * Every command the LaTeX generator writes on its own account. Document content never adds to this
+ * set: text is escaped, URLs are encoded, and math that uses anything outside the formula is
+ * written as literal text. So a hostile document's output may use only these.
+ */
+const LATEX_GENERATOR_COMMANDS = new Set((
+    'documentclass usepackage ifPDFTeX else fi hypersetup setcounter maxdimen lstset ttfamily small makeatletter makeatother renewcommand paragraph ' +
+    'subparagraph startsection z plus minus normalfont normalsize bfseries definecolor newunicodechar DeclareUnicodeCharacter ensuremath ding title author date ' +
+    'begin end maketitle section subsection subsubsection chapter label phantomsection hyperref href footnote endnote footnotemark footnotetext addtocounter ' +
+    'stepcounter theendnotes textbf textit texttt uline sout textsuperscript textsubscript textcolor colorbox setlength fboxsep strut fontsize selectfont protect ' +
+    'item centering raggedleft raggedright arraybackslash dimexpr linewidth tabcolsep arrayrulewidth relax hline cline endhead multicolumn multirow cellcolor ' +
+    'includegraphics ifdim textheight fbox hfil break newpage clearpage rule quad hspace phantom leftskip rightskip hangindent hangafter par cite ' +
+    'textbackslash textasciitilde textasciicircum textless textgreater textbar textasciigrave pagestyle fancyhf fancyhead fancyfoot headrulewidth headheight ' +
+    'fancypagestyle thepage frame frametitle note setbeamertemplate titlepage scriptsize footnotesize checkmark square boxtimes frac'
+).split(/\s+/));
+
+async function latexSanitizationTests() {
+    console.log('- LaTeX generator (escaping, URLs, comments, math, bundle paths)...');
+
+    // escapeLatex: every special character is neutralized, ligatures are broken, and no line
+    // break survives raw (a blank line inside a macro argument would abort the run).
+    check('latex: specials escaped', escapeLatex('\\{}$&%#_~^<>|`[]') ===
+        '\\textbackslash{}\\{\\}\\$\\&\\%\\#\\_\\textasciitilde{}\\textasciicircum{}\\textless{}\\textgreater{}\\textbar{}\\textasciigrave{}{[}{]}');
+    check('latex: ligatures broken', escapeLatex("--- '' ,,") === "-{}-{}- '{}' ,{},");
+    check('latex: every line-break form becomes the newline argument',
+        escapeLatex('a\nb\r\nc\rd\u000Be\u2028f\u2029g', '|') === 'a|b|c|d|e|f|g', escapeLatex('a\nb\r\nc\rd\u000Be\u2028f\u2029g', '|'));
+    check('latex: controls, BOM and lone surrogates dropped', escapeLatex('a\u0000b\u0007c\uFEFFd\uD800e') === 'abcde');
+    check('latex: decomposed accents composed (pdfLaTeX has no combining marks)', escapeLatex('e\u0301') === '\u00E9');
+    check('latex: injection payload is inert', !liveControlWords(escapeLatex('\\input{/etc/passwd}\\write18{rm -rf /}')).some(w => w !== 'textbackslash'));
+
+    // latexComment: whatever line breaks the text holds, nothing after the % escapes onto a live line.
+    const comment = latexComment('x\n\\input{a}\r\\input{b}\u2028\\input{c}');
+    check('latex comment: every line commented', comment.split('\n').filter(Boolean).every(l => l.startsWith('%')) && comment.endsWith('\n'), JSON.stringify(comment));
+
+    // sanitizeLatexUrl: scheme policy, then nothing TeX-special left raw.
+    for (const bad of ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', 'data:text/html,x', 'vbscript:x', 'file:///etc/passwd', '\\\\host\\share', '//host/share', 'java\u0000script:alert(1)']) {
+        check(`latex url: ${JSON.stringify(bad)} rejected`, sanitizeLatexUrl(bad) === '');
+    }
+    const url = sanitizeLatexUrl('https://x.com/a b/{c}\\d^e|f~g$h?i=1&j=_#k%zz%41é');
+    check('latex url: special characters encoded or escaped',
+        url === 'https://x.com/a%20b/%7Bc%7D%5Cd%5Ee%7Cf%7Eg%24h?i=1\\&j=\\_\\#k\\%25zz\\%41%C3%A9', url);
+    check('latex url: no raw brace or command survives', !/[{}]/.test(url) && liveControlWords(url).length === 0);
+
+    // sanitizeLatexMath: refused commands, catcode tricks and structure breakers never pass.
+    const refused = ['\\input{/etc/passwd}', '\\include{x}', '\\write18{id}', '\\immediate\\write18{id}', '\\openout1=x', '\\openin1=/etc/passwd',
+        '\\read1 to\\x', '\\directlua{os.execute("id")}', '\\catcode`\\@=11', '\\def\\x{y}', '\\let\\a\\b', '\\newcommand{\\x}{y}', '\\renewcommand{\\x}{y}',
+        '\\NewDocumentCommand\\x{}{}', '\\csname input\\endcsname{x}', '\\scantokens{x}', '\\verb|x|', '\\includegraphics{/etc/passwd}', '\\pdffiledump{x}',
+        '\\filedump{x}', '\\XeTeXinputencoding{x}', '\\everypar{x}', '\\usepackage{x}', '\\makeatletter', '\\href{javascript:x}{y}', '\\url{x}',
+        '\\setlength\\textwidth{0pt}', '\\endinput', '\\stop', '\\show\\x', '\\lstinputlisting{/etc/passwd}', '\\ExplSyntaxOn', '\\special{x}', '\\font\\x=cmr10'];
+    for (const m of refused) {
+        const r = sanitizeLatexMath(m, 'inline');
+        check(`latex math: ${JSON.stringify(m)} refused`, !r.ok && r.commands.length > 0, JSON.stringify(r));
+    }
+    const caret = sanitizeLatexMath('^^5cinput{x}', 'inline');
+    check('latex math: ^^ notation refused', !caret.ok && caret.commands.includes('^^'));
+    for (const broken of ['a}', '{a', '\\begin{matrix}a', 'a\\end{matrix}', '\\begin{matrix}a\\end{pmatrix}', '{\\begin{matrix}}a\\end{matrix}',
+        '\\begin{verbatim}x\\end{verbatim}', '\\begin{filecontents}{x}y\\end{filecontents}', '\\begin{document}', 'a\\)', '\\[x', 'x\\', '\\begin{align}x\\end{align} y']) {
+        const r = sanitizeLatexMath(broken, broken.includes('align') ? 'block' : 'inline');
+        check(`latex math: structural ${JSON.stringify(broken)} refused`, !r.ok && r.commands.length === 0, JSON.stringify(r));
+    }
+    const neutral = sanitizeLatexMath('a%b$c#d&e\\\\f', 'inline');
+    check('latex math: %, $, #, & and \\\\ neutralized inline', neutral.ok && neutral.latex === 'a\\%b\\$c\\#d\\&e f', JSON.stringify(neutral));
+    const blank = sanitizeLatexMath('a\n\n\nb', 'block');
+    check('latex math: blank lines collapsed', blank.ok && blank.latex === 'a\nb', JSON.stringify(blank));
+    const fine = sanitizeLatexMath('\\frac{a}{b} + \\begin{pmatrix}1&2\\\\3&4\\end{pmatrix} + \\text{ok} + \\mathbb{R}', 'inline');
+    check('latex math: ordinary math untouched', fine.ok && fine.latex === '\\frac{a}{b} + \\begin{pmatrix}1&2\\\\3&4\\end{pmatrix} + \\text{ok} + \\mathbb{R}', JSON.stringify(fine));
+
+    // Whole-document property: a payload in every sink leaves only generator-written commands.
+    const P = '}\\input{/etc/passwd}\\write18{id}%\n\\end{document}\\begin{x}]$&#_^~';
+    const hostile: any = {
+        type: 'docx',
+        metadata: { title: P, author: P, subject: P, keywords: P, description: P, lastModifiedBy: P, language: P, customProperties: { [P]: P } },
+        attachments: [{ name: `../${P}.png`, mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' }],
+        auxiliary: { headers: [{ type: 'header', children: [{ type: 'paragraph', children: [{ type: 'text', text: P }] }] }] },
+        content: [
+            { type: 'heading', metadata: { level: 1, anchorIds: [P] }, children: [{ type: 'text', text: P, notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'text', text: P }] }] }] },
+            { type: 'paragraph', comments: [{ type: 'comment', metadata: { author: P, date: P }, children: [{ type: 'text', text: P }] }], children: [
+                { type: 'text', text: P, formatting: { bold: true, color: P, backgroundColor: P, size: P, font: P } },
+                { type: 'text', text: P, metadata: { link: `https://x.com/${P}`, linkType: 'external' } },
+                { type: 'text', text: P, metadata: { link: `#${P}`, linkType: 'internal' } },
+                { type: 'text', text: P, metadata: { citationKey: P } },
+                { type: 'text', text: P, notes: [{ type: 'note', metadata: { noteType: 'endnote' }, children: [{ type: 'text', text: P }] }] },
+                { type: 'code', metadata: { math: 'inline' }, text: P },
+                { type: 'code', metadata: { math: 'inline' }, text: '\\frac{a}{b}' },
+            ] },
+            { type: 'list', metadata: { listId: P, listType: 'ordered', indentation: 1e9, itemIndex: 1e12 }, children: [{ type: 'text', text: P }] },
+            { type: 'definitionList', children: [{ type: 'definitionTerm', children: [{ type: 'text', text: P }] }, { type: 'definitionDescription', children: [{ type: 'text', text: P }] }] },
+            { type: 'table', children: [{ type: 'row', children: [
+                { type: 'cell', metadata: { colSpan: 1e9, rowSpan: 1e9, backgroundColor: P }, children: [{ type: 'paragraph', children: [{ type: 'text', text: P, notes: [{ type: 'note', metadata: { noteType: 'footnote' }, children: [{ type: 'text', text: P }] }] }] }] },
+            ] }, { type: 'row', children: [{ type: 'cell', children: [{ type: 'code', text: `${P}\\end{verbatim}`, metadata: { language: P } }] }] }] },
+            { type: 'code', text: `x\n\\end{verbatim}\n${P}`, metadata: { language: 'python' } },
+            { type: 'code', text: `x\n\\end{lstlisting}\n${P}`, metadata: { language: 'python' } },
+            { type: 'code', metadata: { math: 'block' }, text: P },
+            { type: 'image', metadata: { attachmentName: `../${P}.png`, altText: P, width: `${P}%`, align: P } },
+            { type: 'image', metadata: { url: `javascript:${P}`, altText: P } },
+            { type: 'admonition', metadata: { admonitionType: P, title: P }, children: [{ type: 'paragraph', children: [{ type: 'text', text: P }] }] },
+            { type: 'embed', metadata: { embedType: 'youtube', videoId: P, label: P } },
+            { type: 'sheet', metadata: { sheetName: P }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: P }] }] }] },
+            { type: 'paragraph', metadata: { alignment: P, paragraphIndentation: { left: 1e15, hanging: 1e15 } }, children: [{ type: 'text', text: P }] },
+        ],
+        getImages: () => [],
+    };
+    for (const [label, config] of [['article', {}], ['beamer', { texConfig: { documentClass: 'beamer' } }], ['fragment', { texConfig: { standalone: false } }]] as const) {
+        const out = (await OfficeGenerator.generate(hostile, 'tex', { renderMetadata: true, onWarning: () => { }, ...config } as any)).value as string;
+        const foreign = [...new Set(liveControlWords(out).filter(w => !LATEX_GENERATOR_COMMANDS.has(w)))];
+        check(`latex ${label}: hostile content adds no command of its own`, foreign.length === 0, foreign.join(', '));
+        const docEnds = (liveLatexSource(out).match(/(^|[^\\])\\end\{document\}/g) || []).length;
+        check(`latex ${label}: exactly one live document end`, label === 'fragment' ? docEnds === 0 : docEnds === 1, `found ${docEnds}`);
+        check(`latex ${label}: hostile spans and indices stay bounded`, out.length < 250000 && !/\d{8,}pt|\{\d{8,}\}/.test(out), `length ${out.length}`);
+    }
+    const bundle = (await OfficeGenerator.generate(hostile, 'tex', { texConfig: { bundle: true }, onWarning: () => { } } as any)).value as Uint8Array;
+    const names = Object.keys(unzipSync(bundle));
+    check('latex bundle: entry names cannot traverse or escape', names.every(n => n === 'main.tex' || /^images\/[A-Za-z0-9-]+\.[a-z]+$/.test(n)), names.join(', '));
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
@@ -1648,6 +1788,7 @@ async function main() {
     await rtfUrlTests();
     await docxSanitizationTests();
     await odtSanitizationTests();
+    await latexSanitizationTests();
     await odfRepeatExpansionTests();
     await abortSignalTests();
     await corruptArchiveTests();

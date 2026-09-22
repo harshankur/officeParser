@@ -6,6 +6,7 @@ import { EpubGenerator } from './generators/EpubGenerator.js';
 import { HtmlGenerator } from './generators/HtmlGenerator.js';
 import { MarkdownGenerator } from './generators/MarkdownGenerator.js';
 import { OdtGenerator } from './generators/OdtGenerator.js';
+import { LatexGenerator } from './generators/LatexGenerator.js';
 import { PdfGenerator } from './generators/PdfGenerator.js';
 import { RtfGenerator } from './generators/RtfGenerator.js';
 import { TextGenerator } from './generators/TextGenerator.js';
@@ -17,12 +18,13 @@ import { getOfficeError } from './utils/errorUtils.js';
  */
 export class OfficeGenerator {
     /**
-     * Normalizes format aliases (e.g., 'txt' to 'text', 'markdown' to 'md') to standard internal formats.
+     * Normalizes format aliases (e.g., 'txt' to 'text', 'markdown' to 'md', 'latex' to 'tex') to standard internal formats.
      */
     public static normalizeDestination(dest: string): UniversalGeneratorFormat {
         const d = dest?.toLowerCase();
         if (d === 'txt') return 'text';
         if (d === 'markdown') return 'md';
+        if (d === 'latex') return 'tex';
         return d as UniversalGeneratorFormat;
     }
 
@@ -74,6 +76,9 @@ export class OfficeGenerator {
                 break;
             case 'odt':
                 generator = new OdtGenerator(ast, config as GeneratorConfig<'odt'>);
+                break;
+            case 'tex':
+                generator = new LatexGenerator(ast, config as GeneratorConfig<'tex'>);
                 break;
             default:
                 throw getOfficeError(OfficeErrorType.FORMAT_UNSUPPORTED, undefined, destination);

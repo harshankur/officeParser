@@ -23,7 +23,7 @@ const ERRORHEADER = "[OfficeParser]: ";
  */
 const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => string)> = {
     [OfficeErrorType.EXTENSION_UNSUPPORTED]: (ext: string) => `Sorry, OfficeParser currently supports docx, pptx, xlsx, odt, odp, ods, odg, pdf, rtf, md, html, csv, epub files only. Create a ticket in Issues on github to add support for ${ext} files. Stay tuned for further updates.`,
-    [OfficeErrorType.FORMAT_UNSUPPORTED]: (format: string) => `Sorry, OfficeGenerator does not support generating '${format}' files. Supported formats: json, text, md, html, csv, rtf, pdf, docx, odt, epub, chunks.`,
+    [OfficeErrorType.FORMAT_UNSUPPORTED]: (format: string) => `Sorry, OfficeGenerator does not support generating '${format}' files. Supported formats: json, text, md, html, csv, rtf, pdf, docx, odt, tex, epub, chunks.`,
     [OfficeErrorType.FILE_CORRUPTED]: (filepath: string) => `Your file ${filepath} seems to be corrupted. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce error.`,
     [OfficeErrorType.FILE_DOES_NOT_EXIST]: (filepath: string) => `File ${filepath} could not be found! Check if the file exists or verify if the relative path to the file is correct from your terminal's location.`,
     [OfficeErrorType.LOCATION_NOT_FOUND]: (location: string) => `Entered location ${location} is not reachable! Please make sure that the entered directory location exists. Check relative paths and reenter.`,
@@ -96,7 +96,11 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
             return replacement.startsWith('(') ? `'${k}' ${replacement}` : `'${k}' (use '${replacement}' instead)`;
         }).join(', ');
         return `Unrecognized config option${info.keys.length === 1 ? '' : 's'}: ${detail}. ${info.keys.length === 1 ? 'It was' : 'They were'} ignored and had no effect. Check for a typo or a key renamed in a major release.`;
-    }
+    },
+    [OfficeWarningType.MATH_WRITTEN_AS_TEXT]: (info: { commands?: string[] }) => info.commands && info.commands.length > 0
+        ? `A math expression used ${info.commands.map(c => `'${c}'`).join(', ')}, which can read or write files, run programs, or redefine commands, so it was written to the LaTeX output as literal text instead of typeset math.`
+        : `A math expression had unbalanced braces or \\begin/\\end environments (or an environment that is not valid there), so it was written to the LaTeX output as literal text instead of typeset math.`,
+    [OfficeWarningType.IMAGES_NOT_BUNDLED]: (info: { files: string[] }) => `The LaTeX output references ${info.files.length} image file${info.files.length === 1 ? '' : 's'} (${info.files.map(f => `'${f}'`).join(', ')}) that ${info.files.length === 1 ? 'is' : 'are'} not part of the .tex source, since a .tex file cannot embed images. Place ${info.files.length === 1 ? 'it at that path' : 'them at those paths'}, relative to the .tex (the bytes are in ast.attachments), or set texConfig.bundle: true to get a zip containing the .tex and its images.`
 };
 
 /**

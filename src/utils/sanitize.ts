@@ -359,3 +359,359 @@ export function sanitizeMarkdownUrl(url: string, opts?: { allowDataImage?: boole
     }
     return stripped.replace(/[\s()<>"`\\]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
 }
+
+// ─── LaTeX ──────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Every character sequence TeX's input reader treats as the end of a line, plus the separators a
+ * source document uses for a soft line break (PPTX's vertical tab, a form feed, the Unicode line and
+ * paragraph separators). They are all normalized to `\n` before anything else, so the one character
+ * a caller has to reason about is `\n`: a raw line end inside a comment would end the comment and
+ * expose the rest of the line as live LaTeX, and a blank line inside a macro argument is a paragraph
+ * break that aborts the whole run.
+ */
+const LATEX_LINE_BREAKS = /\r\n?|[\n\x0B\x0C\u0085\u2028\u2029]/g;
+
+/**
+ * Characters with no visible meaning in LaTeX output: the remaining C0/C1 controls, the byte-order
+ * mark, and the two noncharacters. pdfTeX rejects several controls outright ("Text line contains an
+ * invalid character"), which stops the run.
+ */
+const LATEX_STRIPPED_CHARS = /[\x00-\x08\x0E-\x1F\x7F-\x84\x86-\x9F\uFEFF\uFFFE\uFFFF]/g;
+
+/**
+ * Normalizes untrusted text before it is escaped for LaTeX: Unicode to its composed form, line
+ * breaks to `\n`, invisible control characters and lone surrogates removed (a lone surrogate cannot be encoded as UTF-8, so the file
+ * would not even be valid input).
+ */
+function normalizeLatexInput(text: string): string {
+    return text
+        // Composed form: pdfLaTeX has a glyph for a precomposed letter such as U+00E9 but none for
+        // a combining accent, so a decomposed `e` + U+0301 would be a fatal error there.
+        .normalize('NFC')
+        .replace(LATEX_LINE_BREAKS, '\n')
+        .replace(LATEX_STRIPPED_CHARS, '')
+        .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+        .replace(/(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '$1');
+}
+
+/**
+ * Replacement for every character that is not literal text to LaTeX.
+ *
+ * The ten special characters (`\ { } $ & % # _ ~ ^`) are the injection surface: left alone, `\`
+ * starts a command, `{`/`}` open and close groups, `%` comments out the rest of the line, `$` enters
+ * math, `&`/`#` are alignment and parameter characters. The rest keep the text meaning what it said:
+ * `<`, `>` and `|` print as other glyphs in some font encodings, a backtick is an opening quote, and
+ * `[`/`]` are braced because a `[` right after a command such as `\item` or `\\` is read as that
+ * command's optional argument. Tabs are ordinary spaces in running text.
+ */
+const LATEX_TEXT_ESCAPES: Record<string, string> = {
+    '\\': '\\textbackslash{}',
+    '{': '\\{',
+    '}': '\\}',
+    '$': '\\$',
+    '&': '\\&',
+    '%': '\\%',
+    '#': '\\#',
+    '_': '\\_',
+    '~': '\\textasciitilde{}',
+    '^': '\\textasciicircum{}',
+    '<': '\\textless{}',
+    '>': '\\textgreater{}',
+    '|': '\\textbar{}',
+    '`': '\\textasciigrave{}',
+    '[': '{[}',
+    ']': '{]}',
+    '\t': ' ',
+    '\u00A0': '~',
+    '\u00AD': '\\-',
+    '\u200B': '\\hspace{0pt}',
+};
+
+/**
+ * Characters TeX fonts combine with an identical neighbor into a different glyph (`--` is an en
+ * dash, `''` a closing double quote, `,,` a low double quote in T1). An empty group between the pair
+ * keeps the two characters the source actually contained.
+ */
+const LATEX_LIGATURE_CHARS = new Set(['-', "'", ',']);
+
+/**
+ * Escapes document text for a LaTeX text position (running text, a macro argument, a table cell).
+ *
+ * Every string in the AST comes from an untrusted document, and LaTeX is a programming language:
+ * unescaped text can run `\input{/etc/passwd}`, `\write18{...}`, or simply break the document's
+ * structure. The result contains no active character and no command other than the fixed
+ * replacements in {@link LATEX_TEXT_ESCAPES}.
+ *
+ * @param text - The literal text
+ * @param newline - What a line break inside the text becomes. It is never passed through raw: a blank
+ *   line is a paragraph break, which is an error inside most macro arguments. Defaults to a space.
+ */
+export function escapeLatex(text: string, newline = ' '): string {
+    if (typeof text !== 'string') return '';
+    const src = normalizeLatexInput(text);
+    let out = '';
+    for (let i = 0; i < src.length; i++) {
+        const ch = src[i];
+        if (ch === '\n') { out += newline; continue; }
+        out += LATEX_TEXT_ESCAPES[ch] ?? ch;
+        if (LATEX_LIGATURE_CHARS.has(ch) && src[i + 1] === ch) out += '{}';
+    }
+    return out;
+}
+
+/**
+ * Formats text as LaTeX comment lines (each prefixed `% `, the whole terminated by a newline).
+ *
+ * A comment runs to the end of its line and TeX ignores everything in it, so the only character
+ * that matters is the line end: the input is normalized so every line break TeX would honor is a
+ * `\n` that gets its own `% ` prefix, and nothing after the comment can leak onto a live line. The
+ * trailing newline is part of the result, since the comment has to be closed before any code that
+ * follows it.
+ */
+export function latexComment(text: string): string {
+    if (typeof text !== 'string') return '';
+    return normalizeLatexInput(text).split('\n').map(line => `% ${line}`.trimEnd()).join('\n') + '\n';
+}
+
+/** URL characters `\href` takes verbatim in every context (RFC 3986 unreserved/sub-delims, minus the ones below). */
+const LATEX_URL_LITERAL = /[A-Za-z0-9\-.:/?@!'()*+,;=[\]]/;
+
+/**
+ * URL characters that are special to TeX and have an escaped form hyperref turns back into the plain
+ * character when it writes the link. They must be escaped rather than left raw because `\href` is
+ * often inside another command's argument (bold link text, a table cell), where TeX has already
+ * read `#`, `&` and `_` with their special meanings before hyperref could change them.
+ */
+const LATEX_URL_ESCAPES: Record<string, string> = { '#': '\\#', '&': '\\&', '_': '\\_' };
+
+/**
+ * Sanitizes a document-supplied URL for the first argument of `\href`.
+ *
+ * The scheme policy is the office-package one ({@link sanitizeOfficePackageUrl}): a PDF viewer opens
+ * a link target the same way Word does, so a UNC path is a credential-leak vector and only
+ * `https`/`http`/`mailto`/`tel` (plus relative and fragment URLs) pass. Returns '' for a rejected
+ * URL, and the caller renders the link text alone.
+ *
+ * The URL is then made inert to TeX: `#`, `&`, `_` and `%` take their escaped forms (an existing
+ * `%xx` escape is kept, a stray `%` is encoded as `%25`), and everything else that is not a plain URL
+ * character is percent-encoded as UTF-8, which is equivalent in a URL and leaves no TeX-special or
+ * non-ASCII character in the argument.
+ */
+export function sanitizeLatexUrl(url: string): string {
+    const safe = sanitizeOfficePackageUrl(url);
+    if (!safe) return '';
+    const encoder = new TextEncoder();
+    let out = '';
+    const chars = Array.from(safe);
+    for (let i = 0; i < chars.length; i++) {
+        const ch = chars[i];
+        if (ch === '%') {
+            out += /^[0-9A-Fa-f]{2}$/.test((chars[i + 1] ?? '') + (chars[i + 2] ?? '')) ? '\\%' : '\\%25';
+        } else if (LATEX_URL_ESCAPES[ch]) {
+            out += LATEX_URL_ESCAPES[ch];
+        } else if (LATEX_URL_LITERAL.test(ch)) {
+            out += ch;
+        } else {
+            for (const byte of encoder.encode(ch)) out += '%' + byte.toString(16).toUpperCase().padStart(2, '0');
+        }
+    }
+    return out;
+}
+
+/**
+ * LaTeX commands a math expression may not use, by exact name.
+ *
+ * Math is the one place the LaTeX generator emits document content as live LaTeX rather than
+ * escaped text: `node.text` of a math node *is* LaTeX source (from `$...$` in Markdown, `data-math`
+ * in HTML, or converted equations). A document author controls that source, so everything that
+ * reaches outside the formula is refused: reading files (`\input`, `\openin`, `\includegraphics`,
+ * which TeX Live permits for any readable path by default), writing files or running programs
+ * (`\write`, `\immediate`, `\openout`, `\directlua`), changing how later input is read (`\catcode`,
+ * `\scantokens`, `\verb`), redefining commands for the rest of the document (`\def`, `\let`,
+ * `\newcommand`), changing global layout or counters, ending the run (`\stop`, `\endinput`), and
+ * emitting links that bypass URL sanitization (`\href`, `\url`). `\cr`, `\par` and friends would
+ * end the table row or paragraph the formula sits in.
+ */
+const LATEX_MATH_BLOCKED_COMMANDS = new Set([
+    'input', 'include', 'includeonly', 'InputIfFileExists', 'IfFileExists', 'endinput',
+    'openin', 'openout', 'closein', 'closeout', 'read', 'readline', 'write', 'immediate',
+    'special', 'directlua', 'latelua', 'luaexec', 'luadirect', 'ShellEscape', 'shellescape', 'mdfivesum',
+    'catcode', 'lccode', 'uccode', 'sfcode', 'mathcode', 'delcode',
+    'def', 'edef', 'gdef', 'xdef', 'let', 'futurelet', 'global', 'long', 'outer', 'protected',
+    'csname', 'endcsname', 'scantokens', 'scantextokens', 'ExplSyntaxOn', 'ExplSyntaxOff',
+    'usepackage', 'RequirePackage', 'documentclass', 'LoadClass', 'makeatletter', 'makeatother',
+    'verb', 'verbatiminput', 'lstinputlisting', 'inputminted', 'includegraphics', 'includepdf',
+    'href', 'url', 'nolinkurl', 'hyperref', 'hyperlink', 'hypertarget', 'hyperimage', 'hyperbaseurl', 'hypersetup',
+    'font', 'fontspec', 'setmainfont', 'setsansfont', 'setmonofont', 'setmathfont', 'addfontfeatures',
+    'chardef', 'mathchardef', 'countdef', 'dimendef', 'skipdef', 'muskipdef', 'toksdef',
+    'stop', 'bye', 'dump', 'batchmode', 'nonstopmode', 'scrollmode', 'errorstopmode', 'errmessage', 'errhelp',
+    'output', 'shipout', 'afterassignment', 'aftergroup',
+    'cr', 'crcr', 'tabularnewline', 'noalign', 'omit', 'span', 'par',
+    'setcounter', 'addtocounter', 'stepcounter', 'refstepcounter', 'setlength', 'addtolength',
+    'settowidth', 'settoheight', 'settodepth', 'pagestyle', 'thispagestyle', 'geometry',
+]);
+
+/**
+ * Command-name prefixes a math expression may not use: engine primitive families (`\pdffiledump`,
+ * `\luatexversion`, `\XeTeXinputencoding`, `\filemoddate`), the `\every...` token-list hooks, every
+ * command/environment definition family (`\newcommand`, `\NewDocumentCommand`, `\providecommand`,
+ * `\DeclareRobustCommand`, ...), `\show...` (which pauses an interactive run), and page-header
+ * commands.
+ */
+const LATEX_MATH_BLOCKED_PREFIXES = ['pdf', 'lua', 'XeTeX', 'file', 'every', 'new', 'New', 'renew', 'Renew', 'provide', 'Provide', 'Declare', 'show', 'fancy'];
+
+/** Environments a formula may open anywhere inside math (amsmath and the kernel). */
+const LATEX_INNER_MATH_ENVIRONMENTS = new Set([
+    'matrix', 'pmatrix', 'bmatrix', 'Bmatrix', 'vmatrix', 'Vmatrix', 'smallmatrix',
+    'cases', 'aligned', 'alignedat', 'gathered', 'split', 'array', 'subarray',
+]);
+
+/**
+ * Display environments, which cannot sit inside `\[...\]`. A block formula that is exactly one of
+ * them (the common `$$\begin{align}...\end{align}$$` in Markdown) is written bare instead.
+ */
+const LATEX_DISPLAY_MATH_ENVIRONMENTS = new Set([
+    'equation', 'equation*', 'align', 'align*', 'alignat', 'alignat*', 'gather', 'gather*',
+    'multline', 'multline*', 'flalign', 'flalign*', 'eqnarray', 'eqnarray*',
+]);
+
+/** Whether a control-word name is refused inside math. */
+function isBlockedLatexMathCommand(name: string): boolean {
+    return LATEX_MATH_BLOCKED_COMMANDS.has(name) || LATEX_MATH_BLOCKED_PREFIXES.some(p => name.startsWith(p));
+}
+
+/**
+ * The outcome of {@link sanitizeLatexMath}. On success `latex` is ready to place between the math
+ * delimiters (or, when `displayEnvironment` is set, to write bare as a display environment). On
+ * failure `commands` names the refused commands; it is empty when the problem is structural.
+ */
+export type LatexMathResult =
+    | { ok: true; latex: string; displayEnvironment: boolean }
+    | { ok: false; commands: string[] };
+
+/**
+ * Makes a LaTeX math expression safe to emit as live math.
+ *
+ * The expression is scanned the way TeX tokenizes it (control words are a backslash plus ASCII
+ * letters; that is exact because every command that could change the letter set is refused), and
+ * it is accepted only if all of the following hold:
+ *
+ * - no refused command ({@link LATEX_MATH_BLOCKED_COMMANDS}, {@link LATEX_MATH_BLOCKED_PREFIXES}),
+ *   and no `^^` notation, which spells any character (including `\`) by its hex code and so would
+ *   let a command past a textual scan;
+ * - braces balance, and every `\begin{env}` closes with a matching `\end{env}` at the same brace
+ *   depth, using only math environments, so the formula cannot close a group or environment it
+ *   did not open;
+ * - no `\(`, `\)`, `\[`, `\]`, and no trailing lone backslash (which would escape the closing `$`).
+ *
+ * Characters that would reach outside the formula are neutralized rather than refused: `%` (a
+ * comment would swallow the closing delimiter) becomes `\%`, `$` becomes `\$`, `#` becomes `\#`,
+ * a top-level `&` in inline math becomes `\&` (it would split a table cell), and blank lines are
+ * collapsed (a paragraph break is an error in math). In inline math a top-level `\\` becomes a
+ * space; in block math a top-level `&` or `\\` has the body wrapped in `aligned`/`gathered`.
+ *
+ * @param source - The formula as found in the AST (no delimiters)
+ * @param mode - `'inline'` for `$...$`, `'block'` for display math
+ */
+export function sanitizeLatexMath(source: string, mode: 'inline' | 'block'): LatexMathResult {
+    const text = normalizeLatexInput(typeof source === 'string' ? source : '');
+    const blocked = new Set<string>();
+    if (text.includes('^^')) blocked.add('^^');
+    let structural = false;
+    let out = '';
+    let braceDepth = 0;
+    const envStack: { name: string; braceDepth: number }[] = [];
+    let displayEnvironment = false;
+    let displayEnvironmentEnd = -1;
+    let topLevelAmpersand = false;
+    let topLevelRowBreak = false;
+
+    let i = 0;
+    while (i < text.length) {
+        const ch = text[i];
+        if (ch === '\\') {
+            const next = text[i + 1];
+            if (next === undefined) { structural = true; break; }
+            if (/[A-Za-z]/.test(next)) {
+                let j = i + 1;
+                while (j < text.length && /[A-Za-z]/.test(text[j])) j++;
+                const name = text.slice(i + 1, j);
+                if (isBlockedLatexMathCommand(name)) blocked.add('\\' + name);
+                if (name === 'begin' || name === 'end') {
+                    let k = j;
+                    while (k < text.length && /[ \t\n]/.test(text[k])) k++;
+                    const env = /^\{([A-Za-z]+\*?)\}/.exec(text.slice(k));
+                    if (!env) { structural = true; out += text.slice(i, j); i = j; continue; }
+                    const envName = env[1];
+                    if (name === 'begin') {
+                        const opensDisplay = LATEX_DISPLAY_MATH_ENVIRONMENTS.has(envName) && mode === 'block'
+                            && envStack.length === 0 && braceDepth === 0 && out.trim() === '' && !displayEnvironment;
+                        if (opensDisplay) displayEnvironment = true;
+                        else if (!LATEX_INNER_MATH_ENVIRONMENTS.has(envName)) structural = true;
+                        envStack.push({ name: envName, braceDepth });
+                    } else {
+                        const open = envStack.pop();
+                        if (!open || open.name !== envName || open.braceDepth !== braceDepth) structural = true;
+                    }
+                    out += text.slice(i, k) + env[0];
+                    i = k + env[0].length;
+                    if (name === 'end' && displayEnvironment && envStack.length === 0 && displayEnvironmentEnd < 0) displayEnvironmentEnd = out.length;
+                    continue;
+                }
+                out += text.slice(i, j);
+                i = j;
+                continue;
+            }
+            if (next === '(' || next === ')' || next === '[' || next === ']') structural = true;
+            if (next === '\\' && envStack.length === 0) {
+                if (mode === 'inline') { out += ' '; i += 2; continue; }
+                topLevelRowBreak = true;
+            }
+            out += '\\' + next;
+            i += 2;
+            continue;
+        }
+        switch (ch) {
+            case '%': out += '\\%'; break;
+            case '$': out += '\\$'; break;
+            case '#': out += '\\#'; break;
+            case '&':
+                if (envStack.length > 0) out += '&';
+                else if (mode === 'inline') out += '\\&';
+                else { topLevelAmpersand = true; out += '&'; }
+                break;
+            case '{': braceDepth++; out += ch; break;
+            case '}':
+                braceDepth--;
+                if (braceDepth < 0) structural = true;
+                out += ch;
+                break;
+            case '\n': {
+                // Collapse the whole whitespace run; a blank line would be a paragraph break.
+                let k = i + 1;
+                while (k < text.length && /[ \t\n]/.test(text[k])) k++;
+                out += mode === 'inline' ? ' ' : '\n';
+                i = k;
+                continue;
+            }
+            default: out += ch;
+        }
+        i++;
+    }
+
+    if (braceDepth !== 0 || envStack.length > 0) structural = true;
+    // A display environment must be the whole formula: `\begin{align}...\end{align} x` cannot be
+    // written bare, and cannot go inside `\[...\]` either.
+    if (displayEnvironment && (displayEnvironmentEnd < 0 || out.slice(displayEnvironmentEnd).trim() !== '')) structural = true;
+
+    if (blocked.size > 0) return { ok: false, commands: [...blocked].sort() };
+    if (structural) return { ok: false, commands: [] };
+
+    let latex = out.trim();
+    if (mode === 'block' && !displayEnvironment && (topLevelAmpersand || topLevelRowBreak)) {
+        const env = topLevelAmpersand ? 'aligned' : 'gathered';
+        latex = `\\begin{${env}}\n${latex}\n\\end{${env}}`;
+    }
+    return { ok: true, latex, displayEnvironment };
+}

@@ -127,7 +127,11 @@ export enum OfficeWarningType {
     /** `ocr: true` was set without `extractAttachments: true`; OCR runs over extracted images (in every format), so no OCR was performed */
     OCR_REQUIRES_ATTACHMENTS = 'OCR_REQUIRES_ATTACHMENTS',
     /** A config option was passed that this version does not recognize (e.g. a key renamed in a major release); it had no effect */
-    UNRECOGNIZED_CONFIG_OPTION = 'UNRECOGNIZED_CONFIG_OPTION'
+    UNRECOGNIZED_CONFIG_OPTION = 'UNRECOGNIZED_CONFIG_OPTION',
+    /** A math expression used an unsafe LaTeX command or was malformed, so it was written to LaTeX output as literal text rather than typeset math */
+    MATH_WRITTEN_AS_TEXT = 'MATH_WRITTEN_AS_TEXT',
+    /** LaTeX output references image files that were not bundled with it (`texConfig.bundle` is off); they must be shipped alongside the `.tex` */
+    IMAGES_NOT_BUNDLED = 'IMAGES_NOT_BUNDLED'
 }
 
 /**
@@ -713,6 +717,7 @@ type ConversionValue<D extends UniversalGeneratorFormat> =
     D extends 'epub' ? Uint8Array :
     D extends 'docx' ? Uint8Array :
     D extends 'odt' ? Uint8Array :
+    D extends 'tex' ? string | Uint8Array :
     string;
 
 export interface ConversionResult<D extends UniversalGeneratorFormat> {
@@ -725,7 +730,7 @@ export interface ConversionResult<D extends UniversalGeneratorFormat> {
 /**
  * Universal formats supported by all source types for generation.
  */
-export type UniversalGeneratorFormat = 'text' | 'md' | 'html' | 'pdf' | 'csv' | 'rtf' | 'chunks' | 'epub' | 'docx' | 'odt';
+export type UniversalGeneratorFormat = 'text' | 'md' | 'html' | 'pdf' | 'csv' | 'rtf' | 'chunks' | 'epub' | 'docx' | 'odt' | 'tex';
 
 /**
  * Allowed destination formats for a given source type.
@@ -976,6 +981,7 @@ type GeneratorSpecificConfig<D extends string> =
     D extends 'rtf' ? { rtfConfig?: RtfGeneratorConfig } :
     D extends 'docx' ? { docxConfig?: DocxGeneratorConfig } :
     D extends 'odt' ? { odtConfig?: OdtGeneratorConfig } :
+    D extends 'tex' ? { texConfig?: TexGeneratorConfig } :
     D extends 'chunks' ? { chunksConfig?: ChunkingConfig } :
     Partial<{
         htmlConfig: HtmlGeneratorConfig;
@@ -986,6 +992,7 @@ type GeneratorSpecificConfig<D extends string> =
         rtfConfig: RtfGeneratorConfig;
         docxConfig: DocxGeneratorConfig;
         odtConfig: OdtGeneratorConfig;
+        texConfig: TexGeneratorConfig;
         chunksConfig: ChunkingConfig;
     }>;
 
@@ -1059,6 +1066,7 @@ export type FullGeneratorConfig = DeepRequired<Omit<CommonGeneratorConfig, 'meta
     rtfConfig: RtfGeneratorConfig;
     docxConfig: DocxGeneratorConfig;
     odtConfig: OdtGeneratorConfig;
+    texConfig: TexGeneratorConfig;
 }> & {
     chunksConfig: ChunkingConfig;
     // Deliberately not DeepRequired: every field is meant to stay optional, since the whole
@@ -1391,6 +1399,58 @@ export interface OdtGeneratorConfig {
      * Page margins, written as `fo:margin-*` lengths. Each side is a number of points (1/72 inch) or
      * a unit-labeled string (`'1in'`, `'2cm'`, `'36pt'`, `'48px'`); a bare number is points. Defaults
      * to 72 (the standard one inch) on every side.
+     */
+    margin?: { top?: number | string; right?: number | string; bottom?: number | string; left?: number | string };
+}
+
+/**
+ * The LaTeX document class {@link TexGeneratorConfig.documentClass} selects. `'auto'` picks `beamer`
+ * for a presentation (content made of slides) and `article` for everything else.
+ */
+export type TexDocumentClass = 'auto' | 'article' | 'report' | 'book' | 'beamer';
+
+/**
+ * Configuration options for LaTeX (`.tex`) generation.
+ *
+ * The output compiles with pdfLaTeX, XeLaTeX and LuaLaTeX alike: the preamble loads `fontenc`/
+ * `inputenc` under pdfTeX and `fontspec` under the Unicode engines, and only the packages the
+ * document actually uses.
+ */
+export interface TexGeneratorConfig {
+    /**
+     * The document class. `'auto'` (default) writes a `beamer` presentation when the content is made
+     * of slides (PPTX/ODP) and an `article` otherwise. `'report'` and `'book'` map level-1 headings to
+     * `\chapter`; `'beamer'` turns each slide into a frame, or, for a non-presentation source, starts
+     * a new frame at every level-1/2 heading.
+     */
+    documentClass?: TexDocumentClass;
+    /**
+     * Whether to emit a complete document (preamble, `\begin{document}`...`\end{document}`). When
+     * false, only the body is emitted, headed by a comment listing the packages it needs, for pasting
+     * into an existing document. Defaults to true.
+     */
+    standalone?: boolean;
+    /**
+     * A `.tex` file cannot embed images: `\includegraphics` reads each one from a separate file. When
+     * true, the result is a zip (`Uint8Array`) holding `main.tex` plus every referenced image under
+     * `images/`, ready to compile or upload to Overleaf. When false (default) the result is the
+     * `.tex` source as a string, still referencing `images/<name>`, and the `IMAGES_NOT_BUNDLED`
+     * warning names the files the caller must place there (their bytes are in `ast.attachments`).
+     */
+    bundle?: boolean;
+    /** Number sections (`1`, `1.1`, ...). Defaults to false, matching office documents, whose headings are unnumbered by default. */
+    numberSections?: boolean;
+    /**
+     * Paper size, written as a `geometry` option. One of the shared {@link PaperFormat} names.
+     * Defaults to `'A4'`. Ignored by `beamer`, whose frame size is fixed.
+     */
+    format?: PaperFormat;
+    /** Landscape orientation. Defaults to false. Ignored by `beamer`. */
+    landscape?: boolean;
+    /**
+     * Page margins, written as `geometry` options. Each side is a number of points (1/72 inch) or a
+     * unit-labeled string (`'1in'`, `'2cm'`, `'36pt'`, `'48px'`); a bare number is points. Defaults to
+     * 72 (one inch) on every side. Ignored by `beamer`.
      */
     margin?: { top?: number | string; right?: number | string; bottom?: number | string; left?: number | string };
 }

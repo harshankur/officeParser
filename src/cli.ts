@@ -8,7 +8,7 @@
  *   officeparser file.docx --ocr --extractAttachments
  *
  * Options (--key=value, --key value, or bare flags):
- *   --to=json|text|md|html|csv|rtf|pdf|docx|odt|epub|chunks  Convert AST to specified format (default: json)
+ *   --to=json|text|md|html|csv|rtf|pdf|docx|odt|tex|epub|chunks  Convert AST to specified format (default: json)
  *   --output=path             Save result to a file
  *   --fileType=docx|xlsx|...  Override file type detection
  *   --ocr                     Enable OCR for images (default: false); also requires --extractAttachments
@@ -74,6 +74,7 @@ const knownGeneratorBooleans = new Set([
     // Dotted generator booleans, same rationale as the parser set above.
     'pdfConfig.tagged', 'pdfConfig.outline', 'pdfConfig.landscape', 'pdfConfig.printBackground', 'pdfConfig.displayHeaderFooter',
     'docxConfig.landscape', 'odtConfig.landscape',
+    'texConfig.standalone', 'texConfig.bundle', 'texConfig.numberSections', 'texConfig.landscape',
     'textConfig.preserveLayout', 'textConfig.renderNotes',
     'htmlConfig.standalone', 'htmlConfig.sourceAttributes', 'htmlConfig.gatedEmbeds',
     'mdConfig.fallbackToHtml', 'mdConfig.fallbackToHtml.inlineFormatting',
@@ -104,7 +105,7 @@ const REMOVED_CLI_FLAGS: Record<string, string> = {
 
 // Prefixes used to identify configurations targeted for the generator instead of the parser.
 const generatorPrefixes = [
-    'generatorConfig.', 'htmlConfig.', 'csvConfig.', 'textConfig.', 'mdConfig.', 'pdfConfig.', 'rtfConfig.', 'docxConfig.', 'odtConfig.', 'chunksConfig.'
+    'generatorConfig.', 'htmlConfig.', 'csvConfig.', 'textConfig.', 'mdConfig.', 'pdfConfig.', 'rtfConfig.', 'docxConfig.', 'odtConfig.', 'texConfig.', 'chunksConfig.'
 ];
 
 // Trackers to detect if deprecated/legacy options were used to log helpful warnings.
@@ -333,7 +334,7 @@ if (fileArg && !showHelp) {
     console.log('Usage: officeparser <file> [options]');
     console.log('');
     console.log('Options:');
-    console.log('  --to=json|text|md|html|pdf|csv|rtf|docx|odt|epub|chunks  Target conversion format (default: json)');
+    console.log('  --to=json|text|md|html|pdf|csv|rtf|docx|odt|tex|epub|chunks  Target conversion format (default: json)');
     console.log('  --output=file.ext                           Save output to file instead of stdout');
     console.log('  --fileType=docx|xlsx|pptx|odt|...           Explicitly override input file type detection');
     console.log('  --ocr                                       Enable OCR for images (default: false; also requires --extractAttachments)');
@@ -382,6 +383,9 @@ if (fileArg && !showHelp) {
     console.log('  --mdConfig.dialect=github                   Markdown dialect (extended | github | gitlab | obsidian | pandoc | commonmark)');
     console.log('  --mdConfig.fallbackToHtml=false             Disable HTML fallback for unsupported Markdown features (default: true)');
     console.log('  --mdConfig.fallbackToHtml.inlineFormatting  Round-trip inline color/highlight/font-size as <span style> (opt-in, default: false)');
+    console.log('  --texConfig.bundle                          LaTeX: write a zip of main.tex plus its images/ (default: false, .tex only)');
+    console.log('  --texConfig.documentClass=report            LaTeX class: auto | article | report | book | beamer (default: auto)');
+    console.log('  --texConfig.standalone=false                LaTeX: emit the body only, without the preamble (default: true)');
     console.log('');
     console.log('Format Syntax:');
     console.log('  Flags can be written as --flag (presence implies true), --no-flag (negation),');
@@ -397,5 +401,6 @@ if (fileArg && !showHelp) {
     console.log('  officeparser data.xlsx --to csv --output data.csv --csvDelimiter ";"');
     console.log('  officeparser document.docx --extractAttachments --to epub --output document.epub');
     console.log('  officeparser notes.md --extractAttachments --to odt --output notes.odt');
+    console.log('  officeparser report.docx --extractAttachments --to tex --texConfig.bundle --output report.zip');
     console.log('  officeparser image_doc --fileType docx --to json');
 }
