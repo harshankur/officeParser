@@ -614,6 +614,91 @@ await ast.to('md', {
         </tbody>
     </table>
 
+    <h3 id="texgeneratorconfig">TexGeneratorConfig (<code>texConfig</code>)</h3>
+    <p>Writes LaTeX source from any parsed source. The output compiles unmodified with <strong>pdfLaTeX, XeLaTeX and
+        LuaLaTeX</strong>: the preamble selects fonts per engine and loads only the packages the document uses. The
+        value is a <code>string</code>, or a <code>Uint8Array</code> zip when <code>bundle</code> is set. Adds no
+        dependencies and runs identically in Node and the browser. Destination <code>'tex'</code> (alias
+        <code>'latex'</code>).</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>documentClass</code></td>
+                <td><code>'auto' | 'article' | 'report' | 'book' | 'beamer'</code></td>
+                <td><code>'auto'</code></td>
+                <td><code>auto</code> writes a <code>beamer</code> presentation for slide content (PPTX/ODP) and an
+                    <code>article</code> otherwise. <code>report</code>/<code>book</code> map level-1 headings to
+                    <code>\chapter</code>; <code>beamer</code> for a non-presentation source starts a frame at each
+                    level-1/2 heading.</td>
+            </tr>
+            <tr>
+                <td><code>standalone</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td><code>false</code> emits only the body, headed by a comment listing the packages the including
+                    document needs.</td>
+            </tr>
+            <tr>
+                <td><code>bundle</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>A <code>.tex</code> file cannot embed images. <code>true</code> returns a zip of
+                    <code>main.tex</code> plus every referenced image under <code>images/</code>, ready to compile or
+                    upload to Overleaf. With <code>false</code> the source still references <code>images/&lt;name&gt;</code>
+                    and the <code>IMAGES_NOT_BUNDLED</code> warning names the files to place there.</td>
+            </tr>
+            <tr>
+                <td><code>numberSections</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Number sections. Off by default, matching office documents.</td>
+            </tr>
+            <tr>
+                <td><code>format</code></td>
+                <td><code>PaperFormat</code></td>
+                <td><code>'A4'</code></td>
+                <td>Paper size, written as a <code>geometry</code> option. The same names <code>pdfConfig.format</code>
+                    accepts. Ignored by <code>beamer</code>.</td>
+            </tr>
+            <tr>
+                <td><code>landscape</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Landscape orientation. Ignored by <code>beamer</code>.</td>
+            </tr>
+            <tr>
+                <td><code>margin</code></td>
+                <td><code>object</code></td>
+                <td><code>{72,72,72,72}</code></td>
+                <td>Page margins (<code>top</code>, <code>right</code>, <code>bottom</code>, <code>left</code>), each a
+                    number of points or a unit string (<code>'1in'</code>, <code>'2cm'</code>, <code>'36pt'</code>).
+                    Ignored by <code>beamer</code>.</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>Headings become sectioning commands with <code>\label</code>s, lists nested <code>itemize</code>/<code>enumerate</code>,
+        tables <code>longtable</code> (or <code>tabular</code> where a <code>longtable</code> cannot go) with
+        <code>\multicolumn</code>/<code>\multirow</code> merges (a table wider than 16 columns continues below itself in
+        bands), footnotes/endnotes <code>\footnote</code>/<code>\endnote</code>, review comments LaTeX <code>%</code> comments,
+        code <code>lstlisting</code>/<code>verbatim</code>, page headers <code>fancyhdr</code>, and slides
+        <code>beamer</code> frames with speaker notes as <code>\note</code>.</p>
+    <p><strong>Safety.</strong> All document text is escaped, URLs are scheme-checked and percent-encoded, and image
+        paths are reduced to safe names under <code>images/</code>. Math is the one place content is emitted as live
+        LaTeX; an expression that uses a command able to read or write files, run programs or redefine commands, or
+        that is structurally unbalanced, is written as literal text with a <code>MATH_WRITTEN_AS_TEXT</code> warning.
+        A character the default fonts lack gets a <code>\newunicodechar</code> fallback; a script pdfLaTeX cannot
+        typeset is shown there as <code>[U+XXXX]</code>, while XeLaTeX/LuaLaTeX keep the real characters.</p>
+    <pre><code>const { value: tex } = await ast.to('tex');                                   // string
+const { value: zip } = await ast.to('tex', { texConfig: { bundle: true } });  // Uint8Array (main.tex + images/)</code></pre>
+
     <h3 id="csvgeneratorconfig">CsvGeneratorConfig (<code>csvConfig</code>)</h3>
     <table>
         <thead>
@@ -700,16 +785,16 @@ await ast.to('md', {
             </tr>
         </thead>
         <tbody>
-            <tr><td><code>title</code></td><td><code>string</code></td><td>HTML <code>&lt;title&gt;</code>; EPUB <code>dc:title</code>; Markdown <code>title:</code>; RTF <code>\title</code>; the <code>renderMetadata</code> header in text/CSV</td></tr>
-            <tr><td><code>author</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="author"&gt;</code>; EPUB <code>dc:creator</code>; Markdown <code>author:</code>; RTF <code>\author</code></td></tr>
-            <tr><td><code>description</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="description"&gt;</code>; EPUB <code>dc:description</code>; Markdown <code>description:</code>; RTF <code>\comm</code></td></tr>
-            <tr><td><code>subject</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="DC.subject"&gt;</code>; EPUB <code>dc:subject</code>; Markdown <code>subject:</code>; RTF <code>\subject</code></td></tr>
-            <tr><td><code>keywords</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="keywords"&gt;</code>; EPUB <code>dc:subject</code>; Markdown <code>keywords:</code>; RTF <code>\keywords</code></td></tr>
-            <tr><td><code>lastModifiedBy</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="lastModifiedBy"&gt;</code></td></tr>
-            <tr><td><code>created</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.created"&gt;</code>; Markdown <code>created:</code>; the <code>renderMetadata</code> header in text/CSV</td></tr>
-            <tr><td><code>modified</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.modified"&gt;</code>; EPUB <code>dcterms:modified</code> <em>and every zip entry's mtime</em>; Markdown <code>modified:</code></td></tr>
-            <tr><td><code>language</code></td><td><code>string</code></td><td>EPUB <code>dc:language</code>. Stored on <code>nativeProperties.language</code>, where parsers already surface it.</td></tr>
-            <tr><td><code>custom</code></td><td><code>Record&lt;string, string | number | boolean | Date&gt;</code></td><td>Any caller-defined key/value pairs. HTML <code>&lt;meta name="custom:KEY"&gt;</code>; Markdown frontmatter. <strong>Not representable in EPUB or RTF</strong> &mdash; see below.</td></tr>
+            <tr><td><code>title</code></td><td><code>string</code></td><td>HTML <code>&lt;title&gt;</code>; EPUB <code>dc:title</code>; Markdown <code>title:</code>; RTF <code>\title</code>; LaTeX <code>\title</code> and <code>pdftitle</code>; the <code>renderMetadata</code> header in text/CSV</td></tr>
+            <tr><td><code>author</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="author"&gt;</code>; EPUB <code>dc:creator</code>; Markdown <code>author:</code>; RTF <code>\author</code>; LaTeX <code>\author</code> and <code>pdfauthor</code></td></tr>
+            <tr><td><code>description</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="description"&gt;</code>; EPUB <code>dc:description</code>; Markdown <code>description:</code>; RTF <code>\comm</code>; LaTeX PDF info <code>Description</code></td></tr>
+            <tr><td><code>subject</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="DC.subject"&gt;</code>; EPUB <code>dc:subject</code>; Markdown <code>subject:</code>; RTF <code>\subject</code>; LaTeX <code>pdfsubject</code></td></tr>
+            <tr><td><code>keywords</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="keywords"&gt;</code>; EPUB <code>dc:subject</code>; Markdown <code>keywords:</code>; RTF <code>\keywords</code>; LaTeX <code>pdfkeywords</code></td></tr>
+            <tr><td><code>lastModifiedBy</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="lastModifiedBy"&gt;</code>; LaTeX PDF info <code>LastModifiedBy</code></td></tr>
+            <tr><td><code>created</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.created"&gt;</code>; Markdown <code>created:</code>; LaTeX <code>pdfcreationdate</code>; the <code>renderMetadata</code> header in text/CSV</td></tr>
+            <tr><td><code>modified</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.modified"&gt;</code>; EPUB <code>dcterms:modified</code> <em>and every zip entry's mtime</em>; Markdown <code>modified:</code>; LaTeX <code>\date</code> and <code>pdfmoddate</code> (and the bundle's zip mtimes)</td></tr>
+            <tr><td><code>language</code></td><td><code>string</code></td><td>EPUB <code>dc:language</code>; LaTeX <code>pdflang</code>. Stored on <code>nativeProperties.language</code>, where parsers already surface it.</td></tr>
+            <tr><td><code>custom</code></td><td><code>Record&lt;string, string | number | boolean | Date&gt;</code></td><td>Any caller-defined key/value pairs. HTML <code>&lt;meta name="custom:KEY"&gt;</code>; Markdown frontmatter; LaTeX PDF info entries (the key reduced to letters and digits). <strong>Not representable in EPUB or RTF</strong> &mdash; see below.</td></tr>
         </tbody>
     </table>
     <p><code>custom</code> is kept in its own bucket rather than mixed in beside the named fields on purpose: with a bare

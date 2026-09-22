@@ -11,7 +11,7 @@
     <meta property="og:title"
         content="officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser">
     <meta property="og:description"
-        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 13 formats (including EPUB) and generate DOCX, ODT, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
+        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 13 formats (including EPUB) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
     <meta property="og:image"
         content="https://raw.githubusercontent.com/harshankur/officeParser/master/docs/favicon.png">
     <meta property="og:url" content="https://officeparser.harshankur.com">
@@ -3317,8 +3317,9 @@
                 <div class="feature-card">
                     <span class="feature-icon">🏗️</span>
                     <h3>Native Generation</h3>
-                    <p>Write real <strong>DOCX and ODT</strong> packages, and PDFs via a native <code>pdf-lib</code>
-                        engine that needs <em>no headless browser</em>, running identically in Node and the browser.</p>
+                    <p>Write real <strong>DOCX and ODT</strong> packages, <strong>LaTeX</strong> that compiles with
+                        pdfLaTeX, XeLaTeX and LuaLaTeX, and PDFs via a native <code>pdf-lib</code> engine that needs
+                        <em>no headless browser</em>, running identically in Node and the browser.</p>
                 </div>
                 <div class="feature-card">
                     <span class="feature-icon">🔄</span>
@@ -3725,6 +3726,8 @@
                                 <button class="dropdown-menu-item" data-export-fmt="pdf">PDF (print)</button>
                                 <button class="dropdown-menu-item" data-export-fmt="docx">DOCX (.docx)</button>
                                 <button class="dropdown-menu-item" data-export-fmt="odt">ODT (.odt)</button>
+                                <button class="dropdown-menu-item" data-export-fmt="tex">LaTeX (.tex)</button>
+                                <button class="dropdown-menu-item" data-export-fmt="texbundle">LaTeX + images (.zip)</button>
                                 <button class="dropdown-menu-item" data-export-fmt="epub">EPUB (.epub)</button>
                             </div>
                         </div>
@@ -6235,6 +6238,27 @@
                             const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'odt', genConfig);
                             const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.odt';
                             downloadFile(result.value, name, 'application/vnd.oasis.opendocument.text');
+                        }
+                    },
+                    tex: {
+                        kind: 'binary',
+                        run: async () => {
+                            // LatexGenerator writes LaTeX source straight from the AST; images are referenced
+                            // as images/<name>, which the bundle export below packages alongside.
+                            const genConfig = htmlDerivedConfig(false);
+                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'tex', genConfig);
+                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.tex';
+                            downloadFile(result.value, name, 'application/x-tex');
+                        }
+                    },
+                    texbundle: {
+                        kind: 'binary',
+                        run: async () => {
+                            // texConfig.bundle returns a zip of main.tex plus every referenced image.
+                            const genConfig = { ...htmlDerivedConfig(false), texConfig: { bundle: true } };
+                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'tex', genConfig);
+                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '-latex.zip';
+                            downloadFile(result.value, name, 'application/zip');
                         }
                     }
                 }

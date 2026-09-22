@@ -4,7 +4,7 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 
 **Parses:** [`docx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`pptx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`xlsx`](https://en.wikipedia.org/wiki/Office_Open_XML) · [`odt`](https://en.wikipedia.org/wiki/OpenDocument) · [`odp`](https://en.wikipedia.org/wiki/OpenDocument) · [`ods`](https://en.wikipedia.org/wiki/OpenDocument) · [`odg`](https://en.wikipedia.org/wiki/OpenDocument) · [`pdf`](https://en.wikipedia.org/wiki/PDF) · [`rtf`](https://en.wikipedia.org/wiki/Rich_Text_Format) · [`csv`](https://en.wikipedia.org/wiki/Comma-separated_values) · [`md`](https://en.wikipedia.org/wiki/Markdown) · [`html`](https://en.wikipedia.org/wiki/HTML) · [`epub`](https://en.wikipedia.org/wiki/EPUB)
 
-**Generates:** `DOCX` · `ODT` · `Markdown` · `HTML` · `CSV` · `RTF` · `PDF` · `EPUB` · `Plain Text` · `RAG Chunks`
+**Generates:** `DOCX` · `ODT` · `LaTeX` · `Markdown` · `HTML` · `CSV` · `RTF` · `PDF` · `EPUB` · `Plain Text` · `RAG Chunks`
 
 [![npm version](https://badge.fury.io/js/officeparser.svg)](https://badge.fury.io/js/officeparser)
 [![Total Downloads](https://img.shields.io/npm/dt/officeparser.svg)](https://www.npmjs.com/package/officeparser)
@@ -33,6 +33,7 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 - **Password-protected documents.** Encrypted PDF, OOXML (`docx`/`xlsx`/`pptx`) and ODF (`odt`/`ods`/`odp`/`odg`) open through one unified `password` / `onPassword` option, across parsing, conversion and templating.
 - **Native DOCX & ODT generation**, plus a **native PDF engine** (`pdfConfig.engine: 'native'`, built on `pdf-lib`) that produces real PDF bytes with no headless browser, in Node and the browser alike.
 - **Templates / mail-merge** via `OfficeTemplate.render` (fill a DOCX template's `{{placeholders}}`, single or batch), and **ODG parsing** (LibreOffice Draw).
+- **LaTeX generation** (8.1): `to('tex')` turns any parsed document into LaTeX source that compiles unmodified with pdfLaTeX, XeLaTeX and LuaLaTeX, presentations included (as `beamer` frames), with a zip bundle mode that packages the images. See [TexGeneratorConfig](#texgeneratorconfig).
 
 See the [full changelog](CHANGELOG.md) for the complete list, including breaking changes.
 
@@ -69,6 +70,7 @@ See the [full changelog](CHANGELOG.md) for the complete list, including breaking
   - [PdfGeneratorConfig](#pdfgeneratorconfig)
   - [DocxGeneratorConfig](#docxgeneratorconfig)
   - [OdtGeneratorConfig](#odtgeneratorconfig)
+  - [TexGeneratorConfig](#texgeneratorconfig)
   - [CsvGeneratorConfig](#csvgeneratorconfig)
   - [TextGeneratorConfig](#textgeneratorconfig)
   - [metadataOverrides](#metadataoverrides)
@@ -124,6 +126,10 @@ npx officeparser notes.md --extractAttachments --to=docx --output=notes.docx
 # Convert a Word document (or any source) to OpenDocument Text
 npx officeparser report.docx --extractAttachments --to=odt --output=report.odt
 
+# Convert any source to LaTeX: a .tex file, or a zip of main.tex plus its images
+npx officeparser paper.docx --to=tex --output=paper.tex
+npx officeparser paper.docx --extractAttachments --to=tex --texConfig.bundle --output=paper.zip
+
 # Overriding file extension mapping
 npx officeparser my_document --fileType=docx --to=json
 ```
@@ -138,7 +144,7 @@ npx officeparser my_document --fileType=docx --to=json
 
 | Flag | Values | Default | Description |
 |------|--------|---------|-------------|
-| `--to` | `json\|text\|md\|html\|csv\|rtf\|pdf\|docx\|odt\|epub\|chunks` | `json` | Output format |
+| `--to` | `json\|text\|md\|html\|csv\|rtf\|pdf\|docx\|odt\|tex\|epub\|chunks` | `json` | Output format (`latex` is accepted as an alias of `tex`) |
 | `--output` | path | (none) | Write output to a file |
 | `--fileType` | `docx\|xlsx\|pptx\|odt\|odp\|ods\|odg\|pdf\|rtf\|csv\|md\|html\|epub` | (none) | Explicitly override input file type detection |
 | `--ocr` | boolean | `false` | Enable OCR for images (also requires `--extractAttachments`; OCR runs over extracted images) |
@@ -173,7 +179,10 @@ npx officeparser my_document --fileType=docx --to=json
 | `--htmlConfig.containerWidth` | string \| number | `auto` | HTML output container width (e.g. `900px`, `100%`) |
 | `--textConfig.pageSeparator` | string | `\n` | Separator written between pages in text output |
 | `--pdfConfig.engine` | `html\|native` | `html` | PDF engine: Puppeteer (`html`) or pdf-lib (`native`, no browser) |
-| ~~`--format`~~ | `json\|text\|md\|html\|csv\|rtf\|pdf\|docx\|odt\|epub\|chunks` | `json` | **Deprecated.** Use `--to` |
+| `--texConfig.bundle` | boolean | `false` | LaTeX: write a zip of `main.tex` plus its `images/` instead of the `.tex` alone |
+| `--texConfig.documentClass` | `auto\|article\|report\|book\|beamer` | `auto` | LaTeX document class (`auto` = `beamer` for presentations, `article` otherwise) |
+| `--texConfig.standalone` | boolean | `true` | LaTeX: `false` writes the body only, for pasting into an existing document |
+| ~~`--format`~~ | `json\|text\|md\|html\|csv\|rtf\|pdf\|docx\|odt\|tex\|epub\|chunks` | `json` | **Deprecated.** Use `--to` |
 | ~~`--toText`~~ | | | **Removed in v8.** Use `--to=text`. |
 | ~~`--ocrLanguage`~~ | | | **Removed in v8.** Use `--ocrConfig.language`. |
 | ~~`--putNotesAtLast`~~ | | | **Removed in v8.** Notes are attached structurally via `node.notes`. |
@@ -417,7 +426,7 @@ const { value: html } = await OfficeGenerator.generate(ast, 'html', {
 const { value: csv } = await OfficeGenerator.generate(ast, 'csv');
 ```
 
-**Supported destinations:** `'text'` · `'md'` · `'html'` · `'csv'` · `'rtf'` · `'pdf'` · `'docx'` · `'odt'` · `'epub'` · `'chunks'`
+**Supported destinations:** `'text'` · `'md'` · `'html'` · `'csv'` · `'rtf'` · `'pdf'` · `'docx'` · `'odt'` · `'tex'` (alias `'latex'`) · `'epub'` · `'chunks'`
 
 > [!NOTE]
 > **PDF generation** uses a headless browser by default (`pdfConfig.engine: 'html'`), which needs the
@@ -625,7 +634,7 @@ OfficeParserAST
 │   └── chartData?: { title, dataSets, labels }
 ├── warnings: OfficeIssue[]  (non-fatal issues from the parsing phase)
 ├── config: OfficeParserConfig  (the resolved parse config; `.to()` inherits newlineDelimiter/onWarning from it)
-└── to(format, config?)  (format: 'html'|'md'|'text'|'csv'|'rtf'|'pdf'|'docx'|'odt'|'epub'|'chunks', returns { value, messages })
+└── to(format, config?)  (format: 'html'|'md'|'text'|'csv'|'rtf'|'pdf'|'docx'|'odt'|'tex'|'epub'|'chunks', returns { value, messages })
 ```
 
 ### `OfficeIssue`: Warning / Error Object
@@ -693,6 +702,8 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `CONTENT_NOT_REPRESENTABLE` | generate | A node type has no faithful form in the target format and was downgraded or omitted (e.g. math/embeds in DOCX/ODT, a table-less document to CSV). |
 | `METADATA_NOT_REPRESENTABLE` | generate | A metadata field could not be represented in the target format. |
 | `IMAGE_NOT_INLINED` | generate | An image over `maxInlineImageBytes` was referenced by name instead of inlined (Markdown / fragment HTML). |
+| `IMAGES_NOT_BUNDLED` | generate | LaTeX output references image files that a `.tex` cannot embed; the message names them. Ship them alongside, or set `texConfig.bundle: true`. |
+| `MATH_WRITTEN_AS_TEXT` | generate | A math expression used an unsafe LaTeX command (file access, shell, redefinition) or was malformed, so LaTeX output shows it as literal text instead of typesetting it. |
 | `PDF_GENERATION_FAILED` | generate | PDF generation failed (e.g. Puppeteer missing for `engine: 'html'`). |
 | `INVALID_STYLE_MAPPING` / `INVALID_STYLE_MAP_TAG` | generate | A `styleMap` entry/tag was invalid and ignored. |
 | `TEMPLATE_UNSUPPORTED_FORMAT` / `TEMPLATE_FIELD_MISSING` | template | The template format is unsupported / a `{{field}}` had no value under `onMissing: 'error'`. |
@@ -881,11 +892,13 @@ used verbatim in preference to anything reconstructed from the presentation mark
 > index document text should treat `code` nodes carrying `math` as opaque LaTeX rather than
 > splitting them as words.
 
-**On generation**, an equation's fate depends on the target: HTML and Markdown keep it as LaTeX (a
-`$…$`/`$$…$$` delimited block or a `data-math` attribute); DOCX and ODT downgrade it to its LaTeX text
-and emit a `CONTENT_NOT_REPRESENTABLE` warning (no native OMML/ODF-math is written); plain text, RTF and
-the PDF engines render the LaTeX string as-is without a warning. So the LaTeX always survives, but only
-HTML/Markdown round-trip it as math.
+**On generation**, an equation's fate depends on the target: LaTeX output typesets it as real math
+(`$…$`, `\[…\]`, or a bare `align`-style environment), after a safety check that refuses any command
+reaching outside the formula (see [TexGeneratorConfig](#texgeneratorconfig)); HTML and Markdown keep it
+as LaTeX (a `$…$`/`$$…$$` delimited block or a `data-math` attribute); DOCX and ODT downgrade it to its
+LaTeX text and emit a `CONTENT_NOT_REPRESENTABLE` warning (no native OMML/ODF-math is written); plain
+text, RTF and the PDF engines render the LaTeX string as-is without a warning. So the LaTeX always
+survives, and LaTeX, HTML and Markdown keep it as math.
 
 ### 7. Document Metadata
 
@@ -1199,14 +1212,14 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `includeFormatting` | `boolean` | `true` | Include bold/italic/colors/sizes in output (HTML, Markdown, DOCX, ODT, RTF; a no-op for text/CSV/chunks, which carry no run formatting) |
-| `generateIds` | `boolean` | `true` | Slug-based heading anchors: `id` attributes on HTML headings, and a `{#slug}` suffix on Markdown headings (`# Title {#title}`, kramdown/Pandoc). Set `false` to omit both, useful when the Markdown is rendered by GFM/CommonMark, which show `{#slug}` as literal text. A top-level option (not under `mdConfig`/`htmlConfig`); it affects HTML, Markdown, DOCX and ODT (the formats that carry a heading anchor/bookmark id). |
-| `renderMetadata` | `boolean` | `false` | Render title/author as a visible header block. Rendered by CSV, DOCX, HTML (and the Puppeteer PDF engine), EPUB, text, ODT and RTF; the native PDF engine and Markdown do not |
+| `includeFormatting` | `boolean` | `true` | Include bold/italic/colors/sizes in output (HTML, Markdown, DOCX, ODT, LaTeX, RTF; a no-op for text/CSV/chunks, which carry no run formatting) |
+| `generateIds` | `boolean` | `true` | Slug-based heading anchors: `id` attributes on HTML headings, and a `{#slug}` suffix on Markdown headings (`# Title {#title}`, kramdown/Pandoc). Set `false` to omit both, useful when the Markdown is rendered by GFM/CommonMark, which show `{#slug}` as literal text. A top-level option (not under `mdConfig`/`htmlConfig`); it affects HTML, Markdown, DOCX, ODT and LaTeX (the formats that carry a heading anchor/bookmark id; in LaTeX a `\label`). |
+| `renderMetadata` | `boolean` | `false` | Render title/author as a visible header block. Rendered by CSV, DOCX, HTML (and the Puppeteer PDF engine), EPUB, text, ODT, LaTeX (`\maketitle`, or a beamer title frame) and RTF; the native PDF engine and Markdown do not |
 | `metadataOverrides` | `MetadataOverrides` | `{}` | Override the metadata embedded in the output, merged per field over `ast.metadata` |
 | `includeImages` | `boolean \| 'image-only' \| 'image+ocr-text' \| 'ocr-text-only' \| 'none'` | `true` | How to render an image node. `true`=`'image-only'` (embed the image, no OCR text); `'image+ocr-text'` (image then its recognized/OCR text); `'ocr-text-only'` (OCR text, no image); `false`=`'none'` (omit). In plain-text output an image becomes an `[Image: name]` placeholder (plus OCR text for `'image+ocr-text'`), or just the OCR text for `'ocr-text-only'` |
 | `maxInlineImageBytes` | `number` | `1500000` | Max decoded image size, in bytes, that is inlined as a `data:` URI (HTML/Markdown); the base64 URI itself is ~1/3 larger, so a scanned page cannot emit a multi-megabyte line that breaks downstream parsers. Under the default `image-only` mode an image over the cap renders its recognized/OCR text when it has any (multi-line OCR as a fenced block in Markdown), otherwise a compact name reference; Markdown still emits the `IMAGE_NOT_INLINED` warning. Plain text follows the same rule. **Standalone HTML always inlines**, whatever the cap: a self-contained document has nowhere else to resolve the image from. `0` never inlines, `Infinity` always inlines |
-| `includeCharts` | `boolean` | `true` | Include charts: HTML renders an interactive Chart.js canvas, DOCX/ODT render the chart's data as a table, plain text and the native PDF engine render the chart's data text; Markdown and RTF render nothing for a chart. `false` omits charts in every generator |
-| `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal anchors from output (HTML, Markdown, DOCX, ODT, RTF) |
+| `includeCharts` | `boolean` | `true` | Include charts: HTML renders an interactive Chart.js canvas, DOCX/ODT/LaTeX render the chart's data as a table, plain text and the native PDF engine render the chart's data text; Markdown and RTF render nothing for a chart. `false` omits charts in every generator |
+| `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal anchors from output (HTML, Markdown, DOCX, ODT, LaTeX, RTF) |
 | `ignoreDefaultStyleMap` | `boolean` | `false` | Disable built-in style mappings (e.g., "Heading 1" → h1) |
 | `styleMap` | `string[] \| StructuredStyleMapping[]` | `[]` | Custom semantic style mappings |
 | `onNode` | `(node) => string \| false \| void` | — | Per-node callback for filtering, overriding, or mutating |
@@ -1417,6 +1430,53 @@ import { writeFileSync } from 'fs';
 const { value } = await OfficeConverter.convert('report.docx', 'odt', { extractAttachments: true });
 writeFileSync('report.odt', value); // value is a Uint8Array
 ```
+
+### TexGeneratorConfig
+
+Pass as `texConfig` inside `GeneratorConfig`. The LaTeX generator turns any parsed document into LaTeX source that compiles unmodified with **pdfLaTeX, XeLaTeX and LuaLaTeX**: the preamble selects fonts per engine (`fontenc`/`inputenc` under pdfTeX, `fontspec` otherwise) and loads only the packages the document actually uses. The value is a `string` (the `.tex` source), or a `Uint8Array` zip when `bundle` is set. Zero extra dependencies; runs in Node and the browser.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `documentClass` | `'auto' \| 'article' \| 'report' \| 'book' \| 'beamer'` | `'auto'` | `auto` writes a `beamer` presentation when the content is made of slides (PPTX/ODP) and an `article` otherwise. `report`/`book` map level-1 headings to `\chapter`. `beamer` for a non-presentation source starts a new frame at each level-1/2 heading |
+| `standalone` | `boolean` | `true` | `false` emits only the body, headed by a comment listing the packages the including document needs |
+| `bundle` | `boolean` | `false` | A `.tex` file cannot embed images. `true` returns a zip holding `main.tex` and every referenced image under `images/`, ready to compile or upload to Overleaf. With `false` the source still references `images/<name>`, and an `IMAGES_NOT_BUNDLED` warning names the files to place there (their bytes are in `ast.attachments`) |
+| `numberSections` | `boolean` | `false` | Number sections (`1`, `1.1`, ...). Off by default, matching office documents, whose headings are unnumbered |
+| `format` | `PaperFormat` | `'A4'` | Paper size, written as a `geometry` option. Same names as `pdfConfig.format`. Ignored by `beamer` |
+| `landscape` | `boolean` | `false` | Landscape orientation. Ignored by `beamer` |
+| `margin` | `object` | `{72,72,72,72}` | Page margins (`top`, `right`, `bottom`, `left`), each a number of points or a unit string (`'1in'`, `'2cm'`, `'36pt'`). Ignored by `beamer` |
+
+```typescript
+import { OfficeConverter } from 'officeparser';
+import { writeFileSync } from 'fs';
+
+// Source only: images are referenced as images/<name>
+const { value: tex } = await OfficeConverter.convert('paper.docx', 'tex');
+writeFileSync('paper.tex', tex as string);
+
+// Self-contained: main.tex + images/ in one zip
+const { value: zip } = await OfficeConverter.convert('paper.docx', 'tex', { texConfig: { bundle: true } });
+writeFileSync('paper.zip', zip as Uint8Array);
+```
+
+**How the document maps to LaTeX**
+
+| Content | LaTeX |
+|---|---|
+| Headings | `\section` ... `\subparagraph` (`\chapter` first in `report`/`book`), unnumbered unless `numberSections`; heading ids and linked bookmarks become `\label`s |
+| Run formatting | `\textbf`, `\textit`, `\uline`/`\sout` (`ulem`), `\textsuperscript`/`\textsubscript`, `\textcolor`, a word-wrapping highlight, `\texttt` for monospace fonts, `\fontsize` for sizes that differ from the body size |
+| Lists | nested `itemize`/`enumerate` rebuilt from the flat list items (continued numbering kept), task items as check boxes, definition lists as `description` |
+| Tables | `longtable` (page-breaking, header row repeated) or `tabular` where a `longtable` cannot go; ruled grid, `\multicolumn`/`\multirow` merges, column alignment and cell colours. A table wider than 16 columns continues below itself in bands of 16 |
+| Links, citations | `\href` (scheme-checked), `\hyperref` for internal links whose target exists, `\cite{key}` |
+| Notes, comments | `\footnote` (deferred to `\footnotetext` inside a `tabular`), `\endnote` (`endnotes` package), review comments as LaTeX `%` comments |
+| Code, math | `lstlisting` for a language `listings` knows, `verbatim` otherwise; math as live LaTeX after a safety check |
+| Images, charts, embeds | `\includegraphics` at natural size, bounded to the line and page; charts as a data table; embeds as a link |
+| Slides | `beamer` frames (the slide's first heading is the frame title, speaker notes become `\note`, long slides continue on another frame) |
+| Page header/footer | `fancyhdr` |
+| Metadata | `\title`/`\author`/`\date`, plus the PDF metadata via `\hypersetup` (custom properties included) |
+
+**Safety.** LaTeX is a programming language, so every piece of document text is escaped, URLs are scheme-checked (the same allowlist as the DOCX/ODT generators) and percent-encoded, image paths are reduced to a safe file name inside `images/`, and a code block that contains its own end marker is not put in a verbatim environment. Math is the one place document content is emitted as live LaTeX; an expression that uses a command able to read or write files, run programs, or redefine commands (`\input`, `\write18`, `\openin`, `\catcode`, `\def`, ...), or that is structurally unbalanced, is written as literal text instead, with a `MATH_WRITTEN_AS_TEXT` warning. Compile untrusted output without `--shell-escape`, as you would any LaTeX you did not write.
+
+**Characters.** A character the default fonts lack (check marks, arrows, many math symbols, dingbats, unusual spaces) gets a `\newunicodechar` fallback under every engine. A script pdfLaTeX cannot typeset at all (CJK, Cyrillic, emoji, ...) is shown there as a `[U+XXXX]` marker (Greek as math letters); XeLaTeX and LuaLaTeX keep the real characters, so compile with one of them and set a `\setmainfont` that covers the script.
 
 ### CsvGeneratorConfig
 
@@ -1669,6 +1729,7 @@ For a full debugging guide, visit the [Live Documentation](https://harshankur.gi
 2. **PDF Images**: Extracted and re-encoded as PNG (`pdf_image_p<page>_<n>.png`, `image/png`) on both Node and the browser, since a PDF stores image data in formats no viewer opens directly. v7 emitted BMP; code that filters attachments by `.bmp` must be updated.
 3. **PDF structure without tags**: Tables, lists and headings come from the PDF's tag tree when present. For untagged PDFs they are recovered geometrically, which is best-effort: complex float-beside-text layouts and tables without a tag tree may not separate perfectly. Column reading order, paragraphs and word spacing are handled on both paths.
 4. **PDF text decoration and spans**: text colour is extracted by default (`pdfParserConfig.extractTextColor`); set it `false` to skip the extra operator-list pass on a throughput-focused text path. Underline and strikethrough are still not extracted: they are drawn as separate graphics operators rather than carried as text properties. Vertical (top-to-bottom) writing is read but not laid out spatially. Table cell `colSpan`/`rowSpan` are recovered best-effort on the tagged path, from the geometry of the empty placeholder cells the tag tree pads a merge with; untagged PDFs expose no spans.
+5. **LaTeX output** is a faithful conversion, not a typesetting clone of the source: named font families are not carried over (only monospace), images in formats LaTeX cannot include (GIF, BMP, TIFF, WebP, SVG, EMF) are packaged but drawn as placeholders, `\cite` keys are emitted without a bibliography (add your own `.bib`), and very wide spreadsheets continue in 16-column bands.
 
 ---
 

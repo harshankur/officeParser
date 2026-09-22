@@ -29,7 +29,7 @@ const { value: html } = await OfficeGenerator.generate(ast, 'html', {
 // Convert to CSV
 const { value: csv } = await OfficeGenerator.generate(ast, 'csv');</code></pre>
 
-    <p><strong>Supported destinations:</strong> <code>'text'</code> · <code>'md'</code> · <code>'html'</code> · <code>'csv'</code> · <code>'rtf'</code> · <code>'pdf'</code> · <code>'docx'</code> · <code>'odt'</code> · <code>'epub'</code> · <code>'chunks'</code></p>
+    <p><strong>Supported destinations:</strong> <code>'text'</code> · <code>'md'</code> · <code>'html'</code> · <code>'csv'</code> · <code>'rtf'</code> · <code>'pdf'</code> · <code>'docx'</code> · <code>'odt'</code> · <code>'tex'</code> (alias <code>'latex'</code>) · <code>'epub'</code> · <code>'chunks'</code></p>
 
     <blockquote>
         [!IMPORTANT]
@@ -55,6 +55,7 @@ const { value: chunks }    = await ast.to('chunks', { chunksConfig: { strategy: 
 const { value: pdfBytes }  = await ast.to('pdf');  // returns Uint8Array
 const { value: docxBytes } = await ast.to('docx'); // returns Uint8Array
 const { value: odtBytes }  = await ast.to('odt');  // returns Uint8Array
+const { value: latex }     = await ast.to('tex');  // LaTeX source string (texConfig.bundle: true returns a zip)
 const { value: epubBytes } = await ast.to('epub'); // returns Uint8Array</code></pre>
 
     <h2>ConversionResult Reference</h2>
@@ -71,7 +72,7 @@ const { value: epubBytes } = await ast.to('epub'); // returns Uint8Array</code><
             <tr>
                 <td><code>value</code></td>
                 <td><code>string | Uint8Array | OfficeChunk[]</code></td>
-                <td>The actual generated content. Type depends on destination: <code>pdf</code> / <code>docx</code> / <code>odt</code> / <code>epub</code> → <code>Uint8Array</code>, <code>chunks</code> → <code>OfficeChunk[]</code>, <code>csv</code> → <code>string | Uint8Array</code>, all others → <code>string</code>.</td>
+                <td>The actual generated content. Type depends on destination: <code>pdf</code> / <code>docx</code> / <code>odt</code> / <code>epub</code> → <code>Uint8Array</code>, <code>chunks</code> → <code>OfficeChunk[]</code>, <code>csv</code> and <code>tex</code> → <code>string | Uint8Array</code> (a zip for multi-sheet CSV or <code>texConfig.bundle</code>), all others → <code>string</code>.</td>
             </tr>
             <tr>
                 <td><code>messages</code></td>

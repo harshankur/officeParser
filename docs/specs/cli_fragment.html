@@ -24,9 +24,9 @@
         <tbody>
             <tr>
                 <td><code>--to</code></td>
-                <td><code>json | text | md | html | csv | rtf | pdf | docx | odt | epub | chunks</code></td>
+                <td><code>json | text | md | html | csv | rtf | pdf | docx | odt | tex | epub | chunks</code></td>
                 <td><code>json</code></td>
-                <td>The desired output format for the parsed document.</td>
+                <td>The desired output format for the parsed document (<code>latex</code> is an alias of <code>tex</code>).</td>
             </tr>
             <tr>
                 <td><code>--output</code></td>
@@ -239,8 +239,26 @@
                 <td>PDF engine: Puppeteer through generated HTML, or <code>native</code> (pdf-lib, no browser).</td>
             </tr>
             <tr>
+                <td><code>--texConfig.bundle</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>LaTeX: write a zip of <code>main.tex</code> plus its <code>images/</code> instead of the <code>.tex</code> alone.</td>
+            </tr>
+            <tr>
+                <td><code>--texConfig.documentClass</code></td>
+                <td><code>auto | article | report | book | beamer</code></td>
+                <td><code>auto</code></td>
+                <td>LaTeX document class (<code>auto</code> = <code>beamer</code> for presentations, <code>article</code> otherwise).</td>
+            </tr>
+            <tr>
+                <td><code>--texConfig.standalone</code></td>
+                <td>boolean</td>
+                <td><code>true</code></td>
+                <td>LaTeX: <code>false</code> writes the body only, for pasting into an existing document.</td>
+            </tr>
+            <tr>
                 <td><code><del>--format</del></code></td>
-                <td><code>json | text | md | html | csv | rtf | pdf | docx | odt | epub | chunks</code></td>
+                <td><code>json | text | md | html | csv | rtf | pdf | docx | odt | tex | epub | chunks</code></td>
                 <td><code>json</code></td>
                 <td><strong>Deprecated.</strong> Use <code>--to</code> instead.</td>
             </tr>
