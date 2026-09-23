@@ -7,6 +7,33 @@
     <title>officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser</title>
     <link rel="icon" type="image/png" href="./favicon.png">
 
+    <!-- Page views, counted by the self-hosted viewcounter (views.harshankur.com). Fire-and-forget:
+         it never blocks rendering, sends no cookies or personal data, and runs only on the production
+         site, so dev servers and preview deploys never count. -->
+    <script>
+        (() => {
+            if (location.hostname !== 'officeparser.harshankur.com') return;
+            /** One view of the current page; a spec document (#spec/<name>) counts as its own page. */
+            window.registerPageView = () => {
+                let sessionId;
+                try {
+                    sessionId = sessionStorage.getItem('vc-session') || crypto.randomUUID();
+                    sessionStorage.setItem('vc-session', sessionId);
+                } catch { sessionId = crypto.randomUUID(); }
+                const route = location.hash.startsWith('#spec/') ? location.hash : '';
+                fetch('https://views.harshankur.com/registerView?' + new URLSearchParams({
+                    appId: 'officeparser',
+                    deviceSize: innerWidth < 768 ? 'small' : innerWidth < 1200 ? 'medium' : 'large',
+                    page: location.pathname + route,
+                    title: document.title.slice(0, 200),
+                    referrer: document.referrer,
+                    sessionId,
+                }), { keepalive: true }).catch(() => {});
+            };
+            try { window.registerPageView(); } catch { /* never break the page */ }
+        })();
+    </script>
+
     <!-- OpenGraph Metadata -->
     <meta property="og:title"
         content="officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser">
@@ -4865,7 +4892,14 @@
                 document.getElementById('specs').scrollIntoView({ behavior: 'smooth' });
             };
 
-            window.addEventListener('hashchange', handleHash);
+            window.addEventListener('hashchange', () => {
+                handleHash();
+                // Opening a spec document is a client-side route change: count it as a page view.
+                // (The initial load is counted by the page-view script in <head>.)
+                if (location.hash.startsWith('#spec/') && window.registerPageView) {
+                    try { window.registerPageView(); } catch { /* never break the page */ }
+                }
+            });
             window.addEventListener('load', handleHash);
 
             // --- Visualizer Handlers ---
