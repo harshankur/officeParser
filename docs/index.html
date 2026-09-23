@@ -1013,6 +1013,31 @@
             grid-column: 1 / -1;
         }
 
+        .warning-list {
+            max-height: 40vh;
+            overflow-y: auto;
+        }
+
+        .warning-group + .warning-group {
+            margin-top: 0.6rem;
+        }
+
+        .warning-group-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            opacity: 0.8;
+        }
+
+        .warning-group ul {
+            margin: 0.2rem 0 0;
+            padding-left: 1.1rem;
+        }
+
+        .warning-group li + li {
+            margin-top: 0.25rem;
+        }
+
         .export-intro {
             font-family: 'Outfit', sans-serif;
             font-size: 0.85rem;
@@ -3747,14 +3772,14 @@
         </section>
 
         <div id="warning-banner"
-            style="display: none; max-width: 1000px; margin: 0 auto 2rem; padding: 1rem 1.5rem; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 12px; color: #fbbf24; font-size: 0.9rem; align-items: center; gap: 1rem; backdrop-filter: blur(8px); animation: slideUp 0.3s ease-out;">
+            style="display: none; max-width: 1000px; margin: 0 auto 2rem; padding: 1rem 1.5rem; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 12px; color: #fbbf24; font-size: 0.9rem; align-items: flex-start; gap: 1rem; backdrop-filter: blur(8px); animation: slideUp 0.3s ease-out;">
             <span style="font-size: 1.25rem;">⚠️</span>
-            <div style="flex: 1;">
-                <strong style="display: block; margin-bottom: 0.25rem;">Parser Warning</strong>
-                <span id="warning-text"></span>
+            <div style="flex: 1; min-width: 0;">
+                <strong id="warning-title" style="display: block; margin-bottom: 0.25rem;">Warnings</strong>
+                <div id="warning-list" class="warning-list"></div>
             </div>
-            <button onclick="document.getElementById('warning-banner').style.display='none'"
-                style="background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.1rem;">✕</button>
+            <button onclick="window.dismissWarnings()" aria-label="Dismiss warnings"
+                style="background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.1rem; align-self: flex-start;">✕</button>
         </div>
 
         <div id="status-msg" style="text-align: center; margin-bottom: 2rem; color: var(--accent); font-weight: 600;">
@@ -5418,6 +5443,80 @@
             // Initial sync
             syncStyleMapFromRawToVisual();
 
+            // --- Warnings banner: every warning, grouped by where it came from ---
+            const WARNING_GROUP_LABELS = {
+                parse: 'Parsing', html: 'HTML output', md: 'Markdown output', chunks: 'RAG chunks output',
+                csv: 'CSV output', rtf: 'RTF output', tex: 'LaTeX output', text: 'Plain text output', ast: 'AST download',
+                docx: 'DOCX download', odt: 'ODT download', epub: 'EPUB download', pdf: 'PDF export', texbundle: 'LaTeX + images download'
+            };
+            const warningGroups = new Map();
+            /** Messages on screen when the banner was dismissed; the banner returns only for a new one. */
+            let dismissedWarnings = new Set();
+            /** The group a generation that inherits the parse callback reports to (set by withWarningGroup). */
+            window.activeWarningGroup = null;
+
+            function renderWarningBanner() {
+                const banner = document.getElementById('warning-banner');
+                const list = document.getElementById('warning-list');
+                list.replaceChildren();
+                let total = 0;
+                let unseen = false;
+                // Parsing first, then outputs in the order they were produced.
+                const order = [...warningGroups.keys()].sort((a, b) => (a === 'parse' ? -1 : b === 'parse' ? 1 : 0));
+                for (const group of order) {
+                    const messages = warningGroups.get(group);
+                    if (!messages.length) continue;
+                    const section = document.createElement('div');
+                    section.className = 'warning-group';
+                    const label = document.createElement('div');
+                    label.className = 'warning-group-label';
+                    label.textContent = WARNING_GROUP_LABELS[group] || group;
+                    const ul = document.createElement('ul');
+                    for (const message of messages) {
+                        const li = document.createElement('li');
+                        li.textContent = message;
+                        ul.appendChild(li);
+                        total++;
+                        if (!dismissedWarnings.has(message)) unseen = true;
+                    }
+                    section.append(label, ul);
+                    list.appendChild(section);
+                }
+                document.getElementById('warning-title').textContent = total === 1 ? '1 warning' : `${total} warnings`;
+                if (!total) banner.style.display = 'none';
+                else if (unseen) banner.style.display = 'flex';
+            }
+
+            window.recordWarning = (group, issue) => {
+                console.warn(`officeParser warning (${group}):`, issue);
+                const message = (issue && issue.message) || String(issue);
+                const messages = warningGroups.get(group) || [];
+                if (messages.includes(message)) return;
+                messages.push(message);
+                warningGroups.set(group, messages);
+                renderWarningBanner();
+            };
+
+            /** Clears one group (before it is produced again), or every group and the dismissals. */
+            window.resetWarnings = (group) => {
+                if (group === undefined) { warningGroups.clear(); dismissedWarnings = new Set(); }
+                else warningGroups.delete(group);
+                renderWarningBanner();
+            };
+
+            window.dismissWarnings = () => {
+                for (const messages of warningGroups.values()) messages.forEach(m => dismissedWarnings.add(m));
+                document.getElementById('warning-banner').style.display = 'none';
+            };
+
+            /** Runs a download, reporting its generation warnings under `group`. */
+            window.withWarningGroup = async (group, fn) => {
+                const previous = window.activeWarningGroup;
+                window.resetWarnings(group);
+                window.activeWarningGroup = group;
+                try { return await fn(); } finally { window.activeWarningGroup = previous; }
+            };
+
             async function handleFile(file) {
                 const buffer = await file.arrayBuffer();
                 lastFileBuffer = buffer;
@@ -5480,16 +5579,17 @@
                                 recognition: parseInt(document.getElementById('cfg_ocrRecognition').value, 10) * 1000
                             }
                         },
+                        // Parse warnings, and later any generation that inherits this callback from the
+                        // AST (downloads, which name their group via withWarningGroup).
                         onWarning: (issue) => {
-                            console.warn("Parser Warning:", issue);
-                            const banner = document.getElementById('warning-banner');
-                            const text = document.getElementById('warning-text');
-                            text.textContent = issue.message || String(issue);
-                            banner.style.display = 'flex';
+                            if (window.activeWarningGroup) window.recordWarning(window.activeWarningGroup, issue);
+                            else if (parsing) window.recordWarning('parse', issue);
+                            else console.warn('officeParser warning:', issue);
                         }
                     };
 
-                    document.getElementById('warning-banner').style.display = 'none';
+                    window.resetWarnings();
+                    let parsing = true;
 
                     if (config.ocr) ocrWasUsedInCurrentPreview = true;
                     updateOcrCleanupState();
@@ -5501,7 +5601,8 @@
                     // Pass the bytes as a named File so the library can route by extension: text formats
                     // (Markdown, HTML, CSV, LaTeX) have no magic bytes to detect them by.
                     const input = filename ? new File([buffer], filename) : buffer;
-                    const ast = await window.officeParser.parseOffice(input, config);
+                    let ast;
+                    try { ast = await window.officeParser.parseOffice(input, config); } finally { parsing = false; }
                     const endTime = performance.now();
                     const duration = ((endTime - startTime) / 1000).toFixed(2);
 
@@ -5709,8 +5810,10 @@
                     } else {
                         let genConfig = {
                             ...getGeneratorConfig(),
-                            ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked
+                            ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                            onWarning: (issue) => window.recordWarning(format, issue)
                         };
+                        window.resetWarnings(format);
                         if (format === 'html') {
                             genConfig.htmlConfig = readHtmlPanelConfigInputs();
                         } else if (format === 'md') {
@@ -6279,7 +6382,7 @@
                     try {
                         const orig = btn.textContent;
                         btn.textContent = '⌛...';
-                        await downloadHandlers[fmt]();
+                        await window.withWarningGroup(fmt, () => downloadHandlers[fmt]());
                         btn.textContent = 'Done!';
                         setTimeout(() => btn.textContent = orig, 2000);
                     } catch (err) {
@@ -6363,7 +6466,7 @@
             window.downloadPanelFormat = async (format) => {
                 if (!window.currentAst) return;
                 try {
-                    await downloadHandlers[format]();
+                    await window.withWarningGroup(format, () => downloadHandlers[format]());
                 } catch (err) {
                     console.error(`${format} download failed`, err);
                     statusMsg.textContent = `Error: ${err.message}`;
@@ -6455,11 +6558,7 @@
                         const orig = item.textContent;
                         try {
                             item.textContent = '⌛ Generating...';
-                            if (fmt === panel) {
-                                await downloadHandlers[panel]();
-                            } else {
-                                await DERIVED_EXPORTS[panel][fmt].run();
-                            }
+                            await window.withWarningGroup(fmt, () => fmt === panel ? downloadHandlers[panel]() : DERIVED_EXPORTS[panel][fmt].run());
                             item.textContent = orig;
                         } catch (err) {
                             console.error(`${fmt} export failed`, err);
@@ -6474,19 +6573,19 @@
 
             // --- Export panel: one download button per generator, including formats with no window ---
             const EXPORT_TARGETS = [
-                { name: 'Word', ext: '.docx', run: () => DERIVED_EXPORTS.html.docx.run() },
-                { name: 'OpenDocument Text', ext: '.odt', run: () => DERIVED_EXPORTS.html.odt.run() },
-                { name: 'LaTeX', ext: '.tex', run: () => downloadHandlers.tex() },
-                { name: 'LaTeX + images', ext: '.zip', run: () => DERIVED_EXPORTS.tex.texbundle.run() },
-                { name: 'EPUB', ext: '.epub', run: () => DERIVED_EXPORTS.html.epub.run() },
-                { name: 'PDF', ext: 'print', run: () => DERIVED_EXPORTS.html.pdf.run() },
-                { name: 'HTML', ext: '.html', run: () => downloadHandlers.html() },
-                { name: 'Markdown', ext: '.md', run: () => downloadHandlers.md() },
-                { name: 'Rich Text', ext: '.rtf', run: () => downloadHandlers.rtf() },
-                { name: 'Plain text', ext: '.txt', run: () => downloadHandlers.text() },
-                { name: 'CSV', ext: '.csv / .zip', run: () => downloadHandlers.csv() },
-                { name: 'RAG chunks', ext: '.json', run: () => downloadHandlers.chunks() },
-                { name: 'AST', ext: '.json', run: () => downloadHandlers.ast() }
+                { name: 'Word', group: 'docx', ext: '.docx', run: () => DERIVED_EXPORTS.html.docx.run() },
+                { name: 'OpenDocument Text', group: 'odt', ext: '.odt', run: () => DERIVED_EXPORTS.html.odt.run() },
+                { name: 'LaTeX', group: 'tex', ext: '.tex', run: () => downloadHandlers.tex() },
+                { name: 'LaTeX + images', group: 'texbundle', ext: '.zip', run: () => DERIVED_EXPORTS.tex.texbundle.run() },
+                { name: 'EPUB', group: 'epub', ext: '.epub', run: () => DERIVED_EXPORTS.html.epub.run() },
+                { name: 'PDF', group: 'pdf', ext: 'print', run: () => DERIVED_EXPORTS.html.pdf.run() },
+                { name: 'HTML', group: 'html', ext: '.html', run: () => downloadHandlers.html() },
+                { name: 'Markdown', group: 'md', ext: '.md', run: () => downloadHandlers.md() },
+                { name: 'Rich Text', group: 'rtf', ext: '.rtf', run: () => downloadHandlers.rtf() },
+                { name: 'Plain text', group: 'text', ext: '.txt', run: () => downloadHandlers.text() },
+                { name: 'CSV', group: 'csv', ext: '.csv / .zip', run: () => downloadHandlers.csv() },
+                { name: 'RAG chunks', group: 'chunks', ext: '.json', run: () => downloadHandlers.chunks() },
+                { name: 'AST', group: 'ast', ext: '.json', run: () => downloadHandlers.ast() }
             ];
 
             const exportGrid = document.getElementById('export-grid');
@@ -6507,7 +6606,7 @@
                     btn.disabled = true;
                     extEl.textContent = 'Generating...';
                     try {
-                        await target.run();
+                        await window.withWarningGroup(target.group, () => target.run());
                         extEl.textContent = target.ext;
                     } catch (err) {
                         console.error(`${target.name} export failed`, err);

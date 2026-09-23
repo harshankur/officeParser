@@ -655,7 +655,10 @@ await ast.to('md', {
                 <td>A <code>.tex</code> file cannot embed images. <code>true</code> returns a zip of
                     <code>main.tex</code> plus every referenced image under <code>images/</code>, ready to compile or
                     upload to Overleaf. With <code>false</code> the source still references <code>images/&lt;name&gt;</code>
-                    and the <code>IMAGES_NOT_BUNDLED</code> warning names the files to place there.</td>
+                    and the <code>IMAGES_NOT_BUNDLED</code> warning names the files to place there. An image the source
+                    referred to only by a plain relative path, with no image data (a <code>.tex</code> parsed without its
+                    project), keeps that path in <code>\includegraphics</code>; the warning names it in either mode, since
+                    there is nothing to bundle.</td>
             </tr>
             <tr>
                 <td><code>numberSections</code></td>
