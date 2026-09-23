@@ -17,7 +17,7 @@ import { resolveGeneratorConfig, resolveParserConfig } from '../../src/utils/con
 import {
     escapeHtml, escapeXml, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl,
     serializeForInlineScript, csvSafeCell, escapeRtf, markdownEscapeText, sanitizeMarkdownUrl, sanitizeRtfUrl,
-    escapeLatex, latexComment, sanitizeLatexUrl, sanitizeLatexMath
+    escapeLatex, latexComment, sanitizeLatexUrl, sanitizeLatexMath, sanitizeLatexImagePath
 } from '../../src/utils/sanitize';
 import { extractFiles } from '../../src/utils/zipUtils';
 import { parseXmlString } from '../../src/utils/xmlUtils';
@@ -1699,6 +1699,17 @@ async function latexSanitizationTests() {
     check('latex url: special characters encoded or escaped',
         url === 'https://x.com/a%20b/%7Bc%7D%5Cd%5Ee%7Cf%7Eg%24h?i=1\\&j=\\_\\#k\\%25zz\\%41%C3%A9', url);
     check('latex url: no raw brace or command survives', !/[{}]/.test(url) && liveControlWords(url).length === 0);
+
+    // sanitizeLatexImagePath: TeX reads the file when compiling, so only a plain relative path inside
+    // the document's folder passes, and it needs no escaping.
+    for (const good of ['a.png', 'figures/diagram', 'img/fig_1.v2.pdf', '_x/y-z.jpg']) {
+        check(`latex image path: ${JSON.stringify(good)} kept`, sanitizeLatexImagePath(good) === good);
+    }
+    for (const bad of ['../secret.png', 'a/../../b.png', './a.png', '/etc/passwd', '~/x.png', 'C:\\x.png', 'C:/x.png', '\\\\host\\share\\x.png',
+        'https://x.com/a.png', 'file:///etc/passwd', '.hidden.png', 'a//b.png', 'a/', '-flag.png', 'a b.png', 'a{b}.png', 'a\\input{x}.png',
+        'a%20b.png', 'a$b.png', '|kpsewhich x', "a'b.png", 'é.png', '', 'x'.repeat(256)]) {
+        check(`latex image path: ${JSON.stringify(bad).slice(0, 40)} refused`, sanitizeLatexImagePath(bad) === null);
+    }
 
     // sanitizeLatexMath: refused commands, catcode tricks and structure breakers never pass.
     const refused = ['\\input{/etc/passwd}', '\\include{x}', '\\write18{id}', '\\immediate\\write18{id}', '\\openout1=x', '\\openin1=/etc/passwd',

@@ -1923,6 +1923,22 @@ async function testLatexGeneration(): Promise<void> {
     assert.ok(sWarn.some(w => w.code === 'CONTENT_NOT_REPRESENTABLE' && w.details?.feature === 'image/gif image'), 'TEX synthetic: GIF warns');
     const sNotBundled = sWarn.find(w => w.code === 'IMAGES_NOT_BUNDLED');
     assert.ok(sNotBundled && sNotBundled.message.startsWith(`The LaTeX output references 2 image files ('images/passwd.png', 'images/anim.gif') that are not part of`), 'TEX synthetic: IMAGES_NOT_BUNDLED plural message');
+    // Images referenced by path, with no image data: a plain relative path stays an \includegraphics of
+    // that path (the caller supplies the file), a web image is a link, and any other path is refused.
+    const refAst = await OfficeParser.parseOffice(Buffer.from('<p><img src="pics/a.png"> <img src="https://example.com/b.png"> <img src="../up/c.png"> <img src="/etc/d.png"></p>'), { fileType: 'html' });
+    const refWarn: any[] = [];
+    const refTex = (await refAst.to('tex', { onWarning: (w: any) => refWarn.push(w) } as any)).value as string;
+    assert.ok(refTex.includes('\\includegraphics{pics/a.png}'), 'TEX refs: a relative image path stays an image at that path, at its natural size');
+    assert.ok(refTex.includes('\\href{https://example.com/b.png}') && refTex.includes('\\href{../up/c.png}') && refTex.includes('\\href{/etc/d.png}')
+        && !/\\includegraphics(\[[^\]]*\])?\{[^}]*(\.\.\/|\/etc)/.test(refTex), 'TEX refs: web images and paths leaving the folder are links, never read by TeX');
+    assert.deepStrictEqual(refWarn.filter(w => w.code === 'CONTENT_NOT_REPRESENTABLE').map(w => w.details?.feature),
+        ['remote image', 'image path that is absolute, leaves its folder or uses characters other than letters, digits, . _ - /'], 'TEX refs: "remote" only for a web image');
+    assert.strictEqual(refWarn.find(w => w.code === 'IMAGES_NOT_BUNDLED')?.message,
+        `The LaTeX output references 1 image file ('pics/a.png') by the path the source document gave, without the image data, which the source did not contain. Place it at that path, relative to the .tex, before compiling.`,
+        'TEX refs: IMAGES_NOT_BUNDLED names the path-referenced image (exact message)');
+    const refZipWarn: any[] = [];
+    await refAst.to('tex', { texConfig: { bundle: true }, onWarning: (w: any) => refZipWarn.push(w) } as any);
+    assert.ok(refZipWarn.some(w => w.code === 'IMAGES_NOT_BUNDLED' && w.message.includes(`('pics/a.png')`)), 'TEX refs: a bundle still names the image it has no data to package');
     // Admonition, embed, page break, sheet, header/footer, Unicode.
     assert.ok(stex.includes('\\textbf{\\textcolor{hex9A6700}{Careful}}\\par\nbody'), 'TEX synthetic: admonition title and colour');
     assert.ok(stex.includes('\\href{https://www.youtube.com/watch?v=dQw4w9WgXcQ}{Video}'), 'TEX synthetic: YouTube embed becomes a link');

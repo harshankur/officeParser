@@ -520,6 +520,19 @@ export function sanitizeLatexUrl(url: string): string {
 }
 
 /**
+ * An image path from document content, for `\includegraphics`, or null when it is not a plain
+ * relative path. TeX reads the named file when the document is compiled, so a document may only
+ * point inside its own folder: no scheme, no absolute, home or drive path, no `.`/`..` segments or
+ * hidden files, and only letters, digits, `.`, `_`, `-` and `/`, none of which mean anything to TeX
+ * or to a shell. Such a path needs no escaping.
+ */
+export function sanitizeLatexImagePath(path: string): string | null {
+    const p = String(path ?? '').trim();
+    if (!p || p.length > 255) return null;
+    return /^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/.test(p) ? p : null;
+}
+
+/**
  * LaTeX commands a math expression may not use, by exact name.
  *
  * Math is the one place the LaTeX generator emits document content as live LaTeX rather than

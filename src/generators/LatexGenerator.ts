@@ -3,7 +3,7 @@ import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, Ge
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { ADMONITION_COLOR, decodeBase64, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexUnicodePlan, LISTINGS_LANGUAGES, planLatexUnicode } from '../utils/latexUtils.js';
-import { escapeLatex, latexComment, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
+import { escapeLatex, latexComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -221,6 +221,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     };
 
     private readonly media: { path: string; bytes: Uint8Array }[] = [];
+    /** Images the document references by a relative path, with no image data: the caller supplies them. */
+    private readonly externalImages = new Set<string>();
     private readonly mediaByAttachment = new Map<string, MediaRef | null>();
     private readonly usedFileNames = new Set<string>();
 
@@ -294,14 +296,16 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             tex = `${this.fragmentHeader(unicode)}\n${[this.colorDefinitions().join('\n'), ...parts].filter(Boolean).join(BLOCK_SEPARATOR)}\n`;
         }
 
-        if (this.config.texConfig.bundle === true) {
+        const bundle = this.config.texConfig.bundle === true;
+        const unbundled = bundle ? [] : this.media.map(m => m.path);
+        if (unbundled.length > 0 || this.externalImages.size > 0) {
+            this.warn(OfficeWarningType.IMAGES_NOT_BUNDLED, { files: unbundled, external: [...this.externalImages] });
+        }
+        if (bundle) {
             const { mtime } = resolveZipInstant(this.effectiveMetadata.modified);
             const files: Zippable = { [BUNDLE_MAIN_FILE]: new TextEncoder().encode(tex) };
             for (const m of this.media) files[m.path] = m.bytes;
             return { value: zipSync(files, { mtime }), messages: this.messages };
-        }
-        if (this.media.length > 0) {
-            this.warn(OfficeWarningType.IMAGES_NOT_BUNDLED, { files: this.media.map(m => m.path) });
         }
         return { value: tex, messages: this.messages };
     }
@@ -1291,7 +1295,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      * or taller than the context allows. The bounds are TeX conditionals rather than a computed
      * number because the line width depends on where the image lands (a cell, a list, a frame).
      */
-    private imageSize(node: OfficeContentNode, intrinsic: { w: number; h: number } | null): string {
+    private imageSize(node: OfficeContentNode, intrinsic: { w: number; h: number } | null, natural = false): string {
         const maxH = this.ctx.imageMaxHeight;
         const meta = node.metadata as ImageMetadata | undefined;
         const pct = meta?.width ? /^\s*([\d.]+)\s*%\s*$/.exec(meta.width) : null;
@@ -1312,7 +1316,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             w = intrinsic.w / IMAGE_DPI * PT_PER_INCH;
             h = intrinsic.h / IMAGE_DPI * PT_PER_INCH;
         }
-        if (!w) return `width=\\linewidth,height=${maxH},keepaspectratio`;
+        // An image of unknown size drawn from a path keeps its natural size, as its source did.
+        if (!w) return natural ? '' : `width=\\linewidth,height=${maxH},keepaspectratio`;
         const width = `{\\ifdim ${fmtPt(w)}>\\linewidth\\linewidth\\else ${fmtPt(w)}\\fi}`;
         const height = h ? `{\\ifdim ${fmtPt(h)}>${maxH}${maxH}\\else ${fmtPt(h)}\\fi}` : maxH;
         return `width=${width},height=${height},keepaspectratio`;
@@ -1344,10 +1349,23 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 img = `\\fbox{${escapeLatex(`Image: ${alt || ref.path}`, ' ')}}`;
             }
         } else if (meta?.url) {
-            this.warnOnce('image:remote', OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'remote image', format: 'tex' });
-            const url = sanitizeLatexUrl(meta.url);
-            const text = escapeLatex(alt || meta.url, ' ');
-            img = url ? `${this.cmd('href')}{${url}}{${text}}` : text;
+            const path = sanitizeLatexImagePath(meta.url);
+            if (path) {
+                // A relative path (from a LaTeX \includegraphics, or an HTML/Markdown image beside its
+                // page) stays a reference to that file, as in the source; the warning names it.
+                this.uses.graphics = true;
+                this.externalImages.add(path);
+                const size = this.imageSize(node, null, true);
+                img = `\\includegraphics${size ? `[${size}]` : ''}{${path}}`;
+            } else {
+                // LaTeX cannot fetch a web image, and reads no file outside the document's folder.
+                const remote = /^(?:https?|ftp):|^\/\//i.test(meta.url.trim());
+                this.warnOnce(remote ? 'image:remote' : 'image:path', OfficeWarningType.CONTENT_NOT_REPRESENTABLE,
+                    { feature: remote ? 'remote image' : 'image path that is absolute, leaves its folder or uses characters other than letters, digits, . _ - /', format: 'tex' });
+                const url = sanitizeLatexUrl(meta.url);
+                const text = escapeLatex(alt || meta.url, ' ');
+                img = url ? `${this.cmd('href')}{${url}}{${text}}` : text;
+            }
         }
         if (!img) return alt ? escapeLatex(alt, ' ') : this.ocrMarkup(ocr, block);
 
