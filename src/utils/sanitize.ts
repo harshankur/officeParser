@@ -520,16 +520,32 @@ export function sanitizeLatexUrl(url: string): string {
 }
 
 /**
+ * One segment of an image path: starts with a letter, digit or `_` (so never `.`, `..`, a hidden
+ * file or an option-like `-`), then letters, digits, `.`, `_`, `-` and single spaces, and does not
+ * end with a space. TeX turns a run of spaces into one, so a double space would name another file.
+ */
+const LATEX_IMAGE_PATH_SEGMENT = '[A-Za-z0-9_](?:[A-Za-z0-9._-]| (?! ))*(?<! )';
+const LATEX_IMAGE_PATH = new RegExp(`^${LATEX_IMAGE_PATH_SEGMENT}(?:/${LATEX_IMAGE_PATH_SEGMENT})*$`);
+
+/**
  * An image path from document content, for `\includegraphics`, or null when it is not a plain
  * relative path. TeX reads the named file when the document is compiled, so a document may only
  * point inside its own folder: no scheme, no absolute, home or drive path, no `.`/`..` segments or
- * hidden files, and only letters, digits, `.`, `_`, `-` and `/`, none of which mean anything to TeX
- * or to a shell. Such a path needs no escaping.
+ * hidden files, and only letters, digits, `.`, `_`, `-`, `/` and single spaces, none of which mean
+ * anything to TeX or to a shell (LaTeX reads file names with spaces since 2019). Such a path needs
+ * no escaping.
+ *
+ * A path from HTML or Markdown is a URL reference, so its percent-escapes (`pic%20one.png`) are
+ * decoded first; the decoded path is what is checked. A LaTeX path cannot contain a raw `%` (it
+ * starts a comment), so decoding never misreads one.
  */
 export function sanitizeLatexImagePath(path: string): string | null {
-    const p = String(path ?? '').trim();
+    let p = String(path ?? '').trim();
+    if (p.includes('%')) {
+        try { p = decodeURIComponent(p).trim(); } catch { return null; }
+    }
     if (!p || p.length > 255) return null;
-    return /^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/.test(p) ? p : null;
+    return LATEX_IMAGE_PATH.test(p) ? p : null;
 }
 
 /**

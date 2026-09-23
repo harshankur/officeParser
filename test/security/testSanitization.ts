@@ -1702,12 +1702,17 @@ async function latexSanitizationTests() {
 
     // sanitizeLatexImagePath: TeX reads the file when compiling, so only a plain relative path inside
     // the document's folder passes, and it needs no escaping.
-    for (const good of ['a.png', 'figures/diagram', 'img/fig_1.v2.pdf', '_x/y-z.jpg']) {
+    for (const good of ['a.png', 'figures/diagram', 'img/fig_1.v2.pdf', '_x/y-z.jpg', 'pic with space.png', 'my figures/a b.png']) {
         check(`latex image path: ${JSON.stringify(good)} kept`, sanitizeLatexImagePath(good) === good);
     }
+    // HTML/Markdown paths are URL references: percent-escapes are decoded, then the result is checked.
+    check('latex image path: %20 decoded to a space', sanitizeLatexImagePath('pic%20with%20space.png') === 'pic with space.png');
+    for (const bad of ['%2E%2E/secret.png', '%2Fetc%2Fpasswd', 'a%7Bb%7D.png', 'a%zz.png', 'a%25b.png']) {
+        check(`latex image path: encoded ${JSON.stringify(bad)} refused`, sanitizeLatexImagePath(bad) === null);
+    }
     for (const bad of ['../secret.png', 'a/../../b.png', './a.png', '/etc/passwd', '~/x.png', 'C:\\x.png', 'C:/x.png', '\\\\host\\share\\x.png',
-        'https://x.com/a.png', 'file:///etc/passwd', '.hidden.png', 'a//b.png', 'a/', '-flag.png', 'a b.png', 'a{b}.png', 'a\\input{x}.png',
-        'a%20b.png', 'a$b.png', '|kpsewhich x', "a'b.png", 'é.png', '', 'x'.repeat(256)]) {
+        'https://x.com/a.png', 'file:///etc/passwd', '.hidden.png', 'a//b.png', 'a/', '-flag.png', 'a  b.png', 'a /b.png', 'a/ b.png', 'a\tb.png', 'a{b}.png', 'a\\input{x}.png',
+        'a$b.png', '|kpsewhich x', "a'b.png", 'é.png', '', 'x'.repeat(256)]) {
         check(`latex image path: ${JSON.stringify(bad).slice(0, 40)} refused`, sanitizeLatexImagePath(bad) === null);
     }
 

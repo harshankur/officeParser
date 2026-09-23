@@ -1929,10 +1929,12 @@ async function testLatexGeneration(): Promise<void> {
     const refWarn: any[] = [];
     const refTex = (await refAst.to('tex', { onWarning: (w: any) => refWarn.push(w) } as any)).value as string;
     assert.ok(refTex.includes('\\includegraphics{pics/a.png}'), 'TEX refs: a relative image path stays an image at that path, at its natural size');
+    const spaced = (await (await OfficeParser.parseOffice(Buffer.from('<p><img src="my%20pics/fig%20one.png"></p>'), { fileType: 'html' })).to('tex')).value as string;
+    assert.ok(spaced.includes('\\includegraphics{my pics/fig one.png}'), 'TEX refs: a percent-encoded path with spaces is decoded to the file name');
     assert.ok(refTex.includes('\\href{https://example.com/b.png}') && refTex.includes('\\href{../up/c.png}') && refTex.includes('\\href{/etc/d.png}')
         && !/\\includegraphics(\[[^\]]*\])?\{[^}]*(\.\.\/|\/etc)/.test(refTex), 'TEX refs: web images and paths leaving the folder are links, never read by TeX');
     assert.deepStrictEqual(refWarn.filter(w => w.code === 'CONTENT_NOT_REPRESENTABLE').map(w => w.details?.feature),
-        ['remote image', 'image path that is absolute, leaves its folder or uses characters other than letters, digits, . _ - /'], 'TEX refs: "remote" only for a web image');
+        ['remote image', 'image path that is absolute, leaves its folder or uses characters other than letters, digits, spaces and . _ - /'], 'TEX refs: "remote" only for a web image');
     assert.strictEqual(refWarn.find(w => w.code === 'IMAGES_NOT_BUNDLED')?.message,
         `The LaTeX output references 1 image file ('pics/a.png') by the path the source document gave, without the image data, which the source did not contain. Place it at that path, relative to the .tex, before compiling.`,
         'TEX refs: IMAGES_NOT_BUNDLED names the path-referenced image (exact message)');

@@ -1361,7 +1361,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 // LaTeX cannot fetch a web image, and reads no file outside the document's folder.
                 const remote = /^(?:https?|ftp):|^\/\//i.test(meta.url.trim());
                 this.warnOnce(remote ? 'image:remote' : 'image:path', OfficeWarningType.CONTENT_NOT_REPRESENTABLE,
-                    { feature: remote ? 'remote image' : 'image path that is absolute, leaves its folder or uses characters other than letters, digits, . _ - /', format: 'tex' });
+                    { feature: remote ? 'remote image' : 'image path that is absolute, leaves its folder or uses characters other than letters, digits, spaces and . _ - /', format: 'tex' });
                 const url = sanitizeLatexUrl(meta.url);
                 const text = escapeLatex(alt || meta.url, ' ');
                 img = url ? `${this.cmd('href')}{${url}}{${text}}` : text;
