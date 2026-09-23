@@ -1531,7 +1531,7 @@ writeFileSync('paper.zip', zip as Uint8Array);
 | Links, citations | `\href` (scheme-checked), `\hyperref` for internal links whose target exists, `\cite{key}` |
 | Notes, comments | `\footnote` (deferred to `\footnotetext` inside a `tabular`), `\endnote` (`endnotes` package), review comments as LaTeX `%` comments |
 | Code, math | `lstlisting` for a language `listings` knows, `verbatim` otherwise; math as live LaTeX after a safety check |
-| Images, charts, embeds | `\includegraphics` at natural size, bounded to the line and page; an image the source referred to only by a plain relative path keeps that path (`\includegraphics{figures/diagram}`), while a web image, or a path that is absolute or leaves the document's folder, becomes a link, since TeX cannot fetch the one and must not read the other; charts as a data table; embeds as a link |
+| Images, charts, embeds | `\includegraphics` at natural size, bounded to the line and page; an image the source referred to only by a plain relative path keeps that path (`\includegraphics{figures/diagram}`; spaces are fine, and a URL's `%20`-style escapes are decoded to the file name), while a web image, or a path that is absolute or leaves the document's folder, becomes a link, since TeX cannot fetch the one and must not read the other; charts as a data table; embeds as a link |
 | Slides | `beamer` frames (the slide's first heading is the frame title, speaker notes become `\note`, long slides continue on another frame) |
 | Page header/footer | `fancyhdr` |
 | Title block | a heading styled `Title` (a Word title, or a parsed `\maketitle`) and the `Author`/`Date` lines right after it: `\maketitle` where it stands (a `\titlepage` frame in beamer), printing only those lines |
