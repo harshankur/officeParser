@@ -256,7 +256,7 @@ const buffer = fs.readFileSync('/path/to/file.pdf');
 const ast = await officeParser.parseOffice(buffer);
 ```
 
-In the browser you can hand a `File`/`Blob` straight from an `<input type="file">` — no need to
+In the browser you can hand a `File`/`Blob` straight from an `<input type="file">`, with no need to
 read it into a buffer first. A `File`'s name drives type detection, so no `fileType` hint is
 needed when the name has a recognizable extension:
 
@@ -448,7 +448,7 @@ const { value: csv } = await OfficeGenerator.generate(ast, 'csv');
 > See [PdfGeneratorConfig](#pdfgeneratorconfig).
 >
 > **EPUB generation with images** requires `extractAttachments: true` on the parse step that
-> produced the AST — see [EPUB Support](#epub-support).
+> produced the AST. See [EPUB Support](#epub-support).
 
 ---
 
@@ -840,7 +840,7 @@ formatting: {
 ```
 
 > [!NOTE]
-> On a **content node**, an absent flag and `false` mean the same thing — the flag is simply not
+> On a **content node**, an absent flag and `false` mean the same thing: the flag is simply not
 > applied. On **`ast.metadata.styleMap`**, they differ: an absent flag means the style says nothing
 > about that property (so it inherits), while `false` means the style explicitly turns it off
 > (ODF's `fo:font-weight="normal"`, DOCX's `<w:b w:val="0"/>`). Code resolving inheritance itself
@@ -989,7 +989,7 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 | MDX components (import-only) | `<Component prop="x">...</Component>` | Stripped; inner Markdown is kept. Never generated back. |
 
 > [!NOTE]
-> MDX/JSX stripping is one-directional (parse-only) — officeParser never authors JSX back into Markdown.
+> MDX/JSX stripping is one-directional (parse-only): officeParser never authors JSX back into Markdown.
 > Wikilink enable/disable and citekey→bibliography resolution are application-level concerns; officeParser
 > always parses/generates the syntax itself.
 
@@ -1001,7 +1001,7 @@ save→reload cycle:
 | `data-width` / `data-align` / inline `style="width:…"` on `<img>` | `ImageMetadata.width` / `.align` | |
 | `data-align` on `<table>` | `TableMetadata.align` | Emitted/parsed as per-column GFM markers (`:---`, `:---:`, `---:`); alignment rides `CellMetadata.align` |
 | `title` on `<a>` / `<img>` | `TextMetadata.title` / `ImageMetadata.title` | Survives both directions (`[text](url "Title")` in Markdown) |
-| `colspan` / `rowspan` on `<td>`/`<th>` | `CellMetadata.colSpan` / `.rowSpan` | Previously dropped on HTML import — merged cells now survive a save→reload cycle |
+| `colspan` / `rowspan` on `<td>`/`<th>` | `CellMetadata.colSpan` / `.rowSpan` | Previously dropped on HTML import; merged cells now survive a save→reload cycle |
 | `<div data-youtube-video="ID">` / `<iframe src="...youtube.com...">` | `type: 'embed'` | |
 | `<ul data-type="taskList">` / `<li data-checked>` | `ListMetadata.isTask` / `.checked` | |
 
@@ -1009,7 +1009,7 @@ save→reload cycle:
 
 ## EPUB Support
 
-EPUB files are ZIP archives of XHTML content plus an OPF manifest — `EpubParser` unzips the archive,
+EPUB files are ZIP archives of XHTML content plus an OPF manifest. `EpubParser` unzips the archive,
 resolves the spine's reading order from `content.opf`, and parses each XHTML document through the
 existing `HtmlParser`, so EPUB content shares the same AST shape (and the same Markdown-dialect
 fidelity above) as every other format. Dublin Core metadata (`dc:title`, `dc:creator`, `dc:description`,
@@ -1022,9 +1022,9 @@ EPUB 3 (`mimetype`, `META-INF/container.xml`, an OPF manifest, a nav document, a
 > [!IMPORTANT]
 > **Pass `extractAttachments: true` when converting to or from EPUB if the document has images.**
 > Without it, the parser never pulls embedded image bytes out of the source document, so there is
-> nothing for the EPUB generator to package — images silently disappear even though everything else
+> nothing for the EPUB generator to package, so images silently disappear even though everything else
 > converts correctly. Images are packaged as real zip entries (`OEBPS/images/...`) declared in the OPF
-> manifest, not `data:` URIs — most EPUB reading systems do not render `data:` URIs in image `src`.
+> manifest, not `data:` URIs, because most EPUB reading systems do not render `data:` URIs in image `src`.
 >
 > This only matters for the two-step `OfficeParser.parseOffice()` → `OfficeGenerator.generate()` API
 > and the CLI. [`OfficeConverter.convert()`](#officeconverter-one-step-api) enables `extractAttachments`
@@ -1067,7 +1067,8 @@ const project = await OfficeParser.parseOffice('overleaf-project.zip', { extract
 | `verbatim`, `lstlisting`, `minted`, `\verb` | `code` nodes with their language |
 | `quote`, `quotation`, `verse` | quotes |
 | `fancyhdr` headers and footers | `ast.auxiliary` |
-| `\title`, `\author`, `\date`, `\hypersetup{pdf...}` | `ast.metadata` |
+| `\maketitle`, beamer `\titlepage` | a title block where it stands: a `heading` styled `Title`, then `Author` and `Date` lines (beamer adds `Subtitle`), `\thanks` as footnotes |
+| `\title`, `\author`, `\date`, `\hypersetup{pdf...}` | `ast.metadata` (`pdftitle`/`pdfauthor` win over `\title`/`\author`) |
 | `beamer` frames, `\framesubtitle`, `\note`, overlays | `slide` nodes with speaker notes |
 | `\newcommand`, `\renewcommand`, `\def`, `\newenvironment` | expanded |
 
@@ -1244,7 +1245,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options **(and Markdown input: `preserveIframes`/`embedFolkForms` govern raw `<iframe>` blocks and folk embeds in `.md` too)**. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes: `true` for any, or a hostname allowlist; the src is scheme-checked on generation. `embedFolkForms` (`boolean`, default `false`): opt in to importing ambiguous folk embed forms (Obsidian `![](youtube-url)`, thumbnail-link) as YouTube embeds |
 | `pdfWorkerSrc` | `string` | CDN (jsDelivr) | Path/URL to `pdf.worker.min.mjs` (required in browser) |
 | `pdfParserConfig` | `PdfParserConfig` | see below | PDF-specific options ([table below](#pdfparserconfig)) |
-| `onWarning` | `(issue: OfficeIssue) => void` | — | Callback for non-fatal parsing issues |
+| `onWarning` | `(issue: OfficeIssue) => void` | (none) | Callback for non-fatal parsing issues |
 | `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel parsing (rejects with AbortError) |
 
 ---
@@ -1275,7 +1276,7 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 |--------|------|---------|-------------|
 | `includeFormatting` | `boolean` | `true` | Include bold/italic/colors/sizes in output (HTML, Markdown, DOCX, ODT, LaTeX, RTF; a no-op for text/CSV/chunks, which carry no run formatting) |
 | `generateIds` | `boolean` | `true` | Slug-based heading anchors: `id` attributes on HTML headings, and a `{#slug}` suffix on Markdown headings (`# Title {#title}`, kramdown/Pandoc). Set `false` to omit both, useful when the Markdown is rendered by GFM/CommonMark, which show `{#slug}` as literal text. A top-level option (not under `mdConfig`/`htmlConfig`); it affects HTML, Markdown, DOCX, ODT and LaTeX (the formats that carry a heading anchor/bookmark id; in LaTeX a `\label`). |
-| `renderMetadata` | `boolean` | `false` | Render title/author as a visible header block. Rendered by CSV, DOCX, HTML (and the Puppeteer PDF engine), EPUB, text, ODT, LaTeX (`\maketitle`, or a beamer title frame) and RTF; the native PDF engine and Markdown do not |
+| `renderMetadata` | `boolean` | `false` | Render title/author as a visible header block. Rendered by CSV, DOCX, HTML (and the Puppeteer PDF engine), EPUB, text, ODT, LaTeX (`\maketitle`, or a beamer title frame, unless the content has its own title block) and RTF; the native PDF engine and Markdown do not |
 | `metadataOverrides` | `MetadataOverrides` | `{}` | Override the metadata embedded in the output, merged per field over `ast.metadata` |
 | `includeImages` | `boolean \| 'image-only' \| 'image+ocr-text' \| 'ocr-text-only' \| 'none'` | `true` | How to render an image node. `true`=`'image-only'` (embed the image, no OCR text); `'image+ocr-text'` (image then its recognized/OCR text); `'ocr-text-only'` (OCR text, no image); `false`=`'none'` (omit). In plain-text output an image becomes an `[Image: name]` placeholder (plus OCR text for `'image+ocr-text'`), or just the OCR text for `'ocr-text-only'` |
 | `maxInlineImageBytes` | `number` | `1500000` | Max decoded image size, in bytes, that is inlined as a `data:` URI (HTML/Markdown); the base64 URI itself is ~1/3 larger, so a scanned page cannot emit a multi-megabyte line that breaks downstream parsers. Under the default `image-only` mode an image over the cap renders its recognized/OCR text when it has any (multi-line OCR as a fenced block in Markdown), otherwise a compact name reference; Markdown still emits the `IMAGE_NOT_INLINED` warning. Plain text follows the same rule. **Standalone HTML always inlines**, whatever the cap: a self-contained document has nowhere else to resolve the image from. `0` never inlines, `Infinity` always inlines |
@@ -1283,8 +1284,8 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal anchors from output (HTML, Markdown, DOCX, ODT, LaTeX, RTF) |
 | `ignoreDefaultStyleMap` | `boolean` | `false` | Disable built-in style mappings (e.g., "Heading 1" → h1) |
 | `styleMap` | `string[] \| StructuredStyleMapping[]` | `[]` | Custom semantic style mappings |
-| `onNode` | `(node) => string \| false \| void` | — | Per-node callback for filtering, overriding, or mutating |
-| `onWarning` | `(issue: OfficeIssue) => void` | — | Callback for non-fatal generation issues |
+| `onNode` | `(node) => string \| false \| void` | (none) | Per-node callback for filtering, overriding, or mutating |
+| `onWarning` | `(issue: OfficeIssue) => void` | (none) | Callback for non-fatal generation issues |
 | `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel the generation operation (rejects with AbortError). Currently honored by the PDF and chunking generators; other generators run to completion |
 
 ---
@@ -1362,7 +1363,7 @@ Pass as `htmlConfig` inside `GeneratorConfig`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `standalone` | `boolean \| StandaloneConfig` | `true` | Controls the HTML "document envelope" — see below |
+| `standalone` | `boolean \| StandaloneConfig` | `true` | Controls the HTML "document envelope" (see below) |
 | `chartJsSrc` | `string` | jsDelivr CDN | URL for the Chart.js library |
 | `containerWidth` | `string \| number` | `'auto'` | Max width of the content container. Positive number (px), CSS length string (`'900px'`, `'100%'`, `'60vw'`), or `'auto'`. Invalid values fall back to `'auto'` with an `INVALID_CONTAINER_WIDTH` warning |
 | `customCss` | `string` | `''` | Raw CSS injected into the `<style>` block; use this to override built-in styles |
@@ -1377,7 +1378,7 @@ Pass as `htmlConfig` inside `GeneratorConfig`.
 
 `standalone` conflates several independent decisions: whether to emit the `<!doctype>/<html>/<head>/
 <body>` shell, how CSS is delivered, and whether to inject scripts/meta tags/injections. The boolean
-shorthand still works — **`true`/omitted turns every part on** (a complete document); **`false` turns
+shorthand still works: **`true`/omitted turns every part on** (a complete document); **`false` turns
 every part off** (a bare content fragment, safe to drop into a page you don't control). Pass an
 object instead for granular control; any field you omit defaults to its "on" (standalone) value:
 
@@ -1388,15 +1389,15 @@ object instead for granular control; any field you omit defaults to its "on" (st
 | `styles` | `'full' \| 'scoped' \| 'none'` | `'full'` | See below |
 | `scripts` | `boolean` | `true` | Emit the Chart.js CDN loader and spreadsheet-interactivity `<script>` tags |
 | `headInjections` | `boolean` | `true` | Apply `injections.headStart`/`headEnd`. Only meaningful when `document` is true |
-| `bodyInjections` | `boolean` | `true` | Apply `injections.bodyStart`/`bodyEnd` — applies even to a bare fragment |
+| `bodyInjections` | `boolean` | `true` | Apply `injections.bodyStart`/`bodyEnd`, even to a bare fragment |
 
 `styles` controls how the built-in stylesheet is delivered:
-- **`'full'`** — the complete stylesheet using global selectors (`body`, `h1`, `table`, …). This is
+- **`'full'`**: the complete stylesheet using global selectors (`body`, `h1`, `table`, …). This is
   what `standalone: true` has always emitted.
-- **`'scoped'`** — the same styling, scoped under the fragment's own wrapper via CSS `@scope` so it
+- **`'scoped'`**: the same styling, scoped under the fragment's own wrapper via CSS `@scope` so it
   cannot leak onto a host page's elements. Requires a modern engine (Chrome 118+, Safari 17.4+,
   Firefox 128+); for universal support use `'none'` (bring your own CSS) or `'full'`.
-- **`'none'`** — no stylesheet at all; the host page (or rich-text editor, or EPUB reader) supplies
+- **`'none'`**: no stylesheet at all; the host page (or rich-text editor, or EPUB reader) supplies
   its own styling.
 
 ```js
@@ -1406,7 +1407,7 @@ await ast.to('html', { htmlConfig: { standalone: { document: false } } });
 // The same, but with styles scoped so they can't leak onto your page's own elements:
 await ast.to('html', { htmlConfig: { standalone: { document: false, styles: 'scoped' } } });
 
-// A completely bare fragment (no shell, no styles, no scripts) — e.g. for a rich-text editor:
+// A completely bare fragment (no shell, no styles, no scripts), e.g. for a rich-text editor:
 await ast.to('html', { htmlConfig: { standalone: false } });
 ```
 
@@ -1533,7 +1534,8 @@ writeFileSync('paper.zip', zip as Uint8Array);
 | Images, charts, embeds | `\includegraphics` at natural size, bounded to the line and page; charts as a data table; embeds as a link |
 | Slides | `beamer` frames (the slide's first heading is the frame title, speaker notes become `\note`, long slides continue on another frame) |
 | Page header/footer | `fancyhdr` |
-| Metadata | `\title`/`\author`/`\date`, plus the PDF metadata via `\hypersetup` (custom properties included) |
+| Title block | a heading styled `Title` (a Word title, or a parsed `\maketitle`) and the `Author`/`Date` lines right after it: `\maketitle` where it stands (a `\titlepage` frame in beamer), printing only those lines |
+| Metadata | the PDF metadata via `\hypersetup` (custom properties included); `\title`/`\author`/`\date` from the title block when there is one, else from the metadata |
 
 **Safety.** LaTeX is a programming language, so every piece of document text is escaped, URLs are scheme-checked (the same allowlist as the DOCX/ODT generators) and percent-encoded, image paths are reduced to a safe file name inside `images/`, and a code block that contains its own end marker is not put in a verbatim environment. Math is the one place document content is emitted as live LaTeX; an expression that uses a command able to read or write files, run programs, or redefine commands (`\input`, `\write18`, `\openin`, `\catcode`, `\def`, ...), or that is structurally unbalanced, is written as literal text instead, with a `MATH_WRITTEN_AS_TEXT` warning. Compile untrusted output without `--shell-escape`, as you would any LaTeX you did not write.
 
@@ -1791,7 +1793,7 @@ For a full debugging guide, visit the [Live Documentation](https://harshankur.gi
 2. **PDF Images**: Extracted and re-encoded as PNG (`pdf_image_p<page>_<n>.png`, `image/png`) on both Node and the browser, since a PDF stores image data in formats no viewer opens directly. v7 emitted BMP; code that filters attachments by `.bmp` must be updated.
 3. **PDF structure without tags**: Tables, lists and headings come from the PDF's tag tree when present. For untagged PDFs they are recovered geometrically, which is best-effort: complex float-beside-text layouts and tables without a tag tree may not separate perfectly. Column reading order, paragraphs and word spacing are handled on both paths.
 4. **PDF text decoration and spans**: text colour is extracted by default (`pdfParserConfig.extractTextColor`); set it `false` to skip the extra operator-list pass on a throughput-focused text path. Underline and strikethrough are still not extracted: they are drawn as separate graphics operators rather than carried as text properties. Vertical (top-to-bottom) writing is read but not laid out spatially. Table cell `colSpan`/`rowSpan` are recovered best-effort on the tagged path, from the geometry of the empty placeholder cells the tag tree pads a merge with; untagged PDFs expose no spans.
-5. **LaTeX input** is interpreted, not compiled: officeParser reads the document the way a converter does (structure, text, formatting, macros you define) rather than running TeX, so drawings (TikZ, pgfplots, `picture`) are omitted, packages are not loaded (their commands keep their text when unknown), `\cite` keys stay as keys unless the document has a `thebibliography` (`.bib` files are not processed), and `\maketitle` puts the title in `ast.metadata` rather than in the content (set the generator's `renderMetadata` to show it).
+5. **LaTeX input** is interpreted, not compiled: officeParser reads the document the way a converter does (structure, text, formatting, macros you define) rather than running TeX, so drawings (TikZ, pgfplots, `picture`) are omitted, packages are not loaded (their commands keep their text when unknown), and `\cite` keys stay as keys unless the document has a `thebibliography` (`.bib` files are not processed).
 6. **LaTeX output** is a faithful conversion, not a typesetting clone of the source: named font families are not carried over (only monospace), images in formats LaTeX cannot include (GIF, BMP, TIFF, WebP, SVG, EMF) are packaged but drawn as placeholders, `\cite` keys are emitted without a bibliography (add your own `.bib`), and very wide spreadsheets continue in 16-column bands.
 
 ---

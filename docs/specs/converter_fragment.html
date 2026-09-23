@@ -86,8 +86,9 @@ const { value: fromProject } = await OfficeConverter.convert('overleaf-project.z
 
     <blockquote>
         [!NOTE]
-        <code>convert()</code> forces OCR <strong>off</strong>. If you need OCR, parse with <code>OfficeParser</code>
-        (setting <code>ocr: true</code>) and then render with <code>OfficeGenerator</code>.
+        <code>convert()</code> honors <code>parseConfig.ocr</code>. OCR runs over extracted images, so unless you set
+        <code>parseConfig.extractAttachments</code> yourself, <code>convert()</code> turns it on whenever OCR is enabled
+        (and whenever the output will show images or charts).
     </blockquote>
 
     <blockquote>

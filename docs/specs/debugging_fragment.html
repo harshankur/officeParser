@@ -130,7 +130,7 @@ await officeParser.parseOffice(latexBuffer,    { fileType: 'tex' });</code></pre
         recognized the same way: an archive holding a <code>.tex</code> file with <code>\documentclass</code> near its root
         parses as <code>tex</code>. A file named <code>.zip</code> is always routed by what the archive holds, since
         <code>zip</code> itself names no format.</p>
-    <p>The <code>fileType</code> option is authoritative — it bypasses magic-bytes detection even for binary formats.
+    <p>The <code>fileType</code> option is authoritative: it bypasses magic-bytes detection even for binary formats.
     </p>
 
     <h2>8. PDF Generation Fails (Node.js)</h2>
@@ -258,7 +258,7 @@ await officeParser.parseOffice(latexBuffer,    { fileType: 'tex' });</code></pre
             </tr>
             <tr>
                 <td>Images missing from generated EPUB</td>
-                <td>Pass <code>extractAttachments: true</code> on the parse step — without it there are no image bytes for the EPUB generator to package. <code>OfficeConverter.convert()</code> sets this automatically.</td>
+                <td>Pass <code>extractAttachments: true</code> on the parse step; without it there are no image bytes for the EPUB generator to package. <code>OfficeConverter.convert()</code> sets this automatically.</td>
             </tr>
         </tbody>
     </table>

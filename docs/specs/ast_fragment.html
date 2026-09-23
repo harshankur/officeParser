@@ -69,7 +69,7 @@
         [!NOTE]
         <strong>Discriminated Union</strong>: <code>OfficeContentNode</code> is now a discriminated union type.
         Narrowing on <code>node.type</code> (e.g., <code>if (node.type === 'heading')</code>) gives precise
-        <code>metadata</code> inference — no type-casting needed.
+        <code>metadata</code> inference, with no type-casting needed.
     </blockquote>
 
     <h3>OfficeContentNode</h3>
@@ -181,14 +181,22 @@
             provides the label.</li>
     </ul>
 
+    <p><strong>Title blocks.</strong> A document's typeset title is content, not only metadata: a Word paragraph
+        in the <code>Title</code> style, or a LaTeX <code>\maketitle</code> (beamer <code>\titlepage</code>), is a
+        <code>heading</code> whose <code>metadata.style</code> is <code>'Title'</code>. LaTeX follows it with
+        <code>paragraph</code>s styled <code>'Author'</code> and <code>'Date'</code> (and <code>'Subtitle'</code> in
+        beamer), with any <code>\thanks</code> as footnotes. The LaTeX generator typesets such a block with
+        <code>\maketitle</code>. The same values also stay in <code>ast.metadata</code>.</p>
+
     <h3>4a. Layout &amp; Template Nodes (Auxiliary)</h3>
     <p>These nodes are <em>not</em> part of the main <code>content</code> tree. They live under
         <code>ast.auxiliary</code>:</p>
     <ul>
-        <li><strong><code>header</code></strong>: A header element from a DOCX file. Carries
+        <li><strong><code>header</code></strong>: A running page header: DOCX headers, ODT master-page headers, a
+            PDF's top-band running header, or LaTeX <code>fancyhdr</code> fields. Carries
             <code>HeaderFooterMetadata.type</code> (<code>'default'</code>, <code>'first'</code>, <code>'even'</code>).
             Found in <code>ast.auxiliary.headers[]</code>.</li>
-        <li><strong><code>footer</code></strong>: A footer element from a DOCX file. Same metadata. Found in
+        <li><strong><code>footer</code></strong>: A running page footer, from the same sources. Same metadata. Found in
             <code>ast.auxiliary.footers[]</code>.</li>
         <li><strong><code>slideMaster</code></strong>: A PPTX slide master. Carries <code>SlideMetadata</code>. Found
             in <code>ast.auxiliary.slideMasters[]</code>.</li>
@@ -341,7 +349,7 @@
         <li><strong>Depth-First Search</strong>: Use recursion to walk the <code>children</code> tree for rendering.
         </li>
         <li><strong>Fallback to <code>.text</code></strong>: If you only need plain text, use the <code>text</code>
-            property of any node—it is pre-calculated to include all text from its children.</li>
+            property of any node: it is pre-calculated to include all text from its children.</li>
         <li><strong>Map Attachments First</strong>: Before rendering, create a <code>Map</code> from the
             <code>attachments</code> array using the <code>name</code> property for O(1) lookups when encountering
             <code>image</code> nodes.</li>

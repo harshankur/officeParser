@@ -145,8 +145,8 @@
                 <td><code>true</code></td>
                 <td>Controls the HTML "document envelope". <code>true</code>/omitted turns every part on (a full
                     <code>&lt;html&gt;</code> shell with CSS/scripts/metadata); <code>false</code> turns every part
-                    off (a bare content fragment). Pass a <code>StandaloneConfig</code> object for granular control —
-                    see the table below.</td>
+                    off (a bare content fragment). Pass a <code>StandaloneConfig</code> object for granular control
+                    (see the table below).</td>
             </tr>
             <tr>
                 <td><code>chartJsSrc</code></td>
@@ -221,7 +221,7 @@
 
     <h4><code>StandaloneConfig</code> (the object form of <code>standalone</code>)</h4>
     <p>Any field left unspecified defaults to its "on" (standalone) value, so <code>{ document: false }</code> still
-        yields a fully styled fragment — only the <code>&lt;html&gt;</code> shell is dropped.</p>
+        yields a fully styled fragment: only the <code>&lt;html&gt;</code> shell is dropped.</p>
     <table>
         <thead>
             <tr>
@@ -252,13 +252,13 @@
                 <td><code>'full'</code></td>
                 <td>How the built-in stylesheet is delivered:
                     <ul>
-                        <li><code>'full'</code> — the complete stylesheet using global selectors
-                            (<code>body</code>, <code>h1</code>, <code>table</code>, …) — what
+                        <li><code>'full'</code>: the complete stylesheet using global selectors
+                            (<code>body</code>, <code>h1</code>, <code>table</code>, …), which is what
                             <code>standalone: true</code> has always emitted.</li>
-                        <li><code>'scoped'</code> — the same styling, scoped under the fragment's own wrapper via CSS
+                        <li><code>'scoped'</code>: the same styling, scoped under the fragment's own wrapper via CSS
                             <code>@scope</code> so it cannot leak onto a host page's elements. Requires a modern
                             engine (Chrome 118+, Safari 17.4+, Firefox 128+).</li>
-                        <li><code>'none'</code> — no stylesheet; the host page/editor/EPUB reader supplies its own.
+                        <li><code>'none'</code>: no stylesheet; the host page/editor/EPUB reader supplies its own.
                         </li>
                     </ul>
                     The boolean shorthand for <code>standalone</code> maps <code>true</code>&nbsp;→&nbsp;<code>'full'</code>,
@@ -284,7 +284,7 @@
                 <td><code>bodyInjections</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
-                <td>Applies <code>injections.bodyStart</code>/<code>bodyEnd</code> — applies even when generating a
+                <td>Applies <code>injections.bodyStart</code>/<code>bodyEnd</code>, even when generating a
                     bare fragment, since these wrap body content, not the document shell.</td>
             </tr>
         </tbody>

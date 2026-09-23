@@ -6793,7 +6793,7 @@
             // ---- helpers ----
             // Parse once and return everything the studio needs: body HTML (preview), body text (for
             // placeholder detection) and header/footer text. Headers/footers live in ast.auxiliary, not
-            // the body, so they are otherwise invisible in both the preview and the summary — yet the
+            // the body, so they are otherwise invisible in both the preview and the summary, yet the
             // template feature fills placeholders there too, so we surface them explicitly.
             async function inspect(bytes) {
                 const ast = await window.officeParser.parseOffice(bytes, { onWarning: () => { } });
@@ -6868,7 +6868,7 @@
                     const hasData = dataKeys.includes(k);
                     let status, val;
                     if (inTemplate && hasData) { status = '<span class="ts-ok">✓ filled</span>'; val = '<code>' + escapeHtml(valStr(row0[k])) + '</code>'; }
-                    else if (inTemplate && !hasData) { status = '<span class="ts-warn">no data → ' + missingBehavior + '</span>'; val = '—'; }
+                    else if (inTemplate && !hasData) { status = '<span class="ts-warn">no data → ' + missingBehavior + '</span>'; val = '(none)'; }
                     else { status = '<span class="ts-warn">unused (not in template)</span>'; val = '<code>' + escapeHtml(valStr(row0[k])) + '</code>'; }
                     return '<tr><td><code>' + escapeHtml(start + k + end) + '</code></td><td>' + val + '</td><td>' + (inTemplate ? 'yes' : 'no') + '</td><td>' + status + '</td></tr>';
                 }).join('');
@@ -6898,7 +6898,7 @@
 
             // ---- main action ----
             els.render.addEventListener('click', async () => {
-                if (!window.officeParser || !window.officeParser.OfficeTemplate) { setStatus('Library not loaded yet — try again in a moment.', true); return; }
+                if (!window.officeParser || !window.officeParser.OfficeTemplate) { setStatus('Library not loaded yet. Try again in a moment.', true); return; }
                 if (!state.buffer) { setStatus('Load a .docx template first (upload or the sample).', true); return; }
 
                 let data;
@@ -6932,11 +6932,11 @@
                     renderAfter(after0.html, after0.auxText, rows[0]);
                     els.download.classList.remove('hidden');
                     els.toVisualizer.classList.remove('hidden');
-                    setStatus('Done — ' + state.outputs.length + ' document' + (state.outputs.length === 1 ? '' : 's') + ' rendered. Compare below.', false);
+                    setStatus('Done: ' + state.outputs.length + ' document' + (state.outputs.length === 1 ? '' : 's') + ' rendered. Compare below.', false);
                 } catch (err) {
                     const code = err && err.officeIssue && err.officeIssue.code;
                     els.after.innerHTML = '<div style="color:#ef4444;">' + escapeHtml((code ? code + ': ' : '') + (err.message || String(err))) + '</div>';
-                    setStatus((code || 'Error') + ' — ' + (err.message || String(err)), true);
+                    setStatus((code || 'Error') + ': ' + (err.message || String(err)), true);
                 }
             });
 
