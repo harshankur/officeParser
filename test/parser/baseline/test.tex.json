@@ -88,8 +88,7 @@
       "documentClass": "article",
       "classOptions": [
         "11pt"
-      ],
-      "date": "2025-11-25"
+      ]
     },
     "formatting": {
       "size": "11pt"
@@ -110,6 +109,8 @@
       ],
       "metadata": {
         "level": 1,
+        "style": "Title",
+        "alignment": "center",
         "anchorIds": [
           "_Toc581531977",
           "demonstration-of-docx-support-in-calibre"

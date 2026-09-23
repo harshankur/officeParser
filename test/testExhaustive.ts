@@ -1992,8 +1992,12 @@ async function testLatexParsing(): Promise<void> {
     assert.strictEqual(ast.metadata.formatting?.size, '12pt', 'TEX parse: class size is the body size');
     // Preamble text never reaches the content; text after \end{document} is ignored.
     assert.ok(!JSON.stringify(ast.content).includes('Text after the document end'), 'TEX parse: stops at \\end{document}');
+    // \maketitle typesets the title block where it stands: a Title heading, then Author and Date lines.
+    assert.deepStrictEqual(ast.content.slice(0, 3).map(n => [n.type, (n.metadata as any).style, (n.metadata as any).alignment, n.text]),
+        [['heading', 'Title', 'center', 'Exhaustive LaTeX Test'], ['paragraph', 'Author', 'center', 'Ada Lovelace, Alan Turing'], ['paragraph', 'Date', 'center', '2024-03-15']], 'TEX parse: \maketitle -> title block');
+    assert.strictEqual(collectAllNodes({ content: [ast.content[0]] } as any).flatMap(n => n.notes || [])[0]?.text, 'With thanks.', 'TEX parse: \thanks -> a footnote on the title');
     // Headings, levels, labels.
-    const headings = nodes.filter(n => n.type === 'heading');
+    const headings = nodes.filter(n => n.type === 'heading' && (n.metadata as any).style !== 'Title');
     assert.deepStrictEqual(headings.map(h => [(h.metadata as any).level, h.text]).slice(0, 5),
         [[1, 'Introduction'], [2, 'Links and references'], [3, 'Deep heading'], [4, 'Paragraph heading'], [1, 'Lists']], 'TEX parse: sectioning levels');
     assert.deepStrictEqual((headings[0].metadata as any).anchorIds, ['sec:intro'], 'TEX parse: \\label after a heading names it');
@@ -2022,8 +2026,8 @@ async function testLatexParsing(): Promise<void> {
     assert.ok(links.some(l => (l.metadata as any).link === '#tab:main' && l.text === '1') && links.some(l => (l.metadata as any).link === '#fig:diagram' && l.text === '1'), 'TEX parse: table/figure refs resolve to their numbers');
     assert.deepStrictEqual(nodes.filter(n => (n.metadata as any)?.citationKey).map(n => (n.metadata as any).citationKey), ['knuth1984', 'lamport1994', 'mittelbach2004'], 'TEX parse: \\cite and \\citep keys');
     const notes = nodes.flatMap(n => n.notes || []);
-    assert.deepStrictEqual(notes.map(n => (n.metadata as any).noteType), ['footnote', 'endnote'], 'TEX parse: \\footnote and \\endnote');
-    assert.strictEqual(notes[0].text, 'The footnote body.', 'TEX parse: footnote body');
+    assert.deepStrictEqual(notes.map(n => (n.metadata as any).noteType), ['footnote', 'footnote', 'endnote'], 'TEX parse: \\thanks, \\footnote and \\endnote');
+    assert.strictEqual(notes[1].text, 'The footnote body.', 'TEX parse: footnote body');
     const comment = nodes.flatMap(n => n.comments || [])[0];
     assert.deepStrictEqual([comment?.text, (comment?.metadata as any)?.author, (comment?.metadata as any)?.date], ['Please expand this section.\nIt needs more detail.', 'Reviewer', '2024-02-02'], 'TEX parse: comment lines read back as a comment');
     // Lists.
@@ -2084,6 +2088,15 @@ async function testLatexParsing(): Promise<void> {
     assert.deepStrictEqual(deck.content[0].children!.map(c => [c.type, c.text]), [['heading', 'First'], ['heading', 'Sub'], ['list', 'One']], 'TEX beamer: frame title, subtitle, overlay spec dropped');
     assert.strictEqual(deck.content[0].notes?.[0].text, 'Say hi.', 'TEX beamer: \\note -> slide notes');
     assert.deepStrictEqual(deck.content[1].children!.map(c => c.type), ['heading', 'admonition'], 'TEX beamer: block -> admonition');
+    const titled = await OfficeParser.parseOffice(Buffer.from('\\documentclass{beamer}\\title{Deck}\\subtitle{Sub}\\author{Ann \\and Bob}\\date{\\today}\\begin{document}\\begin{frame}\\titlepage\\end{frame}\\end{document}'), { fileType: 'tex' });
+    assert.deepStrictEqual(titled.content[0].children!.map(c => [(c.metadata as any).style, c.text]), [['Title', 'Deck'], ['Subtitle', 'Sub'], ['Author', 'Ann, Bob']],
+        'TEX beamer: \\titlepage -> a title slide (a \\today date is the compile date, so it is omitted)');
+    const deckTex = (await titled.to('tex')).value as string;
+    assert.ok(/\\title\{Deck\}\n\\subtitle\{Sub\}\n\\author\{Ann, Bob\}\n\\date\{\}/.test(deckTex) && /\\begin\{frame\}\[allowframebreaks\]\n\\relax\n\\titlepage\n\\end\{frame\}/.test(deckTex), 'TEX beamer: a title slide regenerates as \\titlepage');
+
+    // A \label after \phantomsection names what follows it (the generator's anchor before a block).
+    const anchored = await OfficeParser.parseOffice(Buffer.from('\\documentclass{article}\\begin{document}First.\n\n\\phantomsection\\label{next}Second.\n\n\\section{S}\\label{sec}\\end{document}'), { fileType: 'tex' });
+    assert.deepStrictEqual(anchored.content.map(n => [n.text, (n.metadata as any).anchorIds]), [['First.', undefined], ['Second.', ['next']], ['S', ['sec']]], 'TEX parse: \\phantomsection anchors the following block');
 
     // ── Tier 4: round trip with the generator reaches a fixed point ───────────
     const docx = await OfficeParser.parseOffice(path.join(__dirname, 'files/test.docx'), { extractAttachments: true });
@@ -2092,9 +2105,16 @@ async function testLatexParsing(): Promise<void> {
     const t2 = (await (await OfficeParser.parseOffice(Buffer.from(t1), { fileType: 'tex' })).to('tex', pin)).value as string;
     const t3 = (await (await OfficeParser.parseOffice(Buffer.from(t2), { fileType: 'tex' })).to('tex', pin)).value as string;
     assert.strictEqual(t3, t2, 'TEX round trip: generate -> parse -> generate is stable after one cycle');
+    assert.ok(/\\title\{\\protect\\textcolor\{hex17365D\}\{Demonstration of DOCX support in calibre\}\}\n\\author\{\}\n\\date\{\}/.test(t1) && /\\label\{demonstration-of-docx-support-in-calibre\}\\maketitle\n/.test(t1),
+        'TEX round trip: a Word Title paragraph is typeset with \\maketitle, printing only what the document shows');
+    const fixtureTex = (await ast.to('tex')).value as string;
+    const f2 = (await (await OfficeParser.parseOffice(Buffer.from(fixtureTex), { fileType: 'tex' })).to('tex')).value as string;
+    const f3 = (await (await OfficeParser.parseOffice(Buffer.from(f2), { fileType: 'tex' })).to('tex')).value as string;
+    assert.strictEqual(f3, f2, 'TEX round trip: the hand-written fixture is stable after one cycle too');
     const back = await OfficeParser.parseOffice(Buffer.from(t1), { fileType: 'tex' });
     const count = (a: any, t: string) => collectAllNodes(a).filter(n => n.type === t).length;
     for (const t of ['heading', 'table', 'list', 'image']) assert.strictEqual(count(back, t), count(docx, t), `TEX round trip: ${t} count preserved`);
+    assert.deepStrictEqual([back.metadata.title, back.metadata.author], [docx.metadata.title, docx.metadata.author], 'TEX round trip: pdftitle/pdfauthor keep the metadata, whatever the title block prints');
 }
 
 /**

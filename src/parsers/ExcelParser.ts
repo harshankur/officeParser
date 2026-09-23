@@ -39,7 +39,7 @@ import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
  * @returns A promise resolving to the parsed AST
  */
 export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
-    // Honour cancellation requests immediately — before extracting the ZIP archive.
+    // Honour cancellation requests immediately, before extracting the ZIP archive.
     // XLSX parsing involves decompressing multiple XML sheets and potentially running OCR
     // on embedded chart images, so short-circuiting here saves significant work.
     checkAbortSignal(config.abortSignal);

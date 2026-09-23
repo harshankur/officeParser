@@ -40,7 +40,7 @@ import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
  * @returns A promise resolving to the parsed AST
  */
 export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
-    // Honour cancellation requests immediately — before extracting the ZIP archive.
+    // Honour cancellation requests immediately, before extracting the ZIP archive.
     // PPTX presentations can have many slides with media/charts and optional OCR per image,
     // so an early abort prevents decompressing and traversing data that will be discarded.
     checkAbortSignal(config.abortSignal);

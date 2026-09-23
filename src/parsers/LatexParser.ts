@@ -124,7 +124,7 @@ const TRANSPARENT_ENVS: Record<string, string> = {
 const IGNORED_COMMANDS: Record<string, string> = {
     usepackage: 'om', RequirePackage: 'om', documentclass: 'om', vspace: 'sm', vskip: '', hskip: '', vfill: '', hfill: '',
     smallskip: '', medskip: '', bigskip: '', noindent: '', indent: '', nopagebreak: 'o', nolinebreak: 'o',
-    maketitle: '', tableofcontents: '', listoffigures: '', listoftables: '', frontmatter: '', mainmatter: '', backmatter: '',
+    tableofcontents: '', listoffigures: '', listoftables: '', frontmatter: '', mainmatter: '', backmatter: '',
     appendix: '', pagestyle: 'm', thispagestyle: 'm', pagenumbering: 'm', setlength: 'mm', addtolength: 'mm',
     settowidth: 'mm', newlength: 'm', addtocounter: 'mm', stepcounter: 'm', refstepcounter: 'm', newcounter: 'mo',
     selectfont: '', usefont: 'mmmm', fontfamily: 'm', fontseries: 'm', fontshape: 'm', linespread: 'm', strut: '',
@@ -544,6 +544,11 @@ class LatexReader {
 
     metadata: OfficeMetadata = {};
     private native: Record<string, any> = { packages: [] as string[] };
+    /** Raw `\title`/`\subtitle`/`\author`/`\date` arguments, for the block `\maketitle` typesets. */
+    private titleParts: { title?: string; subtitle?: string; author?: string; date?: string } = {};
+    private titleTypeset = false;
+    /** Metadata fields `\hypersetup` set explicitly (`pdftitle`, `pdfauthor`), which `\title`/`\author` do not override. */
+    private readonly pdfMetadata = new Set<'title' | 'author'>();
     attachments: OfficeAttachment[] = [];
     private attachmentByPath = new Map<string, string>();
     private headerFields = new Map<string, string>();
@@ -1127,7 +1132,7 @@ class LatexReader {
                 }
                 return;
             }
-            case 'titlepage': (flow as any).__titlepage = true; return;
+            case 'titlepage': (flow as any).__titlepage = true; this.typesetTitle(flow); return;
             case 'frame': {
                 // `\frame{...}`, the command form of the frame environment.
                 sc.readRawOptional('<', '>');
@@ -1219,7 +1224,8 @@ class LatexReader {
                 this.withState(s => { s.link = { url: u, internal: false }; }, () => this.addText(flow, u, true));
                 return;
             }
-            case 'phantomsection': return;
+            // An anchor at this spot: a \label after it names what follows, not the block before.
+            case 'phantomsection': flow.labelTarget = null; return;
 
             // ── inline formatting (arguments) ──
             case 'textbf': case 'textit': case 'emph': case 'textsl': case 'underline': case 'uline': case 'uuline': case 'uwave':
@@ -1359,10 +1365,11 @@ class LatexReader {
                 if (cname && hex) this.colors.set(cname.trim(), hex);
                 return;
             }
-            case 'title': { sc.readRawOptional(); const t = this.plainText(this.stripThanks(sc.readRawGroup())); if (t) this.metadata.title = t; return; }
-            case 'author': { sc.readRawOptional(); const a = this.authorText(sc.readRawGroup()); if (a) this.metadata.author = a; return; }
-            case 'date': { const d = this.plainText(sc.readRawGroup()); if (d) this.native.date = d; return; }
-            case 'subtitle': { sc.readRawOptional(); const t = this.plainText(sc.readRawGroup()); if (t) this.native.subtitle = t; return; }
+            case 'title': { sc.readRawOptional(); const raw = sc.readRawGroup(); this.titleParts.title = raw ?? undefined; const t = this.plainText(this.stripThanks(raw)); if (t && !this.pdfMetadata.has('title')) this.metadata.title = t; return; }
+            case 'author': { sc.readRawOptional(); const raw = sc.readRawGroup(); this.titleParts.author = raw ?? undefined; const a = this.authorText(raw); if (a && !this.pdfMetadata.has('author')) this.metadata.author = a; return; }
+            case 'date': { const raw = sc.readRawGroup(); this.titleParts.date = raw ?? undefined; const d = this.plainText(raw); if (d) this.native.date = d; return; }
+            case 'subtitle': { sc.readRawOptional(); const raw = sc.readRawGroup(); this.titleParts.subtitle = raw ?? undefined; const t = this.plainText(raw); if (t) this.native.subtitle = t; return; }
+            case 'maketitle': this.typesetTitle(flow); return;
             case 'hypersetup': this.hypersetup(sc.readRawGroup() ?? ''); return;
             case 'usepackage': {
                 const opts = sc.readRawOptional();
@@ -1491,6 +1498,37 @@ class LatexReader {
 
     // ── metadata helpers ──
 
+    /**
+     * The block `\maketitle` (or beamer's `\titlepage`) typesets, as content at that spot: a heading
+     * styled `Title`, then `Subtitle`, `Author` and `Date` lines, the way a word processor's title
+     * page reads. The values also stay in `ast.metadata`. `\thanks` become footnotes on the line that
+     * carries them. A date left to `\today` is the day the document is compiled, so it is omitted.
+     */
+    private typesetTitle(flow: Flow): void {
+        const { title, subtitle, author, date } = this.titleParts;
+        // LaTeX refuses \maketitle without a \title, and empties the title after typesetting it once.
+        if (!title || !this.plainText(this.stripThanks(title))) return;
+        if (this.titleTypeset && !this.beamer) return;
+        this.titleTypeset = true;
+        this.endParagraph(flow);
+        const thanks = (raw: string) => raw.replace(/\\thanks\b/g, '\\footnote');
+        const heading = this.headingNode(thanks(title), 1);
+        Object.assign(heading.metadata as HeadingMetadata, { style: 'Title', alignment: 'center' });
+        this.pushBlock(flow, heading);
+        const line = (raw: string | undefined, style: string) => {
+            if (raw === undefined) return;
+            const node = this.headingNode(thanks(raw), 1);
+            if (!node.text?.trim() && !node.children?.some(c => c.notes?.length)) return;
+            this.pushBlock(flow, { type: 'paragraph', text: node.text, children: node.children, metadata: { style, alignment: 'center' } as ParagraphMetadata });
+        };
+        line(subtitle, 'Subtitle');
+        // Authors are separated by \and; each one's own lines (affiliations) run together.
+        line(author === undefined ? undefined : author.split(/\\and\b|\\AND\b/).map(a => a.trim()).filter(Boolean).join(', '), 'Author');
+        line(date, 'Date');
+        // A \label written right after \maketitle names the title.
+        flow.labelTarget = heading;
+    }
+
     private stripThanks(raw: string | null): string | null {
         return raw === null ? null : raw.replace(/\\thanks\s*\{(?:[^{}]|\{[^{}]*\})*\}/g, '');
     }
@@ -1504,8 +1542,10 @@ class LatexReader {
         for (const [key, value] of this.keyValues(raw)) {
             const v = this.plainText(value);
             switch (key) {
-                case 'pdftitle': this.metadata.title ??= v; break;
-                case 'pdfauthor': this.metadata.author ??= v; break;
+                // The PDF metadata a document states outright is its metadata; \title and \author are
+                // what the title block prints, and fill in only when it states none.
+                case 'pdftitle': if (v) { this.metadata.title = v; this.pdfMetadata.add('title'); } break;
+                case 'pdfauthor': if (v) { this.metadata.author = v; this.pdfMetadata.add('author'); } break;
                 case 'pdfsubject': this.metadata.subject = v; break;
                 case 'pdfkeywords': this.metadata.keywords = v; break;
                 case 'pdflang': this.metadata.language = value.trim(); break;

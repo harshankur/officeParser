@@ -197,7 +197,7 @@ const ODF_FILE_TYPES: SupportedFileType[] = ['odt', 'odp', 'ods', 'odg'];
  * @returns A promise resolving to the parsed AST
  */
 export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
-    // Honour cancellation requests immediately — before extracting the ZIP archive.
+    // Honour cancellation requests immediately, before extracting the ZIP archive.
     // ODF containers (ODT/ODS/ODP) bundle content.xml, styles.xml, and media files;
     // aborting early avoids needlessly inflating and parsing all of those resources.
     checkAbortSignal(config.abortSignal);

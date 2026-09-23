@@ -4,7 +4,7 @@
  * Every string in the parsed AST originates from an untrusted document, so any
  * value interpolated into generated output (HTML, XHTML, CSS, URLs, inline
  * scripts, CSV, RTF, Markdown) must be escaped for its destination context.
- * These are the single source of truth — each generator delegates to them so
+ * These are the single source of truth: each generator delegates to them so
  * escaping stays consistent and a gap fixed here is fixed everywhere.
  */
 
@@ -121,7 +121,7 @@ export function sanitizeCssValue(value: string): string {
  * Escapes a document-supplied URL for use in an href/src attribute. Beyond the
  * usual attribute escaping, this rejects script-executing schemes (javascript:,
  * vbscript:, data:, etc.) so a hyperlink extracted from an untrusted document
- * can't run code when clicked — only http(s)/mailto/tel and relative/fragment
+ * can't run code when clicked: only http(s)/mailto/tel and relative/fragment
  * URLs are passed through.
  */
 export function sanitizeUrl(url: string): string {
@@ -212,7 +212,7 @@ export function serializeForInlineScript(data: unknown): string {
  */
 export function csvSafeCell(value: string, delimiter: string): string {
     let v = typeof value === 'string' ? value : String(value ?? '');
-    // A plain signed number (e.g. "-8", "+7", "-5.3") can't be a formula, so exempt it —
+    // A plain signed number (e.g. "-8", "+7", "-5.3") can't be a formula, so exempt it;
     // otherwise numeric columns get quoted as text. Anything else starting with a formula
     // trigger (including "+1+1", "-1+cmd", "=", "@") is prefixed with a quote.
     const isNumber = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(v.trim());
@@ -327,7 +327,7 @@ export function escapeRtf(text: string): string {
  * neutralized to prevent `<script>`/`<img onerror>` injection when the Markdown
  * is later rendered to HTML.
  *
- * Deliberately narrow — only a `<` immediately followed by a letter, `/`, `!` or
+ * Deliberately narrow: only a `<` immediately followed by a letter, `/`, `!` or
  * `?` (i.e. one that actually opens a tag/comment/PI, matching how browsers
  * detect tags) is encoded. A bare `<` (e.g. `a < b`), `>`, `&`, `[]` and other
  * Markdown metacharacters are left untouched: they can't start a tag, and

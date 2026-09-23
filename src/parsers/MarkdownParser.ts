@@ -684,7 +684,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Standalone anchor-only block: one or more empty `<a name|id="…"></a>` tags on their
         // own line (bookmark targets the MarkdownGenerator emits just before a heading/paragraph).
         // Capture them as a placeholder so the post-loop pass can re-attach them to the following
-        // node's anchorIds — otherwise the tag-opening `<` is escaped and they render as visible text.
+        // node's anchorIds; otherwise the tag-opening `<` is escaped and they render as visible text.
         if (/^(?:\s*<a\s[^>]*>\s*<\/a>\s*)+$/i.test(block)) {
             const anchorIds: string[] = [];
             for (const m of block.matchAll(/<a\s[^>]*\b(?:name|id)="([^"]*)"/gi)) {

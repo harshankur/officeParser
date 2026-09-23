@@ -1,5 +1,5 @@
 import { zipSync, Zippable } from 'fflate';
-import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { ADMONITION_COLOR, decodeBase64, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexUnicodePlan, LISTINGS_LANGUAGES, planLatexUnicode } from '../utils/latexUtils.js';
@@ -197,6 +197,17 @@ function expandTabs(line: string): string {
  * grids, footnotes/endnotes become `\footnote`/`\endnote`, comments become LaTeX `%` comments, and
  * a presentation becomes `beamer` frames with speaker notes as `\note`.
  */
+/** A title block found in the content (see `LatexGenerator.findTitleBlock`). */
+interface TitleBlock {
+    title: OfficeContentNode;
+    subtitle?: OfficeContentNode;
+    author?: OfficeContentNode;
+    date?: OfficeContentNode;
+    /** The slide holding the block, or null when it is at the top level. */
+    container: OfficeContentNode | null;
+    nodes: Set<OfficeContentNode>;
+}
+
 export class LatexGenerator extends BaseGenerator<'tex'> {
     private readonly docClass: Exclude<TexDocumentClass, 'auto'>;
     private readonly beamer: boolean;
@@ -227,6 +238,15 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     /** Set while rendering a heading or frame title: the sectioning command decides the size. */
     private suppressSize = false;
 
+    /**
+     * The document's title block: a heading styled `Title` (a Word title, or what the LaTeX parser
+     * reads from `\maketitle`) and the `Subtitle`/`Author`/`Date` lines right after it. It is
+     * typeset with `\maketitle` (a `\titlepage` frame in beamer) where it stands.
+     */
+    private titleNodes: TitleBlock | null = null;
+    /** The title block's `\title`/`\subtitle`/`\author`/`\date` arguments. */
+    private titleFields: { title: string; subtitle: string; author: string; date: string } | null = null;
+
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'tex'>) {
         super('tex', ast, config);
         const requested = DOCUMENT_CLASSES.has(this.config.texConfig.documentClass) ? this.config.texConfig.documentClass : 'auto';
@@ -251,6 +271,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     async generate(): Promise<ConversionResult<'tex'>> {
         checkAbortSignal(this.config.abortSignal);
         this.prescan();
+        this.titleNodes = this.findTitleBlock();
+        if (this.titleNodes) this.titleFields = await this.renderTitleFields(this.titleNodes);
 
         const body = this.beamer ? await this.renderBeamerBody(this.ast.content) : await this.renderFlow(this.ast.content);
         const headerSetup = this.beamer ? this.warnBeamerHeaders() : await this.pageHeaderSetup();
@@ -451,6 +473,15 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             const node = items[i];
             if (this.isInlineNode(node)) { inline.push(node); continue; }
             await flushInline();
+
+            if (this.titleNodes?.nodes.has(node)) {
+                if (node !== this.titleNodes.title) continue;
+                const override = await this.handleOnNode(node);
+                if (override === false) continue;
+                blocks.push(typeof override === 'string' ? override : `${this.commentsBefore(node)}${this.anchorsFor(node, true)}\\maketitle`);
+                prevPaginated = null;
+                continue;
+            }
 
             if (node.type === 'list') {
                 const listId = String((node.metadata as ListMetadata)?.listId ?? '');
@@ -1449,6 +1480,14 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         };
         for (const node of nodes) {
             checkAbortSignal(this.config.abortSignal);
+            if (this.titleNodes?.nodes.has(node)) {
+                if (node !== this.titleNodes.title) continue;
+                await flushPending();
+                const override = await this.handleOnNode(node);
+                if (override === false) continue;
+                frames.push(typeof override === 'string' ? override : await this.frame(null, [], [], node, '\\titlepage'));
+                continue;
+            }
             const framed = node.type === 'slide' || node.type === 'page' || node.type === 'sheet';
             const titleHeading = node.type === 'heading' && ((node.metadata as HeadingMetadata)?.level ?? 1) <= 2;
             if (!framed && !titleHeading) {
@@ -1461,6 +1500,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             if (typeof override === 'string') { frames.push(override); continue; }
             if (titleHeading) { pending = { title: node, body: [] }; continue; }
             if (node.type === 'sheet') { frames.push(await this.frame(null, [], [], node)); continue; }
+            if (this.titleNodes && this.titleNodes.container === node) {
+                // The title slide: \titlepage typesets the block; anything else on it follows.
+                const rest = (node.children || []).filter(c => !this.titleNodes!.nodes.has(c));
+                frames.push(await this.frame(null, rest, node.notes || [], node, '\\titlepage'));
+                continue;
+            }
             const children = node.children || [];
             const titleIdx = children.findIndex(c => c.type === 'heading');
             const title = titleIdx >= 0 ? children[titleIdx] : null;
@@ -1471,7 +1516,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         return frames.join(BLOCK_SEPARATOR);
     }
 
-    private async frame(title: OfficeContentNode | null, body: OfficeContentNode[], notes: OfficeContentNode[], owner: OfficeContentNode | null): Promise<string> {
+    private async frame(title: OfficeContentNode | null, body: OfficeContentNode[], notes: OfficeContentNode[], owner: OfficeContentNode | null, lead = ''): Promise<string> {
         const anchors = owner ? this.anchorsFor(owner, true) : '';
         let titleTex = '';
         if (title) {
@@ -1507,6 +1552,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             if (labels) lines.push(labels);
         }
         if (anchors) lines.push(anchors);
+        if (lead) lines.push(lead);
         if (content.trim()) lines.push(content.trim());
         lines.push(`\\end{frame}${noteTex}`);
         return lines.join('\n');
@@ -1616,10 +1662,19 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const m = this.effectiveMetadata;
         const esc = (v: unknown) => escapeLatex(String(v ?? ''), ' ').trim();
         const out: string[] = [];
-        if (m.title) out.push(`\\title{${esc(m.title)}}`);
-        if (m.author) out.push(`\\author{${esc(m.author)}}`);
-        const dateIso = toW3CDTF(m.modified) ?? toW3CDTF(m.created);
-        if (m.title) out.push(`\\date{${dateIso ? dateIso.slice(0, 10) : ''}}`);
+        const f = this.titleFields;
+        if (f) {
+            // The title block in the content decides what \maketitle prints, including an empty
+            // author or date where the block has none (LaTeX would otherwise print today's date).
+            out.push(`\\title{${f.title}}`);
+            if (f.subtitle) out.push(`\\subtitle{${f.subtitle}}`);
+            out.push(`\\author{${f.author}}`, `\\date{${f.date}}`);
+        } else {
+            if (m.title) out.push(`\\title{${esc(m.title)}}`);
+            if (m.author) out.push(`\\author{${esc(m.author)}}`);
+            const dateIso = toW3CDTF(m.modified) ?? toW3CDTF(m.created);
+            if (m.title) out.push(`\\date{${dateIso ? dateIso.slice(0, 10) : ''}}`);
+        }
 
         const pdfDate = (v: unknown) => { const iso = toW3CDTF(v); return iso ? `D:${iso.replace(/[-:T]/g, '').replace('Z', '')}Z` : ''; };
         const keys: string[] = [];
@@ -1647,7 +1702,55 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         return { title: out.join('\n'), hypersetup: keys };
     }
 
+    /**
+     * Finds the title block: the first heading styled `Title` at the top level (or, failing that, on
+     * a slide), with the `Subtitle` (beamer only: `article` has no `\subtitle`), `Author` and `Date`
+     * lines that directly follow it, each at most once.
+     */
+    private findTitleBlock(): TitleBlock | null {
+        const scan = (siblings: OfficeContentNode[], container: OfficeContentNode | null): TitleBlock | null => {
+            const i = siblings.findIndex(n => n.type === 'heading' && (n.metadata as HeadingMetadata | undefined)?.style === 'Title');
+            if (i < 0) return null;
+            const block: TitleBlock = { title: siblings[i], container, nodes: new Set([siblings[i]]) };
+            for (const n of siblings.slice(i + 1)) {
+                const style = n.type === 'paragraph' ? (n.metadata as ParagraphMetadata | undefined)?.style : undefined;
+                const key = style === 'Subtitle' && this.beamer ? 'subtitle' : style === 'Author' ? 'author' : style === 'Date' ? 'date' : null;
+                if (!key || block[key]) break;
+                block[key] = n;
+                block.nodes.add(n);
+            }
+            return block;
+        };
+        const top = scan(this.ast.content, null);
+        if (top) return top;
+        for (const n of this.ast.content) {
+            if (n.type !== 'slide') continue;
+            const onSlide = scan(n.children || [], n);
+            if (onSlide) return onSlide;
+        }
+        return null;
+    }
+
+    /** The title block's lines as `\title`/`\subtitle`/`\author`/`\date` arguments; notes become `\thanks`. */
+    private async renderTitleFields(block: TitleBlock): Promise<{ title: string; subtitle: string; author: string; date: string }> {
+        const field = async (node: OfficeContentNode | undefined): Promise<string> => {
+            if (!node) return '';
+            return this.withCtx({ moving: true, display: false, verbatim: false, sections: false, labels: false, longtable: false, notes: 'omit' }, async () => {
+                const runs = await this.headingRuns(node, this.hasUniformFormatting(node, fmt => fmt?.bold === true));
+                const notes: OfficeContentNode[] = [];
+                const collect = (n: OfficeContentNode) => { if (n.notes) notes.push(...n.notes); n.children?.forEach(collect); };
+                collect(node);
+                let thanks = '';
+                for (const note of notes) thanks += `\\thanks{${await this.noteBody(note)}}`;
+                return runs + thanks;
+            });
+        };
+        return { title: await field(block.title), subtitle: await field(block.subtitle), author: await field(block.author), date: await field(block.date) };
+    }
+
     private titleBlock(): string {
+        // A title block in the content is typeset where it stands.
+        if (this.titleNodes) return '';
         if (!this.config.renderMetadata || !this.effectiveMetadata.title) return '';
         return this.beamer ? '\\begin{frame}\n\\titlepage\n\\end{frame}' : '\\maketitle';
     }

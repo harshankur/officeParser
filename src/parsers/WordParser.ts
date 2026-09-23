@@ -86,7 +86,7 @@ import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
  * @returns A promise resolving to the parsed AST
  */
 export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
-    // Honour cancellation requests immediately — before opening the ZIP archive, loading XML
+    // Honour cancellation requests immediately, before opening the ZIP archive, loading XML
     // files, or kicking off any OCR work.  DOCX files can be large and the inflate + XML-parse
     // steps are synchronous-heavy, so failing fast here avoids wasted CPU time.
     checkAbortSignal(config.abortSignal);

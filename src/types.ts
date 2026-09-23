@@ -1115,12 +1115,12 @@ export interface StandaloneConfig {
     metaTags?: boolean;
     /**
      * How the library's built-in CSS is delivered:
-     * - `'full'` — the complete premium stylesheet using global selectors (`body`, `h1`, `table`, …).
+     * - `'full'`: the complete premium stylesheet using global selectors (`body`, `h1`, `table`, …).
      *   This is what `standalone: true` has always emitted.
-     * - `'scoped'` — the same styling, scoped under the fragment's container via CSS `@scope` so it
+     * - `'scoped'`: the same styling, scoped under the fragment's container via CSS `@scope` so it
      *   cannot leak into a host page's own styles. Requires a modern browser engine (Chrome 118+,
      *   Safari 17.4+, Firefox 128+).
-     * - `'none'` — no stylesheet is emitted; the host page (or EPUB reader, or rich-text editor)
+     * - `'none'`: no stylesheet is emitted; the host page (or EPUB reader, or rich-text editor)
      *   supplies its own styling.
      * The boolean shorthand for `standalone` maps `true` → `'full'`, `false` → `'none'`.
      * Defaults to `'full'`.

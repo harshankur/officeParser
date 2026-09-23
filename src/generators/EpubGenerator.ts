@@ -63,7 +63,7 @@ const promoteParagraphsWithBlockContent = (html: string): string => {
  *
  * This is more than cosmetic: a single raw `&` or unclosed tag makes the whole content
  * document fail to open. The conversion:
- *  - strips `<script>` blocks — EpubGenerator renders through HtmlGenerator with
+ *  - strips `<script>` blocks. EpubGenerator renders through HtmlGenerator with
  *    `standalone: false`, which already omits the envelope-level stylesheet and Chart.js/
  *    spreadsheet scripts entirely, but a chart *node* still emits its own inline
  *    `<script>` (chart-init JS) regardless of that flag, since it's content, not envelope.

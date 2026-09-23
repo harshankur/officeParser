@@ -128,7 +128,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
 
             // Harden against SSRF: the HTML being rendered is derived from an untrusted
             // document, and `networkidle0` would otherwise fetch every URL it references
-            // (external images, stylesheets, etc.) from this host — reaching internal
+            // (external images, stylesheets, etc.) from this host, reaching internal
             // services or a cloud metadata endpoint (169.254.169.254). Intercept requests
             // and allow only inline data/blob URIs and the configured chart CDN; abort every
             // other remote fetch.
@@ -149,7 +149,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
                     if (allowedHosts.has(new URL(url).host)) {
                         return req.continue().catch(() => { /* request already handled */ });
                     }
-                } catch { /* unparseable URL — fall through and block */ }
+                } catch { /* unparseable URL: fall through and block */ }
                 blockedRemoteResource = true;
                 return req.abort().catch(() => { /* request already handled */ });
             });
