@@ -25,14 +25,13 @@ interface HtmlNode {
  * values are kept in their raw escaped form during parsing (see `parseAttributes`), so any
  * branch that lifts text or an attribute into AST content has to decode first - `&lt;` inside
  * a code/math body is a less-than operator, not markup.
+ *
+ * One pass, so it is the exact inverse of `escapeHtml`: chained replaces decoded `&amp;` before
+ * `&quot;`/`&#39;`, turning the escaped literal text `&amp;quot;` into `"` instead of `&quot;`.
  */
-const decodeEntities = (s: string): string => s
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+const HTML_ENTITY_DECODES: Record<string, string> = { nbsp: ' ', lt: '<', gt: '>', amp: '&', quot: '"', '#39': "'" };
+const decodeEntities = (s: string): string =>
+    s.replace(/&(nbsp|lt|gt|amp|quot|#39);/g, (_m, name: string) => HTML_ENTITY_DECODES[name]);
 
 /**
  * Presents an `HtmlNode` as a `MathNode` for the shared MathML converter.

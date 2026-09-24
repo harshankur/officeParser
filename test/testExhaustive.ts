@@ -598,6 +598,13 @@ async function testHtml(): Promise<void> {
             `HTML roundtrip: no duplicate attribute in ${tag.slice(0, 80)}`);
     }
 
+    // ── Entity decoding is the exact inverse of escaping (no double decode) ─────
+    // Literal text `&quot;`, `&#39;`, `&lt;` is escaped as `&amp;quot;` etc.; decoding `&amp;` first
+    // and then `&quot;` used to collapse it to `"`, silently changing the text.
+    const entityAst = await OfficeParser.parseOffice(Buffer.from('<p>&amp;quot; &amp;#39; &amp;lt; &quot;</p>'), { fileType: 'html' } as any);
+    const entityText = collectAllNodes(entityAst).filter(n => n.type === 'text').map(n => n.text).join('');
+    assert.strictEqual(entityText, '&quot; &#39; &lt; "', 'HTML: entities decode in one pass (no double decode)');
+
     console.log('  HTML: All assertions passed ✓');
 }
 
