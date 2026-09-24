@@ -32,7 +32,7 @@ This release adds LaTeX, in both directions: LaTeX documents and Overleaf projec
 - **Docs visualizer: "Open result in Visualizer" loads the document completely.** The Template Studio hand-off set the parsed document but kept the previous file's name and Reparse state, so downloads were named after the old file and Reparse re-parsed it. It now loads the rendered document exactly as an upload.
 - **Docs visualizer: Reparse is enabled only when a setting changed.** The button compared differently shaped configurations and so was always enabled after a parse.
 - **Docs visualizer: accessible download menus and narrow screens.** The Download menus announce themselves to assistive technology, take focus when opened, move with the arrow keys and close with Escape or Tab, returning focus to their button; window headers wrap on phone-width screens instead of overflowing.
-- **Docs visualizer: every warning is shown.** The warning banner showed only the most recent warning, so one from an output window could hide the parser's own explanation. It now lists every warning, grouped by where it came from (parsing, each output window, each download), and regenerating an output replaces that output's warnings instead of piling them up.
+- **Docs visualizer: every warning is shown.** The warning banner showed only the most recent warning, so one from an output window could hide the parser's own explanation. It now lists every warning, grouped by where it came from (parsing, each output window, each download); regenerating an output replaces its warnings.
 
 ## [8.0.0] - 2026-09-16
 
