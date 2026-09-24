@@ -143,7 +143,7 @@ npx officeparser my_document --fileType=docx --to=json
 - **Values:** Flags can be passed as `--flag=value` or `--flag value`.
 - **Booleans:** Bare flags imply `true` (e.g. `--ocr` is equivalent to `--ocr=true`). Negation flags start with `no-` (e.g. `--no-ocr` is equivalent to `--ocr=false`).
 - **Nested Objects:** You can pass nested properties directly using JSON dot-notation (e.g. `--ocrConfig.language=fra` or `--htmlConfig.containerWidth=900px`).
-- **Images:** the CLI parses directly, so add `--extractAttachments` for images to reach *any* output (HTML/EPUB embed them, DOCX/ODT/Markdown/native-PDF include them). Without it, an image node has no bytes and HTML/Markdown emit a name-only `<img src="image1.png">` reference. (The `OfficeConverter`/`convert()` API auto-enables this; the CLI does not.)
+- **Images:** the CLI parses directly, so add `--extractAttachments` for images to reach *any* output (HTML/EPUB embed them, DOCX/ODT/Markdown/native-PDF include them, and LaTeX with `--texConfig.bundle` packages them beside the `.tex`). Without it, an image node has no bytes and HTML/Markdown emit a name-only `<img src="image1.png">` reference. (The `OfficeConverter`/`convert()` API auto-enables this; the CLI does not.)
 
 ### CLI Options
 
@@ -314,6 +314,13 @@ try {
 > **AbortError Propagation**
 > When parsing is cancelled via `AbortSignal`, the parser rejects with a standard `AbortError` (a `DOMException` or an Error with `name: 'AbortError'`).
 > This error is *not* wrapped in standard OfficeParser error types so that you can reliably detect cancellation using `error.name === 'AbortError'`.
+
+> [!NOTE]
+> **Cancellation is cooperative**
+> The signal is checked between steps: an already-aborted signal rejects before any work, and an abort
+> is seen at the next check (between archive reads, pages, OCR jobs, or batches of parsed tokens). A
+> step that runs synchronously, such as parsing a `.tex` file or one large XML part, finishes before a
+> timer's abort can run; those steps are bounded in size instead.
 
 > [!NOTE]
 > **Worker Cleanup on Abort**
@@ -705,7 +712,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `ANNOTATION_EXTRACTION_FAILED` / `CHART_DATA_EXTRACTION_FAILED` | parse | A PDF annotation / a chart's data could not be read. |
 | `OCR_FAILED` | parse | OCR ran but failed for an image (see `details`). |
 | `LATEX_CONSTRUCT_NOT_INTERPRETED` | parse | The LaTeX input used commands or environments the parser does not interpret (the message names them). Text inside them was kept; drawings such as TikZ pictures were omitted. |
-| `LATEX_EXPANSION_LIMIT_REACHED` | parse | A LaTeX document hit a bound on macro expansion or file inclusion (the guard against expansion bombs and include cycles); macros or files past it were not expanded. |
+| `LATEX_EXPANSION_LIMIT_REACHED` | parse | A LaTeX document hit a bound on macro expansion, file inclusion or nesting depth (the guard against expansion bombs, include cycles and runaway nesting); macros or files past it were not expanded, and content nested past it is kept as plain text. |
 | `LATEX_FILE_NOT_FOUND` | parse | The LaTeX input includes files or images the parser could not read (a bare `.tex` carries none). Parse the project as a `.zip` to include them; images are kept as path references. |
 | `FILE_TYPE_DETECTION_FAILED` / `BUFFER_TYPE_MISMATCH` | parse | Type could not be sniffed / disagreed with the `fileType` hint. |
 | `PASSWORD_REQUIRED` / `PASSWORD_INCORRECT` | parse | Encrypted input; supply `password`/`onPassword` (these also throw when parsing cannot continue). |
@@ -983,7 +990,7 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 | Footnotes | `Text[^1]` + `[^1]: Definition` | `type: 'note'`, keyed by footnote id |
 | Definition lists | `Term\n: Definition` | `type: 'definitionList'` / `'definitionTerm'` / `'definitionDescription'` |
 | Abbreviations | `*[HTML]: Hypertext Markup Language` | `TextMetadata.abbreviationTitle` |
-| HTML comments | `<!-- note -->` on its own lines (may span lines, blank ones included) or inline in a run | `type: 'comment'`, `CommentMetadata.sourceSyntax: 'html'`, raw body in `text`; re-emitted byte-for-byte by the Markdown and HTML generators, kept by the LaTeX generator as `% <!-- ... -->` lines (which the LaTeX parser reads back), omitted by every other generator |
+| HTML comments | `<!-- note -->` on its own lines (may span lines, blank ones included) or inline in a run | `type: 'comment'`, `CommentMetadata.sourceSyntax: 'html'`, raw body in `text`; re-emitted byte-for-byte by the Markdown and HTML generators, kept by the LaTeX generator as `% <!-- ... -->` lines (which the LaTeX parser reads back), omitted by every other generator. `<!-->` and `<!--->` are empty comments; write `\<!--` for literal text |
 | Attribute lists | `![alt](img.png){width=50% .centered}` | `ImageMetadata.width` / `.align`, `TableMetadata.align` |
 | Citations | `[@smith2024]` | `TextMetadata.citationKey` |
 | Wikilinks | `[[Page]]` / `[[Page\|Alias]]` | `TextMetadata.wikilink`, `.link`, `.linkType` |
@@ -1080,16 +1087,22 @@ const project = await OfficeParser.parseOffice('overleaf-project.zip', { extract
 | `\newcommand`, `\renewcommand`, `\def`, `\newenvironment` | expanded |
 
 LaTeX is a programming language, so the parser is a bounded interpreter: macro expansion, expanded
-text, include depth and nesting all have hard limits (past one, expansion stops with
-`LATEX_EXPANSION_LIMIT_REACHED`, and include cycles are cut), nothing is executed, and zip reading
-obeys `decompressionLimits`. Constructs it does not interpret keep their text and are named once in
+text (included files count toward it), include depth and nesting all have hard limits (past one,
+expansion stops with `LATEX_EXPANSION_LIMIT_REACHED`, and include cycles are cut), parsing time grows
+linearly with the document, nothing is executed, and zip reading obeys `decompressionLimits`. The
+parse itself runs synchronously, so an `abortSignal` is honoured before it starts and while the
+project zip is read, but a timer cannot interrupt a `.tex` being parsed (see
+[Cancellation](#cancellation-with-abortsignal)); it is bounded instead. Constructs it does not interpret keep their text and are named once in
 `LATEX_CONSTRUCT_NOT_INTERPRETED`; drawings (TikZ) are omitted. Review comments survive a round trip:
 a `% Comment (Author, date): text` line, which is how the generator writes a comment, becomes a
 comment on the node that follows.
 
 **Generation.** `to('tex')` writes LaTeX from any parsed document; see
 [TexGeneratorConfig](#texgeneratorconfig). The two directions agree: LaTeX that officeParser writes
-parses back to the same structure, and generating from that parse reproduces the LaTeX exactly.
+parses back to the same structure, and a generate, parse, generate cycle reaches a fixed point after
+one round (the first regeneration may normalize spacing, and image sizes the source never stated).
+In bundle mode, an image the source only named by path is written as
+`\IfFileExists{path}{\includegraphics{path}}{\fbox{...}}`, so the zip compiles whether or not you add the file.
 
 ---
 
@@ -1139,7 +1152,7 @@ Set `ignoreComments: true` to skip extraction.
 const slide = ast.content.find(n => n.type === 'slide');
 console.log(slide?.notes?.map(n => n.text));
 
-// Footnotes and endnotes (DOCX, ODT, RTF, PDF, HTML, Markdown, EPUB) can be deeply nested, so we traverse recursively:
+// Footnotes and endnotes (DOCX, ODT, RTF, PDF, HTML, Markdown, EPUB, LaTeX) can be deeply nested, so we traverse recursively:
 const printNotes = (nodes: OfficeContentNode[]) => {
     nodes.forEach(node => {
         if (node.notes) {
@@ -1249,7 +1262,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`, `'tex'`) as these lack magic bytes. |
 | `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
 | `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000, maxTableCells: 1000000 }` | **New**: Limits applied during ZIP extraction (and ODF cell expansion) to protect against excessive memory and resource usage |
-| `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options **(and Markdown input: `preserveIframes`/`embedFolkForms` govern raw `<iframe>` blocks and folk embeds in `.md` too)**. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes: `true` for any, or a hostname allowlist; the src is scheme-checked on generation. `embedFolkForms` (`boolean`, default `false`): opt in to importing ambiguous folk embed forms (Obsidian `![](youtube-url)`, thumbnail-link) as YouTube embeds `preserveComments` (`boolean`, default `false`): keep `<!-- ... -->` comments in HTML input as `comment` nodes (`metadata.sourceSyntax: 'html'`) instead of dropping them; conditional comments (`<!--[if …]>`) are always dropped. The `data-html-comment` shape `sourceAttributes` emits is always read. |
+| `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options **(and Markdown input: `preserveIframes`/`embedFolkForms` govern raw `<iframe>` blocks and folk embeds in `.md` too)**. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes: `true` for any, or a hostname allowlist; the src is scheme-checked on generation. `embedFolkForms` (`boolean`, default `false`): opt in to importing ambiguous folk embed forms (Obsidian `![](youtube-url)`, thumbnail-link) as YouTube embeds. `preserveComments` (`boolean`, default `false`): keep `<!-- ... -->` comments in HTML input as `comment` nodes (`metadata.sourceSyntax: 'html'`) instead of dropping them; conditional comments (`<!--[if …]>`) are always dropped. The `data-html-comment` shape `sourceAttributes` emits is always read. |
 | `pdfWorkerSrc` | `string` | CDN (jsDelivr) | Path/URL to `pdf.worker.min.mjs` (required in browser) |
 | `pdfParserConfig` | `PdfParserConfig` | see below | PDF-specific options ([table below](#pdfparserconfig)) |
 | `onWarning` | `(issue: OfficeIssue) => void` | (none) | Callback for non-fatal parsing issues |
@@ -1293,7 +1306,7 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 | `styleMap` | `string[] \| StructuredStyleMapping[]` | `[]` | Custom semantic style mappings |
 | `onNode` | `(node) => string \| false \| void` | (none) | Per-node callback for filtering, overriding, or mutating |
 | `onWarning` | `(issue: OfficeIssue) => void` | (none) | Callback for non-fatal generation issues |
-| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel the generation operation (rejects with AbortError). Currently honored by the PDF and chunking generators; other generators run to completion |
+| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel the generation operation (rejects with AbortError). Checked between steps by the HTML, Markdown, RTF, DOCX, ODT, EPUB, LaTeX, PDF and chunking generators; text and CSV generation run to completion |
 
 ---
 
@@ -1578,13 +1591,13 @@ generated repeatedly with different metadata.
 
 | Field | Type | Written as |
 |-------|------|-----------|
-| `title` | `string` | HTML `<title>`/`<meta>`, EPUB `dc:title`, Markdown frontmatter, RTF `\title` |
-| `author` | `string` | HTML `<meta name="author">`, EPUB `dc:creator`, frontmatter, RTF `\author` |
-| `description` | `string` | HTML `<meta name="description">`, EPUB `dc:description`, frontmatter |
-| `subject` / `keywords` / `lastModifiedBy` | `string` | Where the destination format has a slot |
-| `created` / `modified` | `Date` | HTML `dcterms.*`, EPUB `dcterms:modified`, frontmatter |
-| `language` | `string` | EPUB `dc:language` |
-| `custom` | `Record<string, string \| number \| boolean \| Date>` | HTML `<meta name="custom:KEY">`, Markdown frontmatter |
+| `title` | `string` | HTML `<title>`/`<meta>`, EPUB `dc:title`, Markdown frontmatter, RTF `\title`, LaTeX `\title` and `pdftitle` |
+| `author` | `string` | HTML `<meta name="author">`, EPUB `dc:creator`, frontmatter, RTF `\author`, LaTeX `\author` and `pdfauthor` |
+| `description` | `string` | HTML `<meta name="description">`, EPUB `dc:description`, frontmatter, LaTeX PDF info `Description` |
+| `subject` / `keywords` / `lastModifiedBy` | `string` | Where the destination format has a slot (LaTeX: `pdfsubject`, `pdfkeywords`, PDF info `LastModifiedBy`) |
+| `created` / `modified` | `Date` | HTML `dcterms.*`, EPUB `dcterms:modified`, frontmatter, LaTeX `pdfcreationdate` / `\date` and `pdfmoddate` |
+| `language` | `string` | EPUB `dc:language`, LaTeX `pdflang` |
+| `custom` | `Record<string, string \| number \| boolean \| Date>` | HTML `<meta name="custom:KEY">`, Markdown frontmatter, LaTeX PDF info entries |
 
 ```js
 // Rebrand the output without touching the parsed document
