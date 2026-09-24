@@ -2,7 +2,8 @@ import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, Embed
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { base64ByteLength, isHeaderRow } from '../utils/officeGenUtils.js';
-import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
+import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
+import { isSourceComment } from '../utils/commentUtils.js';
 
 type ResolvedStandalone = Required<StandaloneConfig>;
 
@@ -1492,8 +1493,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // Rendered through their children only. Listed explicitly, with no `default`, so that
             // under `noImplicitReturns` a new OfficeContentNodeType fails to compile until it is
             // classified here rather than silently degrading to its children.
-            case 'drawing':
+            // A source comment (`<!-- ... -->`) stays a hidden note: a real comment, or - under
+            // `sourceAttributes`, for an editor whose DOM parser discards comment nodes - an empty span
+            // carrying the raw text in an escaped attribute, so it is data and can never become markup.
+            // A review comment keeps its existing rendering (its children).
             case 'comment':
+                if (isSourceComment(node)) {
+                    return this.config.htmlConfig.sourceAttributes
+                        ? `<span data-html-comment="${escapeHtml(node.text || '')}"></span>`
+                        : `<!--${sanitizeCommentText(node.text || '')}-->`;
+                }
+                return childrenOutput;
+
+            case 'drawing':
             case 'header':
             case 'footer':
             case 'slideMaster':

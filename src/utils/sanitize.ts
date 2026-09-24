@@ -68,6 +68,22 @@ export function escapeHtml(text: string): string {
 }
 
 /**
+ * Make raw text safe to wrap in `<!-- ... -->` in HTML or Markdown output. A comment closes at the first
+ * `-->` or `--!>`, and a leading `>` or `->` closes an empty one, so AST-derived text containing those
+ * could end the comment early and turn what follows into live markup. Each is broken by escaping its
+ * `>` (entities are not decoded inside a comment, so this stays inert). Text parsed FROM a comment can
+ * never contain `-->`, so real comments still round-trip byte-for-byte; only hand-built or hostile
+ * nodes are altered.
+ */
+export function sanitizeCommentText(text: string): string {
+    if (typeof text !== 'string') return '';
+    let out = text.replace(/--!?>/g, (m) => `${m.slice(0, -1)}&gt;`);
+    if (out.startsWith('>')) out = `&gt;${out.slice(1)}`;
+    else if (out.startsWith('->')) out = `-&gt;${out.slice(2)}`;
+    return out;
+}
+
+/**
  * Escapes text for an XML text node or attribute (XHTML/OPF/NCX). Same as
  * escapeHtml but emits the XML-canonical `&apos;` for the single quote.
  */
@@ -472,6 +488,17 @@ export function escapeLatex(text: string, newline = ' '): string {
 export function latexComment(text: string): string {
     if (typeof text !== 'string') return '';
     return normalizeLatexInput(text).split('\n').map(line => `% ${line}`.trimEnd()).join('\n') + '\n';
+}
+
+/**
+ * A source comment (`<!-- ... -->`, `CommentMetadata.sourceSyntax: 'html'`) as LaTeX comment lines:
+ * `% <!--body-->`, one `%` line per line of the body. It stays a hidden note that nothing typesets,
+ * in the shape the LaTeX parser restores verbatim. Unlike `latexComment`, trailing whitespace inside
+ * the body is kept; every line break form still starts a new `%` line, so no text escapes the comment.
+ */
+export function latexSourceComment(body: string): string {
+    const text = `<!--${sanitizeCommentText(typeof body === 'string' ? body : '')}-->`;
+    return normalizeLatexInput(text).split('\n').map(line => (line ? `% ${line}` : '%')).join('\n') + '\n';
 }
 
 /** URL characters `\href` takes verbatim in every context (RFC 3986 unreserved/sub-delims, minus the ones below). */

@@ -37,6 +37,7 @@
     "htmlParserConfig": {
       "preserveAttributes": false,
       "preserveIframes": false,
+      "preserveComments": true,
       "embedFolkForms": false
     },
     "ignorePageGeometry": false,

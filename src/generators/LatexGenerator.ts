@@ -3,7 +3,8 @@ import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, Ge
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { ADMONITION_COLOR, decodeBase64, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexUnicodePlan, LISTINGS_LANGUAGES, planLatexUnicode } from '../utils/latexUtils.js';
-import { escapeLatex, latexComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
+import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
+import { isSourceComment } from '../utils/commentUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -448,6 +449,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     /** Inline-level nodes a flow groups into a paragraph. */
     private isInlineNode(node: OfficeContentNode): boolean {
         if (node.type === 'text') return true;
+        // A source comment sits in its run (a list item, a cell); one standing alone between blocks
+        // forms a run of its own, which renders the same as a block.
+        if (isSourceComment(node)) return true;
         if (node.type === 'break') {
             const t = (node.metadata as any)?.breakType;
             return t === undefined || t === 'textWrapping' || t === 'carriageReturn';
@@ -467,7 +471,10 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         let inline: OfficeContentNode[] = [];
         const flushInline = async () => {
             if (inline.length === 0) return;
-            const p = (await this.renderInline(inline)).trim();
+            let p = (await this.renderInline(inline)).trim();
+            // A run of nothing but source comments stands between blocks, whose blank line already ends
+            // the comment line: no `{}` guard needed.
+            if (inline.every(n => isSourceComment(n))) p = p.replace(/\n\{\}$/, '');
             if (p) blocks.push(p);
             inline = [];
         };
@@ -529,7 +536,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             case 'code': return this.codeBlock(node);
             case 'break': return this.blockBreak(node);
             case 'note': return this.standaloneNote(node);
-            case 'comment': return this.commentLines(node).trimEnd();
+            case 'comment': return (isSourceComment(node) ? latexSourceComment(node.text || '') : this.commentLines(node)).trimEnd();
             case 'admonition': return this.admonition(node);
             case 'chart': return this.chart(node);
             case 'embed': return this.embed(node);
@@ -673,11 +680,31 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             group = [];
             groupLink = '';
         };
-        for (const node of nodes || []) {
+        const list = nodes || [];
+        // Where `out` ended when a `%` comment line was last written: a run that ends in one gets `{}`
+        // after it, since callers trim a run and the `%` would then swallow what they append on the
+        // same line (a heading's closing brace, a cell's `&` or `\\`).
+        let commentEnd = -1;
+        for (let i = 0; i < list.length; i++) {
+            const node = list[i];
             checkAbortSignal(this.config.abortSignal);
             const override = await this.handleOnNode(node);
             if (override === false) continue;
             if (typeof override === 'string') { flushRuns(); await flushGroup(); out += override; continue; }
+            if (isSourceComment(node)) {
+                // A hidden note inside a run: `% <!--...-->` lines. The `%` swallows its line end and TeX
+                // skips the next line's leading spaces, so a space that follows the comment is written in
+                // front of it instead, or "a<!-- x --> b" would typeset as "ab".
+                flushRuns();
+                await flushGroup();
+                const next = list[i + 1];
+                const prev = list[i - 1];
+                const spaceAfter = next?.type === 'text' && /^\s/.test(next.text || '');
+                const spaceBefore = /\s$/.test(out) || (prev?.type === 'text' && /\s$/.test(prev.text || ''));
+                out += `${spaceAfter && !spaceBefore ? ' ' : ''}${latexSourceComment(node.text || '')}`;
+                commentEnd = out.length;
+                continue;
+            }
             const meta = node.metadata as TextMetadata | undefined;
             if (node.type === 'text' && !meta?.citationKey) {
                 if (meta?.link) {
@@ -690,7 +717,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 runs.push(node);
                 if (node.notes?.length || node.comments?.length) {
                     flushRuns();
-                    out += this.inlineComments(node) + await this.notesFor(node);
+                    out += this.inlineComments(node);
+                    if (node.comments?.length) commentEnd = out.length;
+                    out += await this.notesFor(node);
                 }
                 continue;
             }
@@ -700,6 +729,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         }
         flushRuns();
         await flushGroup();
+        if (commentEnd === out.length) out += '{}';
         return out;
     }
 

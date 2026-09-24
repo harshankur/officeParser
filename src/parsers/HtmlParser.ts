@@ -1,5 +1,6 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
+import { isSourceComment } from '../utils/commentUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { isEmptyMath, MathNode, mathmlTreeToLatex } from '../utils/mathUtils.js';
 import { isSafeHtmlAttributeName, iframeAllowed } from '../utils/sanitize.js';
@@ -12,7 +13,8 @@ import { isSafeHtmlAttributeName, iframeAllowed } from '../utils/sanitize.js';
 const MAX_HTML_NESTING_DEPTH = 256;
 
 interface HtmlNode {
-    type: 'element' | 'text';
+    /** `comment` = an HTML comment, kept only under `HtmlParserConfig.preserveComments`; `text` is its body. */
+    type: 'element' | 'text' | 'comment';
     tagName?: string;
     attributes?: Record<string, string>;
     text?: string;
@@ -32,6 +34,12 @@ interface HtmlNode {
 const HTML_ENTITY_DECODES: Record<string, string> = { nbsp: ' ', lt: '<', gt: '>', amp: '&', quot: '"', '#39': "'" };
 const decodeEntities = (s: string): string =>
     s.replace(/&(nbsp|lt|gt|amp|quot|#39);/g, (_m, name: string) => HTML_ENTITY_DECODES[name]);
+
+/** An element's raw child text as the source had it (code/math bodies). A comment is not text. */
+const rawChildText = (node: HtmlNode): string => node.children.map(c => (c.type === 'comment' ? '' : c.text || '')).join('');
+
+/** Plain text of parsed content nodes, leaving out source comments: a hidden note is not text. */
+const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
 
 /**
  * Presents an `HtmlNode` as a `MathNode` for the shared MathML converter.
@@ -151,7 +159,7 @@ const firstFontFamily = (fontFamily: string): string => {
     return first.trim();
 };
 
-const parseHtmlTree = (html: string): HtmlNode => {
+const parseHtmlTree = (html: string, preserveComments: boolean = false): HtmlNode => {
     const root: HtmlNode = { type: 'element', tagName: 'root', children: [], attributes: {} };
     let current = root;
     let cursor = 0;
@@ -172,6 +180,14 @@ const parseHtmlTree = (html: string): HtmlNode => {
 
         if (html.startsWith('<!--', tagStart)) {
             const commentEnd = html.indexOf('-->', tagStart + 4);
+            // Kept as a node only when asked (HtmlParserConfig.preserveComments). A conditional comment
+            // (`<!--[if ...]>`, `<!--<![endif]-->`) is an Office/IE directive, not an authored note: never kept.
+            if (preserveComments && commentEnd !== -1) {
+                const body = html.substring(tagStart + 4, commentEnd);
+                if (!/^\[if\b/i.test(body) && !/<!\[endif\]$/i.test(body)) {
+                    current.children.push({ type: 'comment', text: body, children: [], parent: current });
+                }
+            }
             cursor = commentEnd !== -1 ? commentEnd + 3 : html.length;
             continue;
         }
@@ -280,7 +296,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
     checkAbortSignal(config.abortSignal);
 
     const textStr = buffer.toString('utf-8');
-    const root = parseHtmlTree(textStr);
+    const root = parseHtmlTree(textStr, config.htmlParserConfig?.preserveComments === true);
 
     // Find head and body
     let head: HtmlNode | undefined;
@@ -447,6 +463,12 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
         if (depth > MAX_HTML_NESTING_DEPTH) {
             throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED);
         }
+        if (node.type === 'comment') {
+            // A preserved HTML comment: the author's hidden note, kept verbatim (never entity-decoded -
+            // entities are not interpreted inside a comment).
+            return { type: 'comment', text: node.text || '', metadata: { sourceSyntax: 'html' } as CommentMetadata };
+        }
+
         if (node.type === 'text') {
             let decodedText = decodeEntities(node.text || '');
 
@@ -553,7 +575,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                         const definition = footnoteDefinitions.get(key);
                         const noteNode: OfficeContentNode = {
                             type: 'note',
-                            text: (definition || []).map(d => d.text || '').join(''),
+                            text: plainTextOf(definition || []),
                             children: definition || [],
                             metadata: { noteType: 'footnote', noteId: key }
                         };
@@ -575,6 +597,17 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 }
                 return kids;
             };
+
+            // Source-comment element (HtmlGenerator's `sourceAttributes` shape, emitted for editors whose DOM
+            // parser discards real comment nodes): `<span data-html-comment="raw text">`. Always read, like
+            // the gated embed below - it is this library's own round-trip shape. The text is data only.
+            if ((tagName === 'span' || tagName === 'div') && node.attributes?.['data-html-comment'] !== undefined) {
+                return {
+                    type: 'comment',
+                    text: decodeEntities(node.attributes['data-html-comment']),
+                    metadata: { sourceSyntax: 'html' } as CommentMetadata
+                };
+            }
 
             // Gated generic-iframe embed (HtmlGenerator's `gatedEmbeds` shape): an inert
             // click-to-load placeholder that never auto-loads its src. Read it back to the same
@@ -692,7 +725,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const dataMath = node.attributes['data-math'];
                 const modeIsExplicit = dataMath === 'inline' || dataMath === 'block';
                 const classTokens = (node.attributes?.class || '').split(/\s+/);
-                const rawText = decodeEntities(node.children.map(c => c.text || '').join(''));
+                const rawText = decodeEntities(rawChildText(node));
                 // Prefer the text content; fall back to the attribute value (path 2 producers may
                 // emit an empty body).
                 const source = rawText || (modeIsExplicit ? '' : decodeEntities(dataMath));
@@ -779,7 +812,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             // a ```mermaid block. Previously this div fell through to generic handling and its
             // code flattened to paragraph text.
             if (tagName === 'div' && (node.attributes?.['data-mermaid'] !== undefined || (node.attributes?.class || '').split(/\s+/).includes('mermaid'))) {
-                const code = decodeEntities(node.children.map(c => c.text || '').join('')).trim()
+                const code = decodeEntities(rawChildText(node)).trim()
                     || decodeEntities(node.attributes?.['data-mermaid'] || '');
                 // Only claim this as a mermaid code node when there is actual diagram source.
                 // A bare `class="mermaid"` div with nested elements (a mermaid.js-rendered <svg>,
@@ -959,7 +992,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
 
                 const selfNode: OfficeContentNode = {
                     type: 'list',
-                    text: selfChildren.map(c => c.text || '').join(''),
+                    text: plainTextOf(selfChildren),
                     metadata: {
                         listType: listContext?.type || 'unordered',
                         indentation: listContext?.level || 0,
@@ -1189,9 +1222,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     if (langMatch) language = langMatch.replace('language-', '');
                     // Decode entities: the code body is stored raw, so `&lt;`/`&gt;`/`&amp;` (e.g. a
                     // mermaid `-->` arrow, or `a < b` in a snippet) must be turned back into text.
-                    codeText = decodeEntities(codeNode.children.map(c => c.text || '').join(''));
+                    codeText = decodeEntities(rawChildText(codeNode));
                 } else {
-                    codeText = decodeEntities(node.children.map(c => c.text || '').join(''));
+                    codeText = decodeEntities(rawChildText(node));
                 }
                 // A `mermaid` class token (on the <pre> or its <code>) names the language when no
                 // explicit language-* class is present - some producers emit <pre class="mermaid">.
@@ -1288,7 +1321,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
         if (referencedFootnoteKeys.has(key)) continue;
         content.push({
             type: 'note',
-            text: (definition || []).map(d => d.text || '').join(''),
+            text: plainTextOf(definition || []),
             children: definition || [],
             metadata: { noteType: 'footnote', noteId: key, unreferenced: true },
         });

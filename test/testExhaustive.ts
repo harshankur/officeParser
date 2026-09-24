@@ -337,6 +337,18 @@ async function testMarkdown(): Promise<void> {
     assert.ok(mdOutput.includes('Two-level nested blockquote') && mdOutput.includes('Three-level nested blockquote'), 'MD roundtrip: nested-blockquote text preserved');
     assert.ok(mdOutput.includes('Paren-marker ordered item one'), 'MD roundtrip: ")"-marker ordered list item preserved');
 
+    // ── Source comments (`<!-- ... -->`): hidden notes, kept verbatim ──────────
+    const sourceComments = nodes.filter(n => n.type === 'comment' && (n.metadata as any)?.sourceSyntax === 'html');
+    const blockComment = ' Exhaustive: a source comment on its own lines,\n\nspanning a blank line, kept verbatim ';
+    assert.ok(sourceComments.some(n => n.text === blockComment), 'MD: multi-line block comment kept verbatim (blank line included)');
+    assert.ok(sourceComments.some(n => n.text === ' an inline comment '), 'MD: inline comment kept verbatim');
+    assert.ok(!sourceComments.some(n => (n.text || '').includes('not a comment')), 'MD: a comment inside a code span stays code');
+    assert.ok(nodes.some(n => n.type === 'text' && n.formatting?.font === 'monospace' && n.text === '<!-- not a comment -->'), 'MD: code span keeps the literal comment text');
+    assert.ok(!nodes.some(n => n.type === 'text' && (n.text || '').includes('<!-- Exhaustive')), 'MD: a comment is never parsed as visible text');
+    assert.ok(mdOutput.includes(`<!--${blockComment}-->`), 'MD roundtrip: block comment re-emitted byte-for-byte');
+    assert.ok(mdOutput.includes('Inline <!-- an inline comment --> source comment'), 'MD roundtrip: inline comment re-emitted in its run');
+    assert.ok(!mdOutput.includes('&lt;!--'), 'MD roundtrip: no comment escaped into visible text');
+
     console.log('  Markdown: All assertions passed ✓');
 }
 
@@ -598,6 +610,17 @@ async function testHtml(): Promise<void> {
             `HTML roundtrip: no duplicate attribute in ${tag.slice(0, 80)}`);
     }
 
+    // ── HTML comments: dropped by default, kept (minus conditional comments) when asked ──
+    const isSourceCommentNode = (n: OfficeContentNode) => n.type === 'comment' && (n.metadata as any)?.sourceSyntax === 'html';
+    assert.ok(!nodes.some(isSourceCommentNode), 'HTML: comments are dropped by default');
+    const keptAst = await OfficeParser.parseOffice(filePath, { htmlParserConfig: { preserveComments: true } } as any);
+    const kept = collectAllNodes(keptAst).filter(isSourceCommentNode);
+    assert.ok(kept.some(n => n.text === ' An authored HTML comment, kept under preserveComments '), 'HTML: preserveComments keeps an authored comment verbatim');
+    assert.ok(kept.some(n => n.text === ' an inline html comment '), 'HTML: preserveComments keeps an inline comment');
+    assert.ok(!kept.some(n => /\[if |endif/.test(n.text || '')), 'HTML: conditional (Office/IE) comments are never kept');
+    const keptMd = String((await OfficeGenerator.generate(keptAst, 'md')).value);
+    assert.ok(keptMd.includes('<!-- An authored HTML comment, kept under preserveComments -->'), 'HTML->MD: preserved comment becomes a Markdown comment');
+
     // ── Entity decoding is the exact inverse of escaping (no double decode) ─────
     // Literal text `&quot;`, `&#39;`, `&lt;` is escaped as `&amp;quot;` etc.; decoding `&amp;` first
     // and then `&quot;` used to collapse it to `"`, silently changing the text.
@@ -606,6 +629,91 @@ async function testHtml(): Promise<void> {
     assert.strictEqual(entityText, '&quot; &#39; &lt; "', 'HTML: entities decode in one pass (no double decode)');
 
     console.log('  HTML: All assertions passed ✓');
+}
+
+// ─── Source comments across every generator ──────────────────────────────────
+
+async function testSourceComments(): Promise<void> {
+    console.log('\n=== Running Source Comment Tests ===');
+    const md = 'First paragraph.\n\n<!-- a hidden note -->\n\nHello <!-- inline "q" & <b> --> world.\n';
+    const ast = await OfficeParser.parseOffice(Buffer.from(md), { fileType: 'md' } as any);
+
+    // Markdown -> Markdown is byte-for-byte.
+    assert.strictEqual(String((await OfficeGenerator.generate(ast, 'md')).value), md.trimEnd(), 'Comments: md round trip is byte-for-byte');
+
+    // The editor path: md -> sourceAttributes HTML -> HTML parse -> md, still byte-for-byte. The
+    // comment text rides in an escaped attribute (quotes, ampersand and a tag included).
+    const editorHtml = String((await OfficeGenerator.generate(ast, 'html', { htmlConfig: { sourceAttributes: true, standalone: false } } as any)).value);
+    assert.ok(editorHtml.includes('<span data-html-comment=" a hidden note "></span>'), 'Comments: sourceAttributes emits a data-html-comment span');
+    assert.ok(!editorHtml.includes('<!--'), 'Comments: sourceAttributes emits no real comment (an editor would discard it)');
+    const fromEditor = await OfficeParser.parseOffice(Buffer.from(editorHtml), { fileType: 'html' } as any);
+    assert.strictEqual(String((await OfficeGenerator.generate(fromEditor, 'md')).value), md.trimEnd(), 'Comments: editor-shape round trip is byte-for-byte');
+
+    // Default HTML carries real comments, which re-parse under preserveComments.
+    const plainHtml = String((await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: false } } as any)).value);
+    assert.ok(plainHtml.includes('<!-- a hidden note -->'), 'Comments: default HTML emits a real comment');
+    const reparsed = await OfficeParser.parseOffice(Buffer.from(plainHtml), { fileType: 'html', htmlParserConfig: { preserveComments: true } } as any);
+    assert.strictEqual(String((await OfficeGenerator.generate(reparsed, 'md')).value), md.trimEnd(), 'Comments: default HTML round trip is byte-for-byte under preserveComments');
+
+    // Every other format has no hidden-comment construct: the note must not appear at all.
+    const leaks = (s: string) => s.includes('hidden note') || s.includes('inline "q"') || s.includes('inline &quot;q');
+    for (const format of ['text', 'csv', 'rtf', 'chunks'] as const) {
+        const value = (await OfficeGenerator.generate(ast, format as any)).value;
+        assert.ok(!leaks(JSON.stringify(value)), `Comments: ${format} output omits the hidden note`);
+    }
+    for (const format of ['docx', 'odt', 'epub'] as const) {
+        const bytes = (await OfficeGenerator.generate(ast, format as any)).value as Uint8Array;
+        const text = Object.values(unzipSync(bytes)).map(b => strFromU8(b)).join('\n');
+        assert.ok(text.includes('First paragraph'), `Comments: ${format} output has the body (positive control)`);
+        assert.ok(!leaks(text), `Comments: ${format} package omits the hidden note`);
+    }
+    const pdfText = String((await (await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(ast, 'pdf', { pdfConfig: { engine: 'native' } } as any)).value as Uint8Array), { fileType: 'pdf' } as any)).to('text')).value);
+    assert.ok(pdfText.includes('First paragraph'), 'Comments: pdf has the body (positive control)');
+    assert.ok(!leaks(pdfText), 'Comments: pdf omits the hidden note');
+
+    // The AST handed to generate() is never mutated by the strip.
+    assert.ok(collectAllNodes(ast).some(n => n.type === 'comment'), 'Comments: source AST still holds its comments after non-md generation');
+
+    // A hidden note inside a heading, a list item or a footnote is not part of that node's text either,
+    // so formats that read `node.text` (chunks, text) never show it.
+    const nested = await OfficeParser.parseOffice(Buffer.from('# Head <!-- secret1 --> tail\n\n- item <!-- secret2 --> x\n\nRef[^1].\n\n[^1]: Note <!-- secret3 --> body.\n'), { fileType: 'md' } as any);
+    assert.ok(collectAllNodes(nested).filter(n => n.type !== 'comment').every(n => !/secret/.test(n.text || '')), 'Comments: no node text carries a nested hidden note');
+    for (const format of ['text', 'chunks', 'csv'] as const) {
+        const value = JSON.stringify((await OfficeGenerator.generate(nested, format as any)).value);
+        assert.ok(!/secret/.test(value), `Comments: ${format} omits notes nested in headings, items and footnotes`);
+    }
+
+    // LaTeX has a hidden-comment construct too: `% <!--body-->`, one `%` line per line of the body, which
+    // the LaTeX parser restores, so md -> tex -> md keeps every comment and the typeset text never shows it.
+    const tex = String((await OfficeGenerator.generate(ast, 'tex')).value);
+    assert.ok(tex.includes('\n\n% <!-- a hidden note -->\n\n') && tex.includes('Hello % <!-- inline "q" & <b> -->\n world.'), 'Comments: tex writes source comments as % lines');
+    const fromTex = await OfficeParser.parseOffice(Buffer.from(tex), { fileType: 'tex' } as any);
+    assert.strictEqual(String((await OfficeGenerator.generate(fromTex, 'md')).value), 'First paragraph.\n\n<!-- a hidden note -->\n\nHello <!-- inline "q" & <b> -->world.',
+        'Comments: md -> tex -> md keeps both comments (the space after an inline one moves before it, where TeX keeps it)');
+    assert.strictEqual(String((await fromTex.to('text')).value).trim(), 'First paragraph.\nHello world.', 'Comments: tex text shows no note and keeps the word space');
+    const multi = 'Before.\n\n<!-- line one\n\n  indented, trailing   \n-->\n\nAfter.';
+    const multiTex = String((await OfficeGenerator.generate(await OfficeParser.parseOffice(Buffer.from(multi), { fileType: 'md' } as any), 'tex')).value);
+    assert.ok(multiTex.includes('\n% <!-- line one\n%\n%   indented, trailing   \n% -->\n'), 'Comments: a multi-line comment is one % line per line, whitespace kept');
+    assert.strictEqual(String((await (await OfficeParser.parseOffice(Buffer.from(multiTex), { fileType: 'tex' } as any)).to('md')).value), multi, 'Comments: multi-line comment survives tex byte-for-byte');
+
+    // A comment line ending a heading, item or cell is followed by `{}`: callers trim a run, and the `%`
+    // would otherwise swallow the closing brace, the next \item or the row's `\\`. Review comments too.
+    const edges = await OfficeParser.parseOffice(Buffer.from('# Head <!-- h -->\n\n- item <!-- i -->\n- next\n\n| a | b <!-- c --> |\n|---|---|\n| d | e |\n'), { fileType: 'md' } as any);
+    edges.content.push({ type: 'heading', text: 'Reviewed', metadata: { level: 2 }, children: [{ type: 'text', text: 'Reviewed', comments: [{ type: 'comment', text: 'check', metadata: {}, children: [] }] }] } as any);
+    const edgesTex = String((await OfficeGenerator.generate(edges, 'tex')).value);
+    assert.ok(edgesTex.includes('Head % <!-- h -->\n{}}') && edgesTex.includes('\\item item % <!-- i -->\n{}\n\\item next')
+        && edgesTex.includes('% <!-- c -->\n{} \\\\') && edgesTex.includes('Reviewed% Comment: check\n{}}'), 'Comments: a trailing comment line is guarded by {}');
+    const edgesBack = await OfficeParser.parseOffice(Buffer.from(edgesTex), { fileType: 'tex' } as any);
+    const edgesTable = collectAllNodes(edgesBack).find(n => n.type === 'table')!;
+    assert.deepStrictEqual(edgesTable.children!.map(r => r.children!.length), [2, 2], 'Comments: a comment ending a cell keeps the table intact');
+    assert.strictEqual(collectAllNodes(edgesBack).filter(n => n.type === 'list').length, 2, 'Comments: a comment ending an item keeps the next item');
+
+    // Hand-written LaTeX: `% <!-- ... -->` is read as a source comment; a `<!--` never closed on the
+    // following comment lines is an ordinary comment (discarded) and takes no text with it.
+    const hand = await OfficeParser.parseOffice(Buffer.from('\\documentclass{article}\\begin{document}\nOne.\n\n% <!-- kept -->\n\nTwo.\n% <!-- never closed\nThree.\n\\end{document}'), { fileType: 'tex' } as any);
+    assert.deepStrictEqual(hand.content.map(n => [n.type, n.text]), [['paragraph', 'One.'], ['comment', ' kept '], ['paragraph', 'Two. Three.']], 'Comments: hand-written LaTeX % <!-- --> lines');
+
+    console.log('  Source comments: All assertions passed ✓');
 }
 
 // ─── CSV ─────────────────────────────────────────────────────────────────────
@@ -2357,6 +2465,7 @@ async function runTests(): Promise<void> {
     const tests: Array<[string, () => Promise<void>]> = [
         ['Markdown', testMarkdown],
         ['HTML', testHtml],
+        ['SourceComments', testSourceComments],
         ['CSV', testCsv],
         ['RTF', testRtf],
         ['AttributeRoundtrip', testAttributeRoundtrip],

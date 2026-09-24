@@ -17,7 +17,8 @@ import { resolveGeneratorConfig, resolveParserConfig } from '../../src/utils/con
 import {
     escapeHtml, escapeXml, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl,
     serializeForInlineScript, csvSafeCell, escapeRtf, markdownEscapeText, sanitizeMarkdownUrl, sanitizeRtfUrl,
-    escapeLatex, latexComment, sanitizeLatexUrl, sanitizeLatexMath, sanitizeLatexImagePath
+    escapeLatex, latexComment, sanitizeLatexUrl, sanitizeLatexMath, sanitizeLatexImagePath,
+    sanitizeCommentText, latexSourceComment
 } from '../../src/utils/sanitize';
 import { extractFiles } from '../../src/utils/zipUtils';
 import { parseXmlString } from '../../src/utils/xmlUtils';
@@ -43,6 +44,13 @@ function astWith(content: any[]): OfficeParserAST {
 
 function unitTests() {
     console.log('- Sanitize module (unit)...');
+    // sanitizeCommentText: only comment-closing sequences change; ordinary text is untouched.
+    check('comment text: plain text unchanged', sanitizeCommentText(' a note - with -- dashes ') === ' a note - with -- dashes ');
+    check('comment text: --> neutralized', sanitizeCommentText('a --> b') === 'a --&gt; b');
+    check('comment text: --!> neutralized', sanitizeCommentText('a --!> b') === 'a --!&gt; b');
+    check('comment text: leading > neutralized', sanitizeCommentText('> b') === '&gt; b');
+    check('comment text: leading -> neutralized', sanitizeCommentText('-> b') === '-&gt; b');
+    check('comment text: non-string is empty', sanitizeCommentText(undefined as any) === '');
 
     // escapeHtml / escapeXml include the single quote.
     check('escapeHtml quotes', escapeHtml(`a<b>&"'`) === 'a&lt;b&gt;&amp;&quot;&#39;');
@@ -202,6 +210,9 @@ async function htmlSourceAttributesTests() {
         ['inline math data-math', [{ type: 'code', text: ATTR, metadata: { math: 'inline' } }]],
         ['block math data-math', [{ type: 'code', text: TAG, metadata: { math: 'block' } }]],
         ['mermaid data-mermaid', [{ type: 'code', text: TAG, metadata: { language: 'mermaid' } }]],
+        ['block source comment data-html-comment', [{ type: 'comment', text: TAG, metadata: { sourceSyntax: 'html' } }]],
+        ['inline source comment data-html-comment', [{ type: 'paragraph', children: [
+            { type: 'comment', text: ATTR, metadata: { sourceSyntax: 'html' } }] }]],
     ];
     for (const [name, content] of cases) {
         const out = (await OfficeGenerator.generate(astWith(content), 'html', cfg as any)).value as string;
@@ -212,6 +223,59 @@ async function htmlSourceAttributesTests() {
     // Positive control: the emission must actually happen, or the checks above are vacuous.
     const okMath = (await OfficeGenerator.generate(astWith([{ type: 'code', text: 'E=mc^2', metadata: { math: 'inline' } }]), 'html', cfg as any)).value as string;
     check('html: sourceAttributes actually emits data-math', /data-math="E=mc\^2"/.test(okMath), okMath.slice(0, 200));
+    const okComment = (await OfficeGenerator.generate(astWith([{ type: 'comment', text: ' note ', metadata: { sourceSyntax: 'html' } }]), 'html', cfg as any)).value as string;
+    check('html: sourceAttributes actually emits data-html-comment', okComment.includes('<span data-html-comment=" note "></span>'), okComment.slice(0, 200));
+}
+
+/**
+ * Remove HTML comments the way a browser tokenizes them: `<!-->` and `<!--->` close at once; otherwise a
+ * comment runs to the first `-->` or `--!>` (or the end). What is left is what would render/execute.
+ */
+function stripCommentsLikeABrowser(html: string): string {
+    let out = '';
+    let i = 0;
+    while (i < html.length) {
+        const open = html.indexOf('<!--', i);
+        if (open === -1) { out += html.slice(i); break; }
+        out += html.slice(i, open);
+        const body = open + 4;
+        if (html.startsWith('>', body)) { i = body + 1; continue; }
+        if (html.startsWith('->', body)) { i = body + 2; continue; }
+        const close = html.slice(body).search(/--!?>/);
+        if (close === -1) break;
+        i = body + close + html.slice(body + close).match(/^--!?>/)![0].length;
+    }
+    return out;
+}
+
+async function sourceCommentBreakoutTests() {
+    console.log('- Source comment (<!-- -->) breakout in Markdown and HTML output...');
+    // A comment closes at the first `-->` or `--!>`, and a leading `>`/`->` closes an empty one, so
+    // AST text carrying those could end the comment early and turn the rest into live markup. Whatever
+    // the payload, nothing outside a comment may survive once comments are removed as a browser would.
+    const payloads = [
+        ' x --> <script>alert(1)</script> ',
+        ' x --!> <script>alert(1)</script> ',
+        '> <script>alert(1)</script> ',
+        '-> <script>alert(1)</script> ',
+    ];
+    for (const text of payloads) {
+        const cases: Array<[string, any[]]> = [
+            ['block', [{ type: 'comment', text, metadata: { sourceSyntax: 'html' } }]],
+            ['inline', [{ type: 'paragraph', children: [{ type: 'text', text: 'a' }, { type: 'comment', text, metadata: { sourceSyntax: 'html' } }] }]],
+        ];
+        for (const [where, content] of cases) {
+            for (const format of ['md', 'html'] as const) {
+                const out = String((await OfficeGenerator.generate(astWith(content), format, { htmlConfig: { standalone: false } } as any)).value);
+                check(`${format} ${where} comment ${JSON.stringify(text.slice(0, 7))}: no live markup escapes the comment`,
+                    !/<script/i.test(stripCommentsLikeABrowser(out)), JSON.stringify(out.slice(0, 160)));
+            }
+        }
+    }
+    // Positive control: an ordinary comment is emitted unchanged, so the check above isn't vacuous.
+    const ok = String((await OfficeGenerator.generate(astWith([{ type: 'comment', text: ' plain ', metadata: { sourceSyntax: 'html' } }]), 'md')).value);
+    // (astWith carries a title, so the output starts with frontmatter; the comment is the body.)
+    check('md: an ordinary source comment is emitted verbatim', ok.endsWith('\n\n<!-- plain -->'), JSON.stringify(ok));
 }
 
 async function iframePreservationTests() {
@@ -1700,6 +1764,12 @@ async function latexSanitizationTests() {
         url === 'https://x.com/a%20b/%7Bc%7D%5Cd%5Ee%7Cf%7Eg%24h?i=1\\&j=\\_\\#k\\%25zz\\%41%C3%A9', url);
     check('latex url: no raw brace or command survives', !/[{}]/.test(url) && liveControlWords(url).length === 0);
 
+    // latexSourceComment: a hidden note stays inside `%` lines whatever line breaks it holds, and a
+    // `-->` inside it cannot end the comment early for the LaTeX parser.
+    const hiddenNote = latexSourceComment(' a\r\\input{/etc/passwd}\u2028\\write18{id}\n--> \\def\\x{} ');
+    check('latex source comment: every line commented', hiddenNote.split('\n').filter(Boolean).every(l => l.startsWith('%')) && hiddenNote.endsWith('\n'), JSON.stringify(hiddenNote));
+    check('latex source comment: an inner --> is broken', (hiddenNote.match(/-->/g) || []).length === 1 && hiddenNote.trimEnd().endsWith('-->'), JSON.stringify(hiddenNote));
+
     // sanitizeLatexImagePath: TeX reads the file when compiling, so only a plain relative path inside
     // the document's folder passes, and it needs no escaping.
     for (const good of ['a.png', 'figures/diagram', 'img/fig_1.v2.pdf', '_x/y-z.jpg', 'pic with space.png', 'my figures/a b.png']) {
@@ -1846,6 +1916,7 @@ async function main() {
     await htmlTests();
     await htmlAttributeBagTests();
     await htmlSourceAttributesTests();
+    await sourceCommentBreakoutTests();
     await iframePreservationTests();
     await mdInlineFormattingTests();
     await markdownTests();

@@ -1,6 +1,7 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextAlignment, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
+import { isSourceComment } from '../utils/commentUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { LATEX_SYMBOL_CHARACTERS, LISTINGS_LANGUAGE_NAMES } from '../utils/latexUtils.js';
 import { ADMONITION_COLOR } from '../utils/officeGenUtils.js';
@@ -513,7 +514,8 @@ function parseLatexDate(value: string): Date | undefined {
 
 /** Text of an inline node list. */
 function textOf(nodes: OfficeContentNode[] | undefined): string {
-    return (nodes || []).map(n => (n.type === 'break' ? '\n' : n.text ?? textOf(n.children))).join('');
+    // A source comment is the author's hidden note, not text.
+    return (nodes || []).map(n => (n.type === 'break' ? '\n' : isSourceComment(n) ? '' : n.text ?? textOf(n.children))).join('');
 }
 
 // ── the reader ──────────────────────────────────────────────────────────────────────────────────
@@ -810,7 +812,7 @@ class LatexReader {
                 case 'text': this.addText(flow, tok.v); break;
                 case 'amp': break;
                 case 'dollar': this.readDollarMath(sc, flow); break;
-                case 'comment': this.handleComment(flow, tok.v); break;
+                case 'comment': this.handleComment(flow, tok.v, sc); break;
                 case 'cs': {
                     if (stop.items && tok.name === stop.items) { sc.restore(snap); unwind(); return 'item'; }
                     if (tok.name === 'end') {
@@ -946,8 +948,9 @@ class LatexReader {
 
     // ── comments ──
 
-    private handleComment(flow: Flow, text: string): void {
+    private handleComment(flow: Flow, text: string, sc?: Scanner): void {
         const t = text.replace(/^ /, '');
+        if (t.startsWith('<!--') && sc && this.sourceComment(flow, t, sc)) return;
         const alt = /^alt: (.*)$/.exec(t);
         if (alt) { flow.pendingAlt = alt[1]; return; }
         const m = /^Comment(?: \(([^)]*)\))?: ([\s\S]*)$/.exec(t);
@@ -976,6 +979,36 @@ class LatexReader {
         } else {
             flow.nextComments.push(node);
         }
+    }
+
+    /**
+     * `% <!--body-->`, one `%` line per line of the body: a source comment (Markdown/HTML `<!-- ... -->`,
+     * the author's hidden note) as the LaTeX generator writes it. Restored verbatim as the same node,
+     * inline when the paragraph has text before it. It is not a review comment, so `ignoreComments` does
+     * not govern it, and it takes no anchors meant for the block after it. A `<!--` whose `-->` does not
+     * end one of the directly following comment lines is left an ordinary comment.
+     */
+    private sourceComment(flow: Flow, first: string, sc: Scanner): boolean {
+        const afterFirst = sc.save();
+        let raw = first;
+        while (raw.length < 7 || !raw.endsWith('-->')) {
+            const tok = sc.next(this.atLetter);
+            if (tok.t !== 'comment') { sc.restore(afterFirst); return false; }
+            raw += `\n${tok.v.replace(/^ /, '')}`;
+        }
+        const node: OfficeContentNode = { type: 'comment', text: raw.slice(4, -3), metadata: { sourceSyntax: 'html' } as CommentMetadata };
+        // Inline when the paragraph has text before it, or text follows on the very next line (a comment
+        // that opens a paragraph); a block comment stands between blank lines.
+        const beforeNext = sc.save();
+        const textFollows = sc.next(this.atLetter).t === 'text';
+        sc.restore(beforeNext);
+        if (flow.pending.trim() || this.hasContent(flow.inline) || textFollows) {
+            this.addInline(flow, node);
+        } else {
+            this.endParagraph(flow);
+            flow.blocks.push(node);
+        }
+        return true;
     }
 
     private lastInlineComment(flow: Flow): OfficeContentNode | undefined {

@@ -91,7 +91,7 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
         maxZipEntries: 10000,
         maxTableCells: 1000000
     },
-    htmlParserConfig: { preserveAttributes: false, preserveIframes: false, embedFolkForms: false },
+    htmlParserConfig: { preserveAttributes: false, preserveIframes: false, preserveComments: true, embedFolkForms: false },
     ignorePageGeometry: false,
     password: '',
     onPassword: () => undefined,

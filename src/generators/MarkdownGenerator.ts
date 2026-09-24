@@ -1,5 +1,6 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextMetadata, WikilinkSyntax } from '../types.js';
-import { escapeHtml, markdownEscapeText, sanitizeCssValue, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
+import { escapeHtml, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
+import { isSourceComment } from '../utils/commentUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
 import { clampRepeat } from '../utils/numberUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
@@ -797,9 +798,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (this.resolvedDialect.definitionLists === 'none') return `${childrenOutput}\n\n`;
                     return `: ${childrenOutput}\n`;
 
+                case 'comment':
+                    // A source comment (`<!-- ... -->`) is re-emitted verbatim - inline it sits in its run,
+                    // at top level the block loop below separates it like any other block. A review
+                    // comment keeps its existing rendering (its children).
+                    if (isSourceComment(node)) return `<!--${sanitizeCommentText(node.text || '')}-->`;
+                    return childrenOutput;
+
                 case 'chart':
                 case 'drawing':
-                case 'comment':
                 case 'header':
                 case 'footer':
                 case 'slideMaster':
@@ -1236,9 +1243,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             case 'row':
                             case 'cell':
                             case 'page':
+                            case 'comment':
+                                if (isSourceComment(n)) return `<!--${sanitizeCommentText(n.text || '')}-->`;
+                                return co;
                             case 'break':
                             case 'code':
-                            case 'comment':
                             case 'header':
                             case 'footer':
                             case 'slideMaster':

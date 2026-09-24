@@ -3,6 +3,7 @@ import { resolveGeneratorConfig } from '../utils/configUtils.js';
 import { checkAbortSignal, getWarningMessage } from '../utils/errorUtils.js';
 import { resolveImageMode } from '../utils/officeGenUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
+import { isSourceComment } from '../utils/commentUtils.js';
 
 /**
  * Base class for all document generators.
@@ -274,9 +275,11 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     }
 
     /**
-     * Recursively extracts plain text from a node and its children.
+     * Recursively extracts plain text from a node and its children. A source comment (the author's
+     * hidden note, `<!-- ... -->`) is not text, so it contributes nothing.
      */
     protected getNodeText(node: OfficeContentNode): string {
+        if (isSourceComment(node)) return '';
         if (node.text) return node.text;
         if (node.children) {
             return node.children.map(c => this.getNodeText(c)).join('');

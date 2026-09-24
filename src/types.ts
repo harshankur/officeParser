@@ -314,9 +314,11 @@ export interface CommonOfficeParserConfig {
     ignoreNotes?: boolean;
     /**
      * Flag to ignore comments from parsing. Default is false (comments are extracted onto `node.comments`).
-     * Applies to: DOCX, XLSX, PPTX and every ODF type (ODT/ODS/ODP/ODG). Not applicable to PDF, RTF,
-     * HTML, Markdown or EPUB (no comments are parsed there). (The CSV `#`-row convention produces
-     * top-level `comment` nodes and is not governed by this flag.)
+     * Applies to: DOCX, XLSX, PPTX, every ODF type (ODT/ODS/ODP/ODG) and LaTeX (`% Comment (Author,
+     * date): text` lines). Not applicable to PDF, RTF or EPUB (no comments are parsed there). Source-level
+     * comments are not governed by this flag: the CSV `#`-row convention produces top-level `comment`
+     * nodes, and Markdown/HTML `<!-- ... -->` (and LaTeX `% <!-- ... -->` lines) produce `comment` nodes
+     * with `metadata.sourceSyntax: 'html'` (HTML only under `HtmlParserConfig.preserveComments`).
      */
     ignoreComments?: boolean;
     /**
@@ -596,6 +598,19 @@ export interface HtmlParserConfig {
      * Defaults to false.
      */
     preserveIframes?: boolean | string[];
+    /**
+     * Preserve HTML comments (`<!-- ... -->`) found in HTML input as `comment` nodes with
+     * `metadata.sourceSyntax: 'html'`, so they survive an HTML -> AST -> HTML/Markdown round trip
+     * instead of being dropped. Conditional comments (`<!--[if ...]> ... <![endif]-->`, Office/IE
+     * directives rather than authored notes) are always dropped. Off by default: HTML in the wild
+     * carries many comments (analytics markers, build stamps), and emitting them into converted
+     * Markdown is something a consumer opts into. The `data-html-comment` shape that
+     * `HtmlGeneratorConfig.sourceAttributes` emits is always read, independent of this option.
+     * Comments in Markdown input are always parsed as comment nodes.
+     *
+     * Defaults to false.
+     */
+    preserveComments?: boolean;
     /**
      * Import ambiguous "folk" embed forms in Markdown as embeds: a standalone Obsidian-style image
      * whose URL is a YouTube link (`![](https://youtube.com/watch?v=ID)`), and the clickable
@@ -1184,8 +1199,10 @@ export interface HtmlGeneratorConfig {
      * so attribute-driven structured consumers (rich-text editors, custom viewers) can rehydrate
      * the node from the markup rather than re-parsing the display text. Affects wikilinks
      * (adds `data-wikilink`/`data-target`/`data-alias`), citations (a `<span class="citation">`
-     * carrying `data-key` instead of `<cite>`), math (the LaTeX in `data-math`, undelimited) and
-     * mermaid (a `<div class="mermaid" data-mermaid>` instead of `<pre><code>`).
+     * carrying `data-key` instead of `<cite>`), math (the LaTeX in `data-math`, undelimited),
+     * mermaid (a `<div class="mermaid" data-mermaid>` instead of `<pre><code>`) and source comments
+     * (an empty `<span data-html-comment="…">` instead of `<!-- … -->`, since an editor's DOM parser
+     * discards real comment nodes).
      *
      * Off by default; the default output is byte-identical to previous releases. The widened
      * `HtmlParser` reads every shape this emits, so output stays self-round-trippable.
@@ -2638,6 +2655,17 @@ export interface CommentMetadata {
     initials?: string;
     date?: string;
     commentId?: string;
+    /**
+     * `'html'` marks a SOURCE comment, `<!-- ... -->` in Markdown or HTML: the author's hidden note,
+     * not a review annotation. Its node's `text` is the raw text between `<!--` and `-->`, verbatim
+     * (whitespace included) and it has no children. The Markdown and HTML generators re-emit it as a
+     * comment (the HTML generator as a `data-html-comment` element under
+     * `HtmlGeneratorConfig.sourceAttributes`), and the LaTeX generator as `% <!--...-->` lines, which the
+     * LaTeX parser reads back; every other output format omits it, since none has a hidden-comment
+     * construct and rendering it would reveal a note the author hid. Absent for review comments
+     * (DOCX/PPTX/XLSX/ODF, LaTeX `% Comment:` lines), whose rendering is unchanged.
+     */
+    sourceSyntax?: 'html';
 }
 
 /**

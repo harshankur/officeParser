@@ -42,6 +42,7 @@ const DEFAULT_OCR_CONFIG: DeepRequired<OcrConfig> = {
 const DEFAULT_HTML_PARSER_CONFIG: DeepRequired<HtmlParserConfig> = {
     preserveAttributes: false,
     preserveIframes: false,
+    preserveComments: false,
     embedFolkForms: false,
 };
 

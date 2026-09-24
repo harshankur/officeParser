@@ -1,5 +1,6 @@
-import { AdmonitionMetadata, BreakMetadata, CodeMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
+import { isSourceComment } from '../utils/commentUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { iframeAllowed } from '../utils/sanitize.js';
 
@@ -47,6 +48,9 @@ const ADMONITION_TYPE_MAP: Record<string, AdmonitionMetadata['admonitionType']> 
     caution: 'caution',
     danger: 'caution'
 };
+
+/** Plain text of parsed inline nodes, leaving out source comments: a hidden note is not text. */
+const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
 
 export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     // Honour cancellation requests before the line-by-line Markdown scanning loop begins.
@@ -180,6 +184,20 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         if (!admonitionType) return match; // Unrecognised type - leave as literal text.
         const id = `__ADMONITION_${admonitionBlocks.length}__`;
         admonitionBlocks.push(JSON.stringify({ admonitionType, body }));
+        return `\n\n${id}\n\n`;
+    });
+
+    // Extract source comments that stand on their own lines (`<!-- ... -->`, possibly spanning several
+    // lines, blank ones included) before block splitting, mirroring the code/math/admonition pre-passes -
+    // otherwise the blank-line split tears a multi-line comment apart and its pieces reparse as visible
+    // text. Runs after code-block extraction, so a comment inside a fence stays code. The comment must
+    // open at column 0 (an indented one inside a list item is left to the inline path, so it doesn't
+    // split the list) and its closing `-->` must end the line; the body can't contain `-->`, so the match
+    // always ends at the comment's real close. The raw body is kept verbatim for re-emission.
+    const htmlComments: string[] = [];
+    textStr = textStr.replace(/^<!--((?:(?!-->)[\s\S])*?)-->[ \t]*$/gm, (_match, body: string) => {
+        const id = `__HTML_COMMENT_${htmlComments.length}__`;
+        htmlComments.push(body);
         return `\n\n${id}\n\n`;
     });
 
@@ -334,7 +352,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // footnoteId | citationKey | wikiPage/wikiAlias | refBang/refText/refId=explicit or collapsed
         // reference link/image `[text][ref]`/`[text][]` | shortBang/shortText=shortcut reference `[text]`
         // (deliberately the most generic bracket pattern, so it must stay last among `[`-starting
-        // alternatives) | autolinkUrl=`<url>` autolink | mathInline.
+        // alternatives) | autolinkUrl=`<url>` autolink | mathInline | htmlComment=an inline `<!-- ... -->`
+        // source comment on one line (body can't contain `-->`; a code span that starts earlier on the
+        // line wins by leftmost match, so a comment inside backticks stays code).
         //
         // Named groups (rather than positional match[N] indices) mean adding a new alternative never
         // requires renumbering every existing dispatch arm.
@@ -352,7 +372,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Inline math requires no whitespace right after the opening $ or right before the
         // closing $, the common heuristic (matching Pandoc/KaTeX) for avoiding false
         // positives on currency like "$5 and $10".
-        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|==(?<highlight>.+?)==|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|(?<lineBreak><br\s*\/?>)|<span\s+style="(?<spanStyle>[^"]*)">(?<spanContent>.+?)<\/span>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
+        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|==(?<highlight>.+?)==|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|(?<lineBreak><br\s*\/?>)|<!--(?<htmlComment>(?:(?!-->)[\s\S])*?)-->|<span\s+style="(?<spanStyle>[^"]*)">(?<spanContent>.+?)<\/span>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
         let lastIndex = 0;
         let match;
 
@@ -423,7 +443,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     const noteChildren = definition !== undefined ? parseInline(definition) : [];
                     noteNode = {
                         type: 'note',
-                        text: noteChildren.map(c => c.text || '').join(''),
+                        text: plainTextOf(noteChildren),
                         children: noteChildren,
                         metadata: { noteType: 'footnote', noteId }
                     };
@@ -470,6 +490,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 nodes.push({ type: 'text', text: url, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined, metadata: { link: url, linkType: 'external' } as TextMetadata });
             } else if (g.mathInline !== undefined) { // Inline math
                 nodes.push({ type: 'code', text: g.mathInline, metadata: { math: 'inline' } as CodeMetadata });
+            } else if (g.htmlComment !== undefined) { // Inline source comment: a hidden note, kept verbatim
+                nodes.push({ type: 'comment', text: g.htmlComment, metadata: { sourceSyntax: 'html' } as CommentMetadata });
             }
 
             lastIndex = regex.lastIndex;
@@ -854,6 +876,17 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
         }
 
+        // Source comment on its own lines, extracted to a placeholder above: a hidden note, kept verbatim
+        const commentMatch = block.match(/^__HTML_COMMENT_(\d+)__$/);
+        if (commentMatch) {
+            content.push({
+                type: 'comment',
+                text: htmlComments[parseInt(commentMatch[1])],
+                metadata: { sourceSyntax: 'html' } as CommentMetadata
+            });
+            continue;
+        }
+
         // Code Block
         const codeMatch = block.match(/^__CODE_BLOCK_(\d+)__$/);
         if (codeMatch) {
@@ -902,7 +935,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const children = parseInline(rawText);
             content.push({
                 type: 'heading',
-                text: children.map(c => c.text || '').join(''),
+                text: plainTextOf(children),
                 metadata: {
                     level: headingMatch[2].length,
                     alignment,
@@ -938,7 +971,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const children = parseInline(headingLine);
             content.push({
                 type: 'heading',
-                text: children.map(c => c.text || '').join(''),
+                text: plainTextOf(children),
                 metadata: { level: setextMatch[2][0] === '=' ? 1 : 2, alignment } as HeadingMetadata,
                 children
             });
@@ -1054,7 +1087,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     const children = parseInline(itemText);
                     const listNode: OfficeContentNode = {
                         type: 'list',
-                        text: children.map(c => c.text || '').join(''),
+                        text: plainTextOf(children),
                         metadata: {
                             listType,
                             indentation: level,
@@ -1074,7 +1107,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     // line (no nested code/blockquote/sub-list/multi-paragraph items).
                     const continuationChildren = parseInline(line.trim());
                     lastListNode.children = [...(lastListNode.children || []), { type: 'text', text: ' ' }, ...continuationChildren];
-                    lastListNode.text = (lastListNode.children || []).map(c => c.text || '').join('');
+                    lastListNode.text = plainTextOf(lastListNode.children || []);
                 }
             }
             continue;
@@ -1228,7 +1261,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 carried.push(...(((node.metadata as any)?.anchorIds as string[]) || []));
                 continue;
             }
-            if (carried.length > 0) {
+            if (carried.length > 0 && !isSourceComment(node)) {
                 const meta: any = node.metadata || (node.metadata = {} as any);
                 meta.anchorIds = [...carried, ...((meta.anchorIds as string[]) || [])];
                 carried = [];
@@ -1255,7 +1288,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         const noteChildren = parseInline(definition);
         content.push({
             type: 'note',
-            text: noteChildren.map(c => c.text || '').join(''),
+            text: plainTextOf(noteChildren),
             children: noteChildren,
             metadata: { noteType: 'footnote', noteId: id, unreferenced: true },
         });
