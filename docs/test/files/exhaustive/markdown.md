@@ -176,3 +176,9 @@ Autolink: visit <https://example.com/autolink> for details.
     indented code block line two
 
 ---
+
+<!-- Exhaustive: a source comment on its own lines,
+
+spanning a blank line, kept verbatim -->
+
+Inline <!-- an inline comment --> source comment, and `<!-- not a comment -->` inside a code span.

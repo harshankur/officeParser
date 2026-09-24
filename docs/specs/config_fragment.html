@@ -64,7 +64,8 @@
                     excluded from parsing. Affects DOCX, XLSX, PPTX, ODF (ODT/ODS/ODP) and LaTeX (a
                     <code>% Comment (Author, date): text</code> line, the shape the LaTeX generator writes; other
                     <code>%</code> comments are always discarded). By default comments are attached to their
-                    target node via <code>node.comments[]</code>.</td>
+                    target node via <code>node.comments[]</code>. Source-level comments (CSV <code>#</code> rows, Markdown/HTML
+                    <code>&lt;!-- --&gt;</code>, LaTeX <code>% &lt;!-- --&gt;</code> lines) are not governed by this flag.</td>
             </tr>
             <tr>
                 <td><code>ignoreHeadersAndFooters</code></td>
@@ -308,6 +309,15 @@
                 <td><code>boolean | string[]</code></td>
                 <td><code>false</code></td>
                 <td>Preserve non-YouTube <code>&lt;iframe&gt;</code> embeds (otherwise dropped) as <code>embed</code> nodes. <code>true</code> preserves any; an array is a hostname allowlist (exact host or a <code>.</code>-suffix). The src is scheme-checked on generation, so a <code>javascript:</code>/<code>data:</code> src never survives. Also governs a raw <code>&lt;iframe&gt;</code> block in Markdown input.</td>
+            </tr>
+            <tr>
+                <td><code>htmlParserConfig.preserveComments</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Keep <code>&lt;!-- ... --&gt;</code> comments in HTML input as <code>comment</code> nodes
+                    (<code>metadata.sourceSyntax: 'html'</code>, raw body in <code>text</code>) instead of dropping them.
+                    Conditional comments (<code>&lt;!--[if …]&gt;</code>) are always dropped. HTML only: comments in
+                    Markdown are always kept. The <code>data-html-comment</code> shape <code>sourceAttributes</code> emits is always read.</td>
             </tr>
             <tr>
                 <td><code>htmlParserConfig.embedFolkForms</code></td>

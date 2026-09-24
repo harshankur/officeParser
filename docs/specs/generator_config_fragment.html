@@ -194,7 +194,7 @@
                 <td>Carry each rich node's raw source in a <code>data-*</code> attribute (undelimited text content),
                     so attribute-driven consumers can rehydrate the node: <code>data-wikilink</code>/<code>data-target</code>/<code>data-alias</code>
                     on wikilinks, a <code>&lt;span class="citation" data-key&gt;</code> for citations, the LaTeX in
-                    <code>data-math</code>, and a <code>&lt;div class="mermaid" data-mermaid&gt;</code> for mermaid. Off by default the
+                    <code>data-math</code>, and a <code>&lt;div class="mermaid" data-mermaid&gt;</code> for mermaid, and an empty <code>&lt;span data-html-comment="…"&gt;</code> for a source comment (an editor's DOM parser discards real comments). Off by default the
                     output is byte-identical to before, and the parser reads every shape it emits. Forced off for PDF and EPUB.</td>
             </tr>
             <tr>

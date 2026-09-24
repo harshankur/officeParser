@@ -744,14 +744,18 @@ extracted (the matching `ignore*` flag is then a no-op).
 | ODG  | Y (page) | – | – | – | Y | – | Y |
 | PDF  | – | footnotes/endnotes (tagged) | Y (top/bottom bands) | – | Y | – | Y (spans: tagged only) |
 | RTF  | – | footnotes/endnotes | – (dropped) | – | Y | – | Y |
-| HTML | – | footnotes/endnotes | – | – | Y (`data:` only) | – | Y |
-| MD   | – | footnotes/endnotes | – | – | Y (`data:` only) | – | Y (HTML-table fallback) |
+| HTML | `<!-- -->` become `comment` nodes* (opt-in: `preserveComments`) | footnotes/endnotes | – | – | Y (`data:` only) | – | Y |
+| MD   | `<!-- -->` become `comment` nodes* | footnotes/endnotes | – | – | Y (`data:` only) | – | Y (HTML-table fallback) |
 | CSV  | `#`-rows become `comment` nodes* | – | – | – | – | – | rows |
 | EPUB | – | footnotes/endnotes | – | – | Y | – | Y |
-| TEX  | Y (`% Comment (Author, date):` lines) | footnotes/endnotes | Y (`fancyhdr`) | – | Y (from a project zip) | – | Y |
+| TEX  | Y (`% Comment (Author, date):` lines); `% <!-- -->` lines become `comment` nodes* | footnotes/endnotes | Y (`fancyhdr`) | – | Y (from a project zip) | – | Y |
 
-Notes: comments land on `node.comments[]` (with `author`/`date`) except CSV, whose leading-`#` rows
-become top-level `comment` nodes and are *not* governed by `ignoreComments`. `ignoreNotes` /
+Notes: comments land on `node.comments[]` (with `author`/`date`) except source-level comments, which
+are *not* governed by `ignoreComments`: CSV's leading-`#` rows become top-level `comment` nodes, and
+Markdown/HTML `<!-- ... -->` (and LaTeX `% <!-- ... -->` lines) become `comment` nodes (block or
+inline) marked `metadata.sourceSyntax: 'html'` whose `text` is the raw comment body. The Markdown,
+HTML and LaTeX generators keep those as comments; every other output format omits them (a hidden note
+stays hidden). `ignoreNotes` /
 `ignoreComments` / `ignoreHeadersAndFooters` / `ignoreSlideMasters` each remove the corresponding
 column and are a no-op wherever it shows `–`. OCR (`ocr: true`) recognizes text from any extracted
 image and therefore also needs `extractAttachments: true`.
@@ -970,6 +974,7 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 > Markdown-input parsing options that are not dialect toggles live on `htmlParserConfig` (Markdown
 > shares the HTML parser for embeds): `preserveIframes` and `embedFolkForms` govern raw `<iframe>`
 > blocks and folk embed forms encountered in `.md`. There is no separate `mdParserConfig`.
+> (`preserveComments` is HTML-only: comments in Markdown are always kept, see the table below.)
 
 | Feature | Markdown syntax | AST representation |
 |---|---|---|
@@ -978,6 +983,7 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 | Footnotes | `Text[^1]` + `[^1]: Definition` | `type: 'note'`, keyed by footnote id |
 | Definition lists | `Term\n: Definition` | `type: 'definitionList'` / `'definitionTerm'` / `'definitionDescription'` |
 | Abbreviations | `*[HTML]: Hypertext Markup Language` | `TextMetadata.abbreviationTitle` |
+| HTML comments | `<!-- note -->` on its own lines (may span lines, blank ones included) or inline in a run | `type: 'comment'`, `CommentMetadata.sourceSyntax: 'html'`, raw body in `text`; re-emitted byte-for-byte by the Markdown and HTML generators, kept by the LaTeX generator as `% <!-- ... -->` lines (which the LaTeX parser reads back), omitted by every other generator |
 | Attribute lists | `![alt](img.png){width=50% .centered}` | `ImageMetadata.width` / `.align`, `TableMetadata.align` |
 | Citations | `[@smith2024]` | `TextMetadata.citationKey` |
 | Wikilinks | `[[Page]]` / `[[Page\|Alias]]` | `TextMetadata.wikilink`, `.link`, `.linkType` |
@@ -1066,6 +1072,7 @@ const project = await OfficeParser.parseOffice('overleaf-project.zip', { extract
 | `\cite` and `thebibliography` | citations and the bibliography list |
 | `verbatim`, `lstlisting`, `minted`, `\verb` | `code` nodes with their language |
 | `quote`, `quotation`, `verse` | quotes |
+| `% <!-- ... -->` lines | a source `comment` node (the form the generator writes a Markdown/HTML `<!-- -->` in); other `%` comments are dropped |
 | `fancyhdr` headers and footers | `ast.auxiliary` |
 | `\maketitle`, beamer `\titlepage` | a title block where it stands: a `heading` styled `Title`, then `Author` and `Date` lines (beamer adds `Subtitle`), `\thanks` as footnotes |
 | `\title`, `\author`, `\date`, `\hypersetup{pdf...}` | `ast.metadata` (`pdftitle`/`pdfauthor` win over `\title`/`\author`) |
@@ -1227,7 +1234,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `password` | `string` | `''` | Password for a password-protected document. Applies to every encryptable format: PDF, encrypted OOXML (`.docx`/`.xlsx`/`.pptx`, ECMA-376 agile or standard AES), and encrypted ODF (`.odt`/`.ods`/`.odp`/`.odg`, AES-CBC with PBKDF2). A missing password rejects with `PASSWORD_REQUIRED`, a wrong one with `PASSWORD_INCORRECT`. Ignored for unencrypted files. *ODF note:* LibreOffice 24.8+ defaults to AES-256-GCM with Argon2id key derivation ("wholesome encryption"), which is not supported and rejects with `DOCUMENT_DECRYPTION_FAILED`; re-save with the classic AES-CBC/PBKDF2 scheme (or an earlier LibreOffice) to parse it |
 | `onPassword` | `(reason: 'required' \| 'incorrect') => string \| undefined \| Promise<...>` | (none) | Called when an encrypted document needs a password `password` did not satisfy, so it can be supplied lazily or interactively (prompt, vault). Return a password to retry (capped), or `undefined` to reject as above. Works for every encryptable format (PDF/OOXML/ODF); mirrors pdf.js's `onPassword` |
 | `ignoreNotes` | `boolean` | `false` | Ignore footnotes/endnotes (DOCX, ODT, RTF, PDF, HTML, Markdown, EPUB, LaTeX) and speaker notes (PPTX/ODP, LaTeX `beamer` `\note`). See the [capability matrix](#per-format-capability-matrix) |
-| `ignoreComments` | `boolean` | `false` | Ignore comments/annotations, attached by default via `node.comments[]`. Applies to DOCX, XLSX, PPTX, every ODF type (ODT/ODS/ODP/ODG) and LaTeX (`% Comment (Author, date): text` lines). See the [capability matrix](#per-format-capability-matrix) |
+| `ignoreComments` | `boolean` | `false` | Ignore comments/annotations, attached by default via `node.comments[]`. Applies to DOCX, XLSX, PPTX, every ODF type (ODT/ODS/ODP/ODG) and LaTeX (`% Comment (Author, date): text` lines). Source-level comments (CSV `#` rows, Markdown/HTML `<!-- -->`, LaTeX `% <!-- -->` lines) are not governed by it. See the [capability matrix](#per-format-capability-matrix) |
 | `ignoreHeadersAndFooters` | `boolean` | `false` | Skip headers & footers (populated in `ast.auxiliary.headers/footers` by default). Extracted for DOCX, PDF, ODT and LaTeX (`fancyhdr`) only; a no-op for ODS/ODP/ODG, XLSX, PPTX and RTF. See the [capability matrix](#per-format-capability-matrix) |
 | `ignoreSlideMasters` | `boolean` | `false` | Skip PPTX slide masters (populated in `ast.auxiliary.slideMasters` by default). PPTX only; ODP masters are not extracted |
 | `extractAttachments` | `boolean` | `false` | Populate `ast.attachments` with Base64 images/charts |
@@ -1242,7 +1249,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`, `'tex'`) as these lack magic bytes. |
 | `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
 | `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000, maxTableCells: 1000000 }` | **New**: Limits applied during ZIP extraction (and ODF cell expansion) to protect against excessive memory and resource usage |
-| `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options **(and Markdown input: `preserveIframes`/`embedFolkForms` govern raw `<iframe>` blocks and folk embeds in `.md` too)**. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes: `true` for any, or a hostname allowlist; the src is scheme-checked on generation. `embedFolkForms` (`boolean`, default `false`): opt in to importing ambiguous folk embed forms (Obsidian `![](youtube-url)`, thumbnail-link) as YouTube embeds |
+| `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options **(and Markdown input: `preserveIframes`/`embedFolkForms` govern raw `<iframe>` blocks and folk embeds in `.md` too)**. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes: `true` for any, or a hostname allowlist; the src is scheme-checked on generation. `embedFolkForms` (`boolean`, default `false`): opt in to importing ambiguous folk embed forms (Obsidian `![](youtube-url)`, thumbnail-link) as YouTube embeds `preserveComments` (`boolean`, default `false`): keep `<!-- ... -->` comments in HTML input as `comment` nodes (`metadata.sourceSyntax: 'html'`) instead of dropping them; conditional comments (`<!--[if …]>`) are always dropped. The `data-html-comment` shape `sourceAttributes` emits is always read. |
 | `pdfWorkerSrc` | `string` | CDN (jsDelivr) | Path/URL to `pdf.worker.min.mjs` (required in browser) |
 | `pdfParserConfig` | `PdfParserConfig` | see below | PDF-specific options ([table below](#pdfparserconfig)) |
 | `onWarning` | `(issue: OfficeIssue) => void` | (none) | Callback for non-fatal parsing issues |
@@ -1371,7 +1378,7 @@ Pass as `htmlConfig` inside `GeneratorConfig`.
 | `injections.headEnd` | `string` | `''` | Raw HTML injected before `</head>` |
 | `injections.bodyStart` | `string` | `''` | Raw HTML injected after `<body>` |
 | `injections.bodyEnd` | `string` | `''` | Raw HTML injected before `</body>` |
-| `sourceAttributes` | `boolean` | `false` | Carry each rich node's raw source in a `data-*` attribute (undelimited text), so attribute-driven consumers can rehydrate it: `data-wikilink`/`data-target`/`data-alias` on wikilinks, a `<span class="citation" data-key>` for citations, the LaTeX in `data-math`, and a `<div class="mermaid" data-mermaid>` for mermaid. Off = byte-identical to before; the parser reads every shape it emits. Forced off for PDF/EPUB |
+| `sourceAttributes` | `boolean` | `false` | Carry each rich node's raw source in a `data-*` attribute (undelimited text), so attribute-driven consumers can rehydrate it: `data-wikilink`/`data-target`/`data-alias` on wikilinks, a `<span class="citation" data-key>` for citations, the LaTeX in `data-math`, a `<div class="mermaid" data-mermaid>` for mermaid, and an empty `<span data-html-comment="…">` for a source comment (editors' DOM parsers discard real `<!-- -->`). Off = byte-identical to before; the parser reads every shape it emits. Forced off for PDF/EPUB |
 | `omitDefaultTextColor` | `boolean` | `false` | Omit an inline run `color` equal to the document default (near-black or near-white), so imported text adapts to the reader's light/dark theme instead of being pinned to black or white. Only near-black/near-white run colours are dropped; deliberately-coloured runs are emitted unchanged (Word's `w:val="auto"` already carries no colour). Off = byte-identical to before |
 
 #### `standalone`: granular envelope control
@@ -1529,7 +1536,7 @@ writeFileSync('paper.zip', zip as Uint8Array);
 | Lists | nested `itemize`/`enumerate` rebuilt from the flat list items (continued numbering kept), task items as check boxes, definition lists as `description` |
 | Tables | `longtable` (page-breaking, header row repeated) or `tabular` where a `longtable` cannot go; ruled grid, `\multicolumn`/`\multirow` merges, column alignment and cell colours. A table wider than 16 columns continues below itself in bands of 16 |
 | Links, citations | `\href` (scheme-checked), `\hyperref` for internal links whose target exists, `\cite{key}` |
-| Notes, comments | `\footnote` (deferred to `\footnotetext` inside a `tabular`), `\endnote` (`endnotes` package), review comments as LaTeX `%` comments |
+| Notes, comments | `\footnote` (deferred to `\footnotetext` inside a `tabular`), `\endnote` (`endnotes` package), review comments as LaTeX `%` comments, and a hidden `<!-- -->` note as `% <!-- ... -->` lines |
 | Code, math | `lstlisting` for a language `listings` knows, `verbatim` otherwise; math as live LaTeX after a safety check |
 | Images, charts, embeds | `\includegraphics` at natural size, bounded to the line and page; an image the source referred to only by a plain relative path keeps that path (`\includegraphics{figures/diagram}`; spaces are fine, and a URL's `%20`-style escapes are decoded to the file name), while a web image, or a path that is absolute or leaves the document's folder, becomes a link, since TeX cannot fetch the one and must not read the other; charts as a data table; embeds as a link |
 | Slides | `beamer` frames (the slide's first heading is the frame title, speaker notes become `\note`, long slides continue on another frame) |
