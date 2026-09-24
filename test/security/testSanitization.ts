@@ -328,6 +328,22 @@ async function iframePreservationTests() {
 }
 
 async function markdownTests() {
+    // `<!--` scanning is linear: an unclosed opener must not re-scan the rest of the document. Each of
+    // these took seconds (80k lines: about 29 s) when a lazy regex body searched ahead per opener.
+    for (const [label, md] of [
+        ['80k unclosed <!-- lines', '<!-- x\n'.repeat(80000)],
+        ['20k unclosed <!-- in one line', '<!-- x '.repeat(20000)],
+        ['20k unclosed <!-- in one paragraph', 'a <!-- x\n'.repeat(20000)],
+    ] as const) {
+        const started = Date.now();
+        await OfficeParser.parseOffice(Buffer.from(md), { fileType: 'md' } as any);
+        const ms = Date.now() - started;
+        check(`markdown: ${label} parses in linear time`, ms < 3000, `${ms}ms`);
+    }
+    // Literal text that looks like an internal placeholder is text, never a lifted block (it used to crash).
+    const lookalike = await OfficeParser.parseOffice(Buffer.from('__CODE_BLOCK_0__\n\n__HTML_COMMENT_0__\n\n__MATH_BLOCK_9__'), { fileType: 'md' } as any);
+    check('markdown: placeholder look-alikes stay text', lookalike.content.every(n => n.type === 'paragraph'), JSON.stringify(lookalike.content.map(n => n.type)));
+
     console.log('- MarkdownGenerator (integration)...');
 
     const scriptAst = astWith([
@@ -1892,6 +1908,52 @@ async function latexParserTests() {
         const r = await parse(src);
         check(`latex parser: ${label} parse without recursion blow-up and keep the text`, r.ms < TIME_BUDGET_MS && r.json.includes('deep'), `${r.ms}ms`);
     }
+    // Argument paths (formatting commands, notes, captions, links, nested tables) count against the same
+    // depth bound as groups, so a tall stack of them ends with a warning, not a stack overflow; and a
+    // `\maketitle` inside `\title` cannot re-enter the title block.
+    for (const [label, src] of [
+        ['3k nested \\footnote', '\\footnote{'.repeat(3000) + 'deep' + '}'.repeat(3000)],
+        ['5k nested \\mbox', '\\mbox{'.repeat(5000) + 'deep' + '}'.repeat(5000)],
+        ['3k nested \\caption', '\\caption{'.repeat(3000) + 'deep' + '}'.repeat(3000)],
+        ['2k nested \\textbf', '\\textbf{'.repeat(2000) + 'deep' + '}'.repeat(2000)],
+        ['1.5k nested tabulars', '\\begin{tabular}{c}'.repeat(1500) + 'deep' + '\\end{tabular}'.repeat(1500)],
+    ] as const) {
+        let error = '';
+        const r = await parse(src).catch((e: any) => { error = e.message; return null; });
+        check(`latex parser: ${label} stops at the depth bound`, !!r && r.ms < TIME_BUDGET_MS && r.json.includes('deep') && r.codes.includes('LATEX_EXPANSION_LIMIT_REACHED'), error || `${r?.ms}ms ${r?.codes.join(',')}`);
+    }
+    for (const src of ['\\documentclass{article}\\title{a\\maketitle}\\begin{document}\\maketitle x\\end{document}',
+        '\\documentclass{beamer}\\title{T}\\author{\\maketitle}\\begin{document}\\begin{frame}\\titlepage\\end{frame}\\end{document}']) {
+        let error = '';
+        await parse(src).catch((e: any) => { error = e.message; });
+        check(`latex parser: \\maketitle inside the title block does not recurse (${src.slice(15, 22)})`, !error, error);
+    }
+
+    // Linear time: work that grows with the document, never with its square. Each case took tens of
+    // seconds before (the pending text or raw body was re-read in full per character or space).
+    for (const [label, src] of [
+        ['1MB of spaced prose', 'word '.repeat(200000)],
+        ['1MB \\verb body', '\\verb|' + 'x'.repeat(1_000_000) + '|'],
+        ['1MB \\iffalse body', '\\iffalse ' + 'x'.repeat(1_000_000) + '\\fi'],
+        ['1MB of } in verbatim', '\\begin{verbatim}' + '}'.repeat(1_000_000) + '\\end{verbatim}'],
+        ['20k unclosed % <!-- lines', 'text\n' + '% <!-- x\n'.repeat(20000) + 'end'],
+    ] as const) {
+        const r = await parse(src);
+        check(`latex parser: ${label} parses in linear time`, r.ms < TIME_BUDGET_MS, `${r.ms}ms`);
+    }
+
+    // Memory: an expansion is sized before it is built, and a column spec's repetition is bounded by length.
+    const heapBefore = process.memoryUsage().heapUsed;
+    const amplify = await parse('\\newcommand{\\x}[1]{' + '#1'.repeat(20000) + '}\\x{' + 'y'.repeat(20000) + '}');
+    const spec = await parse('\\begin{tabular}{*{1000}{' + 'c'.repeat(100000) + '}}a\\end{tabular}');
+    const heapGrowth = process.memoryUsage().heapUsed - heapBefore;
+    check('latex parser: a macro repeating a long argument is refused before it is built', amplify.codes.includes('LATEX_EXPANSION_LIMIT_REACHED') && amplify.ms < TIME_BUDGET_MS, amplify.codes.join(','));
+    check('latex parser: a long repeated column spec is bounded', spec.ms < TIME_BUDGET_MS && heapGrowth < 200_000_000, `${spec.ms}ms, heap +${Math.round(heapGrowth / 1e6)}MB`);
+
+    // Included text counts against the expansion budget: including a large file many times over is bounded.
+    const repeated = await parse(zip({ 'main.tex': '\\documentclass{article}\\begin{document}' + '\\input{big}'.repeat(400) + '\\end{document}', 'big.tex': 'z '.repeat(500000) }));
+    check('latex parser: repeated \\input of a large file is bounded', repeated.ms < 3 * TIME_BUDGET_MS && repeated.codes.includes('LATEX_EXPANSION_LIMIT_REACHED'), `${repeated.ms}ms ${repeated.codes.join(',')}`);
+
     const unclosed = await parse('\\begin{itemize}\\item a \\textbf{b \\begin{tabular}{ll} x & y');
     check('latex parser: unclosed groups and environments do not throw', unclosed.json.includes('a'));
 

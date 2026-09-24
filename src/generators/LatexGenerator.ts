@@ -22,6 +22,8 @@ const BUNDLE_MAIN_FILE = 'main.tex';
 
 /** Folder images are written to and referenced from, relative to the `.tex`. */
 const IMAGE_DIR = 'images';
+/** Extensions `\includegraphics` adds to a path given without one (pdfTeX's list, which XeTeX and LuaTeX share). */
+const IMAGE_PROBE_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.eps', '.PDF', '.PNG', '.JPG', '.JPEG'];
 
 /**
  * Image types every LaTeX engine can `\includegraphics` directly (pdfTeX, XeTeX, LuaTeX). Anything
@@ -1386,7 +1388,13 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 this.uses.graphics = true;
                 this.externalImages.add(path);
                 const size = this.imageSize(node, null, true);
-                img = `\\includegraphics${size ? `[${size}]` : ''}{${path}}`;
+                const include = `\\includegraphics${size ? `[${size}]` : ''}{${path}}`;
+                // A bundle promises a zip that compiles as is, but it cannot contain a file the source
+                // only named. There the image is drawn when the file has been added beside the .tex,
+                // and a labelled box stands in otherwise.
+                img = this.config.texConfig.bundle === true
+                    ? this.ifImageExists(path, include, `\\fbox{${escapeLatex(`Image: ${alt || path}`, ' ')}}`)
+                    : include;
             } else {
                 // LaTeX cannot fetch a web image, and reads no file outside the document's folder.
                 const remote = /^(?:https?|ftp):|^\/\//i.test(meta.url.trim());
@@ -1406,6 +1414,15 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         }
         if (mode === 'image+ocr-text' && ocr) return `${img}${block ? BLOCK_SEPARATOR : ' '}${this.ocrMarkup(ocr, block)}`;
         return img;
+    }
+
+    /**
+     * `\IfFileExists` over the names `\includegraphics` would try: the path itself, then, for a path
+     * with no extension, the path plus each graphics extension the engines look for.
+     */
+    private ifImageExists(path: string, include: string, fallback: string): string {
+        const names = /\.[A-Za-z0-9]+$/.test(path.split('/').pop() || '') ? [path] : [path, ...IMAGE_PROBE_EXTENSIONS.map(ext => path + ext)];
+        return names.reduceRight((otherwise, name) => `\\IfFileExists{${name}}{${include}}{${otherwise}}`, fallback);
     }
 
     private blockImage(node: OfficeContentNode): string {

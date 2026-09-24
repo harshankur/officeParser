@@ -601,7 +601,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             // Source-comment element (HtmlGenerator's `sourceAttributes` shape, emitted for editors whose DOM
             // parser discards real comment nodes): `<span data-html-comment="raw text">`. Always read, like
             // the gated embed below - it is this library's own round-trip shape. The text is data only.
-            if ((tagName === 'span' || tagName === 'div') && node.attributes?.['data-html-comment'] !== undefined) {
+            // Only an empty element: that is the shape the generator writes, and an element with content
+            // is content (its text must not vanish into a hidden note).
+            if ((tagName === 'span' || tagName === 'div') && node.attributes?.['data-html-comment'] !== undefined && node.children.length === 0) {
                 return {
                     type: 'comment',
                     text: decodeEntities(node.attributes['data-html-comment']),

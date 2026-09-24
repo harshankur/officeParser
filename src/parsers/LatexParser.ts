@@ -20,7 +20,11 @@ const MAX_EXPANDED_CHARS = 5000000;
 const MAX_INPUT_FRAMES = 128;
 const MAX_INCLUDE_DEPTH = 16;
 /** Deepest nesting of groups and environments interpreted; deeper content is read as plain text. */
-const MAX_NESTING_DEPTH = 256;
+const MAX_NESTING_DEPTH = 128;
+/** Deepest nesting of tables (a table inside a cell) interpreted; deeper tables are read as plain text. */
+const MAX_TABLE_NESTING_DEPTH = 32;
+/** Longest column specification interpreted, after `*{n}{...}` repetition. */
+const MAX_COLUMN_SPEC_CHARS = 100000;
 /** How often (in tokens) the parse loop checks the abort signal. */
 const ABORT_CHECK_INTERVAL = 4096;
 
@@ -191,6 +195,12 @@ class Scanner {
 
     /** Files currently open on the frame stack (for include-cycle detection). */
     openFiles(): string[] { return this.frames.map(f => f.file).filter((f): f is string => !!f); }
+
+    /** The current reading position (top frame and offset), for remembering where a look-ahead ended. */
+    position(): { frame: Frame; i: number } | undefined {
+        const f = this.frames[this.frames.length - 1];
+        return f ? { frame: f, i: f.i } : undefined;
+    }
 
     push(src: string, file?: string): void {
         this.frames.push({ s: src, i: 0, file });
@@ -375,12 +385,16 @@ class Scanner {
 
     /** Raw source up to (and consuming) `marker`; the marker is not included. */
     readRawUntil(marker: string): { text: string; found: boolean } {
-        let out = '';
+        // The body is collected in parts and only the last `marker.length` characters are compared,
+        // so a long `\verb` or `\iffalse` body costs time linear in its length.
+        const parts: string[] = [];
+        let tail = '';
         for (;;) {
             const c = this.nextCh();
-            if (c === undefined) return { text: out, found: false };
-            out += c;
-            if (out.endsWith(marker)) return this.endRaw({ text: out.slice(0, -marker.length), found: true });
+            if (c === undefined) return { text: parts.join(''), found: false };
+            parts.push(c);
+            tail = (tail + c).slice(-marker.length);
+            if (tail === marker) return this.endRaw({ text: parts.join('').slice(0, -marker.length), found: true });
         }
     }
 
@@ -388,16 +402,20 @@ class Scanner {
     readRawEnvBody(name: string): string {
         const begin = `\\begin{${name}}`;
         const end = `\\end{${name}}`;
+        // As in readRawUntil: parts plus a short rolling tail, so a brace-heavy body stays linear.
+        const width = Math.max(begin.length, end.length) + 1;
         let depth = 1;
-        let out = '';
+        const parts: string[] = [];
+        let tail = '';
         for (;;) {
             const c = this.nextCh();
-            if (c === undefined) return out;
-            out += c;
-            if (c === '}' ) {
-                if (out.endsWith(end) && !out.endsWith('\\' + end)) {
-                    if (--depth === 0) return this.endRaw(out.slice(0, -end.length));
-                } else if (out.endsWith(begin)) depth++;
+            if (c === undefined) return parts.join('');
+            parts.push(c);
+            tail = (tail + c).slice(-width);
+            if (c === '}') {
+                if (tail.endsWith(end) && !tail.endsWith('\\' + end)) {
+                    if (--depth === 0) return this.endRaw(parts.join('').slice(0, -end.length));
+                } else if (tail.endsWith(begin)) depth++;
             }
         }
     }
@@ -445,6 +463,13 @@ class Flow {
     blocks: OfficeContentNode[] = [];
     inline: OfficeContentNode[] = [];
     pending = '';
+    /**
+     * The pending buffer's last character and whether it holds any non-space text. Tracked on
+     * append because `pending` is built with `+=`: reading it (`endsWith`, `trim`) flattens the
+     * whole string, and doing that per space would make a paragraph quadratic in its length.
+     */
+    pendingTail = '';
+    pendingHasText = false;
     pendingState: ParseState | null = null;
     pendingMono = false;
     anchors: string[] = [];
@@ -549,6 +574,16 @@ class LatexReader {
     /** Raw `\title`/`\subtitle`/`\author`/`\date` arguments, for the block `\maketitle` typesets. */
     private titleParts: { title?: string; subtitle?: string; author?: string; date?: string } = {};
     private titleTypeset = false;
+    /** Set while a title block is being built, so a `\maketitle` inside `\title` cannot re-enter it. */
+    private inTitle = false;
+    /** Depth of plain-text extraction (metadata, labels), which never typesets a title block. */
+    private plainDepth = 0;
+    /** Where the last `% <!--` look-ahead stopped without finding `-->` (see sourceComment). */
+    private commentScanEnd: { frame: Frame; i: number } | undefined;
+    /** Tables currently being built (see MAX_TABLE_NESTING_DEPTH). */
+    private tableDepth = 0;
+    /** Whether included files have been refused for exceeding the expansion budget. */
+    private includeLimitHit = false;
     /** Metadata fields `\hypersetup` set explicitly (`pdftitle`, `pdfauthor`), which `\title`/`\author` do not override. */
     private readonly pdfMetadata = new Set<'title' | 'author'>();
     attachments: OfficeAttachment[] = [];
@@ -643,17 +678,26 @@ class LatexReader {
         if (flow.pendingState && (!this.sameRunState(flow.pendingState, this.state) || literal !== flow.pendingMono)) this.flushText(flow);
         if (!flow.pendingState) { flow.pendingState = cloneState(this.state); flow.pendingMono = literal || mono; }
         flow.pending += s;
+        flow.pendingTail = s[s.length - 1];
+        if (!flow.pendingHasText && /\S/.test(s)) flow.pendingHasText = true;
         flow.labelTarget = null;
     }
 
     private addSpace(flow: Flow): void {
-        if (flow.inline.length === 0 && !flow.pending) return;
-        if (flow.pending.endsWith(' ')) return;
+        if (flow.inline.length === 0 && flow.pending.length === 0) return;
+        if (flow.pendingTail === ' ') return;
         this.addText(flow, ' ');
     }
 
+    private clearPending(flow: Flow): void {
+        flow.pending = '';
+        flow.pendingTail = '';
+        flow.pendingHasText = false;
+        flow.pendingState = null;
+    }
+
     private flushText(flow: Flow): void {
-        if (!flow.pending || !flow.pendingState) { flow.pending = ''; flow.pendingState = null; return; }
+        if (flow.pending.length === 0 || !flow.pendingState) { this.clearPending(flow); return; }
         const st = flow.pendingState;
         const text = flow.pendingMono ? flow.pending : ligatures(flow.pending);
         const node: OfficeContentNode = { type: 'text', text };
@@ -663,8 +707,7 @@ class LatexReader {
             node.metadata = { link: st.link!.url, linkType: st.link!.internal ? 'internal' : 'external' } as TextMetadata;
         }
         flow.inline.push(node);
-        flow.pending = '';
-        flow.pendingState = null;
+        this.clearPending(flow);
     }
 
     private addInline(flow: Flow, node: OfficeContentNode): void {
@@ -767,7 +810,7 @@ class LatexReader {
 
     private addLabel(flow: Flow, label: string): void {
         if (!label || this.config.ignoreInternalLinks) return;
-        const pendingText = flow.pending.trim() || this.hasContent(flow.inline);
+        const pendingText = flow.pendingHasText || this.hasContent(flow.inline);
         if (flow.labelTarget && !pendingText) {
             const meta = (flow.labelTarget.metadata ??= {} as any) as any;
             meta.anchorIds = [...(meta.anchorIds ?? []), label];
@@ -834,14 +877,22 @@ class LatexReader {
     /** Parses raw source into the current flow, in the current state. */
     private parseRawInto(flow: Flow, raw: string | null): StopReason {
         if (raw === null) return 'eof';
-        return this.parseFlow(new Scanner(raw), flow, {});
+        if (this.nesting >= MAX_NESTING_DEPTH) { this.tooDeep(flow, raw); return 'eof'; }
+        this.nesting++;
+        try { return this.parseFlow(new Scanner(raw), flow, {}); } finally { this.nesting--; }
     }
 
     /** Parses raw source as the body of a separate container (a note, a cell) and returns its blocks. */
     private parseBlocksOf(raw: string, patch?: (f: Flow) => void, freshState = true): OfficeContentNode[] {
         const flow = new Flow();
         patch?.(flow);
-        const run = () => { this.parseFlow(new Scanner(raw), flow, {}); this.endParagraph(flow); };
+        // An argument parsed into its own container (a note, a cell, a caption) is one level deeper.
+        const run = () => {
+            if (this.nesting >= MAX_NESTING_DEPTH) { this.tooDeep(flow, raw); this.endParagraph(flow); return; }
+            this.nesting++;
+            try { this.parseFlow(new Scanner(raw), flow, {}); } finally { this.nesting--; }
+            this.endParagraph(flow);
+        };
         if (freshState) {
             const savedState = this.state, savedStack = this.stateStack, savedNesting = this.nesting;
             this.state = { fmt: {} };
@@ -857,7 +908,9 @@ class LatexReader {
     private plainText(raw: string | null): string {
         if (raw === null) return '';
         const saved = this.finished;
-        const blocks = this.parseBlocksOf(raw);
+        this.plainDepth++;
+        let blocks: OfficeContentNode[];
+        try { blocks = this.parseBlocksOf(raw); } finally { this.plainDepth--; }
         this.finished = saved;
         return blocks.map(b => b.text ?? textOf(b.children)).join(' ').replace(/\s+/g, ' ').trim();
     }
@@ -883,6 +936,15 @@ class LatexReader {
         for (let k = 0; k < def.nargs; k++) {
             if (k === 0 && def.optDefault !== null) args.push(sc.readRawOptional() ?? def.optDefault);
             else args.push(sc.readRawGroup() ?? '');
+        }
+        // Size the expansion before building it: a short definition repeating a long argument can
+        // otherwise allocate hundreds of megabytes before the expansion budget is checked.
+        let size = 0;
+        for (const m of def.body.matchAll(/##|#([1-9])/g)) size += m[0] === '##' ? 1 : (args[+m[1] - 1] ?? '').length;
+        if (this.expandedChars + def.body.length + size > MAX_EXPANDED_CHARS) {
+            if (!this.expansionLimitHit) logWarning(OfficeWarningType.LATEX_EXPANSION_LIMIT_REACHED, this.config, { limit: 'macro expansion' });
+            this.expansionLimitHit = true;
+            return '';
         }
         return def.body.replace(/##|#([1-9])/g, (m, n) => (m === '##' ? '#' : (args[+n - 1] ?? '')));
     }
@@ -973,7 +1035,7 @@ class LatexReader {
         }
         const node: OfficeContentNode = { type: 'comment', text: m[2], metadata: meta, children: [{ type: 'paragraph', text: m[2], children: [{ type: 'text', text: m[2] }] }] };
         (node as any).__open = true;
-        if (flow.pending.trim() || this.hasContent(flow.inline)) {
+        if (flow.pendingHasText || this.hasContent(flow.inline)) {
             const run = this.anchorRun(flow);
             (run.comments ??= []).push(node);
         } else {
@@ -989,20 +1051,37 @@ class LatexReader {
      * end one of the directly following comment lines is left an ordinary comment.
      */
     private sourceComment(flow: Flow, first: string, sc: Scanner): boolean {
+        // A scan that found no `-->` also rules out every `<!--` line it read: none of them can close
+        // before the same point. Remembering where it stopped keeps a file of unclosed openers linear.
+        const at = sc.position();
+        if (at && this.commentScanEnd && at.frame === this.commentScanEnd.frame && at.i < this.commentScanEnd.i) return false;
         const afterFirst = sc.save();
-        let raw = first;
-        while (raw.length < 7 || !raw.endsWith('-->')) {
+        const lines = [first.slice(4)];
+        // `<!-->` and `<!--->` are complete, empty comments (as in HTML and CommonMark).
+        const closed = () => {
+            const last = lines[lines.length - 1];
+            if (lines.length === 1 && (last === '>' || last === '->')) return true;
+            return last.endsWith('-->') && (lines.length > 1 || last.length >= 3);
+        };
+        while (!closed()) {
+            const beforeTok = sc.position();
             const tok = sc.next(this.atLetter);
-            if (tok.t !== 'comment') { sc.restore(afterFirst); return false; }
-            raw += `\n${tok.v.replace(/^ /, '')}`;
+            if (tok.t !== 'comment') {
+                this.commentScanEnd = beforeTok;
+                sc.restore(afterFirst);
+                return false;
+            }
+            lines.push(tok.v.replace(/^ /, ''));
         }
-        const node: OfficeContentNode = { type: 'comment', text: raw.slice(4, -3), metadata: { sourceSyntax: 'html' } as CommentMetadata };
+        const joined = lines.join('\n');
+        const body = lines.length === 1 && (joined === '>' || joined === '->') ? '' : joined.slice(0, -3);
+        const node: OfficeContentNode = { type: 'comment', text: body, metadata: { sourceSyntax: 'html' } as CommentMetadata };
         // Inline when the paragraph has text before it, or text follows on the very next line (a comment
         // that opens a paragraph); a block comment stands between blank lines.
         const beforeNext = sc.save();
         const textFollows = sc.next(this.atLetter).t === 'text';
         sc.restore(beforeNext);
-        if (flow.pending.trim() || this.hasContent(flow.inline) || textFollows) {
+        if (flow.pendingHasText || this.hasContent(flow.inline) || textFollows) {
             this.addInline(flow, node);
         } else {
             this.endParagraph(flow);
@@ -1325,7 +1404,7 @@ class LatexReader {
             case 'hspace': {
                 const star = sc.readStar();
                 const len = this.dimenPt(sc.readRawGroup() ?? '');
-                if (star && !flow.pending && !this.hasContent(flow.inline) && len) {
+                if (star && flow.pending.length === 0 && !this.hasContent(flow.inline) && len) {
                     this.state.left = this.state.left ?? 0;
                     this.addText(flow, '');
                     (flow as any).__firstLine = len;
@@ -1435,6 +1514,16 @@ class LatexReader {
                 return;
             }
             case 'iffalse': sc.readRawUntil('\\fi'); return;
+            case 'IfFileExists': case 'InputIfFileExists': {
+                // Nothing is read from disk, so the "file exists" branch is the document as written: it
+                // is where the LaTeX generator puts an image the bundle could not include.
+                const file = sc.readRawGroup();
+                const then = sc.readRawGroup() ?? '';
+                sc.readRawGroup();
+                if (name === 'InputIfFileExists' && file !== null) this.includeFile(sc, flow, file);
+                this.expand(sc, then);
+                return;
+            }
             case 'ifPDFTeX': case 'ifXeTeX': case 'ifLuaTeX': case 'iftutex': case 'ifpdf': case 'else': case 'fi': case 'ifdefined':
                 return;
         }
@@ -1538,6 +1627,14 @@ class LatexReader {
      * carries them. A date left to `\today` is the day the document is compiled, so it is omitted.
      */
     private typesetTitle(flow: Flow): void {
+        // Only where content is being read: never while extracting plain text (metadata, a label),
+        // and never from inside the title block itself (`\title{...\maketitle}`).
+        if (this.inTitle || this.plainDepth > 0) return;
+        this.inTitle = true;
+        try { this.typesetTitleBlock(flow); } finally { this.inTitle = false; }
+    }
+
+    private typesetTitleBlock(flow: Flow): void {
         const { title, subtitle, author, date } = this.titleParts;
         // LaTeX refuses \maketitle without a \title, and empties the title after typesetting it once.
         if (!title || !this.plainText(this.stripThanks(title))) return;
@@ -1633,7 +1730,11 @@ class LatexReader {
 
     private headingNode(raw: string, level: number): OfficeContentNode {
         const flow = new Flow();
-        this.withState(s => { s.inline = true; s.align = undefined; }, () => { this.parseFlow(new Scanner(raw), flow, {}); this.flushText(flow); });
+        this.withState(s => { s.inline = true; s.align = undefined; }, () => {
+            if (this.nesting >= MAX_NESTING_DEPTH) this.tooDeep(flow, raw);
+            else { this.nesting++; try { this.parseFlow(new Scanner(raw), flow, {}); } finally { this.nesting--; } }
+            this.flushText(flow);
+        });
         const children = this.trimInline(flow.inline);
         return { type: 'heading', text: textOf(children), children, metadata: { level } as HeadingMetadata };
     }
@@ -1675,6 +1776,14 @@ class LatexReader {
             const body = /\\begin\{document\}([\s\S]*?)\\end\{document\}/.exec(text);
             if (body) text = body[1];
         }
+        // Included text counts against the same budget as macro expansion, so including a large file
+        // many times over (not only nesting includes) is bounded too.
+        this.expandedChars += text.length;
+        if (this.expandedChars > MAX_EXPANDED_CHARS) {
+            if (!this.includeLimitHit) logWarning(OfficeWarningType.LATEX_EXPANSION_LIMIT_REACHED, this.config, { limit: 'file inclusion' });
+            this.includeLimitHit = true;
+            return;
+        }
         sc.push(text + '\n', resolved);
     }
 
@@ -1695,7 +1804,11 @@ class LatexReader {
         const path = (sc.readRawGroup() ?? '').trim().replace(/^"|"$/g, '');
         const meta: ImageMetadata = { attachmentName: '' };
         const kv = new Map(this.keyValues(opts));
-        const width = kv.get('width');
+        let width = kv.get('width');
+        // The LaTeX generator's bounded form, `{\ifdim W>\linewidth\linewidth\else W\fi}` (natural width W,
+        // capped at the line), is read as W.
+        const bounded = width ? /^\s*\{?\s*\\ifdim\s*([-+]?[\d.]+\s*[a-z]*)\s*>\s*\\linewidth\s*\\linewidth\s*\\else\s*\1\s*\\fi\s*\}?\s*$/.exec(width) : null;
+        if (bounded) width = bounded[1];
         if (width) {
             const frac = /^\s*([\d.]*)\s*\\(linewidth|textwidth|columnwidth|hsize)\s*$/.exec(width);
             if (frac) meta.width = `${Math.round((parseFloat(frac[1] || '1')) * 1000) / 10}%`;
@@ -1731,8 +1844,7 @@ class LatexReader {
             // any text it produced is not document content.
             flow.blocks = [];
             flow.inline = [];
-            flow.pending = '';
-            flow.pendingState = null;
+            this.clearPending(flow);
             flow.nextAnchors = [];
             flow.nextComments = [];
             this.bodyStarted = true;
@@ -2061,9 +2173,14 @@ class LatexReader {
         this.readArgs(sc, pre);
         const spec = sc.readRawGroup() ?? '';
         const body = sc.readRawEnvBody(env);
+        // A table nested in a cell costs far more stack per level than a group, so tables have their
+        // own, tighter depth bound (well past any real document), the same on every JavaScript engine.
+        if (this.tableDepth >= MAX_TABLE_NESTING_DEPTH) { this.tooDeep(flow, body); return; }
         const aligns = this.columnAligns(spec);
         this.endParagraph(flow);
-        const node = this.buildTable(body, aligns, env);
+        this.tableDepth++;
+        let node: ReturnType<LatexReader['buildTable']>;
+        try { node = this.buildTable(body, aligns, env); } finally { this.tableDepth--; }
         if (node) this.pushBlock(flow, node.table);
         if (node?.caption.length) for (const c of node.caption) this.pushBlock(flow, c);
     }
@@ -2072,7 +2189,11 @@ class LatexReader {
     private columnAligns(spec: string): (('left' | 'center' | 'right') | undefined)[] {
         let s = spec;
         for (let guard = 0; guard < 8 && /\*\{\s*(\d+)\s*\}\{/.test(s); guard++) {
-            s = s.replace(/\*\{\s*(\d+)\s*\}\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}/, (_m, n, inner) => inner.repeat(Math.min(1000, +n)));
+            // `*{n}{spec}` repeats `spec`; the repetition is bounded by column count and by length, since
+            // a long `spec` repeated 1000 times would otherwise allocate a huge string.
+            s = s.replace(/\*\{\s*(\d+)\s*\}\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}/, (_m, n, inner: string) =>
+                inner.repeat(Math.max(0, Math.min(1000, +n, Math.floor(MAX_COLUMN_SPEC_CHARS / Math.max(1, inner.length))))));
+            if (s.length > MAX_COLUMN_SPEC_CHARS) s = s.slice(0, MAX_COLUMN_SPEC_CHARS);
         }
         const out: (('left' | 'center' | 'right') | undefined)[] = [];
         let pendingAlign: 'left' | 'center' | 'right' | undefined;
@@ -2290,6 +2411,21 @@ class LatexReader {
             if (kind === 'eqref') text = `(${text})`;
             node.text = text;
         }
+        // A resolved reference changes the text of whatever holds it: derive each enclosing node's text
+        // again, with the formula it was built with, so `node.text` (what text output and chunks read)
+        // says "Section 1" rather than the label.
+        const refNodes = new Set(this.refs.map(r => r.node));
+        const refresh = (n: OfficeContentNode): boolean => {
+            let dirty = refNodes.has(n);
+            for (const c of n.children ?? []) if (refresh(c)) dirty = true;
+            for (const c of n.notes ?? []) refresh(c);
+            for (const c of n.comments ?? []) refresh(c);
+            if (dirty && !refNodes.has(n) && n.text !== undefined) {
+                n.text = n.type === 'note' || n.type === 'cell' ? (n.children ?? []).map(b => b.text ?? '').join('\n') : textOf(n.children);
+            }
+            return dirty;
+        };
+        if (refNodes.size && this.docFlow) for (const b of this.docFlow.blocks) refresh(b);
         const strip = (nodes: OfficeContentNode[]) => { for (const n of nodes) { delete (n as any).__number; if (n.children) strip(n.children); } };
         if (this.docFlow) strip(this.docFlow.blocks);
     }

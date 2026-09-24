@@ -547,6 +547,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     }
 
     private async processNodeArray(nodes: OfficeContentNode[]): Promise<string> {
+        // Whether these siblings form a run of text (a paragraph's children) rather than a list of blocks.
+        const runHasText = nodes.some(n => n.type === 'text');
         let html = '';
         // Stack to track active lists. `liClose` is the currently-open item's deferred closing
         // suffix (`</li>`, or `</div></li>` for a task item): a list item is rendered WITHOUT its
@@ -643,8 +645,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // Add a blank line after BLOCK nodes for readable HTML source. Inline nodes (a
                 // paragraph's text/link runs) must concatenate with no separator: adding `\n\n`
                 // around an inline <a> put a blank line inside the <p>, which reparsed as a stray
-                // space before the following punctuation (`[video](url) .`).
-                if (node.type !== 'text' && !result.endsWith('\n\n')) {
+                // space before the following punctuation (`[video](url) .`). A source comment inside a
+                // run is inline too: a blank line after it would part the words around it.
+                const inlineNode = node.type === 'text' || (isSourceComment(node) && runHasText);
+                if (!inlineNode && !result.endsWith('\n\n')) {
                     if (result.endsWith('\n')) result += '\n';
                     else result += '\n\n';
                 }

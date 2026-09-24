@@ -130,11 +130,15 @@ export enum OfficeWarningType {
     UNRECOGNIZED_CONFIG_OPTION = 'UNRECOGNIZED_CONFIG_OPTION',
     /** A math expression used an unsafe LaTeX command or was malformed, so it was written to LaTeX output as literal text rather than typeset math */
     MATH_WRITTEN_AS_TEXT = 'MATH_WRITTEN_AS_TEXT',
-    /** LaTeX output references image files that were not bundled with it (`texConfig.bundle` is off); they must be shipped alongside the `.tex` */
+    /**
+     * LaTeX output references image files that are not part of it: the images a `.tex` cannot embed
+     * (when `texConfig.bundle` is off; their bytes are in `ast.attachments`), and, in either mode, images
+     * the source referred to only by a relative path, with no data to package. The message names each.
+     */
     IMAGES_NOT_BUNDLED = 'IMAGES_NOT_BUNDLED',
     /** LaTeX input used commands or environments the parser does not interpret; their text content was kept where it had any */
     LATEX_CONSTRUCT_NOT_INTERPRETED = 'LATEX_CONSTRUCT_NOT_INTERPRETED',
-    /** LaTeX input hit a macro-expansion or file-inclusion limit; the rest of the affected construct was not expanded */
+    /** LaTeX input hit a macro-expansion, file-inclusion or nesting-depth limit; the rest of the affected construct was not expanded (content nested past the limit is kept as plain text) */
     LATEX_EXPANSION_LIMIT_REACHED = 'LATEX_EXPANSION_LIMIT_REACHED',
     /** LaTeX input referenced files (`\input`, `\include`, `\includegraphics`) that were not available to the parser */
     LATEX_FILE_NOT_FOUND = 'LATEX_FILE_NOT_FOUND'

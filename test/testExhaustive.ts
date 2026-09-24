@@ -708,6 +708,24 @@ async function testSourceComments(): Promise<void> {
     assert.deepStrictEqual(edgesTable.children!.map(r => r.children!.length), [2, 2], 'Comments: a comment ending a cell keeps the table intact');
     assert.strictEqual(collectAllNodes(edgesBack).filter(n => n.type === 'list').length, 2, 'Comments: a comment ending an item keeps the next item');
 
+    // Comment edge cases in Markdown: `<!-->` and `<!--->` are complete empty comments (HTML, CommonMark),
+    // a comment may open on one line of a paragraph and close on the next, and a comment inside a code
+    // span stays code.
+    const mdText = async (src: string) => String((await (await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md' } as any)).to('text')).value).trim();
+    assert.strictEqual(await mdText('<!-->\n\ntext\n\nmore -->'), 'text\nmore -->', 'Comments: <!--> is an empty comment, not an opener');
+    assert.strictEqual(await mdText('a <!---> b'), 'a  b', 'Comments: <!---> is an empty comment');
+    assert.strictEqual(await mdText('Some text <!-- multi\nline --> more text'), 'Some text  more text', 'Comments: a comment spanning paragraph lines is hidden');
+    const spanned = await OfficeParser.parseOffice(Buffer.from('Some text <!-- multi\nline --> more text'), { fileType: 'md' } as any);
+    assert.strictEqual(String((await spanned.to('md')).value), 'Some text <!-- multi\nline --> more text', 'Comments: a comment spanning paragraph lines round-trips byte-for-byte');
+    assert.strictEqual(await mdText('Literal `<!-- in code -->` span.'), 'Literal <!-- in code --> span.', 'Comments: a comment inside a code span stays code');
+
+    // HTML: an inline comment keeps the words around it together, and only an EMPTY data-html-comment
+    // element (the generator's shape) is a comment; one with content keeps its content.
+    const inlineHtml = String((await (await OfficeParser.parseOffice(Buffer.from('word<!-- c -->joined'), { fileType: 'md' } as any)).to('html', { htmlConfig: { standalone: false } } as any)).value);
+    assert.ok(inlineHtml.includes('<p>word<!-- c -->joined</p>'), 'Comments: no blank line after an inline comment in HTML');
+    const withContent = await OfficeParser.parseOffice(Buffer.from('<div data-html-comment="x">visible?</div>'), { fileType: 'html' } as any);
+    assert.strictEqual(String((await withContent.to('text')).value).trim(), 'visible?', 'Comments: a data-html-comment element with content keeps it');
+
     // Hand-written LaTeX: `% <!-- ... -->` is read as a source comment; a `<!--` never closed on the
     // following comment lines is an ordinary comment (discarded) and takes no text with it.
     const hand = await OfficeParser.parseOffice(Buffer.from('\\documentclass{article}\\begin{document}\nOne.\n\n% <!-- kept -->\n\nTwo.\n% <!-- never closed\nThree.\n\\end{document}'), { fileType: 'tex' } as any);
@@ -2054,7 +2072,12 @@ async function testLatexGeneration(): Promise<void> {
         `The LaTeX output references 1 image file ('pics/a.png') by the path the source document gave, without the image data, which the source did not contain. Place it at that path, relative to the .tex, before compiling.`,
         'TEX refs: IMAGES_NOT_BUNDLED names the path-referenced image (exact message)');
     const refZipWarn: any[] = [];
-    await refAst.to('tex', { texConfig: { bundle: true }, onWarning: (w: any) => refZipWarn.push(w) } as any);
+    const refZip = unzipSync((await refAst.to('tex', { texConfig: { bundle: true }, onWarning: (w: any) => refZipWarn.push(w) } as any)).value as Uint8Array);
+    // A bundle must compile as is, but cannot hold a file the source only named: the image is drawn when
+    // the file is added, and a labelled box stands in otherwise.
+    assert.ok(strFromU8(refZip['main.tex']).includes('\\IfFileExists{pics/a.png}{\\includegraphics{pics/a.png}}{\\fbox{Image: pics/a.png}}'), 'TEX refs: a bundle guards a path-referenced image with \\IfFileExists');
+    const noExt = unzipSync((await (await OfficeParser.parseOffice(Buffer.from('![d](figures/diagram)'), { fileType: 'md' } as any)).to('tex', { texConfig: { bundle: true } } as any)).value as Uint8Array);
+    assert.ok(strFromU8(noExt['main.tex']).includes('\\IfFileExists{figures/diagram}{\\includegraphics{figures/diagram}}{\\IfFileExists{figures/diagram.pdf}{'), 'TEX refs: a path without an extension probes the graphics extensions');
     assert.ok(refZipWarn.some(w => w.code === 'IMAGES_NOT_BUNDLED' && w.message.includes(`('pics/a.png')`)), 'TEX refs: a bundle still names the image it has no data to package');
     // Admonition, embed, page break, sheet, header/footer, Unicode.
     assert.ok(stex.includes('\\textbf{\\textcolor{hex9A6700}{Careful}}\\par\nbody'), 'TEX synthetic: admonition title and colour');
@@ -2214,6 +2237,14 @@ async function testLatexParsing(): Promise<void> {
     const pImg = collectAllNodes(pAst).find(n => n.type === 'image')!;
     assert.strictEqual((pImg.metadata as any).attachmentName, 'paper/img/logo.png', 'TEX project: image found through \\graphicspath');
     assert.deepStrictEqual(pAst.attachments.map(a => [a.name, a.mimeType]), [['paper/img/logo.png', 'image/png']], 'TEX project: image extracted as an attachment');
+    // The shipped sample project (test.tex plus the image it shows), which the docs visualizer offers.
+    const sample = await OfficeParser.parseOffice(path.join(__dirname, 'files/latex-project.zip'), { extractAttachments: true } as any);
+    const lone = await OfficeParser.parseOffice(path.join(__dirname, 'files/test.tex'), { onWarning: () => {} } as any);
+    assert.strictEqual(sample.type, 'tex', 'TEX project: latex-project.zip is LaTeX');
+    assert.deepStrictEqual(sample.attachments.map(a => [a.name, a.mimeType]), [['images/image.jpg', 'image/jpeg']], 'TEX project: the sample image is attached');
+    // Identical but for the image line: attached in the zip, only a path in the lone .tex.
+    const withoutImages = (t: unknown) => String(t).replace(/\[Image: [^\]]*\]/g, '[Image]');
+    assert.strictEqual(withoutImages((await sample.to('text')).value), withoutImages((await lone.to('text')).value), 'TEX project: the sample holds the same document as test.tex');
 
     // ── Tier 3: beamer ────────────────────────────────────────────────────────
     const deck = await OfficeParser.parseOffice(Buffer.from('\\documentclass{beamer}\\begin{document}\\frame{\\titlepage}\\begin{frame}{First}{Sub}\\begin{itemize}\\item<1-> One\\end{itemize}\\note{Say hi.}\\end{frame}\\begin{frame}[fragile]\\frametitle{Code}\\begin{block}{Idea}Body\\end{block}\\end{frame}\\end{document}'), { fileType: 'tex' });
@@ -2230,6 +2261,17 @@ async function testLatexParsing(): Promise<void> {
     // A \label after \phantomsection names what follows it (the generator's anchor before a block).
     const anchored = await OfficeParser.parseOffice(Buffer.from('\\documentclass{article}\\begin{document}First.\n\n\\phantomsection\\label{next}Second.\n\n\\section{S}\\label{sec}\\end{document}'), { fileType: 'tex' });
     assert.deepStrictEqual(anchored.content.map(n => [n.text, (n.metadata as any).anchorIds]), [['First.', undefined], ['Second.', ['next']], ['S', ['sec']]], 'TEX parse: \\phantomsection anchors the following block');
+
+    // A resolved reference updates the text of everything that holds it, so text output and chunks
+    // show the number, not the label.
+    const refDoc = await OfficeParser.parseOffice(Buffer.from('\\documentclass{article}\\begin{document}\\section{Sec}\\label{s} See \\ref{s} and \\nameref{s}.\n\\begin{itemize}\\item item \\ref{s}\\end{itemize}\n\\begin{tabular}{c}cell \\ref{s}\\\\\\end{tabular}\\end{document}'), { fileType: 'tex' } as any);
+    const refTexts = collectAllNodes(refDoc).filter(n => n.type === 'paragraph' || n.type === 'list' || n.type === 'cell').map(n => n.text);
+    assert.ok(refTexts.includes('See 1 and Sec.') && refTexts.includes('item 1') && refTexts.includes('cell 1') && !refTexts.some(t => /\bs\b/.test(t || '')), `TEX parse: reference text refreshed (${JSON.stringify(refTexts)})`);
+    assert.ok(((await refDoc.to('chunks')).value as any[]).some(c => c.text === 'See 1 and Sec.'), 'TEX parse: chunks see the resolved reference');
+
+    // `\IfFileExists{file}{then}{else}`: nothing is read from disk, so the document as written (then) is read.
+    const ifExists = await OfficeParser.parseOffice(Buffer.from('\\documentclass{article}\\begin{document}\\IfFileExists{fig.png}{\\includegraphics{fig.png}}{\\fbox{none}}\\end{document}'), { fileType: 'tex', onWarning: () => {} } as any);
+    assert.deepStrictEqual(collectAllNodes(ifExists).filter(n => n.type === 'image').map(n => (n.metadata as any).url), ['fig.png'], 'TEX parse: \\IfFileExists reads its then-branch');
 
     // ── Tier 4: round trip with the generator reaches a fixed point ───────────
     const docx = await OfficeParser.parseOffice(path.join(__dirname, 'files/test.docx'), { extractAttachments: true });

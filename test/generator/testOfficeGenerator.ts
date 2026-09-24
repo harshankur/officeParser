@@ -1125,9 +1125,12 @@ async function testGeneratorConfigs(
                     const files = unzipSync(result.value);
                     const main = files['main.tex'] ? strFromU8(files['main.tex']) : '';
                     const packaged = Object.keys(files).filter(n => n !== 'main.tex').sort();
-                    const referenced = [...new Set([...main.matchAll(/\\includegraphics\[[^\]]*\]\{([^}]+)\}/g)].map(m => m[1]))];
-                    ok = !!main && packaged.every(n => /^images\/[A-Za-z0-9-]+\.[a-z]+$/.test(n)) && referenced.every(r => packaged.includes(r));
-                    detail = `${packaged.length} packaged, ${referenced.length} referenced`;
+                    const referenced = [...new Set([...main.matchAll(/\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}/g)].map(m => m[1]))];
+                    // An image the source only named by path cannot be packaged; the bundle guards it with
+                    // \IfFileExists so it still compiles. Every other reference must be in the zip.
+                    const guarded = new Set([...main.matchAll(/\\IfFileExists\{([^}]+)\}\{\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}/g)].map(m => m[2]));
+                    ok = !!main && packaged.every(n => /^images\/[A-Za-z0-9-]+\.[a-z]+$/.test(n)) && referenced.every(r => packaged.includes(r) || guarded.has(r));
+                    detail = `${packaged.length} packaged, ${referenced.length} referenced, ${guarded.size} guarded`;
                 } else {
                     detail = 'bundle:true did not return a Uint8Array';
                 }

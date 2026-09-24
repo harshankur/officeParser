@@ -49,6 +49,70 @@ const ADMONITION_TYPE_MAP: Record<string, AdmonitionMetadata['admonitionType']> 
     danger: 'caution'
 };
 
+/** Where the next `-->` is, remembered between calls so that scanning many `<!--` stays linear. */
+interface CommentCloseCache { at: number; from: number }
+
+/**
+ * The comment opening at `open` (where `text` has `<!--`): its raw body and the index just past it, or
+ * null when it never closes. `<!-->` and `<!--->` are complete, empty comments, as in HTML and
+ * CommonMark; otherwise the comment ends at the first `-->`. `closes` must be shared by calls made in
+ * increasing `open` order over the same text: each `-->` search resumes from the last one, so a text
+ * full of unclosed `<!--` costs time linear in its length rather than quadratic.
+ */
+function commentAt(text: string, open: number, closes: CommentCloseCache): { body: string; end: number } | null {
+    if (text.startsWith('<!-->', open)) return { body: '', end: open + 5 };
+    if (text.startsWith('<!--->', open)) return { body: '', end: open + 6 };
+    const from = open + 4;
+    if (!(from >= closes.from && (closes.at === -1 || closes.at >= from))) {
+        closes.at = text.indexOf('-->', from);
+        closes.from = from;
+    }
+    return closes.at === -1 ? null : { body: text.slice(from, closes.at), end: closes.at + 3 };
+}
+
+/**
+ * Paragraph lines, with the lines a comment spans joined back into one (with their line breaks), so a
+ * comment that opens on one line and closes on a later one is parsed as one comment rather than as
+ * visible text. An opener inside a code span on its line (after an odd number of backticks) is not a
+ * comment. Linear: each line is scanned once, and `-->` searches share one cache.
+ */
+function joinCommentLines(lines: string[]): string[] {
+    if (!lines.some(l => l.includes('<!--'))) return lines;
+    const text = lines.join('\n');
+    const closes: CommentCloseCache = { at: -1, from: Number.MAX_SAFE_INTEGER };
+    const joins = new Set<number>(); // newline offsets inside a comment
+    let pos = 0; // everything before pos has been accounted for
+    let ticks = 0; // backticks between the start of pos's line and pos
+    for (;;) {
+        const open = text.indexOf('<!--', pos);
+        if (open === -1) break;
+        for (let k = pos; k < open; k++) {
+            if (text[k] === '\n') ticks = 0;
+            else if (text[k] === '`') ticks++;
+        }
+        pos = open + 4;
+        if (ticks % 2 === 1) continue;
+        const found = commentAt(text, open, closes);
+        if (!found) continue;
+        let spansLines = false;
+        for (let k = text.indexOf('\n', open); k !== -1 && k < found.end; k = text.indexOf('\n', k + 1)) {
+            joins.add(k);
+            spansLines = true;
+        }
+        if (spansLines) ticks = 0;
+        pos = found.end;
+    }
+    if (joins.size === 0) return lines;
+    const out: string[] = [];
+    let offset = 0;
+    for (const line of lines) {
+        if (out.length && joins.has(offset - 1)) out[out.length - 1] += `\n${line}`;
+        else out.push(line);
+        offset += line.length + 1;
+    }
+    return out;
+}
+
 /** Plain text of parsed inline nodes, leaving out source comments: a hidden note is not text. */
 const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
 
@@ -144,13 +208,24 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         textStr = textStr.replace(/<([A-Z][A-Za-z0-9]*)(?:\s+[^>]*?)?>([\s\S]*?)<\/\1>/g, (_m, _name, inner) => inner);
     } while (textStr !== previousTextStr && ++mdxPasses < MAX_MDX_PASSES);
 
+    // Blocks lifted out before block splitting (code, math, admonitions, comments) are replaced by a
+    // placeholder line. The placeholder is built from private-use characters the document does not
+    // contain, so literal text such as `__CODE_BLOCK_0__` in the document is never mistaken for one.
+    let sentinel = '\uE000';
+    while (textStr.includes(sentinel)) sentinel += '\uE001';
+    const placeholder = (kind: string, n: number) => `${sentinel}${kind}_${n}${sentinel}`;
+    const placeholderIndex = (block: string, kind: string): number | null => {
+        const m = block.startsWith(sentinel + kind + '_') && block.endsWith(sentinel) ? block.slice(sentinel.length + kind.length + 1, -sentinel.length) : null;
+        return m !== null && /^\d+$/.test(m) ? parseInt(m, 10) : null;
+    };
+
     // Extract code blocks first to protect their contents. Accepts both backtick and
     // tilde fences (CommonMark's two fence characters); the backreference on the fence
     // run means a `~~~`-fenced block isn't closed early by a stray ``` inside it, and
     // vice versa.
     const codeBlocks: string[] = [];
     textStr = textStr.replace(/^(`{3,}|~{3,})(\w*)\n([\s\S]*?)\n\1$/gm, (match, _fence, lang, code) => {
-        const id = `__CODE_BLOCK_${codeBlocks.length}__`;
+        const id = placeholder('CODE_BLOCK', codeBlocks.length);
         codeBlocks.push(JSON.stringify({ lang, code }));
         return `\n\n${id}\n\n`;
     });
@@ -160,7 +235,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // Inline math ($...$) is handled directly in parseInline below.
     const mathBlocks: string[] = [];
     textStr = textStr.replace(/^\$\$\n([\s\S]*?)\n\$\$$/gm, (_match, latex) => {
-        const id = `__MATH_BLOCK_${mathBlocks.length}__`;
+        const id = placeholder('MATH_BLOCK', mathBlocks.length);
         mathBlocks.push(latex);
         return `\n\n${id}\n\n`;
     });
@@ -169,7 +244,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // the outer pair as two stray literal `$`. Runs after the multi-line pass, whose placeholders
     // carry no `$$` and so can't be re-matched. `(?!\$)` rejects `$$$...`/empty `$$$$`.
     textStr = textStr.replace(/^\$\$(?!\$)([^\n]+?)\$\$[ \t]*$/gm, (_match, latex) => {
-        const id = `__MATH_BLOCK_${mathBlocks.length}__`;
+        const id = placeholder('MATH_BLOCK', mathBlocks.length);
         mathBlocks.push(latex);
         return `\n\n${id}\n\n`;
     });
@@ -182,7 +257,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     textStr = textStr.replace(/^:::(\w+)[ \t]*\n([\s\S]*?)\n:::[ \t]*$/gm, (match, type, body) => {
         const admonitionType = ADMONITION_TYPE_MAP[type.toLowerCase()];
         if (!admonitionType) return match; // Unrecognised type - leave as literal text.
-        const id = `__ADMONITION_${admonitionBlocks.length}__`;
+        const id = placeholder('ADMONITION', admonitionBlocks.length);
         admonitionBlocks.push(JSON.stringify({ admonitionType, body }));
         return `\n\n${id}\n\n`;
     });
@@ -194,12 +269,30 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // open at column 0 (an indented one inside a list item is left to the inline path, so it doesn't
     // split the list) and its closing `-->` must end the line; the body can't contain `-->`, so the match
     // always ends at the comment's real close. The raw body is kept verbatim for re-emission.
+    // A scan with indexOf rather than a regex: a lazy regex body re-scans to the end of the text for
+    // every unclosed `<!--`, which is quadratic on hostile input.
     const htmlComments: string[] = [];
-    textStr = textStr.replace(/^<!--((?:(?!-->)[\s\S])*?)-->[ \t]*$/gm, (_match, body: string) => {
-        const id = `__HTML_COMMENT_${htmlComments.length}__`;
-        htmlComments.push(body);
-        return `\n\n${id}\n\n`;
-    });
+    {
+        const closes: CommentCloseCache = { at: -1, from: Number.MAX_SAFE_INTEGER };
+        let out = '';
+        let pos = 0;
+        let search = 0;
+        for (;;) {
+            const open = textStr.indexOf('<!--', search);
+            if (open === -1) break;
+            search = open + 1;
+            if (open > 0 && textStr[open - 1] !== '\n') continue;
+            const found = commentAt(textStr, open, closes);
+            if (!found) continue;
+            let end = found.end;
+            while (textStr[end] === ' ' || textStr[end] === '\t') end++;
+            if (end < textStr.length && textStr[end] !== '\n') continue;
+            out += `${textStr.slice(pos, open)}\n\n${placeholder('HTML_COMMENT', htmlComments.length)}\n\n`;
+            htmlComments.push(found.body);
+            pos = search = end;
+        }
+        textStr = out + textStr.slice(pos);
+    }
 
     // Extract footnote definitions (`[^id]: text`) before block splitting, since
     // definitions conventionally live at the end of the document, after every place
@@ -372,15 +465,24 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Inline math requires no whitespace right after the opening $ or right before the
         // closing $, the common heuristic (matching Pandoc/KaTeX) for avoiding false
         // positives on currency like "$5 and $10".
-        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|==(?<highlight>.+?)==|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|(?<lineBreak><br\s*\/?>)|<!--(?<htmlComment>(?:(?!-->)[\s\S])*?)-->|<span\s+style="(?<spanStyle>[^"]*)">(?<spanContent>.+?)<\/span>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
+        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|==(?<highlight>.+?)==|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|(?<lineBreak><br\s*\/?>)|(?<htmlComment><!--)|<span\s+style="(?<spanStyle>[^"]*)">(?<spanContent>.+?)<\/span>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
         let lastIndex = 0;
         let match;
+        const closes: CommentCloseCache = { at: -1, from: Number.MAX_SAFE_INTEGER };
 
         while ((match = regex.exec(text)) !== null) {
+            const g = match.groups!;
+            // The tokenizer matches only a comment's opener; where it closes is looked up (linearly,
+            // see commentAt). An opener that never closes is ordinary text, left in its run.
+            let comment: { body: string; end: number } | null = null;
+            if (g.htmlComment !== undefined) {
+                comment = commentAt(text, match.index, closes);
+                if (!comment) { regex.lastIndex = match.index + 4; continue; }
+                regex.lastIndex = comment.end;
+            }
             if (match.index > lastIndex) {
                 nodes.push(plainText(text.substring(lastIndex, match.index)));
             }
-            const g = match.groups!;
 
             if (g.esc !== undefined) { // Backslash-escaped punctuation
                 nodes.push(plainText(g.esc));
@@ -490,8 +592,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 nodes.push({ type: 'text', text: url, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined, metadata: { link: url, linkType: 'external' } as TextMetadata });
             } else if (g.mathInline !== undefined) { // Inline math
                 nodes.push({ type: 'code', text: g.mathInline, metadata: { math: 'inline' } as CodeMetadata });
-            } else if (g.htmlComment !== undefined) { // Inline source comment: a hidden note, kept verbatim
-                nodes.push({ type: 'comment', text: g.htmlComment, metadata: { sourceSyntax: 'html' } as CommentMetadata });
+            } else if (comment) { // Inline source comment: a hidden note, kept verbatim
+                nodes.push({ type: 'comment', text: comment.body, metadata: { sourceSyntax: 'html' } as CommentMetadata });
             }
 
             lastIndex = regex.lastIndex;
@@ -582,7 +684,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // newline with no such marker is still a soft break and collapses to a space,
     // unchanged from before - CommonMark itself renders a soft break as a space/newline.
     const splitParagraphLines = (block: string): OfficeContentNode[] => {
-        const lines = block.split('\n');
+        const lines = joinCommentLines(block.split('\n'));
         const children: OfficeContentNode[] = [];
         lines.forEach((line, i) => {
             const hardBreak = /(?: {2,}|\\)$/.test(line);
@@ -877,20 +979,20 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
 
         // Source comment on its own lines, extracted to a placeholder above: a hidden note, kept verbatim
-        const commentMatch = block.match(/^__HTML_COMMENT_(\d+)__$/);
-        if (commentMatch) {
+        const commentIndex = placeholderIndex(block, 'HTML_COMMENT');
+        if (commentIndex !== null && commentIndex < htmlComments.length) {
             content.push({
                 type: 'comment',
-                text: htmlComments[parseInt(commentMatch[1])],
+                text: htmlComments[commentIndex],
                 metadata: { sourceSyntax: 'html' } as CommentMetadata
             });
             continue;
         }
 
         // Code Block
-        const codeMatch = block.match(/^__CODE_BLOCK_(\d+)__$/);
-        if (codeMatch) {
-            const data = JSON.parse(codeBlocks[parseInt(codeMatch[1])]);
+        const codeIndex = placeholderIndex(block, 'CODE_BLOCK');
+        if (codeIndex !== null && codeIndex < codeBlocks.length) {
+            const data = JSON.parse(codeBlocks[codeIndex]);
             content.push({
                 type: 'code',
                 text: data.code,
@@ -900,19 +1002,19 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
 
         // GLFM-style fenced-div admonition, extracted to a placeholder above
-        const admonitionBlockMatch = block.match(/^__ADMONITION_(\d+)__$/);
-        if (admonitionBlockMatch) {
-            const data = JSON.parse(admonitionBlocks[parseInt(admonitionBlockMatch[1])]);
+        const admonitionIndex = placeholderIndex(block, 'ADMONITION');
+        if (admonitionIndex !== null && admonitionIndex < admonitionBlocks.length) {
+            const data = JSON.parse(admonitionBlocks[admonitionIndex]);
             content.push(buildAdmonitionNode(data.admonitionType, data.body, 'gitlab'));
             continue;
         }
 
         // Block math ($$...$$), extracted to a placeholder above
-        const mathBlockMatch = block.match(/^__MATH_BLOCK_(\d+)__$/);
-        if (mathBlockMatch) {
+        const mathIndex = placeholderIndex(block, 'MATH_BLOCK');
+        if (mathIndex !== null && mathIndex < mathBlocks.length) {
             content.push({
                 type: 'code',
-                text: mathBlocks[parseInt(mathBlockMatch[1])],
+                text: mathBlocks[mathIndex],
                 metadata: { math: 'block' } as CodeMetadata
             });
             continue;

@@ -224,6 +224,9 @@ export class OfficeParser {
                 buffer = await decryptIfNeeded(buffer, internalConfig, ext);
             }
 
+            /** What a `.zip` archive declares, once the type check below has read it. */
+            let archiveType: string | undefined;
+
             // Attempt to detect file type from buffer only if extension is unknown.
             // This matches v6 behavior and prevents crashes in older Node environments
             // where file-type 22.x might be incompatible.
@@ -260,6 +263,9 @@ export class OfficeParser {
                     const detected = worthResolving
                         ? await resolveZipBackedType(type?.ext, buffer, internalConfig)
                         : type?.ext;
+                    // The archive was opened to resolve a bare `zip`: keep what it declared, so routing
+                    // a file named `.zip` below does not read the archive a second time.
+                    if (worthResolving && type?.ext === GENERIC_ZIP_EXTENSION) archiveType = detected ?? GENERIC_ZIP_EXTENSION;
                     // A bare `zip` says only that the bytes are an archive, which every format
                     // on this path already is. Reporting it as a mismatch against the caller's
                     // own extension is noise, so only a resolved format is worth comparing.
@@ -288,7 +294,7 @@ export class OfficeParser {
             // A file named `.zip` is routed by what the archive holds (a LaTeX project, a renamed
             // office package), since `zip` itself is not a format.
             if (routedExt === GENERIC_ZIP_EXTENSION) {
-                routedExt = (await detectOfficeTypeFromZip(buffer, internalConfig.decompressionLimits ?? {})) ?? routedExt;
+                routedExt = archiveType ?? (await detectOfficeTypeFromZip(buffer, internalConfig.decompressionLimits ?? {})) ?? routedExt;
             }
 
             // OCR runs over extracted images in EVERY format (not just PDF), so `ocr: true` without

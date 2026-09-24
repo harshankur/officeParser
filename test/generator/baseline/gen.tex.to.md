@@ -362,7 +362,7 @@ You can see the Table of Contents created by calibre by clicking the Table of Co
 
 Centered images like this are useful for large pictures that should be a focus of attention.
 
-![image](images/image.jpg)
+![image](images/image.jpg){width=810pt}
 
 There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was *inserted*, not necessarily where it appears on the page in Word.
 
