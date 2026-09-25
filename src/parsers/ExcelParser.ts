@@ -31,6 +31,54 @@ import { performOcr } from '../utils/ocrUtils.js';
 import { decodeXmlEntities, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
+/** How a number format shows a cell value that it treats as a date or a time. */
+type DateFormatKind = 'date' | 'time' | 'datetime' | 'elapsed';
+
+/** Built-in number formats that show a date or a time (ECMA-376 Part 1, 18.8.30). */
+const BUILTIN_DATE_FORMATS = new Map<string, DateFormatKind>([
+    ['14', 'date'], ['15', 'date'], ['16', 'date'], ['17', 'date'], ['18', 'time'], ['19', 'time'],
+    ['20', 'time'], ['21', 'time'], ['22', 'datetime'], ['45', 'time'], ['46', 'elapsed'], ['47', 'time'],
+]);
+
+/** Serials past 9999-12-31, the last date a workbook can hold, are shown as plain numbers. */
+const MAX_DATE_SERIAL = 2958466;
+
+/**
+ * Classifies a number format code by the date and time parts it shows. Quoted text, escaped
+ * characters and `[...]` sections (colours, locales, conditions) are not tokens, except `[h]`,
+ * `[m]` and `[s]`, which show elapsed time.
+ */
+const getDateFormatKind = (code: string): DateFormatKind | undefined => {
+    if (/\[(?:h+|m+|s+)\]/i.test(code)) return 'elapsed';
+    const tokens = code.replace(/"[^"]*"|\\.|\[[^\]]*\]/g, '').toLowerCase();
+    const hasDate = tokens.includes('y') || tokens.includes('d');
+    const hasTime = tokens.includes('h') || tokens.includes('s');
+    if (hasDate) return hasTime ? 'datetime' : 'date';
+    return hasTime ? 'time' : undefined;
+};
+
+/**
+ * Writes a date/time serial as ISO text in the form its number format shows: `2024-09-30`,
+ * `14:05:00`, `2024-09-30 14:05:00`, or `36:00:00` for an elapsed duration. Returns `undefined`
+ * for a value that is not a serial a workbook can hold, which then stays as stored.
+ */
+const formatDateSerial = (value: string, kind: DateFormatKind, date1904: boolean): string | undefined => {
+    const serial = Number(value);
+    if (value === '' || !Number.isFinite(serial) || serial < 0 || serial >= MAX_DATE_SERIAL) return undefined;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    // Rounded to the second, as Excel shows it: a NOW() stamp of 14:04:59.9 reads 14:05:00
+    const seconds = Math.round(serial * 86400);
+    const clock = (total: number) => `${pad(Math.floor(total / 60) % 60)}:${pad(total % 60)}`;
+    if (kind === 'elapsed') return `${Math.floor(seconds / 3600)}:${clock(seconds)}`;
+    const time = `${pad(Math.floor(seconds / 3600) % 24)}:${clock(seconds)}`;
+    if (kind === 'time') return time;
+    // The 1904 system counts from 1904-01-01. The 1900 system counts from 1899-12-31 and includes a
+    // 1900-02-29 that never existed, as serial 60, so serials from 60 on count from 1899-12-30.
+    const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, serial < 60 ? 31 : 30);
+    const date = new Date(epoch + Math.floor(seconds / 86400) * 86400000).toISOString().slice(0, 10);
+    return kind === 'date' ? date : `${date} ${time}`;
+};
+
 /**
  * Parses an Excel spreadsheet (.xlsx) and extracts sheets, rows, and cells.
  * 
@@ -82,6 +130,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     // work below, and read again further down for the sheet-name map.
     const workbookFile = findRequiredPart(files, path => path === 'xl/workbook.xml', config,
         { fileType: 'xlsx', part: 'xl/workbook.xml' });
+    // Date serials count from 1900 unless the workbook uses the 1904 date system
+    const date1904 = /<(?:\w+:)?workbookPr\b[^>]*\bdate1904="(?:1|true)"/.test(workbookFile.content.toString());
 
     // Worksheets, by contrast, are not guaranteed: a workbook holding only chartsheets is
     // valid and simply has no cell text to extract. Warn rather than fail, so the caller can
@@ -156,9 +206,22 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     // Parse styles to build formatting map
     const stylesFile = files.find(f => f.path === 'xl/styles.xml');
     const cellFormatMap: Record<number, TextFormatting> = {};
+    // A date or a time is stored as a day count and shown through its style's number format
+    const cellDateFormatMap: Record<number, DateFormatKind> = {};
 
     if (stylesFile) {
         const xml = parseXmlString(stylesFile.content.toString());
+
+        // Parse custom number formats (numFmtId -> format code)
+        const numFmtCodes: Record<string, string> = Object.create(null);
+        const numFmtsNode = getElementsByTagName(xml, "numFmts")[0];
+        if (numFmtsNode) {
+            for (const numFmt of getElementsByTagName(numFmtsNode, "numFmt")) {
+                const id = numFmt.getAttribute("numFmtId");
+                const code = numFmt.getAttribute("formatCode");
+                if (id && code !== null) numFmtCodes[id] = code;
+            }
+        }
 
         // Parse fonts
         const fontsNode = getElementsByTagName(xml, "fonts")[0];
@@ -239,6 +302,12 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             for (let i = 0; i < xfNodes.length; i++) {
                 const xf = xfNodes[i];
                 const formatting: TextFormatting = {};
+
+                const numFmtId = xf.getAttribute("numFmtId") || '0';
+                const dateFormatKind = numFmtId in numFmtCodes
+                    ? getDateFormatKind(numFmtCodes[numFmtId])
+                    : BUILTIN_DATE_FORMATS.get(numFmtId);
+                if (dateFormatKind) cellDateFormatMap[i] = dateFormatKind;
 
                 const fontId = xf.getAttribute("fontId");
                 if (fontId) {
@@ -562,6 +631,10 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     const typeMatch = cAttrs.match(/t="([a-zA-Z]+)"/);
                     const type = typeMatch ? typeMatch[1] : 'n'; // n = number (default)
 
+                    // Extract cell style index
+                    const styleMatch = cAttrs.match(/s="(\d+)"/);
+                    const styleIdx = styleMatch ? parseInt(styleMatch[1]) : undefined;
+
                     const vMatch = cContent.match(/<v>([\s\S]*?)<\/v>/);
                     const tMatch = cContent.match(/<t\b[^>]*>([\s\S]*?)<\/t>/);
 
@@ -584,8 +657,14 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                         }
                     } else if (type === 'inlineStr' && tMatch) {
                         text = decodeXmlEntities(tMatch[1].trim());
+                    } else if (type === 'b' && vMatch) {
+                        // A boolean is stored as 1 or 0 and shown as TRUE or FALSE
+                        text = vMatch[1].trim() === '1' ? 'TRUE' : 'FALSE';
                     } else if (vMatch) {
                         text = vMatch[1].trim();
+                        // A number in a date or time style is a day count: show the date or time instead
+                        const dateFormatKind = type === 'n' && styleIdx !== undefined ? cellDateFormatMap[styleIdx] : undefined;
+                        if (dateFormatKind) text = formatDateSerial(text, dateFormatKind, date1904) ?? text;
                     }
 
                     // Parse cell coordinate
@@ -602,9 +681,6 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     lastColIndex = colIndex;
 
                     if (text || cellNodes.length > 0) {
-                        // Extract cell style index
-                        const styleMatch = cAttrs.match(/s="(\d+)"/);
-                        const styleIdx = styleMatch ? parseInt(styleMatch[1]) : undefined;
                         const cellFormatting = (styleIdx !== undefined && cellFormatMap[styleIdx]) ? cellFormatMap[styleIdx] : {};
 
                         if (cellNodes.length > 0) {
