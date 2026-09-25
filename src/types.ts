@@ -267,6 +267,7 @@ export interface OcrConfig {
      * 1. Any pending OCR jobs in the scheduler queue are rejected immediately.
      * 2. Any active OCR job running on a Tesseract worker will reject, the worker will be
      *    terminated, and it will be removed from the pool to avoid hanging worker threads.
+     * 3. The parse rejects with an AbortError, as it does for the top-level `abortSignal`.
      * 
      * Developers should prefer passing this at the top level of `parseOffice` (as `config.abortSignal`),
      * which automatically propagates here.
@@ -371,7 +372,9 @@ export interface CommonOfficeParserConfig {
     ocrConfig?: OcrConfig;
     /**
      * An optional AbortSignal to cancel the parsing operation.
-     * When aborted, the parser immediately rejects with a standard AbortError (DOMException).
+     * When aborted, the parser rejects with a standard AbortError (DOMException). Once the signal has
+     * fired, the parse never resolves, including when it fires while OCR is recognizing an image
+     * (that is a cancellation, not an `OCR_FAILED` recognition).
      * 
      * ### Format-Specific Abort Behavior:
      * - **PDF**: Checked between page loads and before individual image OCR operations.

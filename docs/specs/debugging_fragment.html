@@ -191,7 +191,7 @@ await officeParser.parseOffice(latexBuffer,    { fileType: 'tex' });</code></pre
             nesting depth 128, or 32 nested tables), so content past it was not expanded (content nested too deep is kept as
             plain text). Include cycles are cut the same way. The bounds are not configurable, and parsing time grows
             linearly with the document. The parse runs synchronously: an <code>abortSignal</code> is honoured before it
-            starts and while a project zip is read, but a timer cannot interrupt a <code>.tex</code> being parsed.</li>
+            starts, while a project zip is read and while OCR runs, but a timer cannot interrupt a <code>.tex</code> being parsed.</li>
     </ul>
 
     <h2>Quick Reference</h2>

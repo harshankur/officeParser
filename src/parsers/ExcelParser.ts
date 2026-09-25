@@ -27,7 +27,7 @@ import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
-import { performOcr } from '../utils/ocrUtils.js';
+import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { decodeXmlEntities, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
@@ -345,17 +345,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             attachments.push(attachment);
 
-            if (config.ocr) {
-                if (attachment.mimeType.startsWith('image/')) {
-                    try {
-                        const ocrText = (await performOcr(media.content, { ...config.ocrConfig })).trim();
-                        if (ocrText) {
-                            attachment.ocrText = ocrText;
-                        }
-                    } catch (e) {
-                        logWarning(OfficeWarningType.OCR_FAILED, config, attachment.name, e);
-                    }
-                }
+            if (config.ocr && attachment.mimeType.startsWith('image/')) {
+                const ocrText = await ocrDuringParse(media.content, config, attachment.name);
+                if (ocrText) attachment.ocrText = ocrText;
             }
         }
 

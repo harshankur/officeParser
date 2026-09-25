@@ -35,7 +35,7 @@
                 <td><code>abortSignal</code></td>
                 <td><code>AbortSignal | null</code></td>
                 <td><code>null</code></td>
-                <td><strong>Cancellation</strong>: An optional signal to abort the parsing operation. Interrupts heavy loops, PDF page parsing, zip decompression, and active OCR processes cleanly. Rejects with an <code>AbortError</code>.</td>
+                <td><strong>Cancellation</strong>: An optional signal to abort the parsing operation. Interrupts heavy loops, PDF page parsing, zip decompression, and active OCR processes cleanly. Rejects with an <code>AbortError</code>: once the signal fires the parse never resolves, even when it fires while OCR is recognizing an image.</td>
             </tr>
             <tr>
                 <td><code>newlineDelimiter</code></td>
@@ -180,7 +180,7 @@
                 <td><code>ocrConfig.abortSignal</code></td>
                 <td><code>AbortSignal | null</code></td>
                 <td><code>null</code></td>
-                <td><strong>OCR Cancellation</strong>: Automatically propagated from the top-level <code>abortSignal</code>. Used to interrupt queued or executing OCR tasks.</td>
+                <td><strong>OCR Cancellation</strong>: Automatically propagated from the top-level <code>abortSignal</code>. Used to interrupt queued or executing OCR tasks; the parse then rejects with an <code>AbortError</code>, as for the top-level signal.</td>
             </tr>
             <tr>
                 <td><code>ocrConfig.workerPath</code> / <code>corePath</code> / <code>langPath</code></td>

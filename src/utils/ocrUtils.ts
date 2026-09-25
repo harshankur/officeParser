@@ -10,9 +10,9 @@
  * @module ocrUtils
  */
 
-import { OcrConfig } from '../types.js';
+import { FullOfficeParserConfig, OcrConfig, OfficeWarningType } from '../types.js';
 import { isBrowser } from './envUtils.js';
-import { getAbortError } from './errorUtils.js';
+import { getAbortError, logWarning } from './errorUtils.js';
 import { median } from './numberUtils.js';
 
 /**
@@ -26,6 +26,8 @@ interface OcrJob {
     startTime: number;
     timeoutMs: number;
     isFinished?: boolean;
+    /** Rejects with the AbortError when the job is cancelled, so an abandoned recognition is not awaited forever. */
+    cancelled: Promise<never>;
 }
 
 /**
@@ -37,6 +39,19 @@ interface ManagedWorker {
     lastUsed: number;
     isBusy: boolean;
     activeJob?: OcrJob;
+    /** Set once `recognize` has been called for the active job (see `runWorker`). */
+    recognizing?: boolean;
+}
+
+/**
+ * The image as bytes in memory. Tesseract loads its input before sending the job to its worker;
+ * given bytes, that step does no I/O, so the job is sent within the microtasks that follow the
+ * `recognize` call. Anything else is passed on for Tesseract to load.
+ */
+async function imageBytes(image: any): Promise<any> {
+    if (image instanceof Uint8Array) return image;
+    if (typeof Blob !== 'undefined' && image instanceof Blob) return new Uint8Array(await image.arrayBuffer());
+    return image;
 }
 
 /**
@@ -232,6 +247,9 @@ class OcrSchedulerManager {
             let abortListener: (() => void) | null = null;
             let finished = false;
             let job: OcrJob;
+            let cancel: (err: any) => void = () => { };
+            const cancelled = new Promise<never>((_, rejectCancelled) => { cancel = rejectCancelled; });
+            cancelled.catch(() => { });
 
             const cleanResolve = (val: string) => {
                 if (finished) return;
@@ -263,7 +281,8 @@ class OcrSchedulerManager {
                 resolve: cleanResolve,
                 reject: cleanReject,
                 startTime: Date.now(),
-                timeoutMs: recogTimeout
+                timeoutMs: recogTimeout,
+                cancelled
             };
 
             if (signal) {
@@ -272,6 +291,7 @@ class OcrSchedulerManager {
                     
                     const err = getAbortError();
                     cleanReject(err);
+                    cancel(err);
 
                     // 1. Remove job from queue if it hasn't run yet
                     const idx = this.queue.indexOf(job);
@@ -279,16 +299,19 @@ class OcrSchedulerManager {
                         this.queue.splice(idx, 1);
                     }
 
-                    // 2. Find if any worker is currently running this job and terminate/remove it
-                    const workerIndex = this.pool.findIndex(mw => mw.activeJob === job);
+                    // 2. A worker recognizing this job is removed from the pool and terminated, to stop
+                    // the work. Not at once: Tesseract sends the job to its worker in the microtasks
+                    // after `recognize` is called, and a worker terminated before that send makes
+                    // Tesseract's send() reject with nothing to catch it, which ends a Node process. So
+                    // the worker is terminated on the next macrotask, when the job has been sent. A
+                    // worker still starting or re-initializing for this job is left to the code
+                    // awaiting that step, which finds the job finished and cleans up.
+                    const workerIndex = this.pool.findIndex(mw => mw.activeJob === job && mw.recognizing);
                     if (workerIndex !== -1) {
-                        const managedWorker = this.pool[workerIndex];
-                        // Remove from pool immediately to prevent reuse
-                        this.pool.splice(workerIndex, 1);
-                        // Terminate the worker process
-                        try {
-                            managedWorker.worker.terminate();
-                        } catch (e) {}
+                        const [managedWorker] = this.pool.splice(workerIndex, 1);
+                        setTimeout(() => {
+                            Promise.resolve().then(() => managedWorker.worker.terminate()).catch(() => { });
+                        }, 0);
                         // Trigger queue processing for subsequent tasks
                         this.processQueue();
                     }
@@ -483,15 +506,23 @@ class OcrSchedulerManager {
         managed.activeJob = job;
 
         try {
+            const image = await imageBytes(job.image);
+            // Cancelled while the image loaded: nothing was sent to the worker, which stays in the pool.
+            if (job.isFinished) return;
             // When preserving layout (default), ask Tesseract for the block/word tree so we can
             // rebuild the 2-D page layout from per-word boxes; otherwise the flat text is enough.
             const wantLayout = job.config.preserveLayout !== false;
             const recognizePromise = wantLayout
-                ? managed.worker.recognize(job.image, {}, { text: true, blocks: true })
-                : managed.worker.recognize(job.image);
-            const { data } = recogTimeout > 0
-                ? await withTimeout(recognizePromise, recogTimeout, `OCR recognition timed out after ${recogTimeout}ms`)
-                : await recognizePromise;
+                ? managed.worker.recognize(image, {}, { text: true, blocks: true })
+                : managed.worker.recognize(image);
+            managed.recognizing = true;
+            // A cancelled job's worker is terminated, so its recognition never settles: stop waiting.
+            const { data } = await Promise.race([
+                recogTimeout > 0
+                    ? withTimeout(recognizePromise, recogTimeout, `OCR recognition timed out after ${recogTimeout}ms`)
+                    : recognizePromise,
+                job.cancelled,
+            ]);
 
             job.resolve(wantLayout ? layoutOcrText(data) : (data.text || ''));
         } catch (err: any) {
@@ -507,6 +538,7 @@ class OcrSchedulerManager {
             }
             job.reject(err);
         } finally {
+            managed.recognizing = false;
             if (this.pool.includes(managed)) {
                 managed.isBusy = false;
                 managed.activeJob = undefined;
@@ -587,6 +619,37 @@ export const performOcr = async (image: Buffer | string, config?: OcrConfig, mim
     }
 
     return await OcrSchedulerManager.getInstance().recognize(inputImage, config);
+};
+
+/** Whether a parse's caller has cancelled it, through `abortSignal` or the OCR-only `ocrConfig.abortSignal`. */
+const parseCancelled = (config: FullOfficeParserConfig): boolean =>
+    !!(config.abortSignal?.aborted || config.ocrConfig?.abortSignal?.aborted);
+
+/**
+ * OCR of one image while parsing: the recognized text, or `undefined` when recognition failed (an
+ * `OCR_FAILED` warning, and the parse goes on without that text).
+ *
+ * A cancelled parse is not a failed recognition. Once the caller's signal has fired (checked before
+ * recognizing, after it, and whenever recognition rejects), this throws the AbortError, so the
+ * parse rejects instead of resolving without the text. An OCR timeout stays a failed recognition.
+ *
+ * @param image - The image bytes (or a path)
+ * @param config - The parse's resolved configuration (its `ocrConfig` and signals)
+ * @param name - The attachment's name, for the warning
+ * @param mimeType - Media type of `image`; sniffed from its signature otherwise
+ */
+export const ocrDuringParse = async (image: Buffer | string, config: FullOfficeParserConfig, name: string, mimeType?: string): Promise<string | undefined> => {
+    if (parseCancelled(config)) throw getAbortError();
+    try {
+        const text = (await performOcr(image, { ...config.ocrConfig }, mimeType)).trim();
+        if (parseCancelled(config)) throw getAbortError();
+        return text;
+    } catch (error: any) {
+        if (error?.name === 'AbortError') throw error;
+        if (parseCancelled(config)) throw getAbortError();
+        logWarning(OfficeWarningType.OCR_FAILED, config, name, error);
+        return undefined;
+    }
 };
 
 /**

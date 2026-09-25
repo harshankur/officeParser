@@ -38,7 +38,7 @@ import { assertNode, isBrowser } from '../utils/envUtils.js';
 import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { crc32, createAttachment } from '../utils/imageUtils.js';
 import { loadPdfJs } from '../utils/moduleLoader.js';
-import { performOcr } from '../utils/ocrUtils.js';
+import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.js';
 import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRendered, toMatrix6, unionAll } from './pdf/geometry.js';
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
@@ -1438,15 +1438,17 @@ async function emitImage(
         const attachment = createAttachment(attachmentName, png);
         attachment.mimeType = 'image/png';
         if (config.ocr && img.pixelWidth >= 10 && img.pixelHeight >= 10) {
-            try { attachment.ocrText = (await performOcr(png, { ...config.ocrConfig })).trim(); }
-            catch (e) { logWarning(OfficeWarningType.OCR_FAILED, config, attachmentName, e); }
+            const ocrText = await ocrDuringParse(png, config, attachmentName, 'image/png');
+            if (ocrText !== undefined) attachment.ocrText = ocrText;
         }
         attachments.push(attachment);
         const metadata: ImageMetadata = { attachmentName };
         const node: OfficeContentNode = { type: 'image', text: attachment.ocrText || '', metadata };
         node.bounds = roundBounds(img.bounds);
         return node;
-    } catch (e) {
+    } catch (e: any) {
+        // A cancelled parse rejects; it is not a failed image.
+        if (e?.name === 'AbortError') throw e;
         logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, attachmentName, e);
         return null;
     }

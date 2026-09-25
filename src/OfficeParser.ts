@@ -51,7 +51,7 @@ import { parseWord } from './parsers/WordParser.js';
 import { BlobLike, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SupportedFileType } from './types.js';
 import { resolveParserConfig } from './utils/configUtils.js';
 import { assertNode } from './utils/envUtils.js';
-import { getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
+import { checkAbortSignal, getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
 import { loadFileType } from './utils/moduleLoader.js';
 import { terminateOcr } from './utils/ocrUtils.js';
@@ -355,6 +355,10 @@ export class OfficeParser {
                 default:
                     throw getOfficeError(OfficeErrorType.EXTENSION_UNSUPPORTED, internalConfig, ext);
             }
+
+            // A parse whose signal fired while it ran is cancelled, whatever the parser was doing
+            // then: it rejects, never resolving with a document that stopped short of the request.
+            checkAbortSignal(internalConfig.abortSignal);
 
             result.warnings = parsingWarnings;
 

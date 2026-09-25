@@ -218,7 +218,7 @@ const CONFIG_TESTS = [
     {
         id: 'C8',
         name: 'OCR Load Timeout',
-        // Set timeout.workerLoad to 1 ms — far shorter than the time needed to download
+        // Set timeout.workerLoad to 1 ms, far shorter than the time needed to download
         // or load a Tesseract worker.  When OCR is enabled, this should cause the OCR
         // step to be treated as a non-fatal failure (logged via onWarning) while still
         // returning a valid AST with whatever text was extractable without OCR.
@@ -239,7 +239,7 @@ const CONFIG_TESTS = [
     {
         id: 'C9',
         name: 'OCR Recognition Timeout',
-        // Set timeout.recognition to 1 ms — OCR workers initialise normally, but the
+        // Set timeout.recognition to 1 ms: OCR workers initialise normally, but the
         // actual recognition call (worker.recognize) will race against a 1 ms timer and
         // lose.  Like C8, the parse should complete with a non-fatal OCR warning rather
         // than throwing or hanging.  The difference from C8 is that the worker pool IS
@@ -2210,7 +2210,7 @@ async function testAbortSignal(): Promise<FeatureTest[]> {
         try {
             await OfficeParser.parseOffice(filePath, { abortSignal: controller.signal });
 
-            // If we reach here, the parser did NOT honour the abort signal \u2014 that's a failure.
+            // If we reach here, the parser did NOT honour the abort signal, which is a failure.
             results.push({
                 category: 'Cancellation',
                 feature: 'Pre-aborted signal rejects immediately',
@@ -2237,67 +2237,59 @@ async function testAbortSignal(): Promise<FeatureTest[]> {
                     actual: `${err.name}: ${err.message}`,
                     details: isAbortError
                         ? 'parseOffice correctly rejected with AbortError'
-                        : `Expected AbortError but got ${err.name} \u2014 check checkAbortSignal() in errorUtils.ts`,
+                        : `Expected AbortError but got ${err.name}. Check checkAbortSignal() in errorUtils.ts`,
                     duration: Date.now() - startTime
                 }
             });
         }
     }
 
-    // ── Test 2: Signal aborted mid-flight ────────────────────────────────────
-    // Start parseOffice normally and then abort the controller after a short delay.
-    // This exercises the mid-parse abort checkpoints (inside loops, before OCR, etc.).
-    // We can only verify that the Promise eventually rejects; we cannot guarantee it
-    // was caught at a specific checkpoint.
+    // ── Test 2: Signal aborted while OCR runs ────────────────────────────────
+    // The abort lands the moment OCR starts listening to the signal, so it always arrives while an
+    // image is being recognized (a timer could lose the race to a fast parse and test nothing).
+    // Once the signal has fired the parse must reject with AbortError: resolving is a failure.
     {
         const startTime = Date.now();
         const controller = new AbortController();
+        const signal = controller.signal;
+        const listen = signal.addEventListener.bind(signal);
+        let ocrListened = false;
+        signal.addEventListener = ((type: string, listener: any, options?: any) => {
+            listen(type, listener, options);
+            if (type === 'abort' && !ocrListened) {
+                ocrListened = true;
+                queueMicrotask(() => controller.abort());
+            }
+        }) as typeof signal.addEventListener;
 
-        // Abort after a brief delay so the parser has started but (hopefully) not finished.
-        // 50 ms is generous \u2014 adjust if CI machines are too slow to enter the parser in time.
-        const abortTimer = setTimeout(() => controller.abort(), 50);
-
+        let outcome: { status: 'PASS' | 'FAIL'; actual: string; details: string };
         try {
-            // Use OCR + attachments so there are more async checkpoints to hit.
             await OfficeParser.parseOffice(filePath, {
-                abortSignal: controller.signal,
+                abortSignal: signal,
                 ocr: true,
+                extractAttachments: true,
                 ocrConfig: { timeout: { workerLoad: 0, recognition: 0 } }
             });
-
-            // If the parse resolved before the abort fired, that's acceptable \u2014 the file
-            // may be tiny enough to finish in < 50 ms.  Mark as WARN (not FAIL) so CI is green.
-            clearTimeout(abortTimer);
-            results.push({
-                category: 'Cancellation',
-                feature: 'In-flight signal aborts cleanly',
-                fileType: 'docx',
-                result: {
-                    status: 'WARN',
-                    expected: 'AbortError rejection',
-                    actual: 'Resolved before abort timer fired',
-                    details: 'Parse completed before the 50 ms abort delay \u2014 try a larger file to test mid-flight cancellation',
-                    duration: Date.now() - startTime
-                }
-            });
+            outcome = {
+                status: 'FAIL',
+                actual: `Resolved (signal aborted: ${signal.aborted})`,
+                details: ocrListened ? 'The parse resolved after its signal fired during OCR' : 'OCR never started, so nothing was aborted',
+            };
         } catch (err: any) {
-            clearTimeout(abortTimer);
-            const isAbortError = err.name === 'AbortError';
-            results.push({
-                category: 'Cancellation',
-                feature: 'In-flight signal aborts cleanly',
-                fileType: 'docx',
-                result: {
-                    status: isAbortError ? 'PASS' : 'FAIL',
-                    expected: 'AbortError (err.name === "AbortError")',
-                    actual: `${err.name}: ${err.message}`,
-                    details: isAbortError
-                        ? 'In-flight abort correctly rejected with AbortError'
-                        : `Expected AbortError but got ${err.name}`,
-                    duration: Date.now() - startTime
-                }
-            });
+            const ok = err.name === 'AbortError' && ocrListened;
+            outcome = {
+                status: ok ? 'PASS' : 'FAIL',
+                actual: `${err.name}: ${err.message}`,
+                details: ok ? 'An abort during OCR rejected with AbortError'
+                    : ocrListened ? `Expected AbortError but got ${err.name}` : 'OCR never started, so nothing was aborted',
+            };
         }
+        results.push({
+            category: 'Cancellation',
+            feature: 'In-flight signal aborts cleanly',
+            fileType: 'docx',
+            result: { ...outcome, expected: 'AbortError rejection', duration: Date.now() - startTime }
+        });
     }
 
     return results;
@@ -3942,10 +3934,9 @@ async function runAllTests() {
     }
 
     // 4. AbortSignal cancellation tests
-    // Runs two targeted scenarios: (a) pre-aborted signal — parseOffice should reject
-    // immediately without touching the ZIP or running any parsing; (b) in-flight abort —
-    // a controller aborted 50 ms into the parse should cause an AbortError rejection via
-    // the checkAbortSignal() checkpoints embedded in each parser.
+    // Runs two targeted scenarios: (a) a pre-aborted signal: parseOffice should reject
+    // immediately without touching the ZIP or running any parsing; (b) an abort that lands while
+    // OCR recognizes an image: the parse must reject with AbortError, never resolve.
     console.log('Running AbortSignal cancellation tests...');
     allResults.push(...await testAbortSignal());
 

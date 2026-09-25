@@ -6,7 +6,7 @@ import { createAttachment } from '../utils/imageUtils.js';
 import { imageFromPdf } from '../utils/textPdf.js';
 import { LATEX_SYMBOL_CHARACTERS, LISTINGS_LANGUAGE_NAMES } from '../utils/latexUtils.js';
 import { ADMONITION_COLOR } from '../utils/officeGenUtils.js';
-import { performOcr } from '../utils/ocrUtils.js';
+import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 
 // ── limits ──────────────────────────────────────────────────────────────────────────────────────
@@ -3704,10 +3704,9 @@ export const parseLatex = async (buffer: Buffer, config: FullOfficeParserConfig)
 
     if (config.ocr && attachments.length) {
         for (const att of attachments) {
-            checkAbortSignal(config.abortSignal);
             if (!att.mimeType.startsWith('image/')) continue;
-            try { att.ocrText = (await performOcr(Buffer.from(att.data, 'base64'), { ...config.ocrConfig })).trim(); }
-            catch (e) { logWarning(OfficeWarningType.OCR_FAILED, config, att.name, e); }
+            const ocrText = await ocrDuringParse(Buffer.from(att.data, 'base64'), config, att.name);
+            if (ocrText !== undefined) att.ocrText = ocrText;
         }
         const assign = (nodes: OfficeContentNode[]) => {
             for (const n of nodes) {

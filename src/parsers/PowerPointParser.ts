@@ -28,7 +28,7 @@ import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
-import { performOcr } from '../utils/ocrUtils.js';
+import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
@@ -929,14 +929,9 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             const attachment = createAttachment(media.path.split('/').pop() || 'image', media.content);
             attachments.push(attachment);
 
-            if (config.ocr) {
-                if (attachment.mimeType.startsWith('image/')) {
-                    try {
-                        attachment.ocrText = (await performOcr(media.content, { ...config.ocrConfig })).trim();
-                    } catch (e) {
-                        logWarning(OfficeWarningType.OCR_FAILED, config, attachment.name, e);
-                    }
-                }
+            if (config.ocr && attachment.mimeType.startsWith('image/')) {
+                const ocrText = await ocrDuringParse(media.content, config, attachment.name);
+                if (ocrText !== undefined) attachment.ocrText = ocrText;
             }
         }
 

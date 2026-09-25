@@ -14,6 +14,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type { OfficeContentNode, OfficeParserAST } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
+import { terminateOcr } from '../src/utils/ocrUtils';
 import { decodeBase64, hexColor, isHeaderRow, lengthToPt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw } from '../src/utils/officeGenUtils';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -2913,6 +2914,69 @@ async function testConfigConsistency(): Promise<void> {
     console.log('  Config consistency: All assertions passed ✓');
 }
 
+/**
+ * A controller whose signal aborts the moment OCR starts listening to it, so the abort always lands
+ * while an image is being recognized: a timer could lose the race to a fast parse.
+ */
+function abortWhenOcrListens(): { signal: AbortSignal; listened: () => boolean } {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const listen = signal.addEventListener.bind(signal);
+    let listened = false;
+    signal.addEventListener = ((type: string, listener: any, options?: any) => {
+        listen(type, listener, options);
+        if (type === 'abort' && !listened) {
+            listened = true;
+            queueMicrotask(() => controller.abort());
+        }
+    }) as typeof signal.addEventListener;
+    return { signal, listened: () => listened };
+}
+
+/**
+ * Cancellation: once a parse's signal has fired it rejects with AbortError and never resolves, in
+ * every format that runs OCR, even when the abort lands while an image is being recognized (which
+ * was taken for a failed recognition, so the parse resolved without the text). An OCR timeout is
+ * still a failed recognition: an OCR_FAILED warning, and the parse goes on.
+ */
+async function testCancellation(): Promise<void> {
+    const OCR_FORMATS = ['docx', 'pptx', 'xlsx', 'odt', 'odp', 'rtf', 'pdf', 'tex'];
+    const file = (ext: string) => path.join(__dirname, `files/test.${ext}`);
+    try {
+        for (const ext of OCR_FORMATS) {
+            const probe = abortWhenOcrListens();
+            let outcome = 'resolved';
+            await OfficeParser.parseOffice(file(ext), { abortSignal: probe.signal, ocr: true, extractAttachments: true, onWarning: () => {} } as any)
+                .catch((e: any) => { outcome = e.name; });
+            assert.ok(probe.listened(), `Cancellation ${ext}: OCR started, so the abort landed during recognition`);
+            assert.strictEqual(outcome, 'AbortError', `Cancellation ${ext}: an abort during OCR rejects with AbortError`);
+        }
+        // ocrConfig.abortSignal is the same cancellation, delivered to OCR.
+        const ocrOnly = abortWhenOcrListens();
+        let ocrOnlyOutcome = 'resolved';
+        await OfficeParser.parseOffice(file('docx'), { ocr: true, extractAttachments: true, ocrConfig: { abortSignal: ocrOnly.signal }, onWarning: () => {} } as any)
+            .catch((e: any) => { ocrOnlyOutcome = e.name; });
+        assert.strictEqual(ocrOnlyOutcome, 'AbortError', 'Cancellation: an abort through ocrConfig.abortSignal during OCR rejects with AbortError');
+        // A timer abort, wherever it lands, never leaves a parse resolved after it fired.
+        for (const ext of OCR_FORMATS) {
+            const controller = new AbortController();
+            setTimeout(() => controller.abort(), 5);
+            let resolvedAfterAbort = false;
+            await OfficeParser.parseOffice(file(ext), { abortSignal: controller.signal, ocr: true, extractAttachments: true, onWarning: () => {} } as any)
+                .then(() => { resolvedAfterAbort = controller.signal.aborted; }, () => {});
+            assert.ok(!resolvedAfterAbort, `Cancellation ${ext}: a parse never resolves after its signal fired`);
+        }
+        // An OCR timeout is a failed recognition, not a cancellation.
+        const codes: string[] = [];
+        const timedOut = await OfficeParser.parseOffice(file('docx'), { ocr: true, extractAttachments: true, ocrConfig: { timeout: { recognition: 1 } }, onWarning: (w: any) => codes.push(w.code) } as any);
+        assert.ok(codes.includes('OCR_FAILED') && timedOut.attachments.length > 0 && !timedOut.attachments.some(a => a.ocrText),
+            `Cancellation: an OCR timeout is OCR_FAILED and the parse resolves (${codes.join(', ')})`);
+    } finally {
+        await terminateOcr();
+    }
+    console.log('  Cancellation: All assertions passed ✓');
+}
+
 async function runTests(): Promise<void> {
     console.log('Starting exhaustive officeParser test suite...');
     let passed = 0;
@@ -2939,6 +3003,7 @@ async function runTests(): Promise<void> {
         ['OfficeGenUtils', testOfficeGenUtils],
         ['NativePdfEngine', testNativePdfEngine],
         ['Template', testTemplate],
+        ['Cancellation', testCancellation],
     ];
 
     for (const [name, fn] of tests) {

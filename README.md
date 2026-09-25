@@ -1107,8 +1107,8 @@ LaTeX is a programming language, so the parser is a bounded interpreter: macro e
 text (included files count toward it), include depth and nesting all have hard limits (past one,
 expansion stops with `LATEX_EXPANSION_LIMIT_REACHED`, and include cycles are cut), parsing time grows
 linearly with the document, nothing is executed, and zip reading obeys `decompressionLimits`. The
-parse itself runs synchronously, so an `abortSignal` is honoured before it starts and while the
-project zip is read, but a timer cannot interrupt a `.tex` being parsed (see
+parse itself runs synchronously, so an `abortSignal` is honoured before it starts, while the
+project zip is read and while OCR runs, but a timer cannot interrupt a `.tex` being parsed (see
 [Cancellation](#cancellation-with-abortsignal)); it is bounded instead. Constructs it does not interpret keep their text and are named once in
 `LATEX_CONSTRUCT_NOT_INTERPRETED`; drawings (TikZ) are omitted. Review comments survive a round trip:
 a `% Comment (Author, date): text` line, which is how the generator writes a comment, becomes a
@@ -1303,7 +1303,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `pdfParserConfig` | `PdfParserConfig` | see below | PDF-specific options ([table below](#pdfparserconfig)) |
 | `texParserConfig` | `TexParserConfig` | `{ today: '' }` | LaTeX options. `today` (`string`): what `\today` prints. `''` (default) prints the date of the parse, as LaTeX prints the date of the compile, in the document's language ("September 25, 2026" in English); set a fixed date, so that the same file parses the same way every day, or a placeholder of your own to find and replace later |
 | `onWarning` | `(issue: OfficeIssue) => void` | (none) | Callback for non-fatal parsing issues |
-| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel parsing (rejects with AbortError) |
+| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel parsing (rejects with AbortError). Once it fires the parse never resolves, even when it fires while OCR is recognizing an image |
 
 ---
 

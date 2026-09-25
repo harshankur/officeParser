@@ -40,10 +40,10 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeMimeType, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
+import { FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeMimeType, OfficeParserAST, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
-import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
-import { performOcr } from '../utils/ocrUtils.js';
+import { checkAbortSignal } from '../utils/errorUtils.js';
+import { ocrDuringParse } from '../utils/ocrUtils.js';
 
 /**
  * Represents an RTF group (content enclosed in braces).
@@ -1833,17 +1833,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Perform OCR if enabled
     if (config.ocr && config.extractAttachments) {
         for (const attachment of attachments) {
-            checkAbortSignal(config.abortSignal);
             if (attachment.mimeType.startsWith('image/')) {
-                try {
-                    // Convert base64 data back to Buffer for Tesseract.js
-                    // Passing base64 string directly would be interpreted as a file path,
-                    // causing ENAMETOOLONG error for large images.
-                    const imageBuffer = Buffer.from(attachment.data, 'base64');
-                    attachment.ocrText = (await performOcr(imageBuffer, { ...config.ocrConfig })).trim();
-                } catch (e) {
-                    logWarning(OfficeWarningType.OCR_FAILED, config, attachment.name, e);
-                }
+                // A Buffer, not the base64 string: Tesseract.js would take a string for a file path
+                // (ENAMETOOLONG for a large image).
+                const ocrText = await ocrDuringParse(Buffer.from(attachment.data, 'base64'), config, attachment.name);
+                if (ocrText !== undefined) attachment.ocrText = ocrText;
             }
         }
 
