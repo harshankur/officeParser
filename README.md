@@ -1549,7 +1549,7 @@ Pass as `texConfig` inside `GeneratorConfig`. The LaTeX generator turns any pars
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `documentClass` | `'auto' \| 'article' \| 'report' \| 'book' \| 'beamer'` | `'auto'` | `auto` writes a `beamer` presentation when the content is made of slides (PPTX/ODP) and an `article` otherwise. `report`/`book` map level-1 headings to `\chapter`. `beamer` for a non-presentation source starts a new frame at each level-1/2 heading |
-| `standalone` | `boolean` | `true` | `false` emits only the body, headed by a comment listing the packages the including document needs |
+| `standalone` | `boolean` | `true` | `false` emits only the body, headed by a comment listing the packages (and, for Greek, Cyrillic or CJK text, the font setup) the including document needs |
 | `bundle` | `boolean` | `false` | A `.tex` file cannot embed images. `true` returns a zip holding `main.tex` and every referenced image under `images/`, ready to compile or upload to Overleaf. With `false` the source still references `images/<name>`, and an `IMAGES_NOT_BUNDLED` warning names the files to place there (their bytes are in `ast.attachments`) |
 | `numberSections` | `boolean` | `false` | Number sections (`1`, `1.1`, ...). Off by default, matching office documents, whose headings are unnumbered |
 | `format` | `PaperFormat` | `'A4'` | Paper size, written as a `geometry` option. Same names as `pdfConfig.format`. Ignored by `beamer` |
