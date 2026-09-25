@@ -176,9 +176,10 @@ await officeParser.parseOffice(latexBuffer,    { fileType: 'tex' });</code></pre
         through <code>onWarning</code> / <code>ast.warnings</code>:</p>
     <ul>
         <li><strong><code>LATEX_FILE_NOT_FOUND</code></strong>: an <code>\input</code>/<code>\include</code>d file or an
-            <code>\includegraphics</code> image could not be read. A bare <code>.tex</code> contains neither, so parse the
-            project <code>.zip</code> instead (with <code>extractAttachments: true</code> for the image bytes). Images are
-            kept as references to their path (<code>metadata.url</code>).</li>
+            <code>\includegraphics</code> image could not be read. A <code>.tex</code> holds only the files it carries in
+            <code>filecontents</code> blocks, so parse the project <code>.zip</code> instead (with
+            <code>extractAttachments: true</code> for the image bytes). Images are kept as references to their path
+            (<code>metadata.url</code>).</li>
         <li><strong><code>LATEX_CONSTRUCT_NOT_INTERPRETED</code></strong>: the document uses commands or environments the
             parser does not interpret (a TikZ picture, for example). Text inside them is kept where there is any; drawings
             are omitted. The message names each construct once. It also names a conditional the parser could not decide
@@ -280,7 +281,11 @@ await officeParser.parseOffice(latexBuffer,    { fileType: 'tex' });</code></pre
             </tr>
             <tr>
                 <td>Images missing when compiling generated LaTeX (<code>IMAGES_NOT_BUNDLED</code>)</td>
-                <td>Generate with <code>texConfig: { bundle: true }</code> for a zip of the source and its images, or place the files where the message says</td>
+                <td>PNG and JPEG images travel inside the <code>.tex</code> unless <code>texConfig.embedImages</code> is <code>false</code>; for the files the message names, generate with <code>texConfig: { bundle: true }</code> for a zip of the source and its images, or place them where the message says</td>
+            </tr>
+            <tr>
+                <td>XeLaTeX or dvipdfmx cannot find an <code>image-&lt;hash&gt;.pdf</code> the generated LaTeX carries</td>
+                <td>The <code>.tex</code> writes its images beside itself when compiled; with <code>--output-directory</code> they land in that folder, where XeLaTeX and dvipdfmx do not look. Compile in the <code>.tex</code>'s folder, or generate with <code>texConfig: { bundle: true }</code></td>
             </tr>
             <tr>
                 <td>Images missing from generated EPUB</td>

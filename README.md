@@ -33,7 +33,7 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 - **Password-protected documents.** Encrypted PDF, OOXML (`docx`/`xlsx`/`pptx`) and ODF (`odt`/`ods`/`odp`/`odg`) open through one unified `password` / `onPassword` option, across parsing, conversion and templating.
 - **Native DOCX & ODT generation**, plus a **native PDF engine** (`pdfConfig.engine: 'native'`, built on `pdf-lib`) that produces real PDF bytes with no headless browser, in Node and the browser alike.
 - **Templates / mail-merge** via `OfficeTemplate.render` (fill a DOCX template's `{{placeholders}}`, single or batch), and **ODG parsing** (LibreOffice Draw).
-- **LaTeX in both directions** (8.1): `.tex` files and Overleaf project zips parse into the same AST as every other format (sections, lists, tables with merged cells, figures, math, footnotes, citations, cross-references, user macros, `beamer` slides), so LaTeX converts to DOCX, ODT, HTML, Markdown and the rest. And `to('tex')` turns any parsed document into LaTeX source that compiles unmodified with pdfLaTeX, XeLaTeX, LuaLaTeX, upLaTeX, pLaTeX and `latex` (the last three through dvipdfmx), presentations included (as `beamer` frames), with a zip bundle mode that packages the images. See [LaTeX Support](#latex-support).
+- **LaTeX in both directions** (8.1): `.tex` files and Overleaf project zips parse into the same AST as every other format (sections, lists, tables with merged cells, figures, math, footnotes, citations, cross-references, user macros, `beamer` slides), so LaTeX converts to DOCX, ODT, HTML, Markdown and the rest. And `to('tex')` turns any parsed document into LaTeX source that compiles unmodified with pdfLaTeX, XeLaTeX, LuaLaTeX, upLaTeX, pLaTeX and `latex` (the last three through dvipdfmx), presentations included (as `beamer` frames), carrying its images inside the one `.tex` file (or, in bundle mode, as files in a zip). See [LaTeX Support](#latex-support).
 
 See the [full changelog](CHANGELOG.md) for the complete list, including breaking changes.
 
@@ -143,7 +143,7 @@ npx officeparser my_document --fileType=docx --to=json
 - **Values:** Flags can be passed as `--flag=value` or `--flag value`.
 - **Booleans:** Bare flags imply `true` (e.g. `--ocr` is equivalent to `--ocr=true`). Negation flags start with `no-` (e.g. `--no-ocr` is equivalent to `--ocr=false`).
 - **Nested Objects:** You can pass nested properties directly using JSON dot-notation (e.g. `--ocrConfig.language=fra` or `--htmlConfig.containerWidth=900px`).
-- **Images:** the CLI parses directly, so add `--extractAttachments` for images to reach *any* output (HTML/EPUB embed them, DOCX/ODT/Markdown/native-PDF include them, and LaTeX with `--texConfig.bundle` packages them beside the `.tex`). Without it, an image node has no bytes and HTML/Markdown emit a name-only `<img src="image1.png">` reference. (The `OfficeConverter`/`convert()` API auto-enables this; the CLI does not.)
+- **Images:** the CLI parses directly, so add `--extractAttachments` for images to reach *any* output (HTML/EPUB embed them, DOCX/ODT/Markdown/native-PDF include them, and LaTeX carries PNG and JPEG images inside the `.tex`, or with `--texConfig.bundle` packages them beside it). Without it, an image node has no bytes and HTML/Markdown emit a name-only `<img src="image1.png">` reference. (The `OfficeConverter`/`convert()` API auto-enables this; the CLI does not.)
 
 ### CLI Options
 
@@ -187,6 +187,7 @@ npx officeparser my_document --fileType=docx --to=json
 | `--textConfig.pageSeparator` | string | `\n` | Separator written between pages in text output |
 | `--pdfConfig.engine` | `html\|native` | `html` | PDF engine: Puppeteer (`html`) or pdf-lib (`native`, no browser) |
 | `--texConfig.bundle` | boolean | `false` | LaTeX: write a zip of `main.tex` plus its `images/` instead of the `.tex` alone |
+| `--texConfig.embedImages` | boolean | `true` | LaTeX: `false` refers to `images/` files instead of carrying PNG and JPEG images inside the `.tex` |
 | `--texConfig.documentClass` | `auto\|article\|report\|book\|beamer` | `auto` | LaTeX document class (`auto` = `beamer` for presentations, `article` otherwise) |
 | `--texConfig.standalone` | boolean | `true` | LaTeX: `false` writes the body only, for pasting into an existing document |
 | ~~`--format`~~ | `json\|text\|md\|html\|csv\|rtf\|pdf\|docx\|odt\|tex\|epub\|chunks` | `json` | **Deprecated.** Use `--to` |
@@ -717,7 +718,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `OCR_FAILED` | parse | OCR ran but failed for an image (see `details`). |
 | `LATEX_CONSTRUCT_NOT_INTERPRETED` | parse | The LaTeX input used commands or environments the parser does not interpret (the message names them). Text inside them was kept; drawings such as TikZ pictures were omitted. |
 | `LATEX_EXPANSION_LIMIT_REACHED` | parse | A LaTeX document hit a bound on macro expansion, file inclusion or nesting depth (the guard against expansion bombs, include cycles and runaway nesting); macros or files past it were not expanded, and content nested past it is kept as plain text. |
-| `LATEX_FILE_NOT_FOUND` | parse | The LaTeX input includes files or images the parser could not read (a bare `.tex` carries none). Parse the project as a `.zip` to include them; images are kept as path references. |
+| `LATEX_FILE_NOT_FOUND` | parse | The LaTeX input includes files or images the parser could not read (a `.tex` holds only the files it carries in `filecontents` blocks). Parse the project as a `.zip` to include them; images are kept as path references. |
 | `FILE_TYPE_DETECTION_FAILED` / `BUFFER_TYPE_MISMATCH` | parse | Type could not be sniffed / disagreed with the `fileType` hint. |
 | `PASSWORD_REQUIRED` / `PASSWORD_INCORRECT` | parse | Encrypted input; supply `password`/`onPassword` (these also throw when parsing cannot continue). |
 | `UNRECOGNIZED_CONFIG_OPTION` | config | A config key this version does not know (often a typo or a removed/renamed option); it had no effect. Raised for parser and generator configs, and for a `convert()` option placed at the top level instead of under `parseConfig`/`generatorConfig` (the message says where it belongs). |
@@ -725,7 +726,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `CONTENT_NOT_REPRESENTABLE` | generate | A node type has no faithful form in the target format and was downgraded or omitted (e.g. math/embeds in DOCX/ODT, a table-less document to CSV). |
 | `METADATA_NOT_REPRESENTABLE` | generate | A metadata field could not be represented in the target format. |
 | `IMAGE_NOT_INLINED` | generate | An image over `maxInlineImageBytes` was referenced by name instead of inlined (Markdown / fragment HTML). |
-| `IMAGES_NOT_BUNDLED` | generate | LaTeX output references image files that a `.tex` cannot embed; the message names them. Ship them alongside, or set `texConfig.bundle: true`. It also names images the source referred to only by a relative path, with no image data (a `.tex` without its project, an HTML page's `<img src="pics/a.png">`): supply those at that path yourself, since not even a bundle can contain them. |
+| `IMAGES_NOT_BUNDLED` | generate | LaTeX output references image files the `.tex` does not carry (with `texConfig.embedImages: false`, or an image other than a readable PNG or JPEG); the message names them. Ship them alongside, or set `texConfig.bundle: true`. It also names images the source referred to only by a relative path, with no image data (a `.tex` without its project, an HTML page's `<img src="pics/a.png">`): supply those at that path yourself, since not even a bundle can contain them. |
 | `MATH_WRITTEN_AS_TEXT` | generate | A math expression used an unsafe LaTeX command (file access, shell, redefinition) or was malformed, so LaTeX output shows it as literal text instead of typesetting it. |
 | `PDF_GENERATION_FAILED` | generate | PDF generation failed (e.g. Puppeteer missing for `engine: 'html'`). |
 | `INVALID_STYLE_MAPPING` / `INVALID_STYLE_MAP_TAG` | generate | A `styleMap` entry/tag was invalid and ignored. |
@@ -1077,7 +1078,8 @@ const project = await OfficeParser.parseOffice('overleaf-project.zip', { extract
 | `\textbf`, `\emph`, `\underline`, `\sout`, `\texttt`, `\textsc`, `\textcolor`, `\hl`, `\large`, `{\bfseries ...}`, accents, ligatures | formatted text runs |
 | `itemize`, `enumerate` (nested, `\setcounter`), `description`, `\item[$\square$]` | lists, definition lists, task items |
 | `tabular`, `tabularx`, `longtable`, `\multicolumn`, `\multirow`, `\cellcolor`, booktabs | `table` with `colSpan`/`rowSpan`, alignment and cell colours |
-| `figure`/`table` floats, `\caption`, `\includegraphics` | images (bytes from a project zip) and captions |
+| `figure`/`table` floats, `\caption`, `\includegraphics` | images (bytes from a project zip or a `filecontents` block; a PDF that is only a picture, as the generator carries images, becomes that JPEG or PNG) and captions |
+| `filecontents`, `filecontents*` | the file it writes, as compiling does (a file already there is kept unless `overwrite`), for `\input` and `\includegraphics` to read |
 | `$...$`, `\[...\]`, `equation`, `align`, `gather` | math, as LaTeX, with your macros expanded |
 | `\footnote`, `\endnote` | `note` nodes |
 | `\href`, `\url`, `\ref`, `\eqref`, `\nameref`, `\hyperref` | links; references resolve to section, table, figure and equation numbers |
@@ -1556,7 +1558,8 @@ Pass as `texConfig` inside `GeneratorConfig`. The LaTeX generator turns any pars
 |--------|------|---------|-------------|
 | `documentClass` | `'auto' \| 'article' \| 'report' \| 'book' \| 'beamer'` | `'auto'` | `auto` writes a `beamer` presentation when the content is made of slides (PPTX/ODP) and an `article` otherwise. `report`/`book` map level-1 headings to `\chapter`. `beamer` for a non-presentation source starts a new frame at each level-1/2 heading |
 | `standalone` | `boolean` | `true` | `false` emits only the body, headed by a comment listing the packages (and, for Greek, Cyrillic or CJK text, the font setup) the including document needs |
-| `bundle` | `boolean` | `false` | A `.tex` file cannot embed images. `true` returns a zip holding `main.tex` and every referenced image under `images/`, ready to compile or upload to Overleaf. With `false` the source still references `images/<name>`, and an `IMAGES_NOT_BUNDLED` warning names the files to place there (their bytes are in `ast.attachments`) |
+| `bundle` | `boolean` | `false` | `true` returns a zip holding `main.tex` and every image as a file under `images/`, ready to compile or upload to Overleaf. With `false` the result is the `.tex` alone, carrying its PNG and JPEG images inside it (see `embedImages`) |
+| `embedImages` | `boolean` | `true` | Carry each PNG and JPEG image inside the `.tex`, so the one file compiles with its pictures (see **Images inside the `.tex`** below). `false` refers to `images/<name>` files instead, and an `IMAGES_NOT_BUNDLED` warning names the files to place there (their bytes are in `ast.attachments`). Ignored with `bundle` |
 | `numberSections` | `boolean` | `false` | Number sections (`1`, `1.1`, ...). Off by default, matching office documents, whose headings are unnumbered |
 | `format` | `PaperFormat` | `'A4'` | Paper size, written as a `geometry` option. Same names as `pdfConfig.format`. Ignored by `beamer` |
 | `landscape` | `boolean` | `false` | Landscape orientation. Ignored by `beamer` |
@@ -1566,11 +1569,11 @@ Pass as `texConfig` inside `GeneratorConfig`. The LaTeX generator turns any pars
 import { OfficeConverter } from 'officeparser';
 import { writeFileSync } from 'fs';
 
-// Source only: images are referenced as images/<name>
+// One .tex file that carries its images
 const { value: tex } = await OfficeConverter.convert('paper.docx', 'tex');
 writeFileSync('paper.tex', tex as string);
 
-// Self-contained: main.tex + images/ in one zip
+// The images as separate files: main.tex + images/ in one zip
 const { value: zip } = await OfficeConverter.convert('paper.docx', 'tex', { generatorConfig: { texConfig: { bundle: true } } });
 writeFileSync('paper.zip', zip as Uint8Array);
 ```
@@ -1586,13 +1589,15 @@ writeFileSync('paper.zip', zip as Uint8Array);
 | Links, citations | `\href` (scheme-checked), `\hyperref` for internal links whose target exists, `\cite{key}` |
 | Notes, comments | `\footnote` (deferred to `\footnotetext` inside a `tabular`), `\endnote` (`endnotes` package), review comments as LaTeX `%` comments, and a hidden `<!-- -->` note as `% <!-- ... -->` lines |
 | Code, math | `lstlisting` for a language `listings` knows, `verbatim` otherwise; math as live LaTeX after a safety check |
-| Images, charts, embeds | `\includegraphics` at natural size, bounded to the line and page; an image the source referred to only by a plain relative path keeps that path (`\includegraphics{figures/diagram}`; spaces are fine, and a URL's `%20`-style escapes are decoded to the file name), while a web image, or a path that is absolute or leaves the document's folder, becomes a link, since TeX cannot fetch the one and must not read the other; charts as a data table; embeds as a link |
+| Images, charts, embeds | `\includegraphics` at natural size, bounded to the line and page, of a PNG or JPEG carried inside the `.tex` (below) or, in a bundle, a file under `images/`; an image the source referred to only by a plain relative path keeps that path (`\includegraphics{figures/diagram}`; spaces are fine, and a URL's `%20`-style escapes are decoded to the file name), while a web image, or a path that is absolute or leaves the document's folder, becomes a link, since TeX cannot fetch the one and must not read the other; charts as a data table; embeds as a link |
 | Slides | `beamer` frames (the slide's first heading is the frame title, speaker notes become `\note`, long slides continue on another frame) |
 | Page header/footer | `fancyhdr` |
 | Title block | a heading styled `Title` (a Word title, or a parsed `\maketitle`) and the `Author`/`Date` lines right after it: `\maketitle` where it stands (a `\titlepage` frame in beamer), printing only those lines |
 | Metadata | the PDF metadata via `\hypersetup` (custom properties included); `\title`/`\author`/`\date` from the title block when there is one, else from the metadata |
 
 **Safety.** LaTeX is a programming language, so every piece of document text is escaped, URLs are scheme-checked (the same allowlist as the DOCX/ODT generators) and percent-encoded, image paths are reduced to a safe file name inside `images/`, and a code block that contains its own end marker is not put in a verbatim environment. Math is the one place document content is emitted as live LaTeX; an expression that uses a command able to read or write files, run programs, or redefine commands (`\input`, `\write18`, `\openin`, `\catcode`, `\def`, ...), or that is structurally unbalanced, is written as literal text instead, with a `MATH_WRITTEN_AS_TEXT` warning. Compile untrusted output without `--shell-escape`, as you would any LaTeX you did not write.
+
+**Images inside the `.tex`.** LaTeX reads images only from files, and a `.tex` can write a text file while it compiles (the kernel's `filecontents*` environment), so that is how a lone `.tex` carries its pictures: each PNG or JPEG becomes a block holding the image as a small PDF whose every byte is printable ASCII (the image keeps its own compression behind an ASCII85 layer, about a quarter larger), named after a hash of its content. Compiling writes that file beside the `.tex`, keeping a file of that name already there, which lets you replace a picture, and a plain `\includegraphics` reads it with every engine, with no shell escape or Ghostscript needed. Compile in the `.tex`'s folder, as every editor and Overleaf do: with `--output-directory`, pdfLaTeX and LuaLaTeX still find the files, but XeLaTeX and dvipdfmx look beside the `.tex`, so use `bundle` there. Other image formats (GIF, BMP, TIFF, WebP, SVG, EMF) cannot be carried or drawn; they appear as a labelled box. The LaTeX parser reads these blocks back, so the images return as the original JPEG, or a PNG with the same pixels.
 
 **Characters.** A character the default fonts lack (check marks, arrows, many math symbols, dingbats, unusual spaces) gets a fallback under every engine. A script pdfLaTeX cannot typeset at all (CJK, Cyrillic, emoji, ...) is shown there as a `[U+XXXX]` marker (Greek as math letters). XeLaTeX and LuaLaTeX set Greek, Cyrillic and CJK text in fonts TeX Live ships, where they are installed; for emoji or another script, add a `\setmainfont` that covers it. The table under **Engines** in [LaTeX Support](#latex-support) lists what each engine shows.
 

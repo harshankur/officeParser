@@ -3063,6 +3063,7 @@
             tex: [
                 { id: 'cfg_tex_documentClass', label: 'Class', type: 'inline-select', options: ['auto', 'article', 'report', 'book', 'beamer'], names: ['Auto', 'Article', 'Report', 'Book', 'Beamer'], default: 'auto' },
                 { id: 'cfg_tex_standalone', label: 'Standalone', type: 'inline-switch', default: true },
+                { id: 'cfg_tex_embedImages', label: 'Images inside', type: 'inline-switch', default: true },
                 { id: 'cfg_tex_numberSections', label: 'Numbered', type: 'inline-switch', default: false }
             ],
             text: [
@@ -4968,12 +4969,9 @@
             // --- Sample Document Picker ---
             const samplePickerGrid = document.getElementById('sample-picker-grid');
             if (samplePickerGrid) {
-                // LaTeX is offered as a project zip (like an Overleaf download): a lone .tex cannot carry
-                // the image it shows, so the sample would otherwise preview a broken image.
-                const sampleFiles = { tex: 'latex-project.zip' };
                 const sampleFormats = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'];
                 sampleFormats.forEach(fmt => {
-                    const sampleName = sampleFiles[fmt] || `test.${fmt}`;
+                    const sampleName = `test.${fmt}`;
                     const btn = document.createElement('button');
                     btn.className = 'sample-btn';
                     btn.type = 'button';
@@ -5879,6 +5877,7 @@
                 return {
                     documentClass: document.getElementById('cfg_tex_documentClass').value,
                     standalone: document.getElementById('cfg_tex_standalone').checked,
+                    embedImages: document.getElementById('cfg_tex_embedImages').checked,
                     numberSections: document.getElementById('cfg_tex_numberSections').checked
                 };
             }
@@ -6065,9 +6064,9 @@
                     // shows how faithfully the format round-trips.
                     if (window.viewerStates[format] === 'preview') {
                         try {
-                            // A .tex file cannot carry images, so the LaTeX preview re-parses the bundle (main.tex
-                            // plus images/), the way the document compiles.
-                            const source = format === 'tex'
+                            // The LaTeX preview parses back the .tex itself when it carries its images, and
+                            // otherwise the bundle (main.tex plus images/), the way the document compiles.
+                            const source = format === 'tex' && !readTexPanelConfig().embedImages
                                 ? (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'tex', {
                                     ...getGeneratorConfig(),
                                     ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,

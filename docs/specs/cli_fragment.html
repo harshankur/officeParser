@@ -259,6 +259,12 @@
                 <td>LaTeX: write a zip of <code>main.tex</code> plus its <code>images/</code> instead of the <code>.tex</code> alone.</td>
             </tr>
             <tr>
+                <td><code>--texConfig.embedImages</code></td>
+                <td>boolean</td>
+                <td><code>true</code></td>
+                <td>LaTeX: <code>false</code> refers to <code>images/</code> files instead of carrying PNG and JPEG images inside the <code>.tex</code>.</td>
+            </tr>
+            <tr>
                 <td><code>--texConfig.documentClass</code></td>
                 <td><code>auto | article | report | book | beamer</code></td>
                 <td><code>auto</code></td>
@@ -326,9 +332,10 @@
 
 # An Overleaf "Download source" zip also brings its \input files and images
 npx officeparser overleaf-project.zip --extractAttachments --to docx --output paper.docx</code></pre>
-    <p>A bare <code>.tex</code> cannot contain the files it includes or the images it shows: those are reported
-        with the <code>LATEX_FILE_NOT_FOUND</code> warning and images are kept as references to their path. Parse the
-        project <code>.zip</code> to include them.</p>
+    <p>A <code>.tex</code> holds only the files it carries in <code>filecontents</code> blocks (as officeParser's
+        LaTeX output carries its images). Other files it includes or images it shows are reported with the
+        <code>LATEX_FILE_NOT_FOUND</code> warning, and images are kept as references to their path. Parse the project
+        <code>.zip</code> to include them.</p>
 
     <h3>Convert DOCX to EPUB</h3>
     <pre><code>npx officeparser book.docx --extractAttachments --to epub --output book.epub</code></pre>

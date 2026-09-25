@@ -657,13 +657,29 @@ await ast.to('md', {
                 <td><code>bundle</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td>A <code>.tex</code> file cannot embed images. <code>true</code> returns a zip of
-                    <code>main.tex</code> plus every referenced image under <code>images/</code>, ready to compile or
-                    upload to Overleaf. With <code>false</code> the source still references <code>images/&lt;name&gt;</code>
-                    and the <code>IMAGES_NOT_BUNDLED</code> warning names the files to place there. An image the source
-                    referred to only by a plain relative path, with no image data (a <code>.tex</code> parsed without its
-                    project), keeps that path in <code>\includegraphics</code>; the warning names it in either mode, since
-                    there is nothing to bundle.</td>
+                <td><code>true</code> returns a zip of <code>main.tex</code> plus every image as a file under
+                    <code>images/</code>, ready to compile or upload to Overleaf. With <code>false</code> the result is
+                    the <code>.tex</code> alone, carrying its PNG and JPEG images inside it (see <code>embedImages</code>).
+                    An image the source referred to only by a plain relative path, with no image data (a <code>.tex</code>
+                    parsed without its project), keeps that path in <code>\includegraphics</code>; the
+                    <code>IMAGES_NOT_BUNDLED</code> warning names it in either mode, since there is nothing to carry or
+                    bundle.</td>
+            </tr>
+            <tr>
+                <td><code>embedImages</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Carry each PNG and JPEG image inside the <code>.tex</code>, so the one file compiles with its
+                    pictures. LaTeX reads images only from files, so each becomes a <code>filecontents*</code> block
+                    holding it as a small all-ASCII PDF (about a quarter larger than the image), named after a hash of
+                    its content; compiling writes that file beside the <code>.tex</code> (keeping a file of that name
+                    already there, so a picture can be replaced) and <code>\includegraphics</code> reads it with every
+                    engine, with no shell escape or Ghostscript. Compile in the <code>.tex</code>'s folder: with
+                    <code>--output-directory</code>, pdfLaTeX and LuaLaTeX still find the files, but XeLaTeX and dvipdfmx
+                    look beside the <code>.tex</code>, so use <code>bundle</code> there. Other image formats cannot be
+                    drawn by LaTeX and appear as a labelled box. <code>false</code> refers to
+                    <code>images/&lt;name&gt;</code> files instead, and the <code>IMAGES_NOT_BUNDLED</code> warning names
+                    the files to place there. Ignored with <code>bundle</code>.</td>
             </tr>
             <tr>
                 <td><code>numberSections</code></td>
