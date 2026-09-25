@@ -2379,6 +2379,14 @@ See \ref{thm:f}, \ref{lem:a}, \ref{def:n}.
     assert.deepStrictEqual((thmParas[0].metadata as any).anchorIds, ['thm:f'], 'TEX parse: a theorem label anchors the theorem');
     const llncs = await texOf(String.raw`\documentclass{llncs}\begin{document}\begin{theorem}T\end{theorem}\begin{lemma}L\end{lemma}\begin{theorem}T2\end{theorem}\keywords{First \and Second}\end{document}`);
     assert.deepStrictEqual([llncs.paras, llncs.ast.metadata.keywords], [['Theorem 1. T', 'Lemma 1. L', 'Theorem 2. T2', 'Keywords: First, Second'], 'First, Second'], 'TEX parse: theorem environments a class provides, and \\keywords');
+    const unseen = await texOf(String.raw`\documentclass{exam}\usepackage{mythms}\begin{document}\begin{theorem}T\end{theorem}\begin{solution}S\end{solution}\end{document}`);
+    assert.deepStrictEqual(unseen.paras, ['Theorem. T', 'S'], 'TEX parse: a theorem defined out of sight is headed but unnumbered; a class\'s own solution environment is not a theorem');
+    const llncsAbs = await texOf(String.raw`\documentclass{llncs}\begin{document}\begin{abstract}The abstract.\keywords{A \and B}\end{abstract}\end{document}`);
+    assert.deepStrictEqual([llncsAbs.ast.metadata.description, llncsAbs.ast.metadata.keywords, llncsAbs.paras], ['The abstract.', 'A, B', ['The abstract.', 'Keywords: A, B']], 'TEX parse: keywords inside the abstract are not part of the description');
+    const mailInAuthor = await texOf(String.raw`\documentclass{article}\title{T}\author{Ann\thanks{x} \email{ann@x.org}}\begin{document}\maketitle\end{document}`);
+    assert.deepStrictEqual([mailInAuthor.ast.metadata.author, (mailInAuthor.ast.metadata.nativeProperties as any).emails], ['Ann', ['ann@x.org']], 'TEX parse: an \\email inside \\author is recorded once, and is not part of the name');
+    const cjkEnv = await texOf(String.raw`\documentclass{article}\usepackage{CJKutf8}\begin{document}\begin{CJK*}{UTF8}{gbsn}中文\end{CJK*}\end{document}`);
+    assert.deepStrictEqual([cjkEnv.paras, cjkEnv.warnings.length], [['中文'], 0], 'TEX parse: the CJK package\'s environment keeps only its text');
     const thmDeck = await texOf(String.raw`\documentclass{beamer}\begin{document}\begin{frame}{F}\begin{theorem}[Name]Body\end{theorem}\end{frame}\end{document}`);
     assert.deepStrictEqual((thmDeck.ast.content[0].children![1].metadata as any), { admonitionType: 'note', title: 'Theorem (Name)' }, 'TEX beamer: a theorem is a titled block');
 

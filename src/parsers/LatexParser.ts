@@ -122,7 +122,7 @@ const TRANSPARENT_ENVS: Record<string, string> = {
     large: '', Large: '', sloppypar: '', frontmatter: '', mainmatter: '', appendices: '', subequations: '',
     samepage: '', onlyenv: 'O', overprint: 'o', uncoverenv: 'O',
     visibleenv: 'O', actionenv: 'O', titlepage: '', subfigure: 'om', subtable: 'om', framed: '', mdframed: 'o', tcolorbox: 'o',
-    hyphenrules: 'm',
+    hyphenrules: 'm', CJK: 'mm', 'CJK*': 'mm', example: 'o', remark: 'o',
 };
 
 /**
@@ -156,7 +156,8 @@ const CHAPTER_CLASSES = new Set(['book', 'report', 'memoir', 'scrbook', 'scrrepr
 /** Theorem-like environments' styles in the classes that provide them without `\newtheorem`. */
 const DEFAULT_THEOREM_STYLES: Record<string, string> = {
     definition: 'definition', example: 'definition', exercise: 'definition', problem: 'definition', question: 'definition',
-    solution: 'definition', remark: 'remark', claim: 'remark',
+    solution: 'definition', remark: 'remark', claim: 'remark', note: 'remark', case: 'remark', fact: 'plain',
+    definitions: 'definition', examples: 'definition',
 };
 
 /**
@@ -179,15 +180,23 @@ const LANGUAGE_CODES: Record<string, string> = {
     japanese: 'ja', chinese: 'zh', korean: 'ko', esperanto: 'eo', albanian: 'sq', armenian: 'hy', georgian: 'ka',
 };
 
-/**
- * Theorem-like environments a document class may provide without `\newtheorem` (llncs, svjour and
- * others): each is read as a numbered theorem with its own counter.
- */
+/** Titles of the theorem-like environments classes provide without `\newtheorem`. */
 const DEFAULT_THEOREM_TITLES: Record<string, string> = {
     theorem: 'Theorem', lemma: 'Lemma', corollary: 'Corollary', proposition: 'Proposition', definition: 'Definition',
     example: 'Example', remark: 'Remark', conjecture: 'Conjecture', claim: 'Claim', exercise: 'Exercise',
-    problem: 'Problem', property: 'Property', question: 'Question', solution: 'Solution',
+    problem: 'Problem', property: 'Property', question: 'Question', solution: 'Solution', note: 'Note', case: 'Case',
+    fact: 'Fact', definitions: 'Definitions', examples: 'Examples',
 };
+
+/** Springer's classes, which define every theorem-like environment above, each numbered with its own counter. */
+const SPRINGER_CLASSES = new Set(['llncs', 'svjour', 'svjour2', 'svjour3', 'svmono', 'svmult', 'svproc']);
+/** The theorem-like environments beamer defines (as blocks, unnumbered). */
+const BEAMER_THEOREMS = new Set(['theorem', 'corollary', 'fact', 'lemma', 'problem', 'solution', 'definition', 'definitions', 'example', 'examples']);
+/**
+ * Names that are theorem-like in any document, whose definition may be out of sight (in a package or
+ * a class the parser does not read): headed by their title, unnumbered, since their numbering is unknown.
+ */
+const GENERIC_THEOREMS = new Set(['theorem', 'lemma', 'corollary', 'proposition', 'definition', 'conjecture']);
 
 /** What an optional `xparse` argument that was not given holds (and prints), as in LaTeX. */
 const NO_VALUE = '-NoValue-';
@@ -227,7 +236,9 @@ const IGNORED_COMMANDS: Record<string, string> = {
     columnwidth: '', paperwidth: '', textheight: '', paperheight: '', baselineskip: '', parindent_: '', tabcolsep: '',
     arraybackslash: '', arrayrulewidth: '', dimexpr: '', fboxsep: '', setbeamersize: 'm', logo: 'm', institute: 'om',
     documentstyle: 'om', NeedsTeXFormat: 'mo', ProvidesPackage: 'mo', ProvidesClass: 'mo', ProvidesFile: 'mo',
-    PassOptionsToPackage: 'mm', PassOptionsToClass: 'mm',
+    PassOptionsToPackage: 'mm', PassOptionsToClass: 'mm', setCJKmainfont: 'omo', setCJKsansfont: 'omo', setCJKmonofont: 'omo',
+    setCJKfamilyfont: 'momo', setCJKfallbackfamilyfont: 'mom', xeCJKsetup: 'm', xeCJKDeclareCharClass: 'mm', setmainjfont: 'omo',
+    setsansjfont: 'omo', setmonojfont: 'omo', ltjsetparameter: 'm', babelfont: 'omom', CJKfamily: 'm',
     setotherlanguage: 'om', setotherlanguages: 'm', newtheoremstyle: 'mmmmmmmmm', IEEEpeerreviewmaketitle: '',
     IEEEoverridecommandlockouts: '', IEEEdisplaynontitleabstractindextext: '', IEEEaftertitletext: 'm', ExplSyntaxOff: '',
     BooleanTrue: '', BooleanFalse: '', swapnumbers: '',
@@ -758,6 +769,8 @@ class LatexReader {
     private theoremStyle = 'plain';
     /** Theorem counters: the last number given, the counter numbered within, and its number then. */
     private theoremCounters = new Map<string, { value: number; within?: string; prefix: string }>();
+    /** The blocks a keywords command or environment printed, which an abstract's description leaves out. */
+    private keywordBlocks = new WeakSet<OfficeContentNode>();
     /** Whether the current proof's end-of-proof mark was placed (`\qedhere`). */
     private qedPlaced = false;
     /** Languages babel loads (its options) and the one polyglossia or `\babelprovide` makes the main one. */
@@ -2118,7 +2131,8 @@ class LatexReader {
                 sc.readRawOptional();
                 const text = this.plainText(sc.readRawGroup());
                 const key = name === 'email' ? 'emails' : name === 'urladdr' ? 'urls' : 'addresses';
-                if (text) (this.native[key] ??= []).push(text);
+                // An `\email` inside `\author` is read again when the title block is typeset: record it once.
+                if (text && !(this.native[key] ??= []).includes(text)) this.native[key].push(text);
                 return;
             }
             case 'subjclass': {
@@ -2639,7 +2653,8 @@ class LatexReader {
         if (env === 'quote' || env === 'quotation' || env === 'verse') { this.quote(sc, flow, env); return; }
         if (env === 'abstract') {
             const inner = this.subFlow(sc, env, flow, f => { f.paragraphStyle = 'Abstract'; });
-            const text = inner.map(b => b.text ?? '').join('\n').trim();
+            // Keywords set inside the abstract (llncs) are the document's keywords, not part of its description.
+            const text = inner.filter(b => !this.keywordBlocks.has(b)).map(b => b.text ?? '').join('\n').trim();
             if (text && !this.metadata.description) this.metadata.description = text;
             this.endParagraph(flow);
             for (const b of inner) this.pushBlock(flow, b);
@@ -2721,15 +2736,19 @@ class LatexReader {
     }
 
     /**
-     * The theorem-like environment `env` is, if it is one: defined by the document, or one the
-     * classes that provide them without `\newtheorem` (llncs, svjour, beamer) name so.
+     * The theorem-like environment `env` is, if it is one: defined by the document, provided by its
+     * class (Springer's classes number each with its own counter; beamer's are blocks), or a name that
+     * is theorem-like in any document (a theorem defined in a package out of sight), which is headed
+     * but unnumbered, since its numbering is unknown.
      */
     private theoremDef(env: string): TheoremDef | undefined {
         const def = this.theorems.get(env);
         if (def || !own(DEFAULT_THEOREM_TITLES, env)) return def;
-        const provided: TheoremDef = { title: DEFAULT_THEOREM_TITLES[env], style: own(DEFAULT_THEOREM_STYLES, env) ? DEFAULT_THEOREM_STYLES[env] : 'plain', counter: env };
+        const springer = SPRINGER_CLASSES.has(this.native.documentClass);
+        if (!(springer || (this.beamer ? BEAMER_THEOREMS.has(env) : GENERIC_THEOREMS.has(env)))) return undefined;
+        const provided: TheoremDef = { title: DEFAULT_THEOREM_TITLES[env], style: own(DEFAULT_THEOREM_STYLES, env) ? DEFAULT_THEOREM_STYLES[env] : 'plain', counter: springer ? env : undefined };
         this.theorems.set(env, provided);
-        if (!this.theoremCounters.has(env)) this.theoremCounters.set(env, { value: 0, prefix: '' });
+        if (springer && !this.theoremCounters.has(env)) this.theoremCounters.set(env, { value: 0, prefix: '' });
         return provided;
     }
 
@@ -2838,11 +2857,16 @@ class LatexReader {
             ? { type: 'text', text: 'Index Terms: ', formatting: { bold: true, italic: true } }
             : { type: 'text', text: 'Keywords: ', formatting: { bold: true } };
         const body = this.parseBlocksOf(source, undefined, false);
+        for (const b of body) this.keywordBlocks.add(b);
         const first = body[0];
         if (first?.type === 'paragraph') {
             first.children = [label, ...(first.children ?? [])];
             first.text = textOf(first.children);
-        } else body.unshift({ type: 'paragraph', text: label.text, children: [label], metadata: {} as ParagraphMetadata });
+        } else {
+            const head: OfficeContentNode = { type: 'paragraph', text: label.text, children: [label], metadata: {} as ParagraphMetadata };
+            this.keywordBlocks.add(head);
+            body.unshift(head);
+        }
         for (const b of body) this.pushBlock(flow, b);
     }
 
