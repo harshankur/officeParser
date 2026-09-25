@@ -7,6 +7,7 @@
 import { OfficeParser } from '../src/OfficeParser';
 import { OfficeGenerator } from '../src/OfficeGenerator';
 import { OfficeTemplate } from '../src/OfficeTemplate';
+import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate';
 import * as assert from 'assert';
 import * as path from 'path';
@@ -2103,6 +2104,15 @@ async function testLatexGeneration(): Promise<void> {
     assert.ok(mixedTex.includes('jacharrange={-2, -3, -9}') && mixedTex.includes('\\xeCJKDeclareCharClass{Default}'), 'TEX scripts: mostly Latin text keeps quotes and dashes in the Latin font');
     assert.ok(/\\IfFontExistsTF\{FandolSong-Regular\.otf\}\{\\IfFontExistsTF\{HaranoAjiMincho-Regular\.otf\}\{%\n {2}\\ifXeTeX\n {4}\\IfFileExists\{xeCJK\.sty\}/.test(zhTex) && zhTex.includes('\\IfFileExists{luatexja-fontspec.sty}'), 'TEX scripts: the CJK setup is guarded by its fonts and packages');
     assert.ok(greekTex.includes('\\IfFontExistsTF{cmunrm.otf}{%') && !greekTex.includes('xeCJK'), 'TEX scripts: Greek and Cyrillic get Computer Modern Unicode');
+    // An image the source embedded as a data: URI carries its bytes: written out like an extracted image.
+    const dataPng = fs.readFileSync(path.join(__dirname, '..', 'docs', 'favicon.png')).toString('base64');
+    const dataAst = await OfficeParser.parseOffice(Buffer.from(`![logo](data:image/png;base64,${dataPng})`), { fileType: 'md' } as any);
+    const dataWarnings: any[] = [];
+    const dataTex = (await dataAst.to('tex', { onWarning: (w: any) => dataWarnings.push(w) } as any)).value as string;
+    assert.ok(/\\includegraphics\[[^\]]*\]\{images\/image\.png\}/.test(dataTex) && !dataWarnings.some(w => w.code === 'CONTENT_NOT_REPRESENTABLE'), 'TEX: a data: URI image is included, not reported as a bad path');
+    assert.ok(dataWarnings.some(w => w.code === 'IMAGES_NOT_BUNDLED' && w.message.includes('data: URIs')), 'TEX: IMAGES_NOT_BUNDLED says where a data: image\'s bytes are');
+    const dataZip = unzipSync((await dataAst.to('tex', { texConfig: { bundle: true }, onWarning: () => {} } as any)).value as Uint8Array);
+    assert.strictEqual(Buffer.from(dataZip['images/image.png']).toString('base64'), dataPng, 'TEX: the bundle holds the data: image\'s bytes');
     const fragment = (await (await OfficeParser.parseOffice(Buffer.from('中文 ✓ Ωμέγα'), { fileType: 'md' } as any)).to('tex', { texConfig: { standalone: false } } as any)).value as string;
     assert.ok(fragment.includes('% \\usepackage{iftex}\n') && fragment.includes('% \\iftutex\n%   % Greek and Cyrillic') && /\n% +\\usepackage\{xeCJK\}%\n/.test(fragment) && !fragment.includes('chosen above'),
         'TEX scripts: a fragment lists iftex and the script font setup its including document needs');
@@ -2275,11 +2285,11 @@ async function testLatexParsing(): Promise<void> {
     assert.deepStrictEqual(deck.content[0].children!.map(c => [c.type, c.text]), [['heading', 'First'], ['heading', 'Sub'], ['list', 'One']], 'TEX beamer: frame title, subtitle, overlay spec dropped');
     assert.strictEqual(deck.content[0].notes?.[0].text, 'Say hi.', 'TEX beamer: \\note -> slide notes');
     assert.deepStrictEqual(deck.content[1].children!.map(c => c.type), ['heading', 'admonition'], 'TEX beamer: block -> admonition');
-    const titled = await OfficeParser.parseOffice(Buffer.from('\\documentclass{beamer}\\title{Deck}\\subtitle{Sub}\\author{Ann \\and Bob}\\date{\\today}\\begin{document}\\begin{frame}\\titlepage\\end{frame}\\end{document}'), { fileType: 'tex' });
-    assert.deepStrictEqual(titled.content[0].children!.map(c => [(c.metadata as any).style, c.text]), [['Title', 'Deck'], ['Subtitle', 'Sub'], ['Author', 'Ann, Bob']],
-        'TEX beamer: \\titlepage -> a title slide (a \\today date is the compile date, so it is omitted)');
+    const titled = await OfficeParser.parseOffice(Buffer.from('\\documentclass{beamer}\\title{Deck}\\subtitle{Sub}\\author{Ann \\and Bob}\\date{\\today}\\begin{document}\\begin{frame}\\titlepage\\end{frame}\\end{document}'), { fileType: 'tex', texParserConfig: { today: 'May 1, 2024' } } as any);
+    assert.deepStrictEqual(titled.content[0].children!.map(c => [(c.metadata as any).style, c.text]), [['Title', 'Deck'], ['Subtitle', 'Sub'], ['Author', 'Ann, Bob'], ['Date', 'May 1, 2024']],
+        'TEX beamer: \\titlepage -> a title slide, its \\today date as texParserConfig.today sets it');
     const deckTex = (await titled.to('tex')).value as string;
-    assert.ok(/\\title\{Deck\}\n\\subtitle\{Sub\}\n\\author\{Ann, Bob\}\n\\date\{\}/.test(deckTex) && /\\begin\{frame\}\[allowframebreaks\]\n\\relax\n\\titlepage\n\\end\{frame\}/.test(deckTex), 'TEX beamer: a title slide regenerates as \\titlepage');
+    assert.ok(/\\title\{Deck\}\n\\subtitle\{Sub\}\n\\author\{Ann, Bob\}\n\\date\{May 1, 2024\}/.test(deckTex) && /\\begin\{frame\}\[allowframebreaks\]\n\\relax\n\\titlepage\n\\end\{frame\}/.test(deckTex), 'TEX beamer: a title slide regenerates as \\titlepage');
 
     // A \label after \phantomsection names what follows it (the generator's anchor before a block).
     const anchored = await OfficeParser.parseOffice(Buffer.from('\\documentclass{article}\\begin{document}First.\n\n\\phantomsection\\label{next}Second.\n\n\\section{S}\\label{sec}\\end{document}'), { fileType: 'tex' });
@@ -2473,6 +2483,25 @@ code here
     assert.deepStrictEqual((await texOf(Buffer.from('% \\usepackage[koi8-r]{inputenc}\n\\begin{document}caf\u00e9\\end{document}', 'latin1'))).paras, ['café'], 'TEX parse: a commented-out inputenc declares nothing');
     assert.deepStrictEqual((await texOf(Buffer.from('\\usepackage[utf8]{inputenc}\\begin{document}caf\u00e9\\end{document}', 'latin1'))).paras, ['café'], 'TEX parse: a declared utf8 the bytes contradict is judged by the bytes');
     assert.deepStrictEqual((await texOf(Buffer.concat([Buffer.from('% !TEX encoding = IsoLatin2\n\\begin{document}'), Buffer.from([0xb1]), Buffer.from('\\end{document}')]))).paras, ['ą'], 'TEX parse: TeXShop encoding names');
+
+    // \today prints the date of the parse (as LaTeX prints the date of the compile), in the document's
+    // language, or the text texParserConfig.today sets; it is never dropped.
+    const dateIn = (tag: string) => new Intl.DateTimeFormat(tag, { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date());
+    const todayDoc = await texOf(String.raw`\documentclass{article}\title{T}\date{\today}\begin{document}\maketitle Written on \today.\end{document}`);
+    assert.deepStrictEqual([todayDoc.paras.slice(1), todayDoc.ast.metadata.nativeProperties?.date], [[dateIn('en-US'), `Written on ${dateIn('en-US')}.`], dateIn('en-US')], 'TEX parse: \\today is the date of the parse, in the title block and the text');
+    assert.deepStrictEqual((await texOf(String.raw`\usepackage[ngerman]{babel}\begin{document}Berlin, \today\end{document}`)).paras, [`Berlin, ${dateIn('de')}`], 'TEX parse: \\today in the document\'s language');
+    const fixedToday = await texOf(String.raw`\begin{document}Written on \today, \DTMtoday.\end{document}`, { texParserConfig: { today: '[DATE]' } });
+    assert.deepStrictEqual(fixedToday.paras, ['Written on [DATE], [DATE].'], 'TEX parse: texParserConfig.today replaces \\today (and datetime2\'s \\DTMtoday)');
+    const badToday = await texOf(String.raw`\begin{document}\today\end{document}`, { texParserConfig: { today: 42 } });
+    assert.ok(badToday.paras[0] === dateIn('en-US') && badToday.warnings.some(w => w.code === 'INVALID_CONFIG_VALUE' && w.message.includes('texParserConfig.today')), 'TEX parse: a texParserConfig.today that is not a string is reported and ignored');
+
+    // A figure holding only a drawing (omitted) keeps its caption, which carries the figure's number for \ref.
+    for (const ignoreInternalLinks of [false, true]) {
+        const drawing = await texOf(String.raw`\begin{document}\begin{figure}\begin{tikzpicture}\draw (0,0)--(1,1);\end{tikzpicture}\caption{A drawing}\label{fig:d}\end{figure}
+\begin{figure}\label{fig:e}\begin{tikzpicture}\end{tikzpicture}\caption{Label first}\end{figure}
+\begin{figure}\includegraphics{x.png}\caption{Photo}\label{fig:p}\end{figure}See \ref{fig:d}, \ref{fig:e}, \ref{fig:p}.\end{document}`, { ignoreInternalLinks });
+        assert.strictEqual(drawing.paras[drawing.paras.length - 1], 'See 1, 2, 3.', `TEX parse: a drawing-only figure's label reads its number (ignoreInternalLinks: ${ignoreInternalLinks})`);
+    }
 
     // Names from Object.prototype are not table entries.
     const proto = await texOf(String.raw`\begin{document}\constructor \toString \color{constructor}x \texthasOwnProperty{z}\end{document}`);
@@ -2704,6 +2733,99 @@ async function testTemplate(): Promise<void> {
     }
 }
 
+/**
+ * Configuration consistency: every option means the same on every surface, a mistake in a config is
+ * reported rather than silently ignored, and a value an option does not accept falls back visibly.
+ */
+async function testConfigConsistency(): Promise<void> {
+    const md = await OfficeParser.parseOffice(Buffer.from('# Title\n\nText.'), { fileType: 'md' } as any);
+    const run = async (destination: string, config: any) => {
+        const seen: any[] = [];
+        const result = await md.to(destination as any, { ...config, onWarning: (w: any) => seen.push(w) });
+        return { result, seen, codes: seen.map(w => w.code), messages: result.messages.map((m: any) => m.message) };
+    };
+
+    // A value an option does not accept: reported with what it accepts, and the default used.
+    const tex = await run('tex', { texConfig: { documentClass: 'reprot', format: 'A44', margin: { top: '1 inch', left: '2cm' } } });
+    assert.deepStrictEqual(tex.seen.filter(w => w.code === 'INVALID_CONFIG_VALUE').map(w => w.message), [
+        'Invalid texConfig.documentClass: "reprot". Expected one of auto, article, report, book, beamer; the default ("auto") is used instead.',
+        'Invalid texConfig.format: "A44". Expected one of letter, legal, tabloid, ledger, a0, a1, a2, a3, a4, a5, a6; the default ("A4") is used instead.',
+        'Invalid texConfig.margin.top: "1 inch". Expected a number of points or a length such as \'1in\', \'2cm\', \'36pt\'; the default (72) is used instead.',
+    ], 'Config: invalid texConfig values are reported with what the option accepts');
+    const texOut = String(tex.result.value);
+    assert.ok(texOut.includes('\\documentclass[\\officeparserdriver 11pt]{article}') && texOut.includes('top=72pt') && texOut.includes('left=56.69pt'), 'Config: the defaults replace invalid values; valid ones are kept');
+    assert.ok(tex.messages.some((m: string) => m.startsWith('Invalid texConfig.documentClass')), 'Config: configuration warnings are among the result\'s messages');
+    for (const [destination, config, option] of [
+        ['md', { mdConfig: { dialect: 'githb' } }, 'mdConfig.dialect'],
+        ['md', { mdConfig: { dialect: { extends: 'gitlb' } } }, 'mdConfig.dialect.extends'],
+        ['html', { htmlConfig: { standalone: { styles: 'minimal' } } }, 'htmlConfig.standalone.styles'],
+        ['chunks', { chunksConfig: { strategy: 'by-heading' } }, 'chunksConfig.strategy'],
+        ['chunks', { chunksConfig: { splitBy: 'section' } }, 'chunksConfig.splitBy'],
+        ['docx', { docxConfig: { format: 'B5', margin: { bottom: 'wide' } } }, 'docxConfig.format'],
+        ['odt', { odtConfig: { format: 'A4 ' } }, 'odtConfig.format'],
+    ] as const) {
+        const r = await run(destination, config);
+        assert.ok(r.seen.some(w => w.code === 'INVALID_CONFIG_VALUE' && w.message.startsWith(`Invalid ${option}:`)), `Config: ${option} is validated`);
+    }
+    const valid = await run('tex', { texConfig: { documentClass: 'report', format: 'letter', margin: { top: '1in', bottom: 36, left: '2.5cm', right: '' } }, mdConfig: { dialect: { extends: 'github' } } });
+    assert.deepStrictEqual(valid.codes, [], 'Config: valid values (any case of a paper format, unit strings, numbers) raise nothing');
+    const callerConfig = { texConfig: { margin: { top: 'huge' } }, mdConfig: { dialect: { extends: 'nope', math: 'none' } } };
+    await run('tex', callerConfig);
+    assert.deepStrictEqual(callerConfig, { texConfig: { margin: { top: 'huge' } }, mdConfig: { dialect: { extends: 'nope', math: 'none' } } }, 'Config: validation never edits the caller\'s own config');
+
+    // A key a generator does not recognize is reported, as on the parser side.
+    const unknown = await run('tex', { texConfig: { bundel: true }, extractAttachments: true });
+    const unrecognized = unknown.seen.find(w => w.code === 'UNRECOGNIZED_CONFIG_OPTION');
+    assert.ok(unrecognized && unrecognized.message.includes("'texConfig.bundel'") && unrecognized.message.includes("'extractAttachments'"), `Config: unrecognized generator keys are reported (${unrecognized?.message})`);
+    assert.deepStrictEqual((await run('html', { htmlConfig: { containerWidth: 900 }, chunksConfig: { similarityThreshold: 0.5, embeddingFunction: async () => [] }, metadataOverrides: { title: 'x', custom: { a: 1 } } })).codes, [], 'Config: every documented key is recognized (all chunking strategies, metadata overrides)');
+
+    // convert(): a parser or generator option at the top level is not read; the warning says where it belongs.
+    const docx = path.join(__dirname, 'files/test.docx');
+    const convertWarnings: any[] = [];
+    const converted = await OfficeConverter.convert(docx, 'tex', { texConfig: { bundle: true }, ignoreNotes: true, ignoreInternalLinks: true, onWarning: (w: any) => convertWarnings.push(w) } as any);
+    const misplaced = convertWarnings.find(w => w.code === 'UNRECOGNIZED_CONFIG_OPTION');
+    assert.ok(typeof converted.value === 'string' && misplaced
+        && misplaced.message.includes("'texConfig' (use 'generatorConfig.texConfig' instead)")
+        && misplaced.message.includes("'ignoreNotes' (use 'parseConfig.ignoreNotes' instead)")
+        && misplaced.message.includes("'ignoreInternalLinks' (it goes under parseConfig or generatorConfig)"), `Config: convert() names where a misplaced option belongs (${misplaced?.message})`);
+    assert.ok(converted.messages.some(m => m.code === 'UNRECOGNIZED_CONFIG_OPTION'), 'Config: the misplaced-option warning is among convert()\'s messages');
+    const bundled = await OfficeConverter.convert(docx, 'tex', { generatorConfig: { texConfig: { bundle: true } } });
+    assert.ok(bundled.value instanceof Uint8Array, 'Config: generatorConfig.texConfig.bundle gives the zip, as the README shows');
+    const counted = await OfficeConverter.convert(docx, 'tex');
+    const keys = counted.messages.map(m => `${m.code}:${m.message}`);
+    assert.strictEqual(new Set(keys).size, keys.length, `Config: convert() lists each warning once (${keys.length} messages)`);
+
+    // A decompression limit reached while identifying an archive is that limit's error.
+    const projectZip = path.join(__dirname, 'files/latex-project.zip');
+    for (const [label, input, limits, code] of [
+        ['a .zip by name', projectZip, { maxZipEntries: 1 }, 'ZIP entry count exceeds limit (1)'],
+        ['an unnamed buffer', fs.readFileSync(projectZip), { maxUncompressedBytes: 100 }, 'ZIP uncompressed size limit exceeded (100 bytes)'],
+    ] as const) {
+        let message = '';
+        await OfficeParser.parseOffice(input as any, { decompressionLimits: limits, onWarning: () => {} } as any).catch((e: any) => { message = e.message; });
+        assert.ok(message.includes(code), `Config: a limit reached identifying ${label} is reported as the limit (${message})`);
+    }
+
+    // fileType accepts the names the matching extensions do.
+    const texSource = Buffer.from('\\documentclass{article}\\begin{document}Hi\\end{document}');
+    for (const alias of ['tex', 'latex', 'ltx']) assert.strictEqual((await OfficeParser.parseOffice(texSource, { fileType: alias } as any)).type, 'tex', `Config: fileType '${alias}'`);
+    assert.strictEqual((await OfficeParser.parseOffice(fs.readFileSync(projectZip), { fileType: 'zip' } as any)).type, 'tex', "Config: fileType 'zip' parses what the archive holds");
+    assert.strictEqual((await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files/test.odt')), { fileType: 'ott' } as any)).type, 'odt', "Config: fileType 'ott' is ODT");
+
+    // The document language reaches every output with a place for it.
+    const german = await OfficeParser.parseOffice(Buffer.from('\\documentclass{article}\\usepackage[ngerman]{babel}\\begin{document}Hallo\\end{document}'), { fileType: 'tex' } as any);
+    assert.strictEqual(german.metadata.language, 'de', 'Language: from babel');
+    assert.ok(String((await german.to('html')).value).includes('<html lang="de">'), 'Language: HTML lang');
+    const epub = unzipSync((await german.to('epub')).value as Uint8Array);
+    const opf = Object.entries(epub).find(([n]) => n.endsWith('.opf'))![1];
+    assert.ok(strFromU8(opf).includes('<dc:language>de</dc:language>'), 'Language: EPUB dc:language');
+    assert.strictEqual((await OfficeParser.parseOffice(Buffer.from((await german.to('epub')).value as Uint8Array), { fileType: 'epub' } as any)).metadata.language, 'de', 'Language: the EPUB parser puts it in metadata.language');
+    const overridden = String((await german.to('html', { metadataOverrides: { language: 'fr-CA' } } as any)).value);
+    assert.ok(overridden.includes('<html lang="fr-CA">'), 'Language: metadataOverrides.language wins');
+    assert.ok(String((await md.to('html')).value).includes('<html lang="en">'), 'Language: English when the source states none');
+    console.log('  Config consistency: All assertions passed ✓');
+}
+
 async function runTests(): Promise<void> {
     console.log('Starting exhaustive officeParser test suite...');
     let passed = 0;
@@ -2726,6 +2848,7 @@ async function runTests(): Promise<void> {
         ['ODT', testOdtGeneration],
         ['LaTeX', testLatexGeneration],
         ['LaTeX parsing', testLatexParsing],
+        ['Config consistency', testConfigConsistency],
         ['OfficeGenUtils', testOfficeGenUtils],
         ['NativePdfEngine', testNativePdfEngine],
         ['Template', testTemplate],

@@ -147,7 +147,8 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
         pageRange: '',
         normalizeText: true,
         extractTextColor: true
-    }
+    },
+    texParserConfig: { today: '' },
 };
 
 /** Config permutations to test */

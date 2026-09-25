@@ -52,6 +52,9 @@
       "pageRange": "",
       "normalizeText": true,
       "extractTextColor": true
+    },
+    "texParserConfig": {
+      "today": ""
     }
   },
   "type": "epub",
@@ -60,6 +63,7 @@
     "author": "Kovid Goyal",
     "description": "Demonstration of DOCX support in calibre",
     "subject": "calibre",
+    "language": "en",
     "nativeProperties": {
       "title": "DOCX Demo",
       "creator": "Kovid Goyal",

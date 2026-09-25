@@ -3,7 +3,7 @@ import { ConversionResult, GeneratorConfig, OfficeParserAST } from '../types.js'
 import { BaseGenerator } from './BaseGenerator.js';
 import { HtmlGenerator } from './HtmlGenerator.js';
 import { escapeXml } from '../utils/sanitize.js';
-import { decodeBase64, MIME_EXT, resolveZipInstant } from '../utils/officeGenUtils.js';
+import { decodeBase64, documentLanguage, MIME_EXT, resolveZipInstant } from '../utils/officeGenUtils.js';
 
 const VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
 
@@ -209,7 +209,7 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
         const subject = meta.subject;
         const keywords = meta.keywords;
         const nativeProps = (meta.nativeProperties || {}) as Record<string, any>;
-        const language = nativeProps.language || 'en';
+        const language = documentLanguage(meta);
         // OPF metadata is a closed Dublin Core vocabulary: a caller-defined key has no valid
         // element to live in, and inventing one risks failing EPUB validation outright.
         this.warnUnrepresentableCustomMetadata('EPUB');

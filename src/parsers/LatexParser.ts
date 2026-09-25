@@ -251,7 +251,7 @@ const IGNORED_COMMANDS: Record<string, string> = {
     bottomrule: 'o', addlinespace: 'o', endhead: '', endfirsthead: '', endfoot: '', endlastfoot: '', fancyhf: 'm',
     renewcommand: '', footnotesize: '', thanks: 'm', setcounter: 'mm', normalsize: '', ding: 'm', captionsetup: 'om',
     AtBeginDocument: 'm', AtEndDocument: 'm', listfiles: '', hyphenation: 'm',
-    enlargethispage: 'sm', newpage: '', color: '', label: '', today: '', column: 'om', textwidth: '', linewidth: '',
+    enlargethispage: 'sm', newpage: '', color: '', label: '', column: 'om', textwidth: '', linewidth: '',
     columnwidth: '', paperwidth: '', textheight: '', paperheight: '', baselineskip: '', parindent_: '', tabcolsep: '',
     arraybackslash: '', arrayrulewidth: '', dimexpr: '', fboxsep: '', setbeamersize: 'm', logo: 'm', institute: 'om',
     documentstyle: 'om', NeedsTeXFormat: 'mo', ProvidesPackage: 'mo', ProvidesClass: 'mo', ProvidesFile: 'mo',
@@ -2127,6 +2127,7 @@ class LatexReader {
                 this.qedPlaced = true;
                 return;
             case 'qedsymbol': this.addText(flow, '□'); return;
+            case 'today': case 'DTMtoday': this.addText(flow, this.todayText()); return;
             case 'def': case 'gdef': case 'edef': case 'xdef': case 'long': case 'global':
                 if (name === 'long' || name === 'global') return;
                 this.defineTexMacro(sc); return;
@@ -2411,7 +2412,7 @@ class LatexReader {
      * The block `\maketitle` (or beamer's `\titlepage`) typesets, as content at that spot: a heading
      * styled `Title`, then `Subtitle`, `Author` and `Date` lines, the way a word processor's title
      * page reads. The values also stay in `ast.metadata`. `\thanks` become footnotes on the line that
-     * carries them. A date left to `\today` is the day the document is compiled, so it is omitted.
+     * carries them. A `\today` date reads as {@link todayText} says.
      */
     private typesetTitle(flow: Flow): void {
         // Only where content is being read: never while extracting plain text (metadata, a label),
@@ -2917,6 +2918,20 @@ class LatexReader {
         for (const b of body) this.pushBlock(flow, b);
     }
 
+    /**
+     * What `\today` prints: `texParserConfig.today` when set, else the date of the parse, as LaTeX
+     * prints the date of the compile, written the way the document's language writes a date
+     * ("September 25, 2026" in English).
+     */
+    private todayText(): string {
+        const fixed = this.config.texParserConfig?.today;
+        if (typeof fixed === 'string' && fixed) return fixed;
+        const style: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+        const now = new Date();
+        try { return new Intl.DateTimeFormat(this.documentLanguage() ?? 'en-US', style).format(now); }
+        catch { return new Intl.DateTimeFormat('en-US', style).format(now); }
+    }
+
     // ── languages ──
 
     /** The babel/polyglossia language `name` (or `\babeltags` tag) names, if it names one. */
@@ -3071,9 +3086,19 @@ class LatexReader {
         // Labels in a float name its figure or table, wherever in the float they were written.
         const main = inner.find(b => b.type === 'image' || b.type === 'table');
         const kind = env.startsWith('table') || env === 'wraptable' ? 'table' : 'figure';
-        if (inner.some(b => (b.metadata as any)?.style === 'Caption')) {
-            const n = (this.floatNumbers[kind] = (this.floatNumbers[kind] ?? 0) + 1);
-            if (main) (main as any).__number = String(n);
+        const caption = inner.find(b => (b.metadata as any)?.style === 'Caption');
+        if (caption) {
+            const n = String(this.floatNumbers[kind] = (this.floatNumbers[kind] ?? 0) + 1);
+            if (main) (main as any).__number = n;
+            else {
+                // A float with nothing the AST can hold (a TikZ drawing, which is omitted) keeps its
+                // caption, which then carries the float's number: a label in the float reads it.
+                (caption as any).__number = n;
+                for (const id of this.labelLog.slice(labelsBefore)) {
+                    const t = this.labelTargets.get(id);
+                    if (!t || (inner.includes(t) && (t.metadata as any)?.style === 'Caption') || (t.type === 'paragraph' && !(t as any).__number && !t.text)) this.labelTargets.set(id, caption);
+                }
+            }
         }
         if (main) {
             const ids: string[] = [];

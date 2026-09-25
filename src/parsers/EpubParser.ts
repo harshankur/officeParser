@@ -82,7 +82,8 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
         const publisher = dcText('dc:publisher');
         if (publisher) nativeProps.publisher = publisher;
         const language = dcText('dc:language');
-        if (language) nativeProps.language = language;
+        // `metadata.language` is where every parser puts the language; the native field stays too.
+        if (language) { nativeProps.language = language; metadata.language = language; }
         const identifier = dcText('dc:identifier');
         if (identifier) nativeProps.identifier = identifier;
 

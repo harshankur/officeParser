@@ -701,6 +701,22 @@ function configPollutionTests() {
         'Object.assign invoked the __proto__ setter and replaced the config prototype');
     check('config: parser config did not inherit attacker properties',
         parserCfg.pollutedParser === undefined, `inherited pollutedParser = ${parserCfg.pollutedParser}`);
+
+    // The newer config paths: texParserConfig, the value validation and the unknown-key check. A
+    // prototype key is neither merged nor reported as an unknown option, and a huge invalid value
+    // cannot make the warning message huge.
+    const texRaw = JSON.parse('{"texParserConfig":{"today":"x","__proto__":{"pollutedParser":"YES"}}}');
+    const texParser: any = resolveParserConfig(texRaw);
+    check('config: texParserConfig merge applied', texParser.texParserConfig.today === 'x');
+    check('config: __proto__ in texParserConfig cannot reach Object.prototype', ({} as any).pollutedParser === undefined);
+    const issues: any[] = [];
+    const genRaw = JSON.parse('{"__proto__":{"polluted":"YES"},"texConfig":{"documentClass":"article","__proto__":{"polluted":"YES"},"constructor":{"prototype":{"polluted":"YES"}}}}');
+    resolveGeneratorConfig('tex' as any, undefined as any, { ...genRaw, onWarning: (i: any) => issues.push(i) } as any);
+    check('config: prototype keys in a generator config reach nothing', ({} as any).polluted === undefined);
+    check('config: prototype keys are not reported as unknown options', !issues.some(i => /__proto__|constructor/.test(i.message)), issues.map(i => i.message).join(' | '));
+    const huge: any[] = [];
+    resolveGeneratorConfig('tex' as any, undefined as any, { texConfig: { documentClass: 'x'.repeat(1_000_000) }, onWarning: (i: any) => huge.push(i) } as any);
+    check('config: an invalid value is shown truncated in its warning', huge.length === 1 && huge[0].message.length < 400, `${huge[0]?.message.length}`);
     clean();
 }
 

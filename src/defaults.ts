@@ -1,4 +1,4 @@
-import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, DocxGeneratorConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OdtGeneratorConfig, OfficeParserConfig, PdfGeneratorConfig, PdfParserConfig, SemanticChunkingConfig, TexGeneratorConfig, TextGeneratorConfig } from './types.js';
+import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, DocxGeneratorConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OdtGeneratorConfig, OfficeParserConfig, PdfGeneratorConfig, PdfParserConfig, SemanticChunkingConfig, TexGeneratorConfig, TexParserConfig, TextGeneratorConfig } from './types.js';
 
 const PDFJS_VERSION = '6.2.108';
 const DEFAULT_PDF_WORKER_SRC = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
@@ -64,6 +64,14 @@ const DEFAULT_PDF_PARSER_CONFIG: DeepRequired<PdfParserConfig> = {
 };
 
 /**
+ * Default configuration for LaTeX parsing. `today` is empty, so `\today` prints the date of the
+ * parse, as LaTeX prints the date of the compile - see `TexParserConfig`.
+ */
+const DEFAULT_TEX_PARSER_CONFIG: DeepRequired<TexParserConfig> = {
+    today: '',
+};
+
+/**
  * Default configuration for the OfficeParser.
  */
 export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
@@ -97,6 +105,7 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     },
     htmlParserConfig: DEFAULT_HTML_PARSER_CONFIG,
     pdfParserConfig: DEFAULT_PDF_PARSER_CONFIG,
+    texParserConfig: DEFAULT_TEX_PARSER_CONFIG,
 };
 
 /**

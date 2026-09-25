@@ -86,6 +86,12 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.PDF_NO_TEXT_EXTRACTED]: (pages: number) => `No text was extracted from this PDF${pages ? ` (${pages} page${pages === 1 ? '' : 's'})` : ''}. It is very likely a scanned or image-only document with no text layer; set 'ocr: true' (with 'extractAttachments: true') to recognize text from the page images.`,
     [OfficeWarningType.PDF_OUTLINE_TRUNCATED]: (reason: string) => `PDF document outline (bookmarks) is incomplete${reason ? ` (${reason})` : ''}; ast.auxiliary.outline holds only what was recovered.`,
     [OfficeWarningType.OCR_REQUIRES_ATTACHMENTS]: () => `'ocr: true' was set without 'extractAttachments: true'; OCR runs over extracted images, so no OCR was performed. Add 'extractAttachments: true' to recognize text from the document's images.`,
+    [OfficeWarningType.INVALID_CONFIG_VALUE]: (info: { option: string; value: unknown; expected: string; fallback: unknown }) => {
+        const shown = JSON.stringify(info.value) ?? String(info.value);
+        const value = shown.length > 80 ? `${shown.slice(0, 77)}...` : shown;
+        const fallback = info.fallback === '' || info.fallback === undefined ? 'the default is' : `the default (${JSON.stringify(info.fallback)}) is`;
+        return `Invalid ${info.option}: ${value}. Expected ${info.expected}; ${fallback} used instead.`;
+    },
     [OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION]: (info: { keys: string[], renames?: Record<string, string> }) => {
         const detail = info.keys.map(k => {
             const replacement = info.renames?.[k];
@@ -100,13 +106,13 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.MATH_WRITTEN_AS_TEXT]: (info: { commands?: string[] }) => info.commands && info.commands.length > 0
         ? `A math expression used ${info.commands.map(c => `'${c}'`).join(', ')}, which can read or write files, run programs, or redefine commands, so it was written to the LaTeX output as literal text instead of typeset math.`
         : `A math expression had unbalanced braces or \\begin/\\end environments (or an environment that is not valid there), so it was written to the LaTeX output as literal text instead of typeset math.`,
-    [OfficeWarningType.IMAGES_NOT_BUNDLED]: (info: { files: string[]; external?: string[] }) => {
+    [OfficeWarningType.IMAGES_NOT_BUNDLED]: (info: { files: string[]; external?: string[]; fromDataUris?: boolean }) => {
         const list = (files: string[]) => files.map(f => `'${f}'`).join(', ');
         const count = (files: string[]) => `${files.length} image file${files.length === 1 ? '' : 's'}`;
         const external = info.external ?? [];
         const parts: string[] = [];
         if (info.files.length) {
-            parts.push(`The LaTeX output references ${count(info.files)} (${list(info.files)}) that ${info.files.length === 1 ? 'is' : 'are'} not part of the .tex source, since a .tex file cannot embed images. Place ${info.files.length === 1 ? 'it at that path' : 'them at those paths'}, relative to the .tex (the bytes are in ast.attachments), or set texConfig.bundle: true to get a zip containing the .tex and its images.`);
+            parts.push(`The LaTeX output references ${count(info.files)} (${list(info.files)}) that ${info.files.length === 1 ? 'is' : 'are'} not part of the .tex source, since a .tex file cannot embed images. Place ${info.files.length === 1 ? 'it at that path' : 'them at those paths'}, relative to the .tex (the bytes are in ast.attachments${info.fromDataUris ? ', or in the data: URIs the source embedded images as' : ''}), or set texConfig.bundle: true to get a zip containing the .tex and its images.`);
         }
         if (external.length) {
             parts.push(`The LaTeX output ${info.files.length ? 'also ' : ''}references ${count(external)} (${list(external)}) by the path the source document gave, without the image data, which the source did not contain. Place ${external.length === 1 ? 'it at that path' : 'them at those paths'}, relative to the .tex, before compiling.`);

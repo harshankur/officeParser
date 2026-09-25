@@ -19,7 +19,7 @@
 
 import { FullGeneratorConfig, ImageMode, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../../types.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
-import { isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize } from '../../utils/officeGenUtils.js';
+import { documentLanguage, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize } from '../../utils/officeGenUtils.js';
 
 /**
  * Megapixel ceiling for an embedded image. `embedPng`/`embedJpg` decode the full bitmap, so a
@@ -806,6 +806,8 @@ function applyMetadata(pdf: any, m: OfficeMetadata): void {
     set('setTitle', m.title);
     set('setAuthor', m.author);
     set('setSubject', m.subject);
+    // The document language, as the HTML engine's `<html lang>` gives it (`/Lang`).
+    if (m.language || m.nativeProperties?.language) set('setLanguage', documentLanguage(m));
     if (m.keywords) set('setKeywords', String(m.keywords).split(/[,;]\s*/).filter(Boolean));
     set('setCreator', 'officeParser (native engine)');
     set('setProducer', 'officeParser (pdf-lib)');

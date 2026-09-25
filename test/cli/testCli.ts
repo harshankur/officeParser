@@ -830,6 +830,25 @@ async function runTests() {
     const zipOk = res47zip.status === 0 && res47zip.stdout.includes('Demonstration of DOCX support');
     results.push({ name: 'CLI: a LaTeX project .zip is parsed as LaTeX', status: zipOk ? 'PASS' : 'FAIL', details: zipOk ? 'routed by archive contents' : `exit ${res47zip.status}, stderr: ${res47zip.stderr.slice(0, 160)}`, duration: 0 });
 
+    // 48. Options that were easy to get wrong: a bare `--htmlParserConfig.preserveComments` before the
+    //     file must not swallow it as its value; a value an option does not accept is printed without
+    //     --verbose, like an unrecognized option; `--texParserConfig.today` sets what \today prints.
+    console.log('Test 48: preserveComments before the file / INVALID_CONFIG_VALUE / texParserConfig.today');
+    const t48 = Date.now();
+    const commentHtml = fsPath.join(RESULTS_DIR, 'comment.html');
+    fs.writeFileSync(commentHtml, '<html><body><p>Before<!-- hidden note --> after</p></body></html>');
+    const res48a = runCliRaw(['--htmlParserConfig.preserveComments', commentHtml, '--to', 'md']);
+    const commentsOk = res48a.status === 0 && res48a.stdout.includes('<!-- hidden note -->');
+    results.push({ name: 'CLI: a bare --htmlParserConfig.preserveComments before the file', status: commentsOk ? 'PASS' : 'FAIL', details: commentsOk ? 'file kept, comment preserved' : `exit ${res48a.status}, stdout: ${res48a.stdout.slice(0, 120)}, stderr: ${res48a.stderr.slice(0, 120)}`, duration: Date.now() - t48 });
+    const res48b = runCli(['--to', 'tex', '--texConfig.documentClass=reprot']);
+    const invalidOk = res48b.status === 0 && res48b.stderr.includes('[INVALID_CONFIG_VALUE]') && res48b.stderr.includes('texConfig.documentClass') && res48b.stdout.includes('{article}');
+    results.push({ name: 'CLI: an invalid option value is printed without --verbose', status: invalidOk ? 'PASS' : 'FAIL', details: invalidOk ? 'warning printed, default used' : `exit ${res48b.status}, stderr: ${res48b.stderr.slice(0, 200)}`, duration: 0 });
+    const todayTex = fsPath.join(RESULTS_DIR, 'today.tex');
+    fs.writeFileSync(todayTex, '\\documentclass{article}\\begin{document}Written on \\today.\\end{document}');
+    const res48c = runCliRaw([todayTex, '--texParserConfig.today=May 1, 2024', '--to=text']);
+    const todayOk = res48c.status === 0 && res48c.stdout.includes('Written on May 1, 2024.');
+    results.push({ name: 'CLI: --texParserConfig.today sets what \\today prints', status: todayOk ? 'PASS' : 'FAIL', details: todayOk ? 'fixed date printed' : `exit ${res48c.status}, stdout: ${res48c.stdout.slice(0, 120)}`, duration: 0 });
+
     // Print summary report
     const logger = new DualLogger();
     const failedCount = generateReport(results, logger);

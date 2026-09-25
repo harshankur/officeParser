@@ -227,6 +227,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     /** Images the document references by a relative path, with no image data: the caller supplies them. */
     private readonly externalImages = new Set<string>();
     private readonly mediaByAttachment = new Map<string, MediaRef | null>();
+    /** Images the source embedded as `data:` URIs, by URI: they carry their bytes, as attachments do. */
+    private readonly mediaByDataUri = new Map<string, MediaRef | null>();
     private readonly usedFileNames = new Set<string>();
 
     private readonly linkTargets = new Set<string>();
@@ -302,7 +304,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const bundle = this.config.texConfig.bundle === true;
         const unbundled = bundle ? [] : this.media.map(m => m.path);
         if (unbundled.length > 0 || this.externalImages.size > 0) {
-            this.warn(OfficeWarningType.IMAGES_NOT_BUNDLED, { files: unbundled, external: [...this.externalImages] });
+            this.warn(OfficeWarningType.IMAGES_NOT_BUNDLED, { files: unbundled, external: [...this.externalImages], fromDataUris: !bundle && this.mediaByDataUri.size > 0 });
         }
         if (bundle) {
             const { mtime } = resolveZipInstant(this.effectiveMetadata.modified);
@@ -1323,6 +1325,34 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     }
 
     /**
+     * An image the source embedded as a `data:` URI (a Markdown or HTML image parsed without
+     * `extractAttachments`): decoded and written under `images/` like an attachment, since the URI
+     * carries the image itself. Null when the URI cannot be decoded or holds no image type LaTeX or
+     * the bundle can store.
+     */
+    private mediaForDataUri(uri: string): MediaRef | null {
+        if (this.mediaByDataUri.has(uri)) return this.mediaByDataUri.get(uri)!;
+        let ref: MediaRef | null = null;
+        const m = /^data:([^;,]*)((?:;[^;,]*)*?)(;base64)?,(.*)$/is.exec(uri.trim());
+        const mime = (m?.[1] || '').trim().toLowerCase();
+        const ext = INCLUDABLE_IMAGE_EXT[mime] ?? MIME_EXT[mime];
+        if (!m || !ext) {
+            this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: 'data: URI image', reason: m ? 'unsupported mime' : 'malformed data: URI' });
+        } else {
+            try {
+                const bytes = m[3] ? decodeBase64(m[4]) : new TextEncoder().encode(decodeURIComponent(m[4]));
+                const path = `${IMAGE_DIR}/${this.uniqueFileName('image', ext)}`;
+                this.media.push({ path, bytes });
+                ref = { path, includable: !!INCLUDABLE_IMAGE_EXT[mime], mime, intrinsic: sniffImageSize(bytes) };
+            } catch {
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: 'data: URI image', reason: 'undecodable data' });
+            }
+        }
+        this.mediaByDataUri.set(uri, ref);
+        return ref;
+    }
+
+    /**
      * `\includegraphics` options drawing an image at its natural size but never wider than the line
      * or taller than the context allows. The bounds are TeX conditionals rather than a computed
      * number because the line width depends on where the image lands (a cell, a list, a frame).
@@ -1371,8 +1401,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
         const alt = meta?.altText || '';
         let img = '';
-        if (meta?.attachmentName) {
-            const ref = this.mediaFor(meta.attachmentName);
+        const dataUri = !meta?.attachmentName && meta?.url && /^\s*data:/i.test(meta.url) ? meta.url : null;
+        if (meta?.attachmentName || dataUri) {
+            const ref = dataUri ? this.mediaForDataUri(dataUri) : this.mediaFor(meta!.attachmentName!);
             if (ref?.includable) {
                 this.uses.graphics = true;
                 img = `\\includegraphics[${this.imageSize(node, ref.intrinsic)}]{${ref.path}}`;

@@ -128,6 +128,13 @@ export enum OfficeWarningType {
     OCR_REQUIRES_ATTACHMENTS = 'OCR_REQUIRES_ATTACHMENTS',
     /** A config option was passed that this version does not recognize (e.g. a key renamed in a major release); it had no effect */
     UNRECOGNIZED_CONFIG_OPTION = 'UNRECOGNIZED_CONFIG_OPTION',
+    /**
+     * A generator option was given a value it does not accept (a document class, paper format,
+     * margin, PDF engine, HTML stylesheet mode, Markdown dialect or chunking choice that is not one of its
+     * choices). The option's default was used instead; the message names the option, the value and
+     * what it accepts.
+     */
+    INVALID_CONFIG_VALUE = 'INVALID_CONFIG_VALUE',
     /** A math expression used an unsafe LaTeX command or was malformed, so it was written to LaTeX output as literal text rather than typeset math */
     MATH_WRITTEN_AS_TEXT = 'MATH_WRITTEN_AS_TEXT',
     /**
@@ -322,7 +329,7 @@ export interface CommonOfficeParserConfig {
      * date): text` lines). Not applicable to PDF, RTF or EPUB (no comments are parsed there). Source-level
      * comments are not governed by this flag: the CSV `#`-row convention produces top-level `comment`
      * nodes, and Markdown/HTML `<!-- ... -->` (and LaTeX `% <!-- ... -->` lines) produce `comment` nodes
-     * with `metadata.sourceSyntax: 'html'` (HTML only under `HtmlParserConfig.preserveComments`).
+     * with `metadata.sourceSyntax: 'html'` (HTML and EPUB only under `HtmlParserConfig.preserveComments`).
      */
     ignoreComments?: boolean;
     /**
@@ -426,10 +433,12 @@ export interface CommonOfficeParserConfig {
      * 
      * This is authoritative and is used to determine the file type, so it should be accurate.
      * If provided, this bypasses the magic bytes detection and the file extension-based detection either way.
+     * Besides the formats' own names it accepts the {@link FileTypeAlias} names (`latex`, `ltx`, the
+     * ODF template extensions, and `zip`).
      * 
      * Default is null.
      */
-    fileType?: SupportedFileType | null;
+    fileType?: SupportedFileType | FileTypeAlias | null;
     /**
      * Custom delimiter for CSV files.
      * Defaults to ',' but can be overridden (e.g., ';', '\t').
@@ -603,7 +612,7 @@ export interface HtmlParserConfig {
      */
     preserveIframes?: boolean | string[];
     /**
-     * Preserve HTML comments (`<!-- ... -->`) found in HTML input as `comment` nodes with
+     * Preserve HTML comments (`<!-- ... -->`) found in HTML and EPUB input as `comment` nodes with
      * `metadata.sourceSyntax: 'html'`, so they survive an HTML -> AST -> HTML/Markdown round trip
      * instead of being dropped. Conditional comments (`<!--[if ...]> ... <![endif]-->`, Office/IE
      * directives rather than authored notes) are always dropped. Off by default: HTML in the wild
@@ -630,6 +639,22 @@ export interface HtmlParserConfig {
 }
 
 /**
+ * Format-specific options for LaTeX parsing (a `.tex` file or a LaTeX project zip).
+ */
+export interface TexParserConfig {
+    /**
+     * What `\today` prints. LaTeX prints the date the document is compiled; by default the parser
+     * does the same with the date of the parse, written the way the document's language writes
+     * a date ("September 25, 2026" in English, "25. September 2026" in German). Set a string to
+     * print that instead: a fixed date, so that parsing the same file gives the same output on
+     * every day, or a placeholder of your own to find and replace later.
+     *
+     * Default is '' (the date of the parse).
+     */
+    today?: string;
+}
+
+/**
  * Maps an input format string to its corresponding format-specific parser configuration, mirroring
  * `GeneratorSpecificConfig<D>` on the generator side. Unlike the generator side, the input format is
  * usually runtime-detected rather than known statically at the `parseOffice()` call site, so this
@@ -638,7 +663,8 @@ export interface HtmlParserConfig {
 type ParserSpecificConfig<F extends string> =
     F extends 'html' | 'epub' ? { htmlParserConfig?: HtmlParserConfig } :
     F extends 'pdf' ? { pdfParserConfig?: PdfParserConfig } :
-    Partial<{ htmlParserConfig: HtmlParserConfig; pdfParserConfig: PdfParserConfig }>;
+    F extends 'tex' ? { texParserConfig?: TexParserConfig } :
+    Partial<{ htmlParserConfig: HtmlParserConfig; pdfParserConfig: PdfParserConfig; texParserConfig: TexParserConfig }>;
 
 /**
  * Configuration options for the OfficeParser.
@@ -651,13 +677,13 @@ export type OfficeParserConfig<F extends string = string> = CommonOfficeParserCo
 export interface DecompressionLimits {
     /**
      * Maximum allowed total uncompressed size (in bytes) of files extracted from a ZIP archive.
-     * Applies to every ZIP-backed input: OOXML (DOCX, XLSX, PPTX), ODF (ODT, ODS, ODP, ODG) and EPUB.
+     * Applies to every ZIP-backed input: OOXML (DOCX, XLSX, PPTX), ODF (ODT, ODS, ODP, ODG), EPUB and LaTeX project zips.
      * Default is 536870912 (512 MB).
      */
     maxUncompressedBytes?: number;
     /**
      * Maximum allowed number of entries (files and directories) in a ZIP archive.
-     * Applies to every ZIP-backed input: OOXML (DOCX, XLSX, PPTX), ODF (ODT, ODS, ODP, ODG) and EPUB.
+     * Applies to every ZIP-backed input: OOXML (DOCX, XLSX, PPTX), ODF (ODT, ODS, ODP, ODG), EPUB and LaTeX project zips.
      * Default is 10000.
      */
     maxZipEntries?: number;
@@ -806,7 +832,8 @@ export interface MetadataOverrides {
      */
     modified?: Date;
     /**
-     * Language tag (e.g. `'en'`, `'de-DE'`). Written as EPUB `dc:language` and HTML `lang`.
+     * Language tag (e.g. `'en'`, `'de-DE'`). Written as HTML `lang`, EPUB, DOCX and ODT
+     * `dc:language`, the PDF `/Lang` entry, and LaTeX `pdflang`.
      */
     language?: string;
     /**
@@ -1233,7 +1260,7 @@ export interface HtmlGeneratorConfig {
 }
 
 /**
- * Named paper sizes shared by every generator that lays out pages (PDF, DOCX, ODT), so a page size
+ * Named paper sizes shared by every generator that lays out pages (PDF, DOCX, ODT, LaTeX), so a page size
  * is written the same way whatever the destination. Case-insensitive: `'A4'` and `'a4'` are the same
  * size. The A-series is ISO 216; Letter/Legal/Tabloid/Ledger are the US/ANSI sizes.
  */
@@ -1439,9 +1466,11 @@ export type TexDocumentClass = 'auto' | 'article' | 'report' | 'book' | 'beamer'
 /**
  * Configuration options for LaTeX (`.tex`) generation.
  *
- * The output compiles with pdfLaTeX, XeLaTeX and LuaLaTeX alike: the preamble loads `fontenc`/
- * `inputenc` under pdfTeX and `fontspec` under the Unicode engines, and only the packages the
- * document actually uses.
+ * The output compiles with pdfLaTeX, XeLaTeX, LuaLaTeX, upLaTeX, pLaTeX and `latex` (the last three
+ * through `dvipdfmx`), TeX Live 2021 or later: the preamble loads `fontspec` under XeTeX and LuaTeX
+ * (with TeX Live's fonts for Greek, Cyrillic and CJK text where the document has it) and
+ * `fontenc`/`inputenc` under pdfTeX and the pTeX family, gives every package the `dvipdfmx` driver
+ * in DVI mode, and loads only the packages the document actually uses.
  */
 export interface TexGeneratorConfig {
     /**
@@ -2076,6 +2105,14 @@ export interface TemplateConfig {
  * Supported file types for parsing.
  */
 export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods' | 'odg' | 'pdf' | 'rtf' | 'md' | 'html' | 'csv' | 'epub' | 'tex';
+
+/**
+ * Other names the `fileType` option accepts, as the matching file extensions do: `latex` and `ltx`
+ * for `tex`; the ODF template packages `ott`, `ots`, `otp` and `otg` for `odt`, `ods`, `odp` and
+ * `odg`; and `zip`, which is parsed as whatever the archive holds (a LaTeX project, an office
+ * document).
+ */
+export type FileTypeAlias = 'latex' | 'ltx' | 'ott' | 'ots' | 'otp' | 'otg' | 'zip';
 
 /**
  * A structural stand-in for the web `Blob`/`File` so `parseOffice`/`convert` accept them in the
@@ -3022,8 +3059,10 @@ export interface OfficeMetadata {
     /** Keywords associated with the document. */
     keywords?: string;
     /**
-     * The document's primary language as a BCP 47 tag, when the source declares one.
-     * For PDF this comes from the document `/Lang` entry (or the text-content language hint).
+     * The document's primary language as a BCP 47 tag, when the source declares one: the PDF
+     * `/Lang` entry (or the text-content language hint), EPUB `dc:language`, or a LaTeX document's
+     * `pdflang` or babel/polyglossia main language. Generators write it back where their format has
+     * a place for it.
      * @example "en", "en-US", "fr"
      */
     language?: string;

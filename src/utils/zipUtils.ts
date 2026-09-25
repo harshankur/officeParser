@@ -367,8 +367,14 @@ export const detectOfficeTypeFromZip = async (
             },
             SILENT_DETECTION_CONFIG
         );
-    } catch {
-        // Unreadable, truncated, or not an archive at all. The caller keeps whatever the
+    } catch (error: any) {
+        // A limit the caller set was exceeded: parsing the archive would fail on it too, so that is
+        // the error to report, not "unsupported format" for want of a detected type. (The sniff's
+        // own, smaller size cap is not the caller's limit, and exceeding it is no failure.)
+        const code = error?.officeIssue?.code;
+        if (code === OfficeErrorType.ZIP_ENTRY_COUNT_LIMIT_EXCEEDED) throw error;
+        if (code === OfficeErrorType.ZIP_SIZE_LIMIT_EXCEEDED && (limits?.maxUncompressedBytes ?? Infinity) <= MAX_DETECTION_INFLATED_BYTES) throw error;
+        // Otherwise unreadable, truncated, or not an archive at all. The caller keeps whatever the
         // byte-level sniff decided, and the parser it dispatches to reports the real problem.
         return undefined;
     }

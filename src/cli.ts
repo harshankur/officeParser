@@ -22,7 +22,7 @@
  *   --includeRawContent       Include raw content in AST (default: false)
  *   --serializeRawContent     Include stringified XML in metadata (default: true)
  *   --preserveXmlWhitespace   Keep raw formatting space (default: false)
- *   --includeBreakNodes       Include break nodes (DOCX & ODF, default: false)
+ *   --includeBreakNodes       Include break nodes (DOCX, ODF & LaTeX, default: false)
  *   --ignorePageGeometry      Omit per-node bounding boxes and page dimensions (default: false)
  *   --password=secret         Password for an encrypted document (PDF, OOXML, or ODF); or set
  *                             OFFICEPARSER_PASSWORD to keep the secret out of the process list
@@ -64,6 +64,7 @@ const knownParserBooleans = new Set([
     // Dotted boolean keys are listed so a bare `--group.flag` does not swallow the following file
     // argument as its value (the isKnownBoolean check keys off the full dotted name).
     'htmlParserConfig.preserveAttributes', 'htmlParserConfig.preserveIframes', 'htmlParserConfig.embedFolkForms',
+    'htmlParserConfig.preserveComments',
     'pdfParserConfig.useTags', 'pdfParserConfig.detectColumns',
     'pdfParserConfig.mergeHyphenatedWords', 'pdfParserConfig.normalizeText', 'pdfParserConfig.extractTextColor',
     'ocrConfig.preserveLayout',
@@ -237,12 +238,14 @@ if (fileArg && !showHelp) {
         console.warn('Warning: --format is deprecated. Use --to instead.');
     }
     // Intercept parser warning callbacks to format and print issues when verbose is enabled.
-    // An unrecognized option is the exception: it reports a mistake in the command that was just
-    // typed, not a detail of the document being parsed, so it always prints. Hiding it behind
-    // --verbose is how a misspelled or renamed flag ends up silently doing nothing.
+    // A mistake in the options is the exception (an unrecognized option, or a value an option does
+    // not accept): it reports the command that was just typed, not a detail of the document being
+    // parsed, so it always prints. Hiding it behind --verbose is how a misspelled flag or value ends
+    // up silently doing nothing.
+    const CONFIG_MISTAKES = new Set<string>([OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION, OfficeWarningType.INVALID_CONFIG_VALUE, OfficeWarningType.INVALID_CONTAINER_WIDTH]);
     const originalOnWarning = config.onWarning;
     config.onWarning = (issue) => {
-        if (verbose || issue.code === OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION) {
+        if (verbose || CONFIG_MISTAKES.has(issue.code)) {
             const severity = issue.type === 'error' ? 'Error' : 'Warning';
             console.error(`[OfficeParser ${severity}] [${issue.code}]: ${issue.message}`);
             // The message already names every offending key, so the raw details object is only
@@ -348,7 +351,7 @@ if (fileArg && !showHelp) {
     console.log('  --includeRawContent                         Include raw content in AST (default: false)');
     console.log('  --serializeRawContent                       Serialize raw XML content (default: true)');
     console.log('  --preserveXmlWhitespace                     Keep raw formatting space (default: false)');
-    console.log('  --includeBreakNodes                         Include break nodes (DOCX & ODF, default: false)');
+    console.log('  --includeBreakNodes                         Include break nodes (DOCX, ODF & LaTeX, default: false)');
     console.log('  --ignorePageGeometry                        Omit per-node bounding boxes and page dimensions (default: false)');
     console.log('  --verbose                                   Show full error stack traces and warning logs');
     console.log('  --newlineDelimiter=string                   Delimiter string between blocks/lines (default: \\n)');
@@ -356,6 +359,8 @@ if (fileArg && !showHelp) {
     console.log('  --password=secret                           Password for an encrypted document (PDF, OOXML, or ODF)');
     console.log('                                              (or set OFFICEPARSER_PASSWORD to keep it out of the process list)');
     console.log('  --htmlParserConfig.preserveIframes          Keep non-YouTube <iframe> embeds (dropped by default)');
+    console.log('  --htmlParserConfig.preserveComments         Keep HTML/EPUB <!-- --> comments as comment nodes (default: false)');
+    console.log('  --texParserConfig.today="May 1, 2024"       What \\today prints in LaTeX input (default: the date of the parse)');
     console.log('  --ocrConfig.preserveLayout=false            Flatten OCR text instead of keeping its line layout (default: true)');
     console.log('');
     console.log('PDF Parser Options (pdfParserConfig.*):');

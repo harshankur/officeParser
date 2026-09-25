@@ -1,7 +1,7 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { base64ByteLength, isHeaderRow } from '../utils/officeGenUtils.js';
+import { base64ByteLength, documentLanguage, isHeaderRow } from '../utils/officeGenUtils.js';
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 
@@ -394,7 +394,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const spreadsheetScriptOut = sa.scripts ? spreadsheetScript : '';
 
         const value = sa.document ? `<!DOCTYPE html>
-<html lang="en">
+<html lang="${documentLanguage(this.effectiveMetadata)}">
 <head>
     ${headInjectionsOn ? inj.headStart : ''}
     <meta charset="UTF-8">

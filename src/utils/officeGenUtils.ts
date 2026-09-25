@@ -168,6 +168,20 @@ const PAPER_SIZES_PT: Record<string, { w: number; h: number }> = {
     a6: { w: 105 * PT_PER_MM, h: 148 * PT_PER_MM },
 };
 
+/**
+ * The document's language as a BCP 47 tag for output: `metadata.language` (where parsers put it),
+ * else `nativeProperties.language`, else `fallback`. Reduced to the characters a language tag uses,
+ * since it is written into markup (`lang`, `dc:language`, `/Lang`).
+ */
+export function documentLanguage(metadata: { language?: string; nativeProperties?: Record<string, any> } | undefined, fallback = 'en'): string {
+    const raw = metadata?.language || metadata?.nativeProperties?.language;
+    const tag = typeof raw === 'string' ? raw.replace(/[^A-Za-z0-9-]/g, '') : '';
+    return tag || fallback;
+}
+
+/** Every {@link PaperFormat} name, lowercased: the page sizes a `format` option accepts. */
+export const PAPER_FORMAT_NAMES: readonly string[] = Object.keys(PAPER_SIZES_PT);
+
 /** Portrait `{ w, h }` page size in points for a {@link PaperFormat} name (case-insensitive), defaulting to A4. */
 export function paperSizePt(format: string | undefined): { w: number; h: number } {
     return PAPER_SIZES_PT[(format || 'a4').toLowerCase()] || PAPER_SIZES_PT.a4;

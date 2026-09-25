@@ -19,7 +19,8 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     private attachmentIndex?: Map<string, OfficeAttachment>;
 
     constructor(protected destination: D, ast: OfficeParserAST, config?: GeneratorConfig<D> | FullGeneratorConfig) {
-        this.config = resolveGeneratorConfig(destination, ast.config, config);
+        // Problems with the configuration itself are among the result's messages too.
+        this.config = resolveGeneratorConfig(destination, ast.config, config, issue => this.messages.push(issue));
         this.ast = ast;
         this.styleMapper = new StyleMapper(this.config.styleMap, this.config.ignoreDefaultStyleMap);
     }
