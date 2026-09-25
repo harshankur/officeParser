@@ -6,7 +6,6 @@ TestNumber: 42
 TestBool: true
 ---
 
-
 ---
 
 
@@ -30,7 +29,6 @@ TestBool: true
 
 
 
-
 ---
 
 
@@ -47,7 +45,6 @@ TestBool: true
 | **Paragraph level formatting ** |
 | ==You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background. == |
 | For the lovers of poetry amongst you, paragraphs with hanging indents, like this often<br>come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph. |
-
 
 
 
@@ -73,7 +70,6 @@ TestBool: true
 
 
 
-
 ---
 
 
@@ -93,7 +89,6 @@ TestBool: true
 | Three |   |   |   |
 |   | Four |   |   |
 |  |   |   |   |
-
 
 
 
@@ -118,7 +113,6 @@ TestBool: true
 
 
 
-
 ---
 
 
@@ -135,7 +129,6 @@ TestBool: true
 
 
 
-
 ---
 
 
@@ -144,7 +137,6 @@ TestBool: true
 | Centered images like this are useful for large pictures that should be a focus of attention. |
 | There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was *inserted*, not necessarily where it appears on the page in Word. |
 |   |
-
 
 
 
@@ -179,7 +171,6 @@ TestBool: true
 | An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement. |   |
 | iii | We now resume our normal programming |
 | iv | Four |
-
 
 
 

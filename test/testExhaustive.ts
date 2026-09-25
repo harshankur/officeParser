@@ -2977,6 +2977,77 @@ async function testCancellation(): Promise<void> {
     console.log('  Cancellation: All assertions passed ✓');
 }
 
+/**
+ * Markdown and HTML round trips keep what the author wrote. Literal text that looks like a character
+ * reference survives repeated saves (it lost one level of escaping each time), including through
+ * HTML the way an editor saves (md -> HTML -> editor -> HTML -> md); references decode everywhere a
+ * renderer decodes them (HTML text and attributes, Markdown alt text and titles); a one-line code
+ * block stays a block; and blocks are separated by exactly one blank line.
+ */
+async function testMarkdownRoundTrips(): Promise<void> {
+    const md = async (src: string) => ((await (await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md' } as any)).to('md', { generateIds: false } as any)).value as string).trim();
+    const viaHtml = async (src: string) => {
+        const html = (await (await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md' } as any)).to('html', { htmlConfig: { sourceAttributes: true } } as any)).value as string;
+        const back = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any);
+        return ((await back.to('md', { generateIds: false, mdConfig: { dialect: 'extended' } } as any)).value as string).replace(/^---\n[^]*?\n---\n\n/, '').trim();
+    };
+    const stable = async (save: (s: string) => Promise<string>, src: string, expected: string, label: string) => {
+        let text = src;
+        for (let pass = 1; pass <= 3; pass++) {
+            text = await save(text);
+            assert.strictEqual(text, expected, `MD round trip: ${label} (save ${pass})`);
+        }
+    };
+
+    // Literal reference-like text keeps its meaning; a bare & is left alone.
+    for (const save of [md, viaHtml]) {
+        const how = save === md ? 'md' : 'md -> html -> md';
+        await stable(save, 'Text &amp;quot; literal.', 'Text &amp;quot; literal.', `literal &quot; (${how})`);
+        await stable(save, 'Tom &amp;amp; Jerry', 'Tom &amp;amp; Jerry', `literal &amp; (${how})`);
+        await stable(save, 'Tom & Jerry, a && b', 'Tom & Jerry, a && b', `a bare & (${how})`);
+        await stable(save, 'x &#39; &#x27; &copy; &foo; &constructor;', "x ' ' © &amp;foo; &amp;constructor;", `references decoded, literal names kept (${how})`);
+        await stable(save, '![a &amp;quot; b](x.png "say &quot;hi&quot;")', '![a &amp;quot; b](x.png "say &quot;hi&quot;")', `alt text and title (${how})`);
+        await stable(save, '```\nls -la\n```', '```\nls -la\n```', `a one-line code block stays a block (${how})`);
+    }
+    await stable(md, 'code `&quot;` and $a &= b$ stay', 'code `&quot;` and $a &= b$ stay', 'code spans and math are not escaped');
+    // A link target is decoded as a renderer decodes it, and a literal reference in it is escaped.
+    await stable(md, '[l](http://x.com/?a=1&b=2)', '[l](http://x.com/?a=1&b=2)', 'a query string');
+    await stable(md, '[l](http://x.com/?q=&amp;copy;)', '[l](http://x.com/?q=&amp;copy;)', 'a literal reference in a link target');
+    const fromHtml = await OfficeParser.parseOffice(Buffer.from('<p><a href="http://x.com/?q=&amp;copy;&amp;b=2">l</a></p>'), { fileType: 'html' } as any);
+    assert.strictEqual((await fromHtml.to('md')).value, '[l](http://x.com/?q=&amp;copy;&b=2)', 'MD: a URL holding a literal &copy; keeps it for a renderer');
+    // A title escaping its quotes (as other tools write it) is read, and written back as a reference.
+    const titled = await OfficeParser.parseOffice(Buffer.from('[l](http://x.com "say \\"hi\\"") ![a &amp; b](i.png)'), { fileType: 'md' } as any);
+    const [link, , image] = titled.content[0].children!;
+    assert.deepStrictEqual([(link.metadata as any).link, (link.metadata as any).title, (image.metadata as any).altText], ['http://x.com', 'say "hi"', 'a & b'], 'MD: a title may escape its quotes; alt text is decoded');
+    await stable(md, '[l](http://x.com "say \\"hi\\"")', '[l](http://x.com "say &quot;hi&quot;")', 'a title with quotes');
+    // A reference name the object prototype has is not a character.
+    const proto = await OfficeParser.parseOffice(Buffer.from('a &constructor; b'), { fileType: 'md' } as any);
+    assert.strictEqual(proto.content[0].children!.map(c => c.text).join(''), 'a &constructor; b', 'MD: &constructor; is literal text');
+
+    // One blank line around every block, and before the abbreviation definitions.
+    await stable(md, 'Energy is $$E=mc^2$$ here.', 'Energy is\n\n$$\nE=mc^2\n$$\n\nhere.', 'display math split out of a paragraph');
+    for (const [label, src] of [
+        ['math', 'P.\n\n$$\nx\n$$\n\nQ.'], ['fenced code', 'P.\n\n```js\nx\n```\n\nQ.'], ['table', 'P.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\nQ.'],
+        ['abbreviations', 'R&D.\n\n*[R&D]: Research'],
+    ] as const) {
+        await stable(md, src, src, `one blank line around ${label}`);
+    }
+    // Code in a pipe-table cell, where a fence cannot go, stays an inline span.
+    const cellCode = await OfficeParser.parseOffice(Buffer.from('<table><tr><th>a</th></tr><tr><td><pre><code>x</code></pre></td></tr></table>'), { fileType: 'html' } as any);
+    assert.ok(/\| `x` \|/.test((await cellCode.to('md')).value as string), 'MD: code in a pipe-table cell stays an inline span');
+    const pre = (await (await OfficeParser.parseOffice(Buffer.from('```\nls\n```'), { fileType: 'md' } as any)).to('html', { htmlConfig: { standalone: false } } as any)).value as string;
+    assert.ok(/<pre><code>ls<\/code><\/pre>/.test(pre), `HTML: a one-line code block is a <pre> (${pre})`);
+
+    // HTML decodes every numeric reference and HTML 4's names, in text and in attribute values.
+    const html = await OfficeParser.parseOffice(Buffer.from('<p>it&rsquo;s &copy; &#8217; &#x2019; &eacute; &amp;quot; <a href="http://x.com/?a=1&amp;b=2" title="t &amp; u">l</a> <img src="i.png" alt="Tom &amp; Jerry" title="q &quot;x&quot;"></p>'), { fileType: 'html' } as any);
+    const [htmlText, htmlLink, htmlImage] = html.content[0].children!;
+    assert.deepStrictEqual(
+        [htmlText.text, (htmlLink.metadata as any).link, (htmlLink.metadata as any).title, (htmlImage.metadata as any).altText, (htmlImage.metadata as any).title],
+        ['it’s © ’ ’ é &quot; ', 'http://x.com/?a=1&b=2', 't & u', 'Tom & Jerry', 'q "x"'],
+        'HTML: character references decode in text, href, title and alt');
+    console.log('  Markdown round trips: All assertions passed ✓');
+}
+
 async function runTests(): Promise<void> {
     console.log('Starting exhaustive officeParser test suite...');
     let passed = 0;
@@ -2984,6 +3055,7 @@ async function runTests(): Promise<void> {
 
     const tests: Array<[string, () => Promise<void>]> = [
         ['Markdown', testMarkdown],
+        ['Markdown round trips', testMarkdownRoundTrips],
         ['HTML', testHtml],
         ['SourceComments', testSourceComments],
         ['CSV', testCsv],

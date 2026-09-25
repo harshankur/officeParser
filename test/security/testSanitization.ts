@@ -515,6 +515,28 @@ async function htmlAttributeBagTests() {
     const quoted = await gen({ 'data-note': 'he said "hi" <b>' });
     check('bag: value escaped', !/data-note="he said "/.test(quoted) && /&quot;|&#/.test(quoted), quoted);
 
+    // Parsed attribute values are decoded, so the checks above see what a browser would: an encoded
+    // scheme or quote is caught, not smuggled through as inert-looking text.
+    const parsed = async (html: string, fmt: 'html' | 'md') => (await (await OfficeParser.parseOffice(Buffer.from(html),
+        { fileType: 'html', htmlParserConfig: { preserveAttributes: true } } as any)).to(fmt, { htmlConfig: { standalone: false } } as any)).value as string;
+    // Attribute names of every tag, with quoted values consumed whole (text inside a value is not a name).
+    const attributeNames = (html: string) => [...html.matchAll(/<[a-zA-Z][^\s>/]*((?:\s+[^\s"'>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*\/?>/g)]
+        .flatMap(tag => [...tag[1].matchAll(/([^\s"'>/=]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g)].map(a => a[1].toLowerCase()));
+    // A Markdown link target as an HTML5-aware renderer reads it: character references decoded
+    // (`&colon;` included), then percent-decoded.
+    const markdownTargets = (md: string) => [...md.matchAll(/\]\(([^)\s]*)/g)].map(m => {
+        const decoded = m[1].replace(/&colon;/g, ':').replace(/&#(\d+);/g, (_x, n) => String.fromCodePoint(+n)).replace(/&#x([0-9a-f]+);/gi, (_x, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&amp;/g, '&');
+        try { return decodeURIComponent(decoded); } catch { return decoded; }
+    });
+    const encodedScheme = '<p><a href="java&#115;cript:alert(1)">x</a> <a href="jav&#x61;script&colon;alert(2)">y</a></p>';
+    const encodedQuote = '<p data-note="a&quot; onclick=&quot;alert(1)"><a href="http://x.com/&quot; onmouseover=&quot;alert(1)">z</a> <img src="i.png" alt="&quot; onerror=&quot;alert(1)"></p>';
+    for (const source of [encodedScheme, encodedQuote]) {
+        const html = await parsed(source, 'html');
+        check('decoded attributes: no event handler and no javascript: link in HTML', !attributeNames(html).some(n => /^on/.test(n)) && ![...html.matchAll(/href="([^"]*)"/g)].some(m => /^\s*javascript:/i.test(m[1].replace(/&colon;/g, ':').replace(/&amp;/g, '&'))), html);
+        const md = await parsed(source, 'md');
+        check('decoded attributes: no Markdown link target reads as javascript:', !markdownTargets(md).some(t => /^\s*javascript:/i.test(t)), md);
+    }
+
     // Duplicate attributes are merely invalid in HTML but FATAL in the XHTML EpubGenerator emits -
     // an unopenable EPUB. Nothing else in the gate parses generated output as XML.
     const dupe = await gen({ class: 'from-source', 'data-k': 'v' });

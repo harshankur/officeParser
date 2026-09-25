@@ -1,5 +1,5 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextMetadata, WikilinkSyntax } from '../types.js';
-import { escapeHtml, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
+import { escapeHtml, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
 import { clampRepeat } from '../utils/numberUtils.js';
@@ -49,6 +49,24 @@ const MD_ADMONITION_TYPES = new Set(['note', 'tip', 'important', 'warning', 'cau
  * construct and exposes whatever follows as document-level Markdown.
  */
 const foldLines = (value: unknown): string => String(value ?? '').replace(/[\r\n]+/g, ' ');
+
+/**
+ * A link or image title as the `"..."` of `[text](url "title")`: on one line, escaped like text,
+ * with its double quotes as `&quot;` (the parser decodes titles, as CommonMark does), so a quote
+ * cannot end the title early and spill the rest into the URL.
+ */
+const markdownTitle = (title: unknown): string => ` "${markdownEscapeText(foldLines(title)).replace(/"/g, '&quot;')}"`;
+
+/**
+ * Blocks whose Markdown starts with a separator newline, so they stand apart even when they follow
+ * inline content. After output that already ends in a blank line, that newline would make a second
+ * blank line; {@link joinBlock} drops it.
+ */
+const SEPARATED_BLOCK_TYPES = new Set(['code', 'table', 'sheet', 'slide', 'page', 'embed']);
+
+/** Appends a node's Markdown, leaving exactly one blank line before a separated block. */
+const joinBlock = (output: string, node: { type: string }, next: string): string =>
+    SEPARATED_BLOCK_TYPES.has(node.type) && output.endsWith('\n\n') ? output + next.replace(/^\n+/, '') : output + next;
 
 /**
  * Named Markdown dialect presets. `extended` reproduces this library's historical output
@@ -184,6 +202,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
      * other formatting flag still comes through.
      */
     private inImplicitBold = false;
+    /** Rendering a pipe-table cell, where a fenced block cannot go: code there stays an inline span. */
+    private inPipeTableCell = false;
     private hoistedContent: string[] = [];
     private collectedAbbreviations = new Map<string, string>();
     private resolvedDialect: ResolvedMarkdownDialect;
@@ -411,9 +431,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             }
                             // Reject javascript:/data: schemes and encode `()`/whitespace so the
                             // URL can't break out of `](...)` or inject a script link. An advisory
-                            // title follows as `"title"` (quotes inside it escaped), matching what
-                            // the parser reads back.
-                            const linkTitle = meta.title ? ` "${meta.title.replace(/"/g, '\\"')}"` : '';
+                            // title follows as `"title"`, in the form the parser reads back.
+                            const linkTitle = meta.title ? markdownTitle(meta.title) : '';
                             text = `[${text}](${sanitizeMarkdownUrl(link)}${linkTitle})`;
                         }
                     }
@@ -558,7 +577,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // Strip `[]` from alt (would close the `![...]`) and neutralize the URL scheme.
                     const safeAlt = markdownEscapeText(meta?.altText || 'image').replace(/[[\]]/g, '');
                     const safeSrc = sanitizeMarkdownUrl(src, { allowDataImage: true });
-                    const imgTitle = meta?.title ? ` "${meta.title.replace(/"/g, '\\"')}"` : '';
+                    const imgTitle = meta?.title ? markdownTitle(meta.title) : '';
                     const imageMd = `${anchorPrefix}![${safeAlt}](${safeSrc}${imgTitle})${this.renderAttributeList(meta)}`;
 
                     // image+ocr-text: the image, then its recognized text.
@@ -609,35 +628,36 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // all and the text lands directly in the document body.
                     //
                     // Encode rather than drop: `$a < b$` is ordinary LaTeX, and dropping `<`
-                    // would silently corrupt real formulae. markdownEscapeText only touches `<`
+                    // would silently corrupt real formulae. markdownEscapeTags only touches `<`
                     // followed by a letter/`/`/`!`/`?`, which is not idiomatic math, and it is
                     // idempotent - so output is stable across repeated round-trips even though
-                    // the first cycle shifts an anomalous `<img` to `&lt;img`. (Fully lossless
-                    // would mean teaching MarkdownParser.decodeHtmlEntities to cover math `code`
-                    // nodes; that is a parser behaviour change with its own baseline
-                    // consequences and must not gate a security fix.)
+                    // the first cycle shifts an anomalous `<img` to `&lt;img`. Not the text
+                    // escaping: the parser decodes no entities in math, so an `&` stays as written
+                    // (`a &= b` is an alignment). (Fully lossless would mean teaching
+                    // MarkdownParser.decodeHtmlEntities to cover math `code` nodes; that is a
+                    // parser behaviour change with its own baseline consequences.)
                     if (meta?.math === 'block') {
                         // A content line of exactly `$$` would close the block early.
-                        const mathBlock = markdownEscapeText(node.text || '')
+                        const mathBlock = markdownEscapeTags(node.text || '')
                             .split('\n').map(l => (l.trim() === '$$' ? ` ${l}` : l)).join('\n');
                         return this.resolvedDialect.math === 'dollar' ? `\n$$\n${mathBlock}\n$$\n\n` : `\n${mathBlock}\n\n`;
                     }
                     if (meta?.math === 'inline') {
                         // Dropping `$` and newlines is lossless here: the parser's own inline-math
                         // recognizer is `\$(?!\s)([^$\n]+?)(?<!\s)\$`, which can never capture either.
-                        const mathInline = markdownEscapeText(node.text || '').replace(/[$\r\n]+/g, '');
+                        const mathInline = markdownEscapeTags(node.text || '').replace(/[$\r\n]+/g, '');
                         return this.resolvedDialect.math === 'dollar' ? `$${mathInline}$` : mathInline;
                     }
                     const lang = (meta?.language || '').replace(/[\r\n`]+/g, '');
                     // A `code` node is always block-level: genuinely inline code is a monospace
-                    // text node, never a `code` node. So emit a fenced block whenever the node
-                    // carries a language OR spans multiple lines. Previously the decision keyed only
-                    // off a line break, so a single-line code node with a language - `const x = 1;`
-                    // tagged `js`, or a one-line `mermaid` diagram - collapsed to an inline span,
-                    // silently dropping both its language and its block-ness. (Testing `[\r\n]`, not
-                    // just `\n`, still routes a CR-only body to the fenced branch, where a renderer
-                    // that normalizes `\r` to a line ending would otherwise kill an inline span.)
-                    if (lang || (node.text && /[\r\n]/.test(node.text))) {
+                    // text node, never a `code` node. So it is a fenced block, whatever its length
+                    // and whether or not it names a language: a one-line block (a shell command, a
+                    // one-line `mermaid` diagram) written as an inline span came back as inline
+                    // code, losing its block-ness and any language. Only a pipe-table cell, where a
+                    // fence cannot go, keeps a one-line block without a language as an inline span.
+                    // (Testing `[\r\n]`, not just `\n`, still routes a CR-only body to the fenced
+                    // branch there, where a renderer that normalizes `\r` would kill an inline span.)
+                    if (!this.inPipeTableCell || lang || (node.text && /[\r\n]/.test(node.text))) {
                         // Fence with one more backtick than the longest run inside the content
                         // so an embedded ``` can't close the block early and inject markup.
                         const longestRun = Math.max(0, ...((node.text || '').match(/`+/g) || []).map(s => s.length));
@@ -841,7 +861,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
             }
 
-            output += result;
+            output = joinBlock(output, node, result);
         }
 
         if (this.collectedNotes.length > 0) {
@@ -866,7 +886,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         }
 
         if (this.collectedAbbreviations.size > 0) {
-            output += '\n\n';
+            // One blank line before the definitions, as before the notes above.
+            output = output.replace(/\n+$/, '') + '\n\n';
             for (const [abbr, title] of this.collectedAbbreviations) {
                 output += `*[${markdownEscapeText(String(abbr).replace(/[[\]\r\n]+/g, ''))}]: ${markdownEscapeText(foldLines(title))}\n`;
             }
@@ -917,7 +938,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             // Optimization: Merge adjacent text nodes with identical formatting
             const optimizedChildren = this.optimizeNodes(node.children);
             for (const child of optimizedChildren) {
-                childrenOutput += await this.processNodeRecursive(child, processor);
+                childrenOutput = joinBlock(childrenOutput, child, await this.processNodeRecursive(child, processor));
             }
         }
 
@@ -1090,7 +1111,14 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         }
 
                         // Process cell content
-                        let cellContent = await this.processNodeRecursive(cellNode, processor);
+                        const wasInPipeTableCell = this.inPipeTableCell;
+                        this.inPipeTableCell = true;
+                        let cellContent: string;
+                        try {
+                            cellContent = await this.processNodeRecursive(cellNode, processor);
+                        } finally {
+                            this.inPipeTableCell = wasInPipeTableCell;
+                        }
                         // Use <br> fallback only if allowed, otherwise space
                         const br = this.resolvedFallbackToHtml.cellLineBreaks ? '<br>' : ' ';
                         // Consume any trailing spaces before the newline(s) too, so a hard-break's

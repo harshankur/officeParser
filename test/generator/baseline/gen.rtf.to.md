@@ -29,7 +29,6 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like this
 
 # Tables {#toc28114276}
 
-
 | ITEM | NEEDED |
 | --- | --- |
 | Books | 1 |
@@ -42,7 +41,6 @@ Tables in Word can vary from the extremely simple to the extremely complex. cali
 
 Now let’s look at a fancier tableone with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.
 
-
 | City or Town | Point A | Point B | Point C | Point D | Point E |
 | --- | --- | --- | --- | --- | --- |
 | Point A |  |  |  |  |  |
@@ -52,7 +50,6 @@ Now let’s look at a fancier tableone with alternating row colors and partial b
 | Point E | 93 | 35 | 54 | 43 |  |
 
 Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.
-
 
 | College | New students | Graduating students | Change |
 | --- | --- | --- | --- |
@@ -68,14 +65,12 @@ Next, we see a table with special formatting in various locations. Notice how th
 
 Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.
 
-
 | One<br>Three | Two |
 | --- | --- |
 |  | Four |
 |  | To the left is a table inside a table, with some cells merged. |
 
 We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.
-
 
 | December 2007 |   |   |   |   |   |   |   |   |   |   |   |   |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |

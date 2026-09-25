@@ -2,6 +2,7 @@ import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, EmbedM
 import { createAST } from '../utils/astUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
+import { decodeCharacterReferences } from '../utils/htmlEntities.js';
 import { isEmptyMath, MathNode, mathmlTreeToLatex } from '../utils/mathUtils.js';
 import { isSafeHtmlAttributeName, iframeAllowed } from '../utils/sanitize.js';
 
@@ -23,17 +24,17 @@ interface HtmlNode {
 }
 
 /**
- * Decode the handful of HTML entities this parser leaves intact. Text nodes and attribute
- * values are kept in their raw escaped form during parsing (see `parseAttributes`), so any
- * branch that lifts text or an attribute into AST content has to decode first - `&lt;` inside
- * a code/math body is a less-than operator, not markup.
+ * Decode the character references in a text node. Text nodes are kept in their raw escaped form
+ * during parsing, so any branch that lifts text into AST content has to decode first: `&lt;` inside
+ * a code/math body is a less-than operator, not markup. Attribute values are decoded once, as they
+ * are read (see `parseAttributes`).
  *
  * One pass, so it is the exact inverse of `escapeHtml`: chained replaces decoded `&amp;` before
- * `&quot;`/`&#39;`, turning the escaped literal text `&amp;quot;` into `"` instead of `&quot;`.
+ * `&quot;`/`&#39;`, turning the escaped literal text `&amp;quot;` into `"` instead of `&quot;`. Every
+ * numeric reference and HTML 4's named references decode (`&rsquo;`, `&#8217;`, `&copy;`), not only
+ * the few `escapeHtml` writes.
  */
-const HTML_ENTITY_DECODES: Record<string, string> = { nbsp: ' ', lt: '<', gt: '>', amp: '&', quot: '"', '#39': "'" };
-const decodeEntities = (s: string): string =>
-    s.replace(/&(nbsp|lt|gt|amp|quot|#39);/g, (_m, name: string) => HTML_ENTITY_DECODES[name]);
+const decodeEntities = decodeCharacterReferences;
 
 /** An element's raw child text as the source had it (code/math bodies). A comment is not text. */
 const rawChildText = (node: HtmlNode): string => node.children.map(c => (c.type === 'comment' ? '' : c.text || '')).join('');
@@ -68,7 +69,9 @@ const parseAttributes = (attrString: string): Record<string, string> => {
     while ((match = regex.exec(attrString)) !== null) {
         const name = match[1].toLowerCase();
         const value = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : (match[4] || ''));
-        attrs[name] = value;
+        // Decoded here, once, so every reader gets the value the author meant (`href="?a=1&amp;b=2"`
+        // is `?a=1&b=2`, `alt="Tom &amp; Jerry"` is `Tom & Jerry`), and none decodes it again.
+        attrs[name] = decodeEntities(value);
     }
     return attrs;
 };
@@ -606,7 +609,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             if ((tagName === 'span' || tagName === 'div') && node.attributes?.['data-html-comment'] !== undefined && node.children.length === 0) {
                 return {
                     type: 'comment',
-                    text: decodeEntities(node.attributes['data-html-comment']),
+                    text: node.attributes['data-html-comment'],
                     metadata: { sourceSyntax: 'html' } as CommentMetadata
                 };
             }
@@ -616,7 +619,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             // `embed` node unconditionally - capturing metadata is safe (the src is scheme-checked
             // again on any re-emit); it is the trusted, already-gated counterpart to a raw <iframe>.
             if (tagName === 'div' && node.attributes?.['data-embed-gated'] !== undefined) {
-                const gatedSrc = decodeEntities(node.attributes?.['data-embed-src'] || '');
+                const gatedSrc = node.attributes?.['data-embed-src'] || '';
                 if (!gatedSrc) return null;
                 const gatedAlignAttr = node.attributes?.['data-embed-align'];
                 const gatedAlign = (['left', 'center', 'right'] as const).includes(gatedAlignAttr as any) ? gatedAlignAttr as 'left' | 'center' | 'right' : undefined;
@@ -687,9 +690,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 // Non-YouTube iframes are dropped by default (a deliberate security posture).
                 // preserveIframes opts back in, keeping the src as a generic 'iframe' embed; the
                 // src is scheme-checked again on generation, so this only widens what is retained.
-                // Decode the src (attribute values are stored entity-encoded) so it isn't
-                // double-escaped when the generator re-escapes it, which would corrupt query strings.
-                const decodedSrc = decodeEntities(src);
+                // The src is decoded (attribute values are, as they are read), so the generator's
+                // re-escaping does not double-escape it and corrupt a query string.
+                const decodedSrc = src;
                 if (iframeAllowed(decodedSrc, config.htmlParserConfig?.preserveIframes)) {
                     const iframeNode: OfficeContentNode = {
                         type: 'embed',
@@ -730,7 +733,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const rawText = decodeEntities(rawChildText(node));
                 // Prefer the text content; fall back to the attribute value (path 2 producers may
                 // emit an empty body).
-                const source = rawText || (modeIsExplicit ? '' : decodeEntities(dataMath));
+                const source = rawText || (modeIsExplicit ? '' : dataMath);
                 // Strip whichever `$`/`$$` delimiters are actually present, independent of the
                 // resolved mode - a `$`-delimited body inside a <div> must not keep its delimiters.
                 // The delimiter also disambiguates the mode when neither an explicit `data-math` nor
@@ -815,7 +818,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             // code flattened to paragraph text.
             if (tagName === 'div' && (node.attributes?.['data-mermaid'] !== undefined || (node.attributes?.class || '').split(/\s+/).includes('mermaid'))) {
                 const code = decodeEntities(rawChildText(node)).trim()
-                    || decodeEntities(node.attributes?.['data-mermaid'] || '');
+                    || (node.attributes?.['data-mermaid'] || '');
                 // Only claim this as a mermaid code node when there is actual diagram source.
                 // A bare `class="mermaid"` div with nested elements (a mermaid.js-rendered <svg>,
                 // or a div merely reusing the class for styling) has no direct text and no
@@ -942,7 +945,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             if (tagName === 'span'
                 && (node.attributes?.class || '').split(/\s+/).includes('citation')
                 && node.attributes?.['data-key']) {
-                const citationKey = decodeEntities(node.attributes['data-key']);
+                const citationKey = node.attributes['data-key'];
                 return {
                     type: 'text',
                     text: citationKey,
@@ -1170,11 +1173,11 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     // Attribute-driven wikilink shape: the page lives in data-target, the display
                     // text is the anchor's own content (or data-alias/data-target when the anchor
                     // is empty). data-wikilink-page above keeps precedence over this form.
-                    const page = decodeEntities(node.attributes['data-target'] || '');
+                    const page = node.attributes['data-target'] || '';
                     if (!children.some(c => c.type === 'text')) {
                         children.push({
                             type: 'text',
-                            text: decodeEntities(node.attributes['data-alias'] || node.attributes['data-target'] || ''),
+                            text: node.attributes['data-alias'] || node.attributes['data-target'] || '',
                         });
                     }
                     children.forEach(c => {

@@ -1088,15 +1088,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const lang = meta?.language ? ` class="language-${this.escape(meta.language)}"` : '';
                 const codeHtml = `<code${lang}>${this.escape(node.text || '')}</code>`;
                 // A `code` node is always block-level (inline code is a monospace text run, emitted
-                // as <code> by formatText). Wrap in <pre> whenever it carries a language or spans
-                // multiple lines; only a bare single-line, language-less code node stays a <span>.
-                // Previously a single-line block (e.g. a one-line ```js) emitted <span><code>, which
+                // as <code> by formatText), so it is a <pre>, whatever its length and whether or not
+                // it names a language. A one-line block without one used to be a <span><code>, which
                 // re-imports as inline code and which strict CodeBlock parsers (only <pre><code>) miss.
-                if (meta?.language || (node.text && node.text.includes('\n'))) {
-                    return `${extraAnchors}<pre${idAttr}${className}${mappedAttrs}${styleAttr}>${codeHtml}</pre>`;
-                } else {
-                    return `${extraAnchors}<span${idAttr}${className}${mappedAttrs}${styleAttr}>${codeHtml}</span>`;
-                }
+                return `${extraAnchors}<pre${idAttr}${className}${mappedAttrs}${styleAttr}>${codeHtml}</pre>`;
             }
 
             case 'list': {

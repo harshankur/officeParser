@@ -338,30 +338,41 @@ export function escapeRtf(text: string): string {
 }
 
 /**
- * Escapes document text for a Markdown text position. Markdown passes raw HTML
- * through to the renderer, so a `<` that begins an HTML tag or comment must be
- * neutralized to prevent `<script>`/`<img onerror>` injection when the Markdown
- * is later rendered to HTML.
- *
- * Deliberately narrow: only a `<` immediately followed by a letter, `/`, `!` or
- * `?` (i.e. one that actually opens a tag/comment/PI, matching how browsers
- * detect tags) is encoded. A bare `<` (e.g. `a < b`), `>`, `&`, `[]` and other
- * Markdown metacharacters are left untouched: they can't start a tag, and
- * MarkdownParser round-trips this output without decoding entities, so encoding
- * them would corrupt re-parsed content. URL schemes are handled by
- * sanitizeMarkdownUrl.
+ * Neutralizes a `<` that would open an HTML tag, comment or processing instruction (one
+ * immediately followed by a letter, `/`, `!` or `?`, matching how browsers detect tags), so
+ * document content can't inject `<script>`/`<img onerror>` when the Markdown is rendered to
+ * HTML. Nothing else changes: this is the escaping for a position where nothing decodes
+ * entities (math), where encoding more would change the content.
+ */
+export function markdownEscapeTags(text: string): string {
+    if (typeof text !== 'string') return '';
+    return text.replace(/<(?=[a-zA-Z/!?])/g, '&lt;');
+}
+
+/**
+ * Escapes document text for a Markdown text position, one a Markdown parser decodes character
+ * references in (MarkdownParser does, as CommonMark does). Besides the tag-opening `<` of
+ * {@link markdownEscapeTags}, the `&` of anything that reads as a character reference
+ * (`&quot;`, `&#39;`, `&#x27;`, `&copy;`, any `&name;`) becomes `&amp;`, so literal text such
+ * as `&quot;` survives a round trip instead of losing one level of escaping each time. A bare
+ * `&` (`Tom & Jerry`, `a && b`) and every other Markdown metacharacter are left as they are.
+ * The `&` is escaped first, so the `&lt;` this writes is not escaped again. URL schemes are
+ * handled by sanitizeMarkdownUrl.
  */
 export function markdownEscapeText(text: string): string {
     if (typeof text !== 'string') return '';
-    return text.replace(/<(?=[a-zA-Z/!?])/g, '&lt;');
+    return markdownEscapeTags(text.replace(/&(?=#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/g, '&amp;'));
 }
 
 /**
  * Sanitizes a document-supplied URL for a Markdown `[text](url)` / `![alt](url)`
  * target. Rejects script-executing schemes (returning '' → a dead link) and
  * percent-encodes the characters that would break out of the `(...)` or inject
- * markup. `&` is preserved so query strings survive; set `allowDataImage` for
- * image targets so embedded `data:image/*` URIs are permitted.
+ * markup. `&` is preserved so query strings survive, except that a Markdown renderer
+ * decodes character references in a link target: the `&` of one is written `&amp;`, so the
+ * renderer reads exactly this URL (a `javascript&colon;` the scheme check let through as a
+ * path cannot become `javascript:`). Set `allowDataImage` for image targets so embedded
+ * `data:image/*` URIs are permitted.
  */
 export function sanitizeMarkdownUrl(url: string, opts?: { allowDataImage?: boolean }): string {
     if (typeof url !== 'string') return '';
@@ -373,7 +384,8 @@ export function sanitizeMarkdownUrl(url: string, opts?: { allowDataImage?: boole
             || (opts?.allowDataImage === true && /^data:image\//i.test(stripped));
         if (!ok) return '';
     }
-    return stripped.replace(/[\s()<>"`\\]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+    return stripped.replace(/[\s()<>"`\\]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
+        .replace(/&(?=#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/g, '&amp;');
 }
 
 // ─── LaTeX ──────────────────────────────────────────────────────────────────────────────────────

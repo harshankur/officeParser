@@ -2,6 +2,7 @@ import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, Embed
 import { createAST } from '../utils/astUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
+import { decodeCharacterReference, decodeCharacterReferences } from '../utils/htmlEntities.js';
 import { iframeAllowed } from '../utils/sanitize.js';
 
 // Sentinel node type for a standalone bookmark-anchor block (e.g. `<a id="x"></a>` on its
@@ -114,6 +115,16 @@ function joinCommentLines(lines: string[]): string[] {
 }
 
 /** Plain text of parsed inline nodes, leaving out source comments: a hidden note is not text. */
+/**
+ * Text that is not parsed as inline Markdown but is still Markdown text (image alt text, link and
+ * image titles, abbreviation definitions), read as CommonMark reads it: backslash-escaped
+ * punctuation and character references decoded, in one pass, so an escaped `\&` stays a literal
+ * `&` rather than starting a reference.
+ */
+const decodeMarkdownText = (text: string): string =>
+    text.replace(/\\([!-/:-@[-`{-~])|&(#\d+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g,
+        (full: string, escaped: string | undefined, ref: string | undefined) => (escaped !== undefined ? escaped : decodeCharacterReference(ref!) ?? full));
+
 const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
 
 export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
@@ -330,7 +341,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // at the end of the document.
     const abbreviationDefinitions = new Map<string, string>();
     textStr = textStr.replace(/^\*\[([^\]]+)\]:[ \t]*(.*)$/gm, (_match, abbr, definition) => {
-        abbreviationDefinitions.set(abbr, definition.trim());
+        // Decoded, as the text they are matched against is.
+        abbreviationDefinitions.set(decodeMarkdownText(abbr), decodeMarkdownText(definition.trim()));
         return '';
     });
 
@@ -339,8 +351,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // live at the end of the document, after every place they're referenced. Keyed by
     // trimmed/lowercased label, matching CommonMark's case-insensitive reference matching.
     const linkDefinitions = new Map<string, { url: string; title?: string }>();
-    textStr = textStr.replace(/^\[([^\]]+)\]:[ \t]*(\S+)(?:[ \t]+"([^"]*)")?[ \t]*$/gm, (_match, label, url, title) => {
-        linkDefinitions.set(label.trim().toLowerCase(), { url, title });
+    textStr = textStr.replace(/^\[([^\]]+)\]:[ \t]*(\S+)(?:[ \t]+"((?:[^"\\]|\\.)*)")?[ \t]*$/gm, (_match, label, url, title) => {
+        linkDefinitions.set(label.trim().toLowerCase(), { url: decodeMarkdownText(url), title: title === undefined ? undefined : decodeMarkdownText(title) });
         return '';
     });
 
@@ -406,13 +418,18 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Split a Markdown inline destination `url "title"` (also `'title'` / `(title)`) into its
         // URL and optional title. The inline parser previously kept the whole thing as the URL, so
         // `[t](u "T")` produced href `u "T"`; reference-style `[t][id]` already split it correctly.
+        // A title may escape its own delimiter (`"say \\"hi\\""`), and is decoded as CommonMark decodes it.
         const splitUrlTitle = (raw: string): { url: string; title?: string } => {
-            const m = raw.trim().match(/^(.*?)\s+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\))\s*$/);
-            return m ? { url: m[1].trim(), title: m[2] ?? m[3] ?? m[4] } : { url: raw };
+            const m = raw.trim().match(/^(.*?)\s+(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|\(((?:[^)\\]|\\.)*)\))\s*$/);
+            const title = m ? m[2] ?? m[3] ?? m[4] : undefined;
+            // The target is decoded too, as a renderer decodes it (the generator escapes what it must).
+            return m ? { url: decodeMarkdownText(m[1].trim()), title: title === undefined ? undefined : decodeMarkdownText(title) } : { url: decodeMarkdownText(raw) };
         };
         const buildLinkOrImageNodes = (isImage: boolean, altText: string, rawUrl: string, attrsStr?: string): OfficeContentNode[] => {
             const { url, title } = splitUrlTitle(rawUrl);
             if (isImage) {
+                // Alt text is plain text, decoded as a Markdown renderer decodes it.
+                altText = decodeMarkdownText(altText);
                 // Pandoc-style attribute list immediately after an image, e.g. {width=50% .centered}
                 const attrs = attrsStr !== undefined ? parseAttributeList(attrsStr) : undefined;
                 if (url.startsWith('data:')) {
@@ -617,13 +634,6 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
     const escapeRegExpChars = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-    // A deliberately small, common-entity lookup (not the full HTML5 named-character-
-    // reference table) - keeps this a plain object rather than needing a dependency.
-    const NAMED_HTML_ENTITIES: Record<string, string> = {
-        amp: '&', lt: '<', gt: '>', quot: '"', apos: '\'', nbsp: ' ',
-        copy: '©', reg: '®', mdash: '—', ndash: '–', hellip: '…'
-    };
-
     // Decodes HTML named entities and numeric/hex character references (&#NN;/&#xHH;)
     // in plain text nodes, skipping monospace (inline code) nodes since CommonMark does
     // not decode entities inside code spans. The regex only ever matches syntactically
@@ -634,13 +644,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     const decodeHtmlEntities = (nodes: OfficeContentNode[]): OfficeContentNode[] => {
         return nodes.map(node => {
             if (node.type !== 'text' || !node.text || node.formatting?.font === 'monospace') return node;
-            const text = node.text.replace(/&(#\d+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g, (full: string, ref: string) => {
-                if (ref[0] === '#') {
-                    const codePoint = ref[1].toLowerCase() === 'x' ? parseInt(ref.slice(2), 16) : parseInt(ref.slice(1), 10);
-                    return (isNaN(codePoint) || codePoint < 0 || codePoint > 0x10FFFF) ? full : String.fromCodePoint(codePoint);
-                }
-                return NAMED_HTML_ENTITIES[ref] ?? full;
-            });
+            const text = decodeCharacterReferences(node.text);
             return text === node.text ? node : { ...node, text };
         });
     };
@@ -988,11 +992,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const attrsStr = iframeMatch[1];
             // The emitted <iframe> HTML-escapes its attribute values (sanitizeUrl -> escapeHtml), so
             // decode them back; otherwise the src double-escapes (`&amp;` -> `&amp;amp;`) and its
-            // query string is corrupted a little more on every save/reload cycle. `&amp;` is decoded
-            // last so a genuinely double-escaped value only unwinds one level per parse.
-            const decodeAttr = (s: string | undefined) => (s || '')
-                .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
-                .replace(/&#39;/g, '\'').replace(/&amp;/g, '&');
+            // query string is corrupted a little more on every save/reload cycle. One pass, the exact
+            // inverse of that escaping, so a genuinely double-escaped value unwinds one level per parse.
+            const decodeAttr = (s: string | undefined) => decodeCharacterReferences(s || '');
             const src = decodeAttr(attrsStr.match(/\bsrc="([^"]*)"/i)?.[1]);
             const width = attrsStr.match(/\bwidth="([^"]*)"/i)?.[1];
             const height = attrsStr.match(/\bheight="([^"]*)"/i)?.[1];
