@@ -125,6 +125,41 @@ const decodeMarkdownText = (text: string): string =>
     text.replace(/\\([!-/:-@[-`{-~])|&(#\d+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g,
         (full: string, escaped: string | undefined, ref: string | undefined) => (escaped !== undefined ? escaped : decodeCharacterReference(ref!) ?? full));
 
+/**
+ * Replaces each fenced code block in `text` with what `replace` returns for it, read as CommonMark
+ * reads a fence: three or more backticks or tildes, indented up to three spaces, whose info
+ * string's first word is the language (`c++`, `objective-c`, `js title="a.js"`; a backtick fence's
+ * info string holds no backtick), closed by a fence of the same character at least as long (so a
+ * `~~~` block isn't closed by a stray ``` inside it). Content lines lose up to the opening fence's
+ * indentation. A fence that is never closed is left as text.
+ */
+function liftFencedCode(text: string, replace: (lang: string, code: string) => string): string {
+    const lines = text.split('\n');
+    const out: string[] = [];
+    // Per fence character, the shortest fence already known to have no closer after it: a later
+    // opener at least that long has none either, so a run of unclosed fences is not rescanned.
+    const unclosedFrom: Record<string, number> = { '`': Infinity, '~': Infinity };
+    for (let i = 0; i < lines.length; i++) {
+        const open = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(lines[i]);
+        const char = open?.[2][0];
+        if (open && char && !(char === '`' && open[3].includes('`')) && open[2].length < unclosedFrom[char]) {
+            const [, indent, fence, info] = open;
+            const close = new RegExp(`^ {0,3}${char === '`' ? '`' : '~'}{${fence.length},}[ \\t]*$`);
+            let j = i + 1;
+            while (j < lines.length && !close.test(lines[j])) j++;
+            if (j < lines.length) {
+                const dedent = new RegExp(`^ {0,${indent.length}}`);
+                out.push(replace(info.trim().split(/\s+/)[0] || '', lines.slice(i + 1, j).map(line => line.replace(dedent, '')).join('\n')));
+                i = j;
+                continue;
+            }
+            unclosedFrom[char] = fence.length;
+        }
+        out.push(lines[i]);
+    }
+    return out.join('\n');
+}
+
 const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
 
 export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
@@ -230,16 +265,21 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return m !== null && /^\d+$/.test(m) ? parseInt(m, 10) : null;
     };
 
-    // Extract code blocks first to protect their contents. Accepts both backtick and
-    // tilde fences (CommonMark's two fence characters); the backreference on the fence
-    // run means a `~~~`-fenced block isn't closed early by a stray ``` inside it, and
-    // vice versa.
+    // Extract fenced code blocks first to protect their contents (see liftFencedCode).
     const codeBlocks: string[] = [];
-    textStr = textStr.replace(/^(`{3,}|~{3,})(\w*)\n([\s\S]*?)\n\1$/gm, (match, _fence, lang, code) => {
+    const liftCode = (text: string): string => liftFencedCode(text, (lang, code) => {
         const id = placeholder('CODE_BLOCK', codeBlocks.length);
         codeBlocks.push(JSON.stringify({ lang, code }));
         return `\n\n${id}\n\n`;
     });
+    /** The code node a lifted block's placeholder stands for, or null for any other text. */
+    const liftedCodeNode = (part: string): OfficeContentNode | null => {
+        const index = placeholderIndex(part.trim(), 'CODE_BLOCK');
+        if (index === null || index >= codeBlocks.length) return null;
+        const data = JSON.parse(codeBlocks[index]);
+        return { type: 'code', text: data.code, metadata: { language: data.lang } as CodeMetadata };
+    };
+    textStr = liftCode(textStr);
 
     // Extract block math ($$\n...\n$$) before block splitting, mirroring the code-block
     // pre-pass above - its body may contain blank lines that would otherwise fragment it.
@@ -763,9 +803,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // paragraph children. v1 only supports inline content inside admonitions (no nested
     // lists/headings/code) - acceptable per the roadmap's first cut.
     const buildAdmonitionNode = (admonitionType: AdmonitionMetadata['admonitionType'], body: string, sourceSyntax: 'github' | 'gitlab'): OfficeContentNode => {
-        const paragraphs = body.split(/\n\n+/).map(p => p.trim()).filter(Boolean);
-        const children: OfficeContentNode[] = paragraphs.flatMap(p =>
-            splitAtDisplayMath(splitParagraphLines(p), parts => ({ type: 'paragraph', children: parts })));
+        // A fenced block in the body (dequoted, so the top-level pass could not see it) is a code child.
+        const paragraphs = liftCode(body).split(/\n\n+/).map(p => p.trim()).filter(Boolean);
+        const children: OfficeContentNode[] = paragraphs.flatMap(p => liftedCodeNode(p)
+            ?? splitAtDisplayMath(splitParagraphLines(p), parts => ({ type: 'paragraph', children: parts })));
         return {
             type: 'admonition',
             metadata: { admonitionType, sourceSyntax } as AdmonitionMetadata,
@@ -1156,11 +1197,25 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 continue;
             }
 
-            content.push({
-                type: 'paragraph',
-                metadata: { style: 'Quote' } as any,
-                children: parseInline(dequoted)
-            });
+            // A fenced block in the quote (dequoted, so the top-level pass could not see it) stays a
+            // code block, between the quote's paragraphs: a quote is a paragraph style, so the
+            // block cannot sit inside it, but its code and language survive.
+            const lifted = liftCode(dequoted);
+            if (lifted === dequoted) {
+                content.push({ type: 'paragraph', metadata: { style: 'Quote' } as any, children: parseInline(dequoted) });
+                continue;
+            }
+            let text: string[] = [];
+            const flushQuote = () => {
+                const quoted = text.join('\n\n').trim();
+                if (quoted) content.push({ type: 'paragraph', metadata: { style: 'Quote' } as any, children: parseInline(quoted) });
+                text = [];
+            };
+            for (const part of lifted.split(/\n\n+/)) {
+                const code = liftedCodeNode(part);
+                if (code) { flushQuote(); content.push(code); } else text.push(part);
+            }
+            flushQuote();
             continue;
         }
 

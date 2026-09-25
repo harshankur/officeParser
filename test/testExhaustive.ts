@@ -3020,6 +3020,20 @@ async function testMarkdownRoundTrips(): Promise<void> {
     const [link, , image] = titled.content[0].children!;
     assert.deepStrictEqual([(link.metadata as any).link, (link.metadata as any).title, (image.metadata as any).altText], ['http://x.com', 'say "hi"', 'a & b'], 'MD: a title may escape its quotes; alt text is decoded');
     await stable(md, '[l](http://x.com "say \\"hi\\"")', '[l](http://x.com "say &quot;hi&quot;")', 'a title with quotes');
+    // A fence is read as CommonMark reads it: any info string (its first word is the language),
+    // up to three spaces of indentation, a longer closing fence; and inside a list item, quote or
+    // admonition it stays a code block (in an admonition, inside it).
+    for (const [src, lang, code] of [
+        ['```c++\nint x;\n```', 'c++', 'int x;'], ['```objective-c\nid x;\n```', 'objective-c', 'id x;'],
+        ['```js title="a.js"\nlet x;\n```', 'js', 'let x;'], ['``` js\nlet y;\n```', 'js', 'let y;'],
+        ['   ```\n   indented\n   ```', '', 'indented'], ['````\na\n```\nb\n`````', '', 'a\n```\nb'],
+    ] as const) {
+        const fenced = (await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md' } as any)).content[0];
+        assert.deepStrictEqual([fenced.type, (fenced.metadata as any)?.language, fenced.text], ['code', lang, code], `MD: fence ${JSON.stringify(src)}`);
+    }
+    await stable(md, '- item\n\n  ```js\n  x\n  ```\n- next', '- item\n\n```js\nx\n```\n\n- next', 'a fenced block in a list item stays a code block');
+    await stable(md, '> quote\n>\n> ```js\n> code\n> ```\n>\n> after', '> quote\n\n```js\ncode\n```\n\n> after', 'a fenced block in a quote stays a code block');
+    await stable(md, '> [!NOTE]\n> text\n>\n> ```sh\n> ls\n> ```', '> [!NOTE]\n> text\n>\n> ```sh\n> ls\n> ```', 'a fenced block in an admonition stays inside it');
     // A reference name the object prototype has is not a character.
     const proto = await OfficeParser.parseOffice(Buffer.from('a &constructor; b'), { fileType: 'md' } as any);
     assert.strictEqual(proto.content[0].children!.map(c => c.text).join(''), 'a &constructor; b', 'MD: &constructor; is literal text');
