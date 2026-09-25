@@ -128,7 +128,7 @@ npx officeparser notes.md --extractAttachments --to=docx --output=notes.docx
 npx officeparser report.docx --extractAttachments --to=odt --output=report.odt
 
 # Convert any source to LaTeX: a .tex file, or a zip of main.tex plus its images
-npx officeparser paper.docx --to=tex --output=paper.tex
+npx officeparser paper.docx --extractAttachments --to=tex --output=paper.tex
 npx officeparser paper.docx --extractAttachments --to=tex --texConfig.bundle --output=paper.zip
 
 # Convert LaTeX to Word: a single .tex, or an Overleaf project zip (which brings its \input files and images)
@@ -151,7 +151,7 @@ npx officeparser my_document --fileType=docx --to=json
 |------|--------|---------|-------------|
 | `--to` | `json\|text\|md\|html\|csv\|rtf\|pdf\|docx\|odt\|tex\|epub\|chunks` | `json` | Output format (`latex` is accepted as an alias of `tex`) |
 | `--output` | path | (none) | Write output to a file |
-| `--fileType` | `docx\|xlsx\|pptx\|odt\|odp\|ods\|odg\|pdf\|rtf\|csv\|md\|html\|epub\|tex` | (none) | Explicitly override input file type detection |
+| `--fileType` | `docx\|xlsx\|pptx\|odt\|odp\|ods\|odg\|pdf\|rtf\|csv\|md\|html\|epub\|tex` | (none) | Explicitly override input file type detection. Also accepts `latex`/`ltx`, the ODF template names `ott`/`ots`/`otp`/`otg`, and `zip` (parsed as whatever the archive holds) |
 | `--ocr` | boolean | `false` | Enable OCR for images (also requires `--extractAttachments`; OCR runs over extracted images) |
 | `--ocrConfig.language` | string | `eng` | Tesseract language(s), e.g. `deu` or `eng+fra` |
 | `--ocrConfig.preserveLayout` | boolean | `true` | Keep the line layout of recognized text |
@@ -172,6 +172,8 @@ npx officeparser my_document --fileType=docx --to=json
 | `--pdfParserConfig.useTags` | boolean | `true` | Use the PDF tag tree; `false` forces geometry-only structure |
 | `--pdfParserConfig.detectColumns` | boolean | `true` | Multi-column reading-order detection |
 | `--pdfParserConfig.pageRange` | string | all | Parse only the given pages, e.g. `1-3,7` |
+| `--htmlParserConfig.preserveComments` | boolean | `false` | Keep HTML/EPUB `<!-- -->` comments as `comment` nodes |
+| `--texParserConfig.today` | string | the date of the parse | What `\today` prints in LaTeX input, e.g. `--texParserConfig.today="May 1, 2024"` |
 | `--pdfParserConfig.headingDetection` | `auto\|font-size\|off` | `auto` | How headings are inferred on the geometry path |
 | `--pdfParserConfig.mergeHyphenatedWords` | boolean | `true` | Rejoin words hyphenated across line breaks |
 | `--pdfParserConfig.normalizeText` | boolean | `true` | Unicode/ligature normalization of extracted text |
@@ -716,7 +718,8 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `LATEX_FILE_NOT_FOUND` | parse | The LaTeX input includes files or images the parser could not read (a bare `.tex` carries none). Parse the project as a `.zip` to include them; images are kept as path references. |
 | `FILE_TYPE_DETECTION_FAILED` / `BUFFER_TYPE_MISMATCH` | parse | Type could not be sniffed / disagreed with the `fileType` hint. |
 | `PASSWORD_REQUIRED` / `PASSWORD_INCORRECT` | parse | Encrypted input; supply `password`/`onPassword` (these also throw when parsing cannot continue). |
-| `UNRECOGNIZED_CONFIG_OPTION` | config | A config key this version does not know (often a typo or a removed/renamed option); it had no effect. |
+| `UNRECOGNIZED_CONFIG_OPTION` | config | A config key this version does not know (often a typo or a removed/renamed option); it had no effect. Raised for parser and generator configs, and for a `convert()` option placed at the top level instead of under `parseConfig`/`generatorConfig` (the message says where it belongs). |
+| `INVALID_CONFIG_VALUE` | config | A generator option got a value it does not accept (a `documentClass`, paper `format` or margin, `pdfConfig.engine`, `htmlConfig.standalone.styles`, a Markdown dialect preset, a chunking strategy/`splitBy`/`tableSplitStrategy`) or `texParserConfig.today` is not a string; the option's default was used, and the message names the option, the value and what it accepts. |
 | `CONTENT_NOT_REPRESENTABLE` | generate | A node type has no faithful form in the target format and was downgraded or omitted (e.g. math/embeds in DOCX/ODT, a table-less document to CSV). |
 | `METADATA_NOT_REPRESENTABLE` | generate | A metadata field could not be represented in the target format. |
 | `IMAGE_NOT_INLINED` | generate | An image over `maxInlineImageBytes` was referenced by name instead of inlined (Markdown / fragment HTML). |
@@ -754,7 +757,7 @@ extracted (the matching `ignore*` flag is then a no-op).
 | HTML | `<!-- -->` become `comment` nodes* (opt-in: `preserveComments`) | footnotes/endnotes | – | – | Y (`data:` only) | – | Y |
 | MD   | `<!-- -->` become `comment` nodes* | footnotes/endnotes | – | – | Y (`data:` only) | – | Y (HTML-table fallback) |
 | CSV  | `#`-rows become `comment` nodes* | – | – | – | – | – | rows |
-| EPUB | – | footnotes/endnotes | – | – | Y | – | Y |
+| EPUB | `<!-- -->` become `comment` nodes* (opt-in: `preserveComments`) | footnotes/endnotes | – | – | Y | – | Y |
 | TEX  | Y (`% Comment (Author, date):` lines); `% <!-- -->` lines become `comment` nodes* | footnotes/endnotes | Y (`fancyhdr`) | – | Y (from a project zip) | – | Y |
 
 Notes: comments land on `node.comments[]` (with `author`/`date`) except source-level comments, which
@@ -981,7 +984,7 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 > Markdown-input parsing options that are not dialect toggles live on `htmlParserConfig` (Markdown
 > shares the HTML parser for embeds): `preserveIframes` and `embedFolkForms` govern raw `<iframe>`
 > blocks and folk embed forms encountered in `.md`. There is no separate `mdParserConfig`.
-> (`preserveComments` is HTML-only: comments in Markdown are always kept, see the table below.)
+> (`preserveComments` governs HTML and EPUB input only: comments in Markdown are always kept, see the table below.)
 
 | Feature | Markdown syntax | AST representation |
 |---|---|---|
@@ -1291,9 +1294,10 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`, `'tex'`) as these lack magic bytes. |
 | `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
 | `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000, maxTableCells: 1000000 }` | **New**: Limits applied during ZIP extraction (and ODF cell expansion) to protect against excessive memory and resource usage |
-| `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options **(and Markdown input: `preserveIframes`/`embedFolkForms` govern raw `<iframe>` blocks and folk embeds in `.md` too)**. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes: `true` for any, or a hostname allowlist; the src is scheme-checked on generation. `embedFolkForms` (`boolean`, default `false`): opt in to importing ambiguous folk embed forms (Obsidian `![](youtube-url)`, thumbnail-link) as YouTube embeds. `preserveComments` (`boolean`, default `false`): keep `<!-- ... -->` comments in HTML input as `comment` nodes (`metadata.sourceSyntax: 'html'`) instead of dropping them; conditional comments (`<!--[if …]>`) are always dropped. The `data-html-comment` shape `sourceAttributes` emits is always read. |
+| `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options **(and Markdown input: `preserveIframes`/`embedFolkForms` govern raw `<iframe>` blocks and folk embeds in `.md` too)**. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes: `true` for any, or a hostname allowlist; the src is scheme-checked on generation. `embedFolkForms` (`boolean`, default `false`): opt in to importing ambiguous folk embed forms (Obsidian `![](youtube-url)`, thumbnail-link) as YouTube embeds. `preserveComments` (`boolean`, default `false`): keep `<!-- ... -->` comments in HTML and EPUB input as `comment` nodes (`metadata.sourceSyntax: 'html'`) instead of dropping them; conditional comments (`<!--[if …]>`) are always dropped. The `data-html-comment` shape `sourceAttributes` emits is always read. |
 | `pdfWorkerSrc` | `string` | CDN (jsDelivr) | Path/URL to `pdf.worker.min.mjs` (required in browser) |
 | `pdfParserConfig` | `PdfParserConfig` | see below | PDF-specific options ([table below](#pdfparserconfig)) |
+| `texParserConfig` | `TexParserConfig` | `{ today: '' }` | LaTeX options. `today` (`string`): what `\today` prints. `''` (default) prints the date of the parse, as LaTeX prints the date of the compile, in the document's language ("September 25, 2026" in English); set a fixed date, so that the same file parses the same way every day, or a placeholder of your own to find and replace later |
 | `onWarning` | `(issue: OfficeIssue) => void` | (none) | Callback for non-fatal parsing issues |
 | `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel parsing (rejects with AbortError) |
 
@@ -1516,9 +1520,9 @@ Pass as `docxConfig` inside `GeneratorConfig`. The DOCX generator writes a real 
 import { OfficeConverter } from 'officeparser';
 import { writeFileSync } from 'fs';
 
-// Any supported source → Word. Use --extractAttachments (CLI) or extractAttachments: true to embed images.
+// Any supported source → Word. convert() extracts the images itself; the CLI needs --extractAttachments.
 const { value } = await OfficeConverter.convert('report.md', 'docx', {
-    docxConfig: { format: 'Letter', margin: { top: 36, right: 36, bottom: 36, left: 36 } }
+    generatorConfig: { docxConfig: { format: 'Letter', margin: { top: 36, right: 36, bottom: 36, left: 36 } } }
 });
 writeFileSync('report.docx', value); // value is a Uint8Array
 ```
@@ -1537,8 +1541,8 @@ Pass as `odtConfig` inside `GeneratorConfig`. The ODT generator writes a real Op
 import { OfficeConverter } from 'officeparser';
 import { writeFileSync } from 'fs';
 
-// Any supported source → OpenDocument Text. --extractAttachments (CLI) / extractAttachments: true embeds images.
-const { value } = await OfficeConverter.convert('report.docx', 'odt', { extractAttachments: true });
+// Any supported source → OpenDocument Text. convert() extracts the images itself; the CLI needs --extractAttachments.
+const { value } = await OfficeConverter.convert('report.docx', 'odt');
 writeFileSync('report.odt', value); // value is a Uint8Array
 ```
 
@@ -1565,7 +1569,7 @@ const { value: tex } = await OfficeConverter.convert('paper.docx', 'tex');
 writeFileSync('paper.tex', tex as string);
 
 // Self-contained: main.tex + images/ in one zip
-const { value: zip } = await OfficeConverter.convert('paper.docx', 'tex', { texConfig: { bundle: true } });
+const { value: zip } = await OfficeConverter.convert('paper.docx', 'tex', { generatorConfig: { texConfig: { bundle: true } } });
 writeFileSync('paper.zip', zip as Uint8Array);
 ```
 
@@ -1625,7 +1629,7 @@ generated repeatedly with different metadata.
 | `description` | `string` | HTML `<meta name="description">`, EPUB `dc:description`, frontmatter, LaTeX PDF info `Description` |
 | `subject` / `keywords` / `lastModifiedBy` | `string` | Where the destination format has a slot (LaTeX: `pdfsubject`, `pdfkeywords`, PDF info `LastModifiedBy`) |
 | `created` / `modified` | `Date` | HTML `dcterms.*`, EPUB `dcterms:modified`, frontmatter, LaTeX `pdfcreationdate` / `\date` and `pdfmoddate` |
-| `language` | `string` | EPUB `dc:language`, LaTeX `pdflang` |
+| `language` | `string` | HTML `lang`, EPUB/DOCX/ODT `dc:language`, PDF `/Lang`, LaTeX `pdflang` |
 | `custom` | `Record<string, string \| number \| boolean \| Date>` | HTML `<meta name="custom:KEY">`, Markdown frontmatter, LaTeX PDF info entries |
 
 ```js

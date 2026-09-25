@@ -315,9 +315,9 @@
                 <td><code>htmlParserConfig.preserveComments</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td>Keep <code>&lt;!-- ... --&gt;</code> comments in HTML input as <code>comment</code> nodes
+                <td>Keep <code>&lt;!-- ... --&gt;</code> comments in HTML and EPUB input as <code>comment</code> nodes
                     (<code>metadata.sourceSyntax: 'html'</code>, raw body in <code>text</code>) instead of dropping them.
-                    Conditional comments (<code>&lt;!--[if …]&gt;</code>) are always dropped. HTML only: comments in
+                    Conditional comments (<code>&lt;!--[if …]&gt;</code>) are always dropped. HTML and EPUB only: comments in
                     Markdown are always kept. The <code>data-html-comment</code> shape <code>sourceAttributes</code> emits is always read.</td>
             </tr>
             <tr>
@@ -325,6 +325,15 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td>Import ambiguous "folk" embed forms in Markdown as (safe, id-rendered) YouTube embeds: a standalone Obsidian image whose URL is a YouTube link (<code>![](…watch?v=ID)</code>), and the clickable thumbnail-link (<code>[![](…/vi/ID/…)](watch)</code>). Off by default because auto-upgrading an image/link is a heuristic that could mangle a genuine image link; the unambiguous forms (<code>data-youtube-video</code>, a YouTube <code>&lt;iframe&gt;</code>, the <code>::youtube</code> directive) are always recognized regardless.</td>
+            </tr>
+            <tr>
+                <td><code>texParserConfig.today</code></td>
+                <td><code>string</code></td>
+                <td><code>''</code></td>
+                <td>What <code>\today</code> prints in LaTeX input. <code>''</code> prints the date of the parse, as LaTeX prints the
+                    date of the compile, written the way the document's language writes a date ("September 25, 2026" in English).
+                    Set a fixed date, so that the same file parses the same way every day, or a placeholder of your own to find
+                    and replace later. A value that is not a string raises <code>INVALID_CONFIG_VALUE</code> and is ignored.</td>
             </tr>
         </tbody>
     </table>

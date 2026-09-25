@@ -121,6 +121,18 @@
                 <td>Restrict parsing to given pages, e.g. <code>1-3,7</code>.</td>
             </tr>
             <tr>
+                <td><code>--htmlParserConfig.preserveComments</code></td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>Keep HTML and EPUB <code>&lt;!-- --&gt;</code> comments as <code>comment</code> nodes.</td>
+            </tr>
+            <tr>
+                <td><code>--texParserConfig.today</code></td>
+                <td>string</td>
+                <td>the date of the parse</td>
+                <td>What <code>\today</code> prints in LaTeX input, e.g. <code>--texParserConfig.today="May 1, 2024"</code>.</td>
+            </tr>
+            <tr>
                 <td><code>--pdfParserConfig.headingDetection</code></td>
                 <td><code>auto | font-size | off</code></td>
                 <td><code>auto</code></td>
@@ -294,7 +306,8 @@
     <p>Each removed flag above exits with status 1 and prints its replacement, rather than being accepted and
         ignored. An unrecognized or renamed <em>config</em> key (say <code>--ocrConfig.autoTerminateTimeout</code>) is not fatal, but the
         CLI always prints the <code>UNRECOGNIZED_CONFIG_OPTION</code> warning naming its replacement, with or without
-        <code>--verbose</code>.</p>
+        <code>--verbose</code>, and likewise <code>INVALID_CONFIG_VALUE</code> for a value an option does not accept
+        (<code>--texConfig.documentClass=reprot</code>) and <code>INVALID_CONTAINER_WIDTH</code>.</p>
 
     <br>
     <h2>Examples</h2>

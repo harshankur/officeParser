@@ -2,6 +2,10 @@
     <h1>Generator Configuration Specification</h1>
     <p>The <code>GeneratorConfig</code> object controls how the AST is transformed into final output formats like HTML,
         Markdown, or PDF. It consists of common options and specialized sub-configurations.</p>
+    <p>A key the generator does not recognize raises <code>UNRECOGNIZED_CONFIG_OPTION</code>, and a value an option does
+        not accept (a document class, paper format or margin, PDF engine, HTML stylesheet mode, Markdown dialect preset, or
+        chunking choice) raises <code>INVALID_CONFIG_VALUE</code> and uses the option's default. Both appear in the result's
+        <code>messages</code> as well as reaching <code>onWarning</code>.</p>
     <p style="font-size: 0.9em; opacity: 0.85;"><strong>Related:</strong>
         <a href="#spec/generator">OfficeGenerator &amp; <code>ast.to()</code></a> &middot;
         <a href="#spec/config">OfficeParserConfig</a> (the parse side) &middot;
@@ -809,7 +813,7 @@ const { value: zip } = await ast.to('tex', { texConfig: { bundle: true } });  //
             <tr><td><code>lastModifiedBy</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="lastModifiedBy"&gt;</code>; LaTeX PDF info <code>LastModifiedBy</code></td></tr>
             <tr><td><code>created</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.created"&gt;</code>; Markdown <code>created:</code>; LaTeX <code>pdfcreationdate</code>; the <code>renderMetadata</code> header in text/CSV</td></tr>
             <tr><td><code>modified</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.modified"&gt;</code>; EPUB <code>dcterms:modified</code> <em>and every zip entry's mtime</em>; Markdown <code>modified:</code>; LaTeX <code>\date</code> and <code>pdfmoddate</code> (and the bundle's zip mtimes)</td></tr>
-            <tr><td><code>language</code></td><td><code>string</code></td><td>EPUB <code>dc:language</code>; LaTeX <code>pdflang</code>. Stored on <code>nativeProperties.language</code>, where parsers already surface it.</td></tr>
+            <tr><td><code>language</code></td><td><code>string</code></td><td>HTML <code>lang</code>; EPUB, DOCX and ODT <code>dc:language</code>; PDF <code>/Lang</code>; LaTeX <code>pdflang</code>. Parsers put a document's language in <code>metadata.language</code> (EPUB also keeps it in <code>nativeProperties.language</code>).</td></tr>
             <tr><td><code>custom</code></td><td><code>Record&lt;string, string | number | boolean | Date&gt;</code></td><td>Any caller-defined key/value pairs. HTML <code>&lt;meta name="custom:KEY"&gt;</code>; Markdown frontmatter; LaTeX PDF info entries (the key reduced to letters and digits). <strong>Not representable in EPUB or RTF</strong> (see below).</td></tr>
         </tbody>
     </table>

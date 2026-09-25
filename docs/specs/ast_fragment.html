@@ -210,7 +210,7 @@
             <code>node.comments[]</code>. Carries <code>CommentMetadata</code>: <code>author</code>,
             <code>initials</code>, <code>date</code>, <code>commentId</code>.</li>
         <li><strong><code>comment</code> with <code>sourceSyntax: 'html'</code></strong>: A source comment,
-            <code>&lt;!-- ... --&gt;</code> from Markdown (always) or HTML (under <code>htmlParserConfig.preserveComments</code>):
+            <code>&lt;!-- ... --&gt;</code> from Markdown (always) or HTML and EPUB (under <code>htmlParserConfig.preserveComments</code>):
             the author's hidden note, as a block node or inline in a run. <code>text</code> holds the raw body verbatim; it has no
             children. The Markdown and HTML generators re-emit it, and the LaTeX generator writes it as <code>% &lt;!-- ... --&gt;</code>
             lines that the LaTeX parser reads back; every other output format omits it.</li>
