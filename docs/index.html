@@ -5817,8 +5817,9 @@
              * iframe inside `container`. Used by the windows whose output has no browser renderer.
              */
             async function renderReparsedPreview(source, fileType, container) {
-                const bytes = new TextEncoder().encode(source);
-                const reparsed = await window.officeParser.parseOffice(bytes, { fileType });
+                // A string is the generated source; bytes are a LaTeX bundle (main.tex plus its images).
+                const bytes = typeof source === 'string' ? new TextEncoder().encode(source) : source;
+                const reparsed = await window.officeParser.parseOffice(bytes, { fileType, extractAttachments: true });
                 const htmlResult = await reparsed.to('html');
 
                 const contentFrame = document.createElement('iframe');
@@ -6062,7 +6063,17 @@
                     // shows how faithfully the format round-trips.
                     if (window.viewerStates[format] === 'preview') {
                         try {
-                            await renderReparsedPreview(result.value, format, container);
+                            // A .tex file cannot carry images, so the LaTeX preview re-parses the bundle (main.tex
+                            // plus images/), the way the document compiles.
+                            const source = format === 'tex'
+                                ? (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'tex', {
+                                    ...getGeneratorConfig(),
+                                    ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                                    texConfig: { ...readTexPanelConfig(), bundle: true },
+                                    onWarning: () => { }
+                                })).value
+                                : result.value;
+                            await renderReparsedPreview(source, format, container);
                         } catch (e) {
                             container.innerHTML = '';
                             const err = document.createElement('div');
