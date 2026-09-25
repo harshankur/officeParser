@@ -120,9 +120,87 @@ const TRANSPARENT_ENVS: Record<string, string> = {
     minipage: 'oomm', columns: 'o', column: 'om', multicols: 'mo', 'multicols*': 'mo', adjustbox: 'm', landscape: '',
     spacing: 'm', singlespace: '', onehalfspace: '', doublespace: '', small: '', footnotesize: '', scriptsize: '',
     large: '', Large: '', sloppypar: '', frontmatter: '', mainmatter: '', appendices: '', subequations: '',
-    samepage: '', otherlanguage: 'm', 'otherlanguage*': 'm', english: '', onlyenv: 'O', overprint: 'o', uncoverenv: 'O',
+    samepage: '', onlyenv: 'O', overprint: 'o', uncoverenv: 'O',
     visibleenv: 'O', actionenv: 'O', titlepage: '', subfigure: 'om', subtable: 'om', framed: '', mdframed: 'o', tcolorbox: 'o',
-    theorem: 'o', lemma: 'o', proof: 'o', definition: 'o', corollary: 'o', proposition: 'o', example: 'o', remark: 'o',
+    hyphenrules: 'm',
+};
+
+/**
+ * Conditionals with a fixed value: `\iftrue`, `\iffalse`, and the engine tests of `iftex` (and the
+ * older `ifxetex`/`ifluatex`/`ifpdf` packages). The parser reads a document as pdfLaTeX, the usual
+ * engine (Overleaf's and arXiv's default), would compile it, so a document written for several
+ * engines yields one branch's text.
+ */
+const FIXED_CONDITIONALS: Record<string, boolean> = {
+    ifPDFTeX: true, ifpdftex: true, ifpdf: true, ifeTeX: true, ifetex: true, iftrue: true, iffalse: false,
+    ifXeTeX: false, ifxetex: false, ifLuaTeX: false, ifluatex: false, ifLuaHBTeX: false, ifluahbtex: false, iftutex: false,
+    ifpTeX: false, ifptex: false, ifupTeX: false, ifuptex: false, ifVTeX: false, ifvtex: false, ifAlephTeX: false, ifalephtex: false,
+};
+
+/** TeX's other conditionals: decided only in the forms {@link LatexReader.conditional} knows, but always matched with their `\fi`. */
+const PRIMITIVE_CONDITIONALS = new Set(['if', 'ifcat', 'ifnum', 'ifdim', 'ifodd', 'ifvmode', 'ifhmode', 'ifmmode', 'ifinner', 'ifvoid',
+    'ifhbox', 'ifvbox', 'ifx', 'ifeof', 'ifcase', 'ifdefined', 'ifcsname', 'iffontchar', 'ifincsname', 'ifabsnum', 'ifabsdim',
+    'ifpdfprimitive', 'ifprimitive']);
+
+/** Commands undefined under pdfLaTeX that documents test for: other engines' primitives and converters' markers. */
+const UNDEFINED_UNDER_PDFLATEX = new Set(['directlua', 'luatexversion', 'luaescapestring', 'XeTeXversion', 'XeTeXrevision',
+    'XeTeXinterchartokenstate', 'kanjiskip', 'ptexversion', 'uptexversion', 'HCode', 'Configure', 'NoValue']);
+
+/** pdfTeX's integer registers that documents test, with their values under pdfLaTeX. */
+const PDFTEX_REGISTERS: Record<string, number> = { pdfoutput: 1, pdftexversion: 140, pdfshellescape: 0 };
+
+/** Document classes with chapters (where `\chapter` is defined). */
+const CHAPTER_CLASSES = new Set(['book', 'report', 'memoir', 'scrbook', 'scrreprt', 'amsbook', 'extbook', 'extreport', 'ctexbook',
+    'ctexrep', 'jsbook', 'jbook', 'jreport', 'ujbook', 'ujreport', 'tbook', 'treport', 'thesis', 'ociamthesis', 'Dissertate']);
+
+/** Theorem-like environments' styles in the classes that provide them without `\newtheorem`. */
+const DEFAULT_THEOREM_STYLES: Record<string, string> = {
+    definition: 'definition', example: 'definition', exercise: 'definition', problem: 'definition', question: 'definition',
+    solution: 'definition', remark: 'remark', claim: 'remark',
+};
+
+/**
+ * babel/polyglossia language names and their BCP 47 tags: a language switch keeps only its text,
+ * and the document's main language is recorded in `metadata.language`.
+ */
+const LANGUAGE_CODES: Record<string, string> = {
+    english: 'en', american: 'en-US', USenglish: 'en-US', british: 'en-GB', UKenglish: 'en-GB', canadian: 'en-CA',
+    australian: 'en-AU', newzealand: 'en-NZ', french: 'fr', francais: 'fr', acadian: 'fr-CA', canadien: 'fr-CA',
+    german: 'de', ngerman: 'de', austrian: 'de-AT', naustrian: 'de-AT', swissgerman: 'de-CH', nswissgerman: 'de-CH',
+    spanish: 'es', mexican: 'es-MX', italian: 'it', portuguese: 'pt', portuges: 'pt', brazil: 'pt-BR', brazilian: 'pt-BR',
+    dutch: 'nl', afrikaans: 'af', russian: 'ru', ukrainian: 'uk', belarusian: 'be', polish: 'pl', czech: 'cs',
+    slovak: 'sk', slovene: 'sl', slovenian: 'sl', croatian: 'hr', serbian: 'sr', serbianc: 'sr', bulgarian: 'bg',
+    macedonian: 'mk', greek: 'el', polutonikogreek: 'el', swedish: 'sv', danish: 'da', norsk: 'nb', norwegian: 'nb',
+    bokmal: 'nb', nynorsk: 'nn', finnish: 'fi', icelandic: 'is', estonian: 'et', latvian: 'lv', lithuanian: 'lt',
+    hungarian: 'hu', magyar: 'hu', romanian: 'ro', turkish: 'tr', catalan: 'ca', basque: 'eu', galician: 'gl',
+    irish: 'ga', scottish: 'gd', welsh: 'cy', breton: 'br', latin: 'la', hebrew: 'he', arabic: 'ar', persian: 'fa',
+    farsi: 'fa', urdu: 'ur', hindi: 'hi', bengali: 'bn', marathi: 'mr', sanskrit: 'sa', tamil: 'ta', telugu: 'te',
+    thai: 'th', vietnamese: 'vi', indonesian: 'id', bahasa: 'id', bahasai: 'id', malay: 'ms', bahasam: 'ms',
+    japanese: 'ja', chinese: 'zh', korean: 'ko', esperanto: 'eo', albanian: 'sq', armenian: 'hy', georgian: 'ka',
+};
+
+/**
+ * Theorem-like environments a document class may provide without `\newtheorem` (llncs, svjour and
+ * others): each is read as a numbered theorem with its own counter.
+ */
+const DEFAULT_THEOREM_TITLES: Record<string, string> = {
+    theorem: 'Theorem', lemma: 'Lemma', corollary: 'Corollary', proposition: 'Proposition', definition: 'Definition',
+    example: 'Example', remark: 'Remark', conjecture: 'Conjecture', claim: 'Claim', exercise: 'Exercise',
+    problem: 'Problem', property: 'Property', question: 'Question', solution: 'Solution',
+};
+
+/** What an optional `xparse` argument that was not given holds (and prints), as in LaTeX. */
+const NO_VALUE = '-NoValue-';
+
+/**
+ * Legacy `inputenc` encodings and the WHATWG encoding each decodes with. A `.tex` file is UTF-8
+ * unless it declares one of these (or is not valid UTF-8, when Windows-1252 is assumed).
+ */
+const INPUTENC_ENCODINGS: Record<string, string> = {
+    utf8: 'utf-8', latin1: 'windows-1252', latin9: 'iso-8859-15', latin2: 'iso-8859-2', latin3: 'iso-8859-3',
+    latin4: 'iso-8859-4', latin5: 'windows-1254', latin10: 'iso-8859-16', cp1250: 'windows-1250', cp1251: 'windows-1251',
+    cp1252: 'windows-1252', cp1257: 'windows-1257', ansinew: 'windows-1252', applemac: 'macintosh', koi8r: 'koi8-r',
+    'koi8-r': 'koi8-r', 'x-mac-cyrillic': 'x-mac-cyrillic', cp866: 'ibm866',
 };
 
 /** Commands that carry no content for the AST, with the argument signature to consume. */
@@ -144,11 +222,29 @@ const IGNORED_COMMANDS: Record<string, string> = {
     flushbottom: '', onecolumn: '', twocolumn: 'o', centerline: '', hline: '', cline: 'm', toprule: 'o', midrule: 'o',
     bottomrule: 'o', addlinespace: 'o', endhead: '', endfirsthead: '', endfoot: '', endlastfoot: '', fancyhf: 'm',
     renewcommand: '', footnotesize: '', thanks: 'm', setcounter: 'mm', normalsize: '', ding: 'm', captionsetup: 'om',
-    newtheorem: 'moo', theoremstyle: 'm', AtBeginDocument: 'm', AtEndDocument: 'm', listfiles: '', hyphenation: 'm',
+    AtBeginDocument: 'm', AtEndDocument: 'm', listfiles: '', hyphenation: 'm',
     enlargethispage: 'sm', newpage: '', color: '', label: '', today: '', column: 'om', textwidth: '', linewidth: '',
     columnwidth: '', paperwidth: '', textheight: '', paperheight: '', baselineskip: '', parindent_: '', tabcolsep: '',
     arraybackslash: '', arrayrulewidth: '', dimexpr: '', fboxsep: '', setbeamersize: 'm', logo: 'm', institute: 'om',
+    documentstyle: 'om', NeedsTeXFormat: 'mo', ProvidesPackage: 'mo', ProvidesClass: 'mo', ProvidesFile: 'mo',
+    setotherlanguage: 'om', setotherlanguages: 'm', newtheoremstyle: 'mmmmmmmmm', IEEEpeerreviewmaketitle: '',
+    IEEEoverridecommandlockouts: '', IEEEdisplaynontitleabstractindextext: '', IEEEaftertitletext: 'm', ExplSyntaxOff: '',
+    BooleanTrue: '', BooleanFalse: '', swapnumbers: '',
 };
+
+/**
+ * TeX's and LaTeX's length and integer parameters: an assignment to one (`\parskip=6pt`,
+ * plain TeX's `\magnification=1200`) is not text.
+ */
+const TEX_REGISTERS = new Set(['magnification', 'hsize', 'vsize', 'hoffset', 'voffset', 'baselineskip', 'lineskip', 'lineskiplimit',
+    'topskip', 'maxdepth', 'tolerance', 'pretolerance', 'looseness', 'emergencystretch', 'hbadness', 'vbadness', 'hfuzz', 'vfuzz',
+    'clubpenalty', 'widowpenalty', 'displaywidowpenalty', 'brokenpenalty', 'interlinepenalty', 'exhyphenpenalty', 'hyphenpenalty',
+    'abovedisplayskip', 'belowdisplayskip', 'abovedisplayshortskip', 'belowdisplayshortskip', 'textwidth', 'textheight',
+    'linewidth', 'columnwidth', 'paperwidth', 'paperheight', 'oddsidemargin', 'evensidemargin', 'topmargin', 'headheight',
+    'headsep', 'footskip', 'marginparwidth', 'marginparsep', 'columnsep', 'tabcolsep', 'arrayrulewidth', 'fboxsep', 'fboxrule',
+    'overfullrule', 'parfillskip', 'spaceskip', 'xspaceskip', 'mathsurround', 'nulldelimiterspace',
+    'scriptspace', 'unitlength', 'itemsep', 'parsep', 'topsep', 'partopsep', 'labelsep', 'labelwidth', 'leftmargin',
+    'rightmargin', 'itemindent', 'listparindent', 'footnotesep', 'skip', 'dimen', 'count', 'toks']);
 
 /** Commands whose last mandatory argument is ordinary content, with the signature before it. */
 const WRAPPER_COMMANDS: Record<string, string> = {
@@ -156,7 +252,12 @@ const WRAPPER_COMMANDS: Record<string, string> = {
     rotatebox: 'om', centerline: '', textnormal: '', textup: '', textmd: '', textsc: '', textulc: '', textbf_: '',
     boxed: '', text: '', only: 'O', uncover: 'O', visible: 'O', invisible: 'O', alt: 'Om', temporal: 'Omm', onslide: 'O',
     structure: 'O', alert: 'O', emph_: '', newblock: '', tcbox: 'o', adjustbox: 'm', shortstack: 'o', underbrace: '',
+    foreignlanguage: 'om', textlang: 'om', IEEEauthorblockN: '', IEEEauthorblockA: '', IEEEmembership: '',
+    IEEEtitleabstractindextext: '', dedicatory: '', line: '', leftline: '', rightline: '',
 };
+
+/** Whether a table has its own entry `key` (not one inherited from `Object.prototype`, such as `constructor`). */
+const own = (table: object, key: string): boolean => Object.prototype.hasOwnProperty.call(table, key);
 
 // ── scanner ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -367,11 +468,48 @@ class Scanner {
     }
 
     readStar(): boolean {
+        return this.readChar('*');
+    }
+
+    /** Consumes `ch` if it is the next non-blank character (an `xparse` `t` argument, a star). */
+    readChar(ch: string): boolean {
         const snap = this.save();
         this.skipBlanks();
-        if (this.peekCh() === '*') { this.nextCh(); return true; }
+        if (this.peekCh() === ch) { this.nextCh(); return true; }
         this.restore(snap);
         return false;
+    }
+
+    /**
+     * Skips a conditional branch that is not taken: raw source up to the `\else` (with `toElse`)
+     * or `\fi` that belongs to it, counting the conditionals opened inside it. Consumes that word
+     * and returns it, or null when the input ends first.
+     */
+    skipBranch(isConditional: (name: string) => boolean, toElse: boolean): 'else' | 'fi' | null {
+        let depth = 0;
+        for (;;) {
+            const c = this.nextCh();
+            if (c === undefined) return null;
+            if (c === '%') { while (this.peekCh() !== undefined && this.peekCh() !== '\n') this.nextCh(); continue; }
+            if (c !== '\\') continue;
+            let name = '';
+            while (this.isLetter(this.peekCh(), true)) name += this.nextCh();
+            if (!name) { this.nextCh(); continue; }
+            if (name === 'fi') {
+                if (depth === 0) return this.endWord('fi');
+                depth--;
+            } else if (name === 'else') {
+                if (depth === 0 && toElse) return this.endWord('else');
+            } else if (isConditional(name)) depth++;
+        }
+    }
+
+    /** Ends a control word read by hand: the blanks after it are skipped, as TeX does. */
+    private endWord<T>(v: T): T {
+        while (this.peekCh() === ' ' || this.peekCh() === '\t') this.nextCh();
+        this.afterCs = true;
+        this.lineStart = false;
+        return v;
     }
 
     /** Whether the next non-blank character is `ch` (nothing consumed). */
@@ -496,8 +634,12 @@ interface Stop {
 
 interface ListContext { listId: string; level: number; enumDepth: number; nextIndex?: number; }
 
-interface UserMacro { nargs: number; optDefault: string | null; body: string; }
-interface UserEnv { nargs: number; optDefault: string | null; begin: string; end: string; }
+/** One argument of an `xparse` (`\NewDocumentCommand`) signature. */
+interface XArg { kind: 'm' | 'o' | 'O' | 's' | 't' | 'd' | 'D' | 'r' | 'R' | 'v' | 'b'; token?: string; open?: string; close?: string; value?: string; }
+interface UserMacro { nargs: number; optDefault: string | null; body: string; spec?: XArg[]; }
+interface UserEnv { nargs: number; optDefault: string | null; begin: string; end: string; spec?: XArg[]; }
+/** A theorem-like environment: its printed title, `\theoremstyle`, and the counter it numbers with (none: unnumbered). */
+interface TheoremDef { title: string; style: string; counter?: string; }
 
 /** Files of a LaTeX project (a zip), addressed by normalized path. */
 interface Project { files: Map<string, Buffer>; root: string; }
@@ -513,6 +655,20 @@ function normalizeProjectPath(base: string, path: string): string | null {
         parts.push(seg);
     }
     return parts.join('/');
+}
+
+/** `n` in lowercase roman numerals (LaTeX's `\roman`). */
+function roman(n: number): string {
+    if (n < 1 || n >= 4000) return String(n);
+    const digits: [number, string][] = [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']];
+    let out = '';
+    for (const [v, s] of digits) while (n >= v) { out += s; n -= v; }
+    return out;
+}
+
+/** `n` as a letter (LaTeX's `\alph`), or its digits past `z`. */
+function alph(n: number): string {
+    return n >= 1 && n <= 26 ? String.fromCharCode(96 + n) : String(n);
 }
 
 /** Applies TeX's input ligatures to a run of text (not in a typewriter font, where there are none). */
@@ -584,8 +740,38 @@ class LatexReader {
     private tableDepth = 0;
     /** Whether included files have been refused for exceeding the expansion budget. */
     private includeLimitHit = false;
-    /** Metadata fields `\hypersetup` set explicitly (`pdftitle`, `pdfauthor`), which `\title`/`\author` do not override. */
-    private readonly pdfMetadata = new Set<'title' | 'author'>();
+    /** Metadata fields `\hypersetup` set explicitly (`pdftitle`, `pdfauthor`, `pdfkeywords`), which `\title`/`\author`/`\keywords` do not override. */
+    private readonly pdfMetadata = new Set<'title' | 'author' | 'keywords'>();
+    /** `\newif` switches (which `ifthen` and etoolbox booleans are too) with their current values. */
+    private ifs = new Map<string, boolean>();
+    /** etoolbox toggles with their current values. */
+    private toggles = new Map<string, boolean>();
+    /**
+     * Conditionals open where reading is: `taken` (the true branch of a decided test, whose `\else`
+     * part is skipped), `else` (the false branch of one), `both` (a test not decided: both are read).
+     */
+    private conds: ('taken' | 'else' | 'both')[] = [];
+    /** Theorem-like environments (`\newtheorem`, `\declaretheorem`) by name. */
+    private theorems = new Map<string, TheoremDef>();
+    /** The `\theoremstyle` a new theorem-like environment takes. */
+    private theoremStyle = 'plain';
+    /** Theorem counters: the last number given, the counter numbered within, and its number then. */
+    private theoremCounters = new Map<string, { value: number; within?: string; prefix: string }>();
+    /** Whether the current proof's end-of-proof mark was placed (`\qedhere`). */
+    private qedPlaced = false;
+    /** Languages babel loads (its options) and the one polyglossia or `\babelprovide` makes the main one. */
+    private babelLanguages: string[] = [];
+    private mainLanguage?: string;
+    /** `\babeltags` tags, which name languages in `\text<tag>` and `<tag>` environments. */
+    private languageTags = new Map<string, string>();
+    /** xparse environments open, with the arguments their end code may use. */
+    private openEnvs: { env: string; args: string[] }[] = [];
+    /** Whether the document is ConTeXt (`\starttext`), read for its text as a fallback. */
+    private context = false;
+    /** ConTeXt lists open (`\startitemize`), with the LaTeX environment each is read as. */
+    private contextLists: string[] = [];
+    /** The legacy encoding the main file declares (`inputenc`), for included files that declare none. */
+    inputEncoding: string | undefined;
     attachments: OfficeAttachment[] = [];
     private attachmentByPath = new Map<string, string>();
     private headerFields = new Map<string, string>();
@@ -603,6 +789,10 @@ class LatexReader {
     private pendingMarks: OfficeContentNode[] = [];
     private refs: { node: OfficeContentNode; label: string; kind: string }[] = [];
     private labelTargets = new Map<string, OfficeContentNode>();
+    /** Every `\label` in reading order, so an environment can find the labels written inside it. */
+    private labelLog: string[] = [];
+    /** The number of the `enumerate` item being read at each enumerate depth, for `\ref`s to items. */
+    private enumNumbers: number[] = [];
     private unknown = new Set<string>();
     private missingFiles = new Set<string>();
     private bodyStarted = false;
@@ -618,8 +808,12 @@ class LatexReader {
         this.docFlow = flow;
         this.parseFlow(new Scanner(src, file), flow, {});
         this.endParagraph(flow);
-        const content = this.finishBlocks(flow.blocks);
+        // References resolve before runs merge: a reference without a link is merged into the text around it.
         this.resolveRefs();
+        const content = this.finishBlocks(flow.blocks);
+        // `\hypersetup{pdflang=...}` states the language outright; otherwise it is babel's or polyglossia's main one.
+        const language = this.documentLanguage();
+        if (language && !this.metadata.language) this.metadata.language = language;
         if (this.unknown.size) logWarning(OfficeWarningType.LATEX_CONSTRUCT_NOT_INTERPRETED, this.config, { constructs: [...this.unknown].sort() });
         if (this.missingFiles.size) logWarning(OfficeWarningType.LATEX_FILE_NOT_FOUND, this.config, { files: [...this.missingFiles] });
         this.metadata.nativeProperties = { ...this.native };
@@ -635,15 +829,29 @@ class LatexReader {
      * sections), whether sections are numbered, and the document class.
      */
     private prescan(src: string): void {
-        const cls = /\\documentclass\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/.exec(src);
+        // `\documentstyle` is LaTeX 2.09's `\documentclass`.
+        const cls = /\\document(?:class|style)\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/.exec(src);
         if (cls) {
             this.native.documentClass = cls[2].trim();
             this.native.classOptions = (cls[1] ?? '').split(',').map(s => s.trim()).filter(Boolean);
             this.beamer = this.native.documentClass === 'beamer';
             const size = this.native.classOptions.map((o: string) => /^(10|11|12)pt$/.exec(o)).find(Boolean);
             if (size) this.classSize = +size[1];
+        } else if (/\\starttext\b/.test(src)) {
+            // ConTeXt is a different macro format: its text is read, with its sectioning, lists and
+            // code, but little else of it is interpreted.
+            this.context = true;
+            this.unknown.add('ConTeXt (the document is not LaTeX)');
         }
-        SECTIONING.forEach((name, rank) => { if (new RegExp(`\\\\${name}\\*?\\s*[[{]`).test(src)) this.sectionRanks.add(rank); });
+        SECTIONING.forEach((name, rank) => {
+            if (new RegExp(`\\\\${name}\\*?\\s*[[{]`).test(src) || (this.context && new RegExp(`\\\\start${name}\\b`).test(src))) this.sectionRanks.add(rank);
+        });
+        if (this.context) {
+            // ConTeXt's unnumbered title levels read as the numbered ones they stand for.
+            [['title', 'chapter'], ['subject', 'section'], ['subsubject', 'subsection'], ['subsubsubject', 'subsubsection']].forEach(([title, name]) => {
+                if (new RegExp(`\\\\start${title}\\b`).test(src)) this.sectionRanks.add(SECTIONING.indexOf(name));
+            });
+        }
         if (/\\setcounter\s*\{secnumdepth\}\s*\{\s*-/.test(src)) this.numbered = false;
     }
 
@@ -708,6 +916,12 @@ class LatexReader {
         }
         flow.inline.push(node);
         this.clearPending(flow);
+    }
+
+    /** The current run formatting, as a node's `formatting` (none when plain), for a run built outside {@link addText}. */
+    private runFormatting(): { formatting?: TextFormatting } {
+        const fmt = Object.fromEntries(Object.entries(this.state.fmt).filter(([, v]) => v !== undefined && v !== false));
+        return Object.keys(fmt).length ? { formatting: fmt as TextFormatting } : {};
     }
 
     private addInline(flow: Flow, node: OfficeContentNode): void {
@@ -809,16 +1023,21 @@ class LatexReader {
     }
 
     private addLabel(flow: Flow, label: string): void {
-        if (!label || this.config.ignoreInternalLinks) return;
+        if (!label) return;
+        this.labelLog.push(label);
+        // Without internal links a label is no anchor, but a `\ref` to it still reads its number.
+        const links = !this.config.ignoreInternalLinks;
         const pendingText = flow.pendingHasText || this.hasContent(flow.inline);
         if (flow.labelTarget && !pendingText) {
-            const meta = (flow.labelTarget.metadata ??= {} as any) as any;
-            meta.anchorIds = [...(meta.anchorIds ?? []), label];
+            if (links) {
+                const meta = (flow.labelTarget.metadata ??= {} as any) as any;
+                meta.anchorIds = [...(meta.anchorIds ?? []), label];
+            }
             this.labelTargets.set(label, flow.labelTarget);
         } else if (pendingText) {
-            flow.anchors.push(label);
+            if (links) flow.anchors.push(label);
             this.labelTargets.set(label, { type: 'paragraph', text: '' } as OfficeContentNode);
-        } else {
+        } else if (links) {
             flow.nextAnchors.push(label);
         }
     }
@@ -863,7 +1082,7 @@ class LatexReader {
                         if (stop.env && env === stop.env) { unwind(); return 'end'; }
                         if (env === 'document') { this.endParagraph(flow); this.finished = true; unwind(); return 'enddoc'; }
                         const user = this.envs.get(env);
-                        if (user) this.expand(sc, user.end);
+                        if (user) this.endUserEnv(sc, env, user);
                         break;
                     }
                     const r = this.command(sc, flow, tok.name, stop);
@@ -931,22 +1150,106 @@ class LatexReader {
     }
 
     /** Reads a user macro's arguments and returns its body with them substituted. */
-    private substitute(sc: Scanner, def: { nargs: number; optDefault: string | null; body: string }): string {
+    private substitute(sc: Scanner, def: UserMacro): string {
+        return this.fill(def.body, this.readUserArgs(sc, def));
+    }
+
+    /**
+     * Reads a user macro's or environment's arguments: by its `xparse` signature, or else `n`
+     * mandatory ones, the first optional when it has a default. `env` names the environment whose
+     * body a `b` argument takes.
+     */
+    private readUserArgs(sc: Scanner, def: { nargs: number; optDefault: string | null; spec?: XArg[] }, env?: string): string[] {
+        if (def.spec) return def.spec.map(a => this.readXArg(sc, a, env));
         const args: string[] = [];
         for (let k = 0; k < def.nargs; k++) {
             if (k === 0 && def.optDefault !== null) args.push(sc.readRawOptional() ?? def.optDefault);
             else args.push(sc.readRawGroup() ?? '');
         }
+        return args;
+    }
+
+    /** A definition's body with its parameters (`#1`...`#9`, `##`) replaced by the arguments. */
+    private fill(body: string, args: string[]): string {
         // Size the expansion before building it: a short definition repeating a long argument can
         // otherwise allocate hundreds of megabytes before the expansion budget is checked.
         let size = 0;
-        for (const m of def.body.matchAll(/##|#([1-9])/g)) size += m[0] === '##' ? 1 : (args[+m[1] - 1] ?? '').length;
-        if (this.expandedChars + def.body.length + size > MAX_EXPANDED_CHARS) {
+        for (const m of body.matchAll(/##|#([1-9])/g)) size += m[0] === '##' ? 1 : (args[+m[1] - 1] ?? '').length;
+        if (this.expandedChars + body.length + size > MAX_EXPANDED_CHARS) {
             if (!this.expansionLimitHit) logWarning(OfficeWarningType.LATEX_EXPANSION_LIMIT_REACHED, this.config, { limit: 'macro expansion' });
             this.expansionLimitHit = true;
             return '';
         }
-        return def.body.replace(/##|#([1-9])/g, (m, n) => (m === '##' ? '#' : (args[+n - 1] ?? '')));
+        return body.replace(/##|#([1-9])/g, (m, n) => (m === '##' ? '#' : (args[+n - 1] ?? '')));
+    }
+
+    /** One `xparse` argument: an absent optional one is `-NoValue-` (or its default), a star or token a boolean. */
+    private readXArg(sc: Scanner, a: XArg, env?: string): string {
+        switch (a.kind) {
+            case 'm': return sc.readRawGroup() ?? '';
+            case 's': return sc.readStar() ? '\\BooleanTrue' : '\\BooleanFalse';
+            case 't': return sc.readChar(a.token!) ? '\\BooleanTrue' : '\\BooleanFalse';
+            case 'b': return env ? sc.readRawEnvBody(env) : '';
+            case 'v': {
+                if (sc.nextIs('{')) return sc.readRawGroup() ?? '';
+                sc.skipBlanks();
+                const delim = sc.nextCh();
+                return delim === undefined ? '' : sc.readRawUntil(delim).text;
+            }
+            default: {
+                const open = a.open ?? '[', close = a.close ?? ']';
+                // A delimiter that also closes (`d||`) cannot nest: the argument ends at its next occurrence.
+                const value = open === close ? (sc.readChar(open) ? sc.readRawUntil(close).text : null) : sc.readRawOptional(open, close);
+                return value ?? (a.kind === 'O' || a.kind === 'D' || a.kind === 'R' ? a.value ?? '' : NO_VALUE);
+            }
+        }
+    }
+
+    /**
+     * Parses an `xparse` argument specification (`m`, `o`, `O{default}`, `s`, `t<token>`,
+     * `d<open><close>`, `D..{default}`, `r..`, `R..{default}`, `v`, `b`, with the `+`, `!` and
+     * `>{processor}` prefixes ignored), or returns null for one using anything else.
+     */
+    private parseXSpec(spec: string): XArg[] | null {
+        const out: XArg[] = [];
+        let i = 0;
+        const blanks = () => { while (i < spec.length && /\s/.test(spec[i])) i++; };
+        const group = (): string | null => {
+            blanks();
+            if (spec[i] !== '{') return null;
+            let depth = 0;
+            const start = i;
+            for (; i < spec.length; i++) {
+                if (spec[i] === '\\') { i++; continue; }
+                if (spec[i] === '{') depth++;
+                else if (spec[i] === '}' && --depth === 0) { i++; return spec.slice(start + 1, i - 1); }
+            }
+            return null;
+        };
+        const token = (): string | null => {
+            blanks();
+            const c = spec[i];
+            if (c === undefined || c === '\\' || c === '{' || c === '}' || c === '#') return null;
+            i++;
+            return c;
+        };
+        for (;;) {
+            blanks();
+            if (i >= spec.length) return out.length <= 9 ? out : null;
+            const k = spec[i++];
+            if (k === '+' || k === '!') continue;
+            if (k === '>') { if (group() === null) return null; continue; }
+            if (k === 'm' || k === 'o' || k === 's' || k === 'v' || k === 'b') out.push({ kind: k });
+            else if (k === 'O') { const value = group(); if (value === null) return null; out.push({ kind: k, value }); }
+            else if (k === 't') { const t = token(); if (t === null) return null; out.push({ kind: k, token: t }); }
+            else if (k === 'd' || k === 'r' || k === 'D' || k === 'R') {
+                const open = token(), close = token();
+                if (open === null || close === null) return null;
+                const value = k === 'D' || k === 'R' ? group() : undefined;
+                if (value === null) return null;
+                out.push({ kind: k, open, close, ...(value !== undefined ? { value } : {}) });
+            } else return null;
+        }
     }
 
     /** Expands user macros inside a math formula (the formula is otherwise kept verbatim). */
@@ -1006,6 +1309,273 @@ class LatexReader {
         const end = sc.readRawGroup() ?? '';
         if (!name || (!redefine && this.envs.has(name))) return;
         this.envs.set(name, { nargs: Math.max(0, Math.min(9, parseInt(n ?? '0', 10) || 0)), optDefault: opt, begin, end });
+    }
+
+    /**
+     * `\NewDocumentCommand` and its family (`xparse`, in the LaTeX kernel since 2020): `New` and
+     * `Provide` keep a command already defined, `Renew` and `Declare` replace it.
+     */
+    private defineDocumentCommand(sc: Scanner, form: string): void {
+        const name = (sc.readRawGroup() ?? '').trim().replace(/^\\/, '').replace(/\s+/g, '');
+        const spec = sc.readRawGroup() ?? '';
+        const body = sc.readRawGroup() ?? '';
+        if (!name || PROTECTED_COMMANDS.has(name)) return;
+        if (!/^(Renew|Declare)/.test(form) && this.macros.has(name)) return;
+        const args = this.parseXSpec(spec);
+        if (!args) { this.unknown.add(`\\${name} (argument specification ${spec.trim()})`); return; }
+        this.macros.set(name, { nargs: args.length, optDefault: null, body, spec: args });
+    }
+
+    /** `\NewDocumentEnvironment` and its family: begin and end code both see the arguments. */
+    private defineDocumentEnvironment(sc: Scanner, form: string): void {
+        const name = (sc.readRawGroup() ?? '').trim();
+        const spec = sc.readRawGroup() ?? '';
+        const begin = sc.readRawGroup() ?? '';
+        const end = sc.readRawGroup() ?? '';
+        if (!name) return;
+        if (!/^(Renew|Declare)/.test(form) && this.envs.has(name)) return;
+        const args = this.parseXSpec(spec);
+        if (!args) { this.unknown.add(`${name} environment (argument specification ${spec.trim()})`); return; }
+        this.envs.set(name, { nargs: args.length, optDefault: null, begin, end, spec: args });
+    }
+
+    /** `\begin` of a user environment: its begin code, with its arguments, is read in place. */
+    private beginUserEnv(sc: Scanner, env: string, user: UserEnv): void {
+        const args = this.readUserArgs(sc, user, env);
+        // An environment whose body is an argument (`b`) consumed its `\end` with it: its end code follows at once.
+        if (user.spec?.some(a => a.kind === 'b')) { this.expand(sc, this.fill(user.begin, args) + this.fill(user.end, args)); return; }
+        if (user.spec) this.openEnvs.push({ env, args });
+        if (!this.expand(sc, this.fill(user.begin, args))) sc.readRawEnvBody(env);
+    }
+
+    /** `\end` of a user environment: its end code is read in place (an xparse one's with its arguments). */
+    private endUserEnv(sc: Scanner, env: string, user: UserEnv): void {
+        if (!user.spec) { this.expand(sc, user.end); return; }
+        let k = this.openEnvs.length - 1;
+        while (k >= 0 && this.openEnvs[k].env !== env) k--;
+        const args = k >= 0 ? this.openEnvs.splice(k, 1)[0].args : [];
+        this.expand(sc, this.fill(user.end, args));
+    }
+
+    // ── conditionals ──
+
+    /** Whether a control word is a TeX conditional (one that a skipped branch must match with its `\fi`). */
+    private isConditional(name: string): boolean {
+        return own(FIXED_CONDITIONALS, name) || PRIMITIVE_CONDITIONALS.has(name) || this.ifs.has(name) || (name.startsWith('if') && name.includes('@'));
+    }
+
+    /**
+     * Whether a command is defined when pdfLaTeX reads the document, or undefined when that is not
+     * known here (a command of some package the parser does not know).
+     */
+    private isDefined(name: string): boolean | undefined {
+        if (UNDEFINED_UNDER_PDFLATEX.has(name)) return false;
+        if (this.macros.has(name) || this.ifs.has(name) || this.theorems.has(name) || this.envs.has(name)) return true;
+        if (name === 'chapter') return CHAPTER_CLASSES.has(this.native.documentClass);
+        if (own(SYMBOLS, name) || own(ACCENTS, name) || own(WRAPPER_COMMANDS, name) || own(IGNORED_COMMANDS, name) || own(FIXED_CONDITIONALS, name)
+            || PROTECTED_COMMANDS.has(name) || PRIMITIVE_CONDITIONALS.has(name)) return true;
+        return undefined;
+    }
+
+    /**
+     * TeX conditionals, decided as pdfLaTeX would where the parser can: the fixed and engine tests
+     * (`\ifXeTeX`), `\newif` switches, and `\ifdefined`, `\ifcsname` and `\ifx\cs\undefined` on
+     * commands whose status is known. The branch not taken is skipped unread. A test it cannot decide
+     * (`\ifnum`, `\ifx` in general) has both branches read and is reported. Returns false when
+     * `name` is not a conditional's word.
+     */
+    private conditional(sc: Scanner, name: string): boolean {
+        switch (name) {
+            case 'else': case 'or': {
+                const top = this.conds.pop();
+                // The end of a taken branch: the rest, to the matching `\fi`, is the branch not taken.
+                if (top === 'taken') { sc.skipBranch(n => this.isConditional(n), false); return true; }
+                if (top !== undefined) this.conds.push(top);
+                return true;
+            }
+            case 'fi': this.conds.pop(); return true;
+            case 'newif': {
+                const tok = sc.next(this.atLetter);
+                if (tok.t === 'cs') this.defineSwitch(tok.name);
+                return true;
+            }
+            case 'unless': {
+                const snap = sc.save();
+                const tok = sc.next(true);
+                if (tok.t === 'cs' && tok.name !== 'ifcase' && this.isConditional(tok.name)) { this.branch(sc, tok.name, true); return true; }
+                sc.restore(snap);
+                return true;
+            }
+        }
+        const flag = /^(.+)(true|false)$/.exec(name);
+        if (flag && this.ifs.has(`if${flag[1]}`)) { this.ifs.set(`if${flag[1]}`, flag[2] === 'true'); return true; }
+        if (!this.isConditional(name)) return false;
+        this.branch(sc, name, false);
+        return true;
+    }
+
+    /** Opens conditional `name` (negated by `\unless`): decides it, and skips the branch not taken. */
+    private branch(sc: Scanner, name: string, negate: boolean): void {
+        let value = this.decide(sc, name);
+        if (value === undefined) {
+            this.conds.push('both');
+            this.unknown.add(`\\${name}`);
+            return;
+        }
+        if (negate) value = !value;
+        if (value) { this.conds.push('taken'); return; }
+        if (sc.skipBranch(n => this.isConditional(n), true) === 'else') this.conds.push('else');
+    }
+
+    /** A conditional's value, reading its test, or undefined when it cannot be decided (the test is then left unread). */
+    private decide(sc: Scanner, name: string): boolean | undefined {
+        if (own(FIXED_CONDITIONALS, name)) return FIXED_CONDITIONALS[name];
+        if (this.ifs.has(name)) return this.ifs.get(name);
+        const snap = sc.save();
+        if (name === 'ifdefined') {
+            const a = sc.next(true);
+            const d = a.t === 'cs' ? this.isDefined(a.name) : undefined;
+            if (d === undefined) sc.restore(snap);
+            return d;
+        }
+        if (name === 'ifx') {
+            // `\ifx\cs\undefined` (or `\@undefined`): whether `\cs` is undefined.
+            const a = sc.next(true);
+            const b = sc.next(true);
+            const d = a.t === 'cs' && b.t === 'cs' && (b.name === 'undefined' || b.name === '@undefined') ? this.isDefined(a.name) : undefined;
+            if (d === undefined) { sc.restore(snap); return undefined; }
+            return !d;
+        }
+        if (name === 'ifnum' || name === 'ifodd') {
+            // Integer tests on literal numbers and on the pdfTeX registers documents test (`\pdfoutput` is 1).
+            const operand = (): number | undefined => {
+                sc.skipBlanks();
+                if (sc.peekCh() === '\\') {
+                    const t = sc.next(true);
+                    return t.t === 'cs' && own(PDFTEX_REGISTERS, t.name) ? PDFTEX_REGISTERS[t.name] : undefined;
+                }
+                let digits = '';
+                if (sc.peekCh() === '-' || sc.peekCh() === '+') digits += sc.nextCh();
+                while (/\d/.test(sc.peekCh() ?? '') && digits.length < 12) digits += sc.nextCh();
+                return /\d/.test(digits) ? parseInt(digits, 10) : undefined;
+            };
+            const a = operand();
+            if (a === undefined) { sc.restore(snap); return undefined; }
+            if (name === 'ifodd') { this.endNumber(sc); return Math.abs(a) % 2 === 1; }
+            sc.skipBlanks();
+            const rel = sc.nextCh();
+            const b = rel === '<' || rel === '=' || rel === '>' ? operand() : undefined;
+            if (b === undefined) { sc.restore(snap); return undefined; }
+            this.endNumber(sc);
+            return rel === '<' ? a < b : rel === '>' ? a > b : a === b;
+        }
+        if (name === 'ifcsname') {
+            // The name is short: looking further for `\endcsname` (and re-reading on failure) would make
+            // a run of unclosed `\ifcsname`s quadratic.
+            let text = '';
+            for (let c = sc.nextCh(); c !== undefined; c = sc.nextCh()) {
+                text += c;
+                if ((c === 'e' && text.endsWith('\\endcsname')) || text.length >= 256) break;
+            }
+            const m = /^\s*([A-Za-z@]+)\s*\\endcsname$/.exec(text);
+            const d = m ? this.isDefined(m[1]) : undefined;
+            if (d === undefined) sc.restore(snap);
+            return d;
+        }
+        return undefined;
+    }
+
+    /** After a number TeX reads one optional space. */
+    private endNumber(sc: Scanner): void {
+        if (sc.peekCh() === ' ') sc.nextCh();
+    }
+
+    /**
+     * The argument-style tests of LaTeX and its packages (`\@ifpackageloaded`, `\@ifundefined`,
+     * `ifthen`'s `\ifthenelse` on booleans, etoolbox's `\ifdef` and toggles, xparse's `\IfBooleanTF`
+     * and `\IfNoValueTF`): the branch taken is read in place. Returns false when `name` is not one.
+     */
+    private testCommand(sc: Scanner, name: string): boolean {
+        let test: boolean | undefined;
+        let branches = 'TF';
+        switch (name) {
+            case '@ifpackageloaded': case 'IfPackageLoadedTF': case '@ifclassloaded': case 'IfClassLoadedTF': {
+                const pkg = (sc.readRawGroup() ?? '').trim();
+                test = /class/i.test(name) ? this.native.documentClass === pkg : (this.native.packages as string[]).includes(pkg);
+                break;
+            }
+            case '@ifundefined': {
+                const d = this.isDefinedRaw(sc.readRawGroup());
+                test = d === undefined ? undefined : !d;
+                break;
+            }
+            case 'ifdef': case 'ifundef': case 'ifcsdef': case 'ifcsundef': {
+                const d = this.isDefinedRaw(sc.readRawGroup());
+                test = d === undefined ? undefined : name.endsWith('undef') ? !d : d;
+                break;
+            }
+            case 'iftoggle': test = this.toggles.get((sc.readRawGroup() ?? '').trim()); break;
+            case 'ifbool': test = this.ifs.get(`if${(sc.readRawGroup() ?? '').trim()}`); break;
+            case 'ifthenelse': {
+                const cond = (sc.readRawGroup() ?? '').trim();
+                const bool = /^(\\NOT\s*)?\\boolean\s*\{([^{}]*)\}$/.exec(cond);
+                const equal = /^\\equal\s*\{([^{}\\]*)\}\s*\{([^{}\\]*)\}$/.exec(cond);
+                if (bool) { const v = this.ifs.get(`if${bool[2].trim()}`); test = v === undefined ? undefined : !!bool[1] !== v; }
+                else if (equal) test = equal[1].trim() === equal[2].trim();
+                break;
+            }
+            default: {
+                const x = /^If(Boolean|NoValue|Value|Blank)(TF|T|F)$/.exec(name);
+                if (!x) return false;
+                const arg = (sc.readRawGroup() ?? '').trim();
+                test = x[1] === 'Boolean' ? arg === '\\BooleanTrue' : x[1] === 'NoValue' ? arg === NO_VALUE : x[1] === 'Value' ? arg !== NO_VALUE : arg === '';
+                branches = x[2];
+            }
+        }
+        const yes = branches.includes('T') ? sc.readRawGroup() ?? '' : '';
+        const no = branches.includes('F') ? sc.readRawGroup() ?? '' : '';
+        if (test === undefined) {
+            // Not decided: both branches are read, as before the test was understood.
+            this.unknown.add(`\\${name}`);
+            this.expand(sc, `${yes}${no}`);
+            return true;
+        }
+        this.expand(sc, test ? yes : no);
+        return true;
+    }
+
+    /** {@link isDefined} for a command named in an argument (`\cs` or its bare name). */
+    private isDefinedRaw(raw: string | null): boolean | undefined {
+        const m = /^\s*\\?([A-Za-z@]+)\s*$/.exec(raw ?? '');
+        return m ? this.isDefined(m[1]) : undefined;
+    }
+
+    /** Defines `\newif` switch `name` (false), unless the name is one of TeX's own conditionals. */
+    private defineSwitch(name: string): void {
+        if (!/^if[A-Za-z@]+$/.test(name) || PRIMITIVE_CONDITIONALS.has(name) || own(FIXED_CONDITIONALS, name) || this.ifs.has(name)) return;
+        this.ifs.set(name, false);
+    }
+
+    /**
+     * Switches set by commands: `\newboolean`/`\setboolean` (ifthen), `\newbool`/`\setbool`/`\booltrue`
+     * and `\newtoggle`/`\settoggle`/`\toggletrue` (etoolbox). Returns false when `name` is not one.
+     */
+    private setSwitch(sc: Scanner, name: string): boolean {
+        const key = () => (sc.readRawGroup() ?? '').trim();
+        switch (name) {
+            case 'newboolean': case 'provideboolean': case 'newbool': case 'providebool': this.defineSwitch(`if${key()}`); return true;
+            case 'setboolean': case 'setbool': {
+                const k = `if${key()}`;
+                const v = /^\s*true\s*$/i.test(sc.readRawGroup() ?? '');
+                if (this.ifs.has(k)) this.ifs.set(k, v);
+                return true;
+            }
+            case 'booltrue': case 'boolfalse': { const k = `if${key()}`; if (this.ifs.has(k)) this.ifs.set(k, name === 'booltrue'); return true; }
+            case 'newtoggle': case 'providetoggle': { const k = key(); if (!this.toggles.has(k)) this.toggles.set(k, false); return true; }
+            case 'settoggle': { const k = key(); this.toggles.set(k, /^\s*true\s*$/i.test(sc.readRawGroup() ?? '')); return true; }
+            case 'toggletrue': case 'togglefalse': this.toggles.set(key(), name === 'toggletrue'); return true;
+        }
+        return false;
     }
 
     // ── comments ──
@@ -1155,14 +1725,15 @@ class LatexReader {
             if (!this.expand(sc, body)) this.unknown.add(`\\${name}`);
             return;
         }
+        if (this.conditional(sc, name) || this.setSwitch(sc, name) || this.testCommand(sc, name)) return;
 
-        if (name in SYMBOLS) {
+        if (own(SYMBOLS, name)) {
             if (name === '-' || name === ',') this.addText(flow, SYMBOLS[name]);
             else if (SYMBOLS[name] === '' ) { /* spacing no-op */ }
             else this.addText(flow, SYMBOLS[name]);
             return;
         }
-        if (name in ACCENTS) {
+        if (own(ACCENTS, name)) {
             let arg = sc.readRawGroup() ?? '';
             if (arg === '\\i') arg = 'i';
             if (arg === '\\j') arg = 'j';
@@ -1292,14 +1863,14 @@ class LatexReader {
                 const keys = (sc.readRawGroup() ?? '').split(',').map(k => k.trim()).filter(Boolean);
                 keys.forEach((key, k) => {
                     if (k > 0) this.addText(flow, '; ');
-                    this.addInline(flow, { type: 'text', text: key, metadata: { citationKey: key } as TextMetadata });
+                    this.addInline(flow, { type: 'text', text: key, ...this.runFormatting(), metadata: { citationKey: key } as TextMetadata });
                 });
                 return;
             }
             case 'ref': case 'autoref': case 'cref': case 'Cref': case 'eqref': case 'pageref': case 'nameref': case 'vref': case 'Autoref': {
                 sc.readStar();
                 const label = (sc.readRawGroup() ?? '').trim();
-                const node: OfficeContentNode = { type: 'text', text: label };
+                const node: OfficeContentNode = { type: 'text', text: label, ...this.runFormatting() };
                 if (!this.config.ignoreInternalLinks) node.metadata = { link: `#${label}`, linkType: 'internal' } as TextMetadata;
                 this.refs.push({ node, label, kind: name });
                 this.addInline(flow, node);
@@ -1391,11 +1962,22 @@ class LatexReader {
             case 'rmfamily': delete this.state.fmt.font; return;
             case 'normalfont': delete this.state.fmt.bold; delete this.state.fmt.italic; delete this.state.fmt.font; return;
             case 'scshape': return;
+            // LaTeX 2.09's font switches, which LaTeX2e keeps: each starts from the normal font.
+            case 'bf': case 'it': case 'sl': case 'tt': case 'sf': case 'rm': case 'sc': {
+                const fmt = this.state.fmt;
+                delete fmt.bold; delete fmt.italic; delete fmt.font;
+                if (name === 'bf') fmt.bold = true;
+                else if (name === 'it' || name === 'sl') fmt.italic = true;
+                else if (name === 'tt') fmt.font = 'monospace';
+                else if (name === 'sf') fmt.font = 'sans-serif';
+                return;
+            }
             case 'centering': this.state.align = 'center'; return;
             case 'raggedleft': this.state.align = 'right'; return;
             case 'raggedright': this.state.align = 'left'; return;
             case 'leftskip': case 'rightskip': case 'hangindent': case 'parindent': case 'hangafter': case 'parskip': {
                 const v = this.readDimenAssignment(sc);
+                this.readGlueTail(sc);
                 if (name === 'leftskip') this.state.left = v;
                 else if (name === 'rightskip') this.state.right = v;
                 else if (name === 'hangindent') this.state.hang = v;
@@ -1446,8 +2028,47 @@ class LatexReader {
             case 'includegraphics': this.image(sc, flow); return;
 
             // ── definitions and metadata ──
-            case 'newcommand': case 'renewcommand': case 'providecommand': case 'DeclareRobustCommand': case 'NewDocumentCommand_':
+            case 'newcommand': case 'renewcommand': case 'providecommand': case 'DeclareRobustCommand':
                 this.defineMacro(sc, name !== 'providecommand' && name !== 'newcommand'); return;
+            case 'NewDocumentCommand': case 'RenewDocumentCommand': case 'ProvideDocumentCommand': case 'DeclareDocumentCommand':
+            case 'NewExpandableDocumentCommand': case 'RenewExpandableDocumentCommand': case 'ProvideExpandableDocumentCommand':
+            case 'DeclareExpandableDocumentCommand':
+                this.defineDocumentCommand(sc, name); return;
+            case 'NewDocumentEnvironment': case 'RenewDocumentEnvironment': case 'ProvideDocumentEnvironment': case 'DeclareDocumentEnvironment':
+                this.defineDocumentEnvironment(sc, name); return;
+            // expl3 code is a programming layer with its own syntax, not document content.
+            case 'ExplSyntaxOn': sc.readRawUntil('\\ExplSyntaxOff'); return;
+            case 'newtheorem': {
+                const star = sc.readStar();
+                const env = (sc.readRawGroup() ?? '').trim();
+                const shared = sc.readRawOptional();
+                const title = sc.readRawGroup() ?? '';
+                const within = shared === null ? sc.readRawOptional() : null;
+                this.defineTheorem(env, title, star ? undefined : (shared?.trim() || env), within?.trim());
+                return;
+            }
+            case 'declaretheorem': {
+                // thmtools: `\declaretheorem[options]{names}` (or options after the names).
+                const before = sc.readRawOptional();
+                const names = sc.readRawGroup() ?? '';
+                const after = before === null ? sc.readRawOptional() : null;
+                const kv = new Map(this.keyValues(before ?? after ?? ''));
+                for (const env of names.split(',').map(n => n.trim()).filter(Boolean)) {
+                    const title = kv.get('name') ?? kv.get('title') ?? env.charAt(0).toUpperCase() + env.slice(1);
+                    const shared = (kv.get('sibling') ?? kv.get('numberlike') ?? kv.get('sharenumber'))?.trim();
+                    const numbered = !/^\s*no\s*$/.test(kv.get('numbered') ?? '');
+                    this.defineTheorem(env, title, numbered ? shared || env : undefined, (kv.get('numberwithin') ?? kv.get('within') ?? kv.get('parent'))?.trim(), kv.get('style')?.trim());
+                }
+                return;
+            }
+            case 'theoremstyle': this.theoremStyle = (sc.readRawGroup() ?? '').trim() || 'plain'; return;
+            case 'qed': case 'qedhere':
+                if (this.state.inline) return;
+                this.addSpace(flow);
+                this.addText(flow, '□');
+                this.qedPlaced = true;
+                return;
+            case 'qedsymbol': this.addText(flow, '□'); return;
             case 'def': case 'gdef': case 'edef': case 'xdef': case 'long': case 'global':
                 if (name === 'long' || name === 'global') return;
                 this.defineTexMacro(sc); return;
@@ -1459,7 +2080,7 @@ class LatexReader {
                 if (a.t === 'cs' && b.t === 'cs') {
                     const target = this.macros.get(b.name);
                     if (target) this.macros.set(a.name, target);
-                    else if (!(b.name in SYMBOLS)) this.macros.set(a.name, { nargs: 0, optDefault: null, body: `\\${b.name}` });
+                    else if (!own(SYMBOLS, b.name)) this.macros.set(a.name, { nargs: 0, optDefault: null, body: `\\${b.name}` });
                     else this.macros.set(a.name, { nargs: 0, optDefault: null, body: SYMBOLS[b.name] });
                 }
                 return;
@@ -1478,16 +2099,106 @@ class LatexReader {
                 return;
             }
             case 'title': { sc.readRawOptional(); const raw = sc.readRawGroup(); this.titleParts.title = raw ?? undefined; const t = this.plainText(this.stripThanks(raw)); if (t && !this.pdfMetadata.has('title')) this.metadata.title = t; return; }
-            case 'author': { sc.readRawOptional(); const raw = sc.readRawGroup(); this.titleParts.author = raw ?? undefined; const a = this.authorText(raw); if (a && !this.pdfMetadata.has('author')) this.metadata.author = a; return; }
+            case 'author': {
+                sc.readRawOptional();
+                // IEEEtran's author blocks: a name, then its affiliation lines, set apart in the title block.
+                const raw = sc.readRawGroup()?.replace(/\\IEEEauthorblockA\b/g, ', \\IEEEauthorblockA') ?? null;
+                this.titleParts.author = raw ?? undefined;                 const a = this.authorText(raw);
+                if (a && !this.pdfMetadata.has('author')) this.metadata.author = a;
+                return;
+            }
             case 'date': { const raw = sc.readRawGroup(); this.titleParts.date = raw ?? undefined; const d = this.plainText(raw); if (d) this.native.date = d; return; }
             case 'subtitle': { sc.readRawOptional(); const raw = sc.readRawGroup(); this.titleParts.subtitle = raw ?? undefined; const t = this.plainText(raw); if (t) this.native.subtitle = t; return; }
             case 'maketitle': this.typesetTitle(flow); return;
+            case 'keywords': case 'keyword': this.keywords(flow, sc.readRawGroup(), false); return;
+            // amsart's author information, printed at the end of the article: kept as properties.
+            case 'address': case 'curraddr': case 'email': case 'urladdr': {
+                sc.readRawOptional();
+                const text = this.plainText(sc.readRawGroup());
+                const key = name === 'email' ? 'emails' : name === 'urladdr' ? 'urls' : 'addresses';
+                if (text) (this.native[key] ??= []).push(text);
+                return;
+            }
+            case 'subjclass': {
+                const year = sc.readRawOptional()?.trim();
+                const codes = this.plainText(sc.readRawGroup());
+                if (codes) this.native.subjectClassification = { codes, ...(year ? { scheme: `MSC${year}` } : {}) };
+                return;
+            }
+            case 'IEEEPARstart': {
+                const [first, rest] = this.readArgs(sc, 'mm');
+                this.parseRawInto(flow, first);
+                this.parseRawInto(flow, rest);
+                return;
+            }
+            // KOMA-Script's `\minisec`: a small bold heading outside the document's structure.
+            case 'minisec': {
+                const raw = sc.readRawGroup();
+                this.endParagraph(flow);
+                this.withState(s => { s.fmt.bold = true; }, () => this.parseRawInto(flow, raw));
+                this.endParagraph(flow);
+                return;
+            }
+            // A quotation at the head of a chapter, its source set flush right (epigraph; KOMA-Script's `\dictum`).
+            case 'epigraph': case 'dictum': {
+                const author = name === 'dictum' ? sc.readRawOptional() : null;
+                const text = sc.readRawGroup() ?? '';
+                const source = name === 'epigraph' ? sc.readRawGroup() : author !== null ? `(${author})` : null;
+                this.expand(sc, `\\begin{quote}${text}${source?.trim() ? `\\par{\\raggedleft ${source}\\par}` : ''}\\end{quote}`);
+                return;
+            }
+            case 'setdefaultlanguage': case 'setmainlanguage': {
+                const opts = sc.readRawOptional();
+                const lang = (sc.readRawGroup() ?? '').trim();
+                const variant = opts ? /variant\s*=\s*([A-Za-z]+)/.exec(opts)?.[1] : undefined;
+                this.mainLanguage = variant && own(LANGUAGE_CODES, variant) ? variant : lang;
+                return;
+            }
+            case 'babelprovide': {
+                const opts = sc.readRawOptional() ?? '';
+                const lang = (sc.readRawGroup() ?? '').trim();
+                if (opts.split(',').some(o => o.trim() === 'main')) this.mainLanguage = lang;
+                return;
+            }
+            case 'babeltags':
+                for (const [tag, lang] of this.keyValues(sc.readRawGroup() ?? '')) if (tag && lang) this.languageTags.set(tag, lang.trim());
+                return;
+            // plain TeX's end of the document, and ConTeXt's.
+            case 'bye': case 'stoptext':
+                this.endParagraph(flow);
+                this.finished = true;
+                return 'enddoc';
+            case 'starttext':
+                if (!this.context) break;
+                flow.blocks = [];
+                flow.inline = [];
+                this.clearPending(flow);
+                this.bodyStarted = true;
+                return;
+            // plain TeX's section heading, its title delimited by the end of the paragraph.
+            case 'beginsection': {
+                let raw = '';
+                for (;;) {
+                    const snap = sc.save();
+                    const tok = sc.next(this.atLetter);
+                    if (tok.t === 'eof' || tok.t === 'par' || (tok.t === 'cs' && tok.name === 'par')) break;
+                    if (tok.t === 'cs' && tok.name === 'end') { sc.restore(snap); break; }
+                    raw += tok.t === 'cs' ? `\\${tok.name} ` : tok.t === 'text' ? tok.v : tok.t === 'space' ? ' ' : tok.t === 'bgroup' ? '{' : tok.t === 'egroup' ? '}' : tok.t === 'dollar' ? '$' : '';
+                    if (raw.length > 10000) break;
+                }
+                this.addBlock(flow, this.headingNode(raw, this.headingLevel('section')));
+                return;
+            }
+            // plain TeX glue and kerns: the amount is not text.
+            case 'vskip': case 'hskip': case 'kern': case 'vglue': case 'hglue': case 'mskip': case 'mkern':
+                this.readGlue(sc);
+                return;
             case 'hypersetup': this.hypersetup(sc.readRawGroup() ?? ''); return;
             case 'usepackage': {
                 const opts = sc.readRawOptional();
                 const pkgs = (sc.readRawGroup() ?? '').split(',').map(p => p.trim()).filter(Boolean);
                 (this.native.packages as string[]).push(...pkgs);
-                void opts;
+                if (pkgs.includes('babel')) this.babelLanguages.push(...(opts ?? '').split(',').map(o => o.trim()).filter(Boolean));
                 return;
             }
             case 'graphicspath': {
@@ -1513,7 +2224,6 @@ class LatexReader {
                 for (const p of ['L', 'C', 'R']) if (pos.toUpperCase().includes(p)) target.set(p, raw);
                 return;
             }
-            case 'iffalse': sc.readRawUntil('\\fi'); return;
             case 'IfFileExists': case 'InputIfFileExists': {
                 // Nothing is read from disk, so the "file exists" branch is the document as written: it
                 // is where the LaTeX generator puts an image the bundle could not include.
@@ -1524,16 +2234,33 @@ class LatexReader {
                 this.expand(sc, then);
                 return;
             }
-            case 'ifPDFTeX': case 'ifXeTeX': case 'ifLuaTeX': case 'iftutex': case 'ifpdf': case 'else': case 'fi': case 'ifdefined':
-                return;
         }
 
-        if (name in WRAPPER_COMMANDS) {
+        // babel's and polyglossia's `\text<language>{...}` (and `\text<tag>` for a `\babeltags` tag): the text alone.
+        if (name.startsWith('text') && this.languageName(name.slice(4))) {
+            sc.readRawOptional();
+            this.parseRawInto(flow, sc.readRawGroup());
+            return;
+        }
+        if (this.context && this.contextCommand(sc, flow, name)) return;
+        if (own(WRAPPER_COMMANDS, name)) {
             this.readArgs(sc, WRAPPER_COMMANDS[name]);
             this.parseRawInto(flow, sc.readRawGroup());
             return;
         }
-        if (name in IGNORED_COMMANDS) {
+        if (TEX_REGISTERS.has(name)) {
+            // An assignment (`=` or a value follows); a register named as a value elsewhere is left alone.
+            const snap = sc.save();
+            sc.skipBlanks();
+            const next = sc.peekCh() ?? '';
+            sc.restore(snap);
+            if (next === '=' || /[\d.+-]/.test(next) || (/^(skip|dimen|count|toks)$/.test(name) && /\d/.test(next))) {
+                if (/^(skip|dimen|count|toks)$/.test(name)) { sc.skipBlanks(); while (/\d/.test(sc.peekCh() ?? '')) sc.nextCh(); }
+                this.readGlue(sc);
+            }
+            return;
+        }
+        if (own(IGNORED_COMMANDS, name)) {
             this.readArgs(sc, IGNORED_COMMANDS[name]);
             return;
         }
@@ -1614,7 +2341,7 @@ class LatexReader {
         const n = name.trim();
         const defined = this.colors.get(n);
         if (defined) return defined;
-        const named = NAMED_COLORS[n];
+        const named = own(NAMED_COLORS, n) ? NAMED_COLORS[n] : undefined;
         return named ? `#${named}` : undefined;
     }
 
@@ -1659,12 +2386,25 @@ class LatexReader {
         flow.labelTarget = heading;
     }
 
+    /** The arguments of every `\name{...}` in raw source, in order. */
+    private argumentsOf(raw: string, name: string): string[] {
+        const sc = new Scanner(raw);
+        const out: string[] = [];
+        for (;;) {
+            const tok = sc.next(this.atLetter);
+            if (tok.t === 'eof') return out;
+            if (tok.t === 'cs' && tok.name === name) out.push(sc.readRawGroup() ?? '');
+        }
+    }
+
     private stripThanks(raw: string | null): string | null {
         return raw === null ? null : raw.replace(/\\thanks\s*\{(?:[^{}]|\{[^{}]*\})*\}/g, '');
     }
 
     private authorText(raw: string | null): string {
         if (raw === null) return '';
+        // With IEEEtran's author blocks, the authors are the names; the rest is their affiliations.
+        if (/\\IEEEauthorblockN\b/.test(raw)) return this.argumentsOf(raw, 'IEEEauthorblockN').map(n => this.plainText(n.replace(/\\\\/g, ' '))).filter(Boolean).join(', ');
         return this.stripThanks(raw)!.split(/\\and\b|\\AND\b/).map(a => this.plainText(a.replace(/\\\\/g, ' '))).filter(Boolean).join(', ');
     }
 
@@ -1677,7 +2417,7 @@ class LatexReader {
                 case 'pdftitle': if (v) { this.metadata.title = v; this.pdfMetadata.add('title'); } break;
                 case 'pdfauthor': if (v) { this.metadata.author = v; this.pdfMetadata.add('author'); } break;
                 case 'pdfsubject': this.metadata.subject = v; break;
-                case 'pdfkeywords': this.metadata.keywords = v; break;
+                case 'pdfkeywords': if (v) { this.metadata.keywords = v; this.pdfMetadata.add('keywords'); } break;
                 case 'pdflang': this.metadata.language = value.trim(); break;
                 case 'pdfcreationdate': { const d = parseLatexDate(value); if (d) this.metadata.created = d; break; }
                 case 'pdfmoddate': { const d = parseLatexDate(value); if (d) this.metadata.modified = d; break; }
@@ -1771,7 +2511,7 @@ class LatexReader {
             logWarning(OfficeWarningType.LATEX_EXPANSION_LIMIT_REACHED, this.config, { limit: 'file inclusion' });
             return;
         }
-        let text = this.project!.files.get(resolved)!.toString('utf8').replace(/\r\n?/g, '\n');
+        let text = decodeTex(this.project!.files.get(resolved)!, this.inputEncoding).text.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
         if (subfile) {
             const body = /\\begin\{document\}([\s\S]*?)\\end\{document\}/.exec(text);
             if (body) text = body[1];
@@ -1853,11 +2593,11 @@ class LatexReader {
         if (this.nesting >= MAX_NESTING_DEPTH) { this.tooDeep(flow, sc.readRawEnvBody(env)); return; }
 
         const user = this.envs.get(env);
-        if (user) {
-            const code = this.substitute(sc, { nargs: user.nargs, optDefault: user.optDefault, body: user.begin });
-            if (!this.expand(sc, code)) sc.readRawEnvBody(env);
-            return;
-        }
+        if (user) { this.beginUserEnv(sc, env, user); return; }
+        const theorem = this.theoremDef(env);
+        if (theorem) { this.theorem(sc, flow, env, theorem); return; }
+        if (env === 'proof') { this.proof(sc, flow, env); return; }
+        if (env === 'IEEEkeywords' || env === 'keywords' || env === 'keyword') { this.keywords(flow, sc.readRawEnvBody(env), env === 'IEEEkeywords'); return; }
         if (env === 'itemize' || env === 'enumerate' || env === 'compactitem' || env === 'compactenum' || env === 'inparaenum' || env === 'asparaenum') {
             sc.readRawOptional();
             this.endParagraph(flow);
@@ -1883,7 +2623,7 @@ class LatexReader {
             this.addBlockMath(flow, PLAIN_DISPLAY_MATH_ENVS.has(env) || env === 'math' || env === 'displaymath' ? body : `\\begin{${env}}${body}\\end{${env}}`);
             return;
         }
-        if (env in TABLE_ENVS) { this.table(sc, flow, env); return; }
+        if (own(TABLE_ENVS, env)) { this.table(sc, flow, env); return; }
         if (DRAWING_ENVS.has(env)) { sc.readRawEnvBody(env); this.unknown.add(`${env} environment`); return; }
         if (env === 'frame') return this.frame(sc, flow, stop);
         if (env === 'block' || env === 'alertblock' || env === 'exampleblock') {
@@ -1914,9 +2654,17 @@ class LatexReader {
             this.float(sc, flow, env);
             return;
         }
-        if (env in TRANSPARENT_ENVS) {
+        if (own(TRANSPARENT_ENVS, env)) {
             this.readArgs(sc, TRANSPARENT_ENVS[env]);
             return this.envInto(sc, flow, env);
+        }
+        // A language switch (babel's `otherlanguage`, polyglossia's `\begin{french}`, a `\babeltags` tag):
+        // its text in place, within the paragraph around it.
+        if (env === 'otherlanguage' || env === 'otherlanguage*' || this.languageName(env) || env === 'Arabic') {
+            if (env.startsWith('otherlanguage')) sc.readRawGroup();
+            else sc.readRawOptional();
+            this.nesting++;
+            try { return this.parseFlow(sc, flow, { env }) === 'enddoc' ? 'enddoc' : undefined; } finally { this.nesting--; }
         }
         this.unknown.add(`${env} environment`);
         return this.envInto(sc, flow, env);
@@ -1959,6 +2707,248 @@ class LatexReader {
         return flow.blocks;
     }
 
+    // ── theorems ──
+
+    /** Defines theorem-like environment `env` titled `title`, numbered with `counter` (none: unnumbered). */
+    private defineTheorem(env: string, title: string, counter: string | undefined, within?: string, style?: string): void {
+        if (!env) return;
+        this.theorems.set(env, { title: this.plainText(title), style: style || this.theoremStyle, counter });
+        const c = counter ? this.theoremCounters.get(counter) : undefined;
+        if (counter && !c) this.theoremCounters.set(counter, { value: 0, within, prefix: '' });
+        else if (c && counter === env && within) c.within = within;
+    }
+
+    /**
+     * The theorem-like environment `env` is, if it is one: defined by the document, or one the
+     * classes that provide them without `\newtheorem` (llncs, svjour, beamer) name so.
+     */
+    private theoremDef(env: string): TheoremDef | undefined {
+        const def = this.theorems.get(env);
+        if (def || !own(DEFAULT_THEOREM_TITLES, env)) return def;
+        const provided: TheoremDef = { title: DEFAULT_THEOREM_TITLES[env], style: own(DEFAULT_THEOREM_STYLES, env) ? DEFAULT_THEOREM_STYLES[env] : 'plain', counter: env };
+        this.theorems.set(env, provided);
+        if (!this.theoremCounters.has(env)) this.theoremCounters.set(env, { value: 0, prefix: '' });
+        return provided;
+    }
+
+    /** The number of the section (or other sectioning unit) `unit` the reading is in, for counters numbered within it. */
+    private unitNumber(unit: string): string {
+        const rank = SECTIONING.indexOf(unit);
+        if (rank < 0) return '';
+        const level = this.headingLevel(unit);
+        const parts = this.sectionNumbers.slice(0, level);
+        while (parts.length < level) parts.push(0);
+        return parts.join('.');
+    }
+
+    /**
+     * A theorem-like environment: its body, headed by its title, number and note ("**Theorem 2.1**
+     * (Note)**.**") as amsthm sets it, the body italic in the `plain` style. A `\ref` to a label in it
+     * reads its number. Under beamer it is a titled block, as beamer sets it.
+     */
+    private theorem(sc: Scanner, flow: Flow, env: string, def: TheoremDef): void {
+        const note = sc.readRawOptional();
+        this.endParagraph(flow);
+        let number: string | undefined;
+        const counter = def.counter ? this.theoremCounters.get(def.counter) : undefined;
+        if (counter && !this.beamer) {
+            const prefix = counter.within ? this.unitNumber(counter.within) : '';
+            if (prefix !== counter.prefix) { counter.value = 0; counter.prefix = prefix; }
+            number = `${prefix ? `${prefix}.` : ''}${++counter.value}`;
+        }
+        const noteRuns = note !== null && note.trim() ? this.headingNode(note, 1).children ?? [] : [];
+        if (this.beamer) {
+            const inner = this.subFlow(sc, env, flow);
+            const title = `${def.title}${noteRuns.length ? ` (${textOf(noteRuns)})` : ''}`;
+            const type: AdmonitionMetadata['admonitionType'] = env.startsWith('example') ? 'tip' : 'note';
+            this.addBlock(flow, { type: 'admonition', children: inner, metadata: { admonitionType: type, title } as AdmonitionMetadata });
+            return;
+        }
+        const labelsBefore = this.labelLog.length;
+        const inner = this.withState(s => { if (def.style === 'plain') s.fmt.italic = true; else delete s.fmt.italic; }, () => this.subFlow(sc, env, flow));
+        const head: TextFormatting = def.style === 'remark' ? { italic: true } : { bold: true };
+        const runs: OfficeContentNode[] = [{ type: 'text', text: number ? `${def.title} ${number}` : def.title, formatting: head }];
+        if (noteRuns.length) runs.push({ type: 'text', text: ' (' }, ...noteRuns, { type: 'text', text: ')' });
+        runs.push({ type: 'text', text: '.', formatting: head });
+        const first = this.headInto(inner, runs);
+        if (number) {
+            // Labels in the theorem name it: a `\ref` to one reads the theorem's number.
+            // A label on something numbered of its own inside it (an equation, a nested theorem) keeps that.
+            (first as any).__number = number;
+            for (const id of this.labelLog.slice(labelsBefore)) {
+                const t = this.labelTargets.get(id);
+                if (!t || (t.type === 'paragraph' && !(t as any).__number)) this.labelTargets.set(id, first);
+            }
+        }
+        for (const b of inner) this.pushBlock(flow, b);
+    }
+
+    /** amsthm's proof: "*Proof.*" (or its optional heading) before the body, and the end-of-proof mark □ after it. */
+    private proof(sc: Scanner, flow: Flow, env: string): void {
+        const heading = sc.readRawOptional();
+        this.endParagraph(flow);
+        this.qedPlaced = false;
+        const inner = this.withState(s => { delete s.fmt.italic; }, () => this.subFlow(sc, env, flow));
+        const runs = heading !== null
+            ? this.withState(s => { s.fmt.italic = true; }, () => this.headingNode(heading, 1).children ?? [])
+            : [{ type: 'text', text: 'Proof', formatting: { italic: true } } as OfficeContentNode];
+        // amsthm adds the period unless the heading ends with punctuation.
+        if (!/[.!?:]\s*$/.test(textOf(runs))) runs.push({ type: 'text', text: '.', formatting: { italic: true } });
+        this.headInto(inner, runs);
+        if (!this.qedPlaced) {
+            const last = inner[inner.length - 1];
+            if (last?.type === 'paragraph') {
+                last.children = [...(last.children ?? []), { type: 'text', text: ' □' }];
+                last.text = textOf(last.children);
+            } else inner.push({ type: 'paragraph', text: '□', children: [{ type: 'text', text: '□' }], metadata: { alignment: 'right' } as ParagraphMetadata });
+        }
+        this.qedPlaced = false;
+        for (const b of inner) this.pushBlock(flow, b);
+    }
+
+    /** Puts heading runs at the start of an environment's first paragraph (or in a paragraph of their own before it), returning that paragraph. */
+    private headInto(blocks: OfficeContentNode[], runs: OfficeContentNode[]): OfficeContentNode {
+        const first = blocks[0];
+        if (first?.type === 'paragraph' && !(first.metadata as ParagraphMetadata | undefined)?.style) {
+            first.children = [...runs, { type: 'text', text: ' ' }, ...(first.children ?? [])];
+            first.text = textOf(first.children);
+            return first;
+        }
+        const para: OfficeContentNode = { type: 'paragraph', text: textOf(runs), children: runs, metadata: {} as ParagraphMetadata };
+        blocks.unshift(para);
+        return para;
+    }
+
+    /**
+     * Keywords (`\keywords`, and the `keywords`/`keyword` and IEEEtran `IEEEkeywords` environments): the
+     * document's keywords metadata unless `\hypersetup` states them, printed where they stand as the
+     * classes print them ("Keywords: a, b"; IEEE's "Index Terms—a, b").
+     */
+    private keywords(flow: Flow, raw: string | null, ieee: boolean): void {
+        if (raw === null) return;
+        // llncs separates keywords with `\and`, elsarticle with `\sep`.
+        const source = raw.replace(/\s*\\(and|sep)\b\s*/g, ', ');
+        const text = this.plainText(source);
+        if (!text) return;
+        if (!this.pdfMetadata.has('keywords')) this.metadata.keywords = text;
+        this.endParagraph(flow);
+        const label: OfficeContentNode = ieee
+            ? { type: 'text', text: 'Index Terms—', formatting: { bold: true, italic: true } }
+            : { type: 'text', text: 'Keywords: ', formatting: { bold: true } };
+        const body = this.parseBlocksOf(source, undefined, false);
+        const first = body[0];
+        if (first?.type === 'paragraph') {
+            first.children = [label, ...(first.children ?? [])];
+            first.text = textOf(first.children);
+        } else body.unshift({ type: 'paragraph', text: label.text, children: [label], metadata: {} as ParagraphMetadata });
+        for (const b of body) this.pushBlock(flow, b);
+    }
+
+    // ── languages ──
+
+    /** The babel/polyglossia language `name` (or `\babeltags` tag) names, if it names one. */
+    private languageName(name: string): string | undefined {
+        if (own(LANGUAGE_CODES, name)) return name;
+        const tagged = this.languageTags.get(name);
+        return tagged && own(LANGUAGE_CODES, tagged) ? tagged : undefined;
+    }
+
+    /**
+     * The document's main language as a BCP 47 tag: polyglossia's `\setdefaultlanguage` or babel's
+     * `main=` option, else the last language babel loads (from its options after the class's, as babel does).
+     */
+    private documentLanguage(): string | undefined {
+        const pick = (name: string | undefined) => (name && own(LANGUAGE_CODES, name) ? LANGUAGE_CODES[name] : undefined);
+        if (this.mainLanguage) return pick(this.mainLanguage);
+        if (!(this.native.packages as string[]).includes('babel')) return undefined;
+        const options = [...((this.native.classOptions ?? []) as string[]), ...this.babelLanguages];
+        const main = options.map(o => /^main\s*=\s*(.+)$/.exec(o)?.[1]?.trim()).filter(Boolean).pop();
+        return pick(main ?? options.filter(o => own(LANGUAGE_CODES, o)).pop());
+    }
+
+    // ── plain TeX and ConTeXt ──
+
+    /** Skips plain TeX glue after `\vskip`/`\hskip`/`\kern`: a dimension with optional `plus` and `minus` parts. */
+    private readGlue(sc: Scanner): void {
+        this.skipDimen(sc);
+        this.readGlueTail(sc);
+    }
+
+    /** Skips the `plus` and `minus` parts of glue after its natural size. */
+    private readGlueTail(sc: Scanner): void {
+        for (const word of ['plus', 'minus']) {
+            const snap = sc.save();
+            sc.skipBlanks();
+            let w = '';
+            while (/[a-z]/.test(sc.peekCh() ?? '') && w.length < word.length) w += sc.nextCh();
+            if (w === word) this.skipDimen(sc);
+            else sc.restore(snap);
+        }
+    }
+
+    /** Skips an (optionally `=`-prefixed) dimension or number: digits and a unit, or a register or `\magstep<n>`. */
+    private skipDimen(sc: Scanner): void {
+        sc.skipBlanks();
+        if (sc.peekCh() === '=') sc.nextCh();
+        sc.skipBlanks();
+        const register = () => {
+            const t = sc.next(this.atLetter);
+            if (t.t === 'cs' && t.name.startsWith('magstep')) while (/[\d.]/.test(sc.peekCh() ?? '')) sc.nextCh();
+        };
+        if (sc.peekCh() === '\\') { register(); return; }
+        let n = 0;
+        while (/[-+\d.,]/.test(sc.peekCh() ?? '') && n++ < 32) sc.nextCh();
+        sc.skipBlanks();
+        // A unit, including `fil`/`fill`/`filll` and `true` units; a register (`2\baselineskip`) ends the amount.
+        if (sc.peekCh() === '\\') { register(); return; }
+        const snap = sc.save();
+        let unit = '';
+        while (/[a-z]/.test(sc.peekCh() ?? '') && unit.length < 12) unit += sc.nextCh();
+        if (!/^(true)?(pt|pc|in|bp|cm|mm|dd|cc|sp|em|ex|mu|px|fil+)$/.test(unit)) sc.restore(snap);
+    }
+
+    /**
+     * ConTeXt's commands, read for a ConTeXt document's text: `\start<name>`/`\stop<name>` pairs as
+     * the LaTeX environments they match (sectioning, itemize, typing, formula, quotation) or else as
+     * transparent ones, and its `\setup...`/`\use...`/`\define...` configuration skipped. Returns
+     * false for a command it does not know.
+     */
+    private contextCommand(sc: Scanner, flow: Flow, name: string): boolean {
+        const options = () => { while (sc.nextIs('[')) sc.readRawOptional(); };
+        if (/^(setup|use|define|enable|disable)[A-Za-z]+$/.test(name) || name === 'mainlanguage' || name === 'language') {
+            options();
+            while (sc.nextIs('{')) sc.readRawGroup();
+            return true;
+        }
+        const start = /^start([A-Za-z]+)$/.exec(name);
+        const stop = /^stop([A-Za-z]+)$/.exec(name);
+        const what = (start ?? stop)?.[1];
+        if (!what) return false;
+        const sectioning: Record<string, string> = { part: 'part', chapter: 'chapter', section: 'section', subsection: 'subsection', subsubsection: 'subsubsection', title: 'chapter*', subject: 'section*', subsubject: 'subsection*', subsubsubject: 'subsubsection*' };
+        if (own(sectioning, what)) {
+            if (stop) return true;
+            const opts = sc.readRawOptional() ?? '';
+            const kv = new Map(this.keyValues(opts));
+            const title = kv.get('title') ?? '';
+            const [cmd, star] = sectioning[what].endsWith('*') ? [sectioning[what].slice(0, -1), '*'] : [sectioning[what], ''];
+            this.expand(sc, `\\${cmd}${star}{${title}}${kv.get('reference') ? `\\label{${kv.get('reference')}}` : ''}`);
+            return true;
+        }
+        if (what === 'typing') { sc.readRawOptional(); this.expand(sc, `\\begin{verbatim}${sc.readRawUntil('\\stoptyping').text}\\end{verbatim}`); return true; }
+        if (what === 'formula') { sc.readRawOptional(); this.addBlockMath(flow, sc.readRawUntil('\\stopformula').text); return true; }
+        if (what === 'itemize') {
+            if (stop) { const env = this.contextLists.pop(); if (env) this.expand(sc, `\\end{${env}}`); return true; }
+            const opts = (sc.readRawOptional() ?? '').split(',').map(o => o.trim());
+            const env = opts.some(o => /^(n|a|A|r|R|numbers?|characters|Characters|romannumerals|Romannumerals)$/.test(o)) ? 'enumerate' : 'itemize';
+            this.contextLists.push(env);
+            this.expand(sc, `\\begin{${env}}`);
+            return true;
+        }
+        if (what === 'quotation' || what === 'quote' || what === 'blockquote') { if (start) options(); this.expand(sc, start ? '\\begin{quote}' : '\\end{quote}'); return true; }
+        if (start) options();
+        return true;
+    }
+
     private verbatim(sc: Scanner, flow: Flow, env: string): void {
         let language: string | undefined;
         if (env === 'lstlisting') {
@@ -1989,7 +2979,7 @@ class LatexReader {
             const color = label.formatting.color.replace('#', '').toUpperCase();
             const byColor = Object.entries(ADMONITION_COLOR).find(([, c]) => c.toUpperCase() === color)?.[0];
             const byName = (label.text ?? '').trim().toLowerCase();
-            const type = (byColor ?? (byName in ADMONITION_COLOR ? byName : undefined)) as AdmonitionMetadata['admonitionType'] | undefined;
+            const type = (byColor ?? (own(ADMONITION_COLOR, byName) ? byName : undefined)) as AdmonitionMetadata['admonitionType'] | undefined;
             if (type) {
                 const title = (label.text ?? '').trim();
                 const body = inner.slice(1).map(b => { if (b.type === 'paragraph') delete (b.metadata as any)?.style; return b; });
@@ -2003,6 +2993,7 @@ class LatexReader {
     }
 
     private float(sc: Scanner, flow: Flow, env: string): void {
+        const labelsBefore = this.labelLog.length;
         const inner = this.subFlow(sc, env, flow);
         // Labels in a float name its figure or table, wherever in the float they were written.
         const main = inner.find(b => b.type === 'image' || b.type === 'table');
@@ -2023,6 +3014,11 @@ class LatexReader {
                 meta.anchorIds = [...(meta.anchorIds ?? []), ...ids];
                 for (const id of ids) this.labelTargets.set(id, main);
             }
+            // Without internal links there are no anchors to move, but a label on the caption still names the float.
+            for (const id of this.labelLog.slice(labelsBefore)) {
+                const t = this.labelTargets.get(id);
+                if (t && t !== main && inner.includes(t) && (t.metadata as any)?.style === 'Caption') this.labelTargets.set(id, main);
+            }
         }
         for (const b of inner) this.pushBlock(flow, b);
     }
@@ -2042,9 +3038,23 @@ class LatexReader {
             const label = sc.readRawOptional();
             const itemFlow = new Flow();
             (itemFlow as any).__list = ctx;
+            const labelsBefore = this.labelLog.length;
+            const numbered = ordered && label === null;
+            if (numbered) this.enumNumbers[ctx.enumDepth - 1] = index + 1;
             this.nesting++;
             try { r = this.withState(() => { }, () => this.parseFlow(sc, itemFlow, { env, items: 'item' })); } finally { this.nesting--; }
             this.endParagraph(itemFlow);
+            if (numbered) {
+                // A label in a numbered item reads as the item's reference ("2", "2a", "2(a)iii"), as in LaTeX.
+                const n = this.enumNumbers;
+                const d = ctx.enumDepth;
+                const number = d <= 1 ? `${n[0]}` : d === 2 ? `${n[0]}${alph(n[1])}`
+                    : `${n[0]}(${alph(n[1])})${roman(n[2])}${d >= 4 ? alph(n[3]).toUpperCase() : ''}`;
+                for (const id of this.labelLog.slice(labelsBefore)) {
+                    const t = this.labelTargets.get(id);
+                    if (!t || (t.type === 'paragraph' && !(t as any).__number)) this.labelTargets.set(id, { type: 'list', __number: number } as any);
+                }
+            }
             const blocks = itemFlow.blocks;
             let isTask: boolean | undefined, checked: boolean | undefined;
             let prefix: OfficeContentNode[] = [];
@@ -2458,6 +3468,50 @@ class LatexReader {
 
 // ── project loading ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The legacy encoding a `.tex` file declares, as a WHATWG encoding label: `inputenc`'s option (the
+ * last one it knows), or a `% !TEX encoding =` line (TeXShop, TeXstudio). A declaration is ASCII,
+ * so it is found in the bytes read as Latin-1, before the file is decoded.
+ */
+function declaredEncoding(head: string): string | undefined {
+    const inputenc = /\\usepackage\s*\[([^\]]*)\]\s*\{inputenc\}/.exec(head) ?? /\\inputencoding\s*\{([^}]*)\}/.exec(head);
+    if (inputenc) {
+        const option = inputenc[1].split(',').map(o => o.trim()).reverse().find(o => own(INPUTENC_ENCODINGS, o));
+        if (option) return INPUTENC_ENCODINGS[option];
+    }
+    const magic = /^%\s*!TEX\s+encoding\s*=\s*([A-Za-z0-9_ -]+?)\s*$/im.exec(head)?.[1].toLowerCase().replace(/[\s_]+/g, '-');
+    if (!magic) return undefined;
+    if (/^utf-?8/.test(magic)) return 'utf-8';
+    if (/^(iso-?latin-?1|latin-?1|iso-?8859-1)$/.test(magic)) return 'windows-1252';
+    if (/^(iso-?latin-?9|latin-?9|iso-?8859-15)$/.test(magic)) return 'iso-8859-15';
+    if (/^mac-?(os-?)?roman$/.test(magic)) return 'macintosh';
+    try { new TextDecoder(magic); return magic; } catch { return undefined; }
+}
+
+/**
+ * Decodes a `.tex` file. UTF-8 (LaTeX's default input encoding since 2018) when it is valid UTF-8;
+ * otherwise the legacy encoding the file declares (or `inherited`, the main file's, for an included
+ * file that declares none), or else Windows-1252, the usual 8-bit one. A file that is mostly UTF-8
+ * with a few damaged bytes, and declares nothing else, stays UTF-8.
+ */
+function decodeTex(buf: Buffer, inherited?: string): { text: string; declared?: string } {
+    const declared = declaredEncoding(buf.subarray(0, 1 << 20).toString('latin1'));
+    try {
+        return { text: new TextDecoder('utf-8', { fatal: true }).decode(buf), declared };
+    } catch { /* not valid UTF-8 */ }
+    let label = declared ?? inherited;
+    if (!label) {
+        // Valid multi-byte sequences outnumbering the damaged ones mean UTF-8 text with some damage.
+        const lenient = buf.toString('utf8');
+        let replaced = 0, multibyte = 0;
+        for (const ch of lenient) { if (ch === '\uFFFD') replaced++; else if (ch.charCodeAt(0) > 0x7F) multibyte++; }
+        label = multibyte > replaced ? 'utf-8' : 'windows-1252';
+    }
+    if (label === 'utf-8') return { text: buf.toString('utf8'), declared };
+    try { return { text: new TextDecoder(label).decode(buf), declared }; }
+    catch { return { text: new TextDecoder('windows-1252').decode(buf), declared }; }
+}
+
 const ZIP_MAGIC = [0x50, 0x4b];
 
 /** Picks the main file of a project: `main.tex`, else a top-level `.tex` with `\documentclass`, else the shallowest one. */
@@ -2474,7 +3528,7 @@ function findMainFile(files: Map<string, Buffer>): string | null {
 export const parseLatex = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     checkAbortSignal(config.abortSignal);
     let project: Project | null = null;
-    let src: string;
+    let decoded: { text: string; declared?: string };
     let mainPath: string | undefined;
     if (buffer.length >= 2 && ZIP_MAGIC.every((b, i) => buffer[i] === b)) {
         const entries = await extractFiles(buffer, name => !name.endsWith('/'), config.decompressionLimits, config);
@@ -2490,14 +3544,15 @@ export const parseLatex = async (buffer: Buffer, config: FullOfficeParserConfig)
         }
         project = { files, root: '' };
         mainPath = main;
-        src = files.get(main)!.toString('utf8');
+        decoded = decodeTex(files.get(main)!);
     } else {
-        src = buffer.toString('utf8');
+        decoded = decodeTex(buffer);
     }
-    src = src.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
+    const src = decoded.text.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
 
     const mainDir = mainPath && mainPath.includes('/') ? mainPath.slice(0, mainPath.lastIndexOf('/')) : '';
     const reader = new LatexReader(config, project, mainDir);
+    reader.inputEncoding = decoded.declared;
     const content = reader.parse(src, mainPath);
     const attachments = reader.attachments;
 

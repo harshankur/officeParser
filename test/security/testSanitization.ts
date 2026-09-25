@@ -1895,6 +1895,9 @@ async function latexParserTests() {
         ['argument-doubling macro', '\\newcommand{\\x}[1]{\\x{#1#1}}\\x{a}'],
         ['recursive macro in math', '\\newcommand{\\m}{\\m\\m}$\\m$'],
         ['self-opening environment', '\\newenvironment{r}{\\begin{r}}{}\\begin{r}x\\end{r}'],
+        ['argument-doubling xparse command', '\\NewDocumentCommand{\\x}{m}{\\x{#1#1}}\\x{a}'],
+        ['self-opening xparse environment', '\\NewDocumentEnvironment{r}{O{x}}{\\begin{r}}{}\\begin{r}x\\end{r}'],
+        ['recursive \\IfBooleanTF', '\\NewDocumentCommand{\\l}{s}{\\IfBooleanTF{#1}{\\l*\\l*}{\\l*\\l*}}\\l'],
     ] as const) {
         const r = await parse(src);
         check(`latex parser: ${label} is bounded`, r.ms < TIME_BUDGET_MS && r.json.length < SIZE_BUDGET && r.codes.includes('LATEX_EXPANSION_LIMIT_REACHED'),
@@ -1917,6 +1920,10 @@ async function latexParserTests() {
         ['3k nested \\caption', '\\caption{'.repeat(3000) + 'deep' + '}'.repeat(3000)],
         ['2k nested \\textbf', '\\textbf{'.repeat(2000) + 'deep' + '}'.repeat(2000)],
         ['1.5k nested tabulars', '\\begin{tabular}{c}'.repeat(1500) + 'deep' + '\\end{tabular}'.repeat(1500)],
+        ['3k nested theorems', '\\begin{theorem}'.repeat(3000) + 'deep' + '\\end{theorem}'.repeat(3000)],
+        ['3k nested proofs', '\\begin{proof}'.repeat(3000) + 'deep' + '\\end{proof}'.repeat(3000)],
+        ['3k nested language environments', '\\begin{french}'.repeat(3000) + 'deep' + '\\end{french}'.repeat(3000)],
+        ['5k nested \\foreignlanguage', '\\foreignlanguage{german}{'.repeat(5000) + 'deep' + '}'.repeat(5000)],
     ] as const) {
         let error = '';
         const r = await parse(src).catch((e: any) => { error = e.message; return null; });
@@ -1937,6 +1944,15 @@ async function latexParserTests() {
         ['1MB \\iffalse body', '\\iffalse ' + 'x'.repeat(1_000_000) + '\\fi'],
         ['1MB of } in verbatim', '\\begin{verbatim}' + '}'.repeat(1_000_000) + '\\end{verbatim}'],
         ['20k unclosed % <!-- lines', 'text\n' + '% <!-- x\n'.repeat(20000) + 'end'],
+        ['100k conditionals in an unclosed \\iffalse', '\\iffalse ' + '\\ifnum1<2 x'.repeat(100000)],
+        ['100k \\ifXeTeX\\else pairs never closed', '\\ifXeTeX a\\else b'.repeat(100000)],
+        ['100k stray \\else and \\fi', '\\else x\\fi y'.repeat(100000)],
+        ['100k unclosed \\ifcsname', '\\ifcsname x '.repeat(100000)],
+        ['100k \\newif switches', Array.from({ length: 100000 }, (_, k) => `\\newif\\ifs${k}`).join('')],
+        ['1MB \\ExplSyntaxOn body', '\\ExplSyntaxOn ' + 'x_y:n '.repeat(160000)],
+        ['1MB unclosed xparse d() argument', '\\NewDocumentCommand\\d{d()}{#1}\\d(' + 'x'.repeat(1_000_000)],
+        ['10k theorems numbered within sections', '\\newtheorem{t}{T}[section]' + '\\section{s}\\begin{t}x\\end{t}'.repeat(10000)],
+        ['20k unclosed ConTeXt \\startitemize', '\\starttext ' + '\\startitemize \\item x '.repeat(20000)],
     ] as const) {
         const r = await parse(src);
         check(`latex parser: ${label} parses in linear time`, r.ms < TIME_BUDGET_MS, `${r.ms}ms`);
@@ -1953,6 +1969,13 @@ async function latexParserTests() {
     // Included text counts against the expansion budget: including a large file many times over is bounded.
     const repeated = await parse(zip({ 'main.tex': '\\documentclass{article}\\begin{document}' + '\\input{big}'.repeat(400) + '\\end{document}', 'big.tex': 'z '.repeat(500000) }));
     check('latex parser: repeated \\input of a large file is bounded', repeated.ms < 3 * TIME_BUDGET_MS && repeated.codes.includes('LATEX_EXPANSION_LIMIT_REACHED'), `${repeated.ms}ms ${repeated.codes.join(',')}`);
+
+    // Table and switch names from Object.prototype are unknown names, never inherited table entries.
+    const proto = await parse('\\usepackage[constructor]{babel}\\usepackage[__proto__]{inputenc}\\babeltags{__proto__ = french}\\newtheorem{constructor}{C}'
+        + '\\setdefaultlanguage{toString}\\begin{document}\\begin{constructor}a\\end{constructor}\\begin{toString}b\\end{toString}\\textvalueOf{c}'
+        + '\\foreignlanguage{__proto__}{d}\\newif\\ifconstructor\\constructortrue\\ifconstructor e\\fi\\begin{hasOwnProperty}f\\end{hasOwnProperty}\\end{document}');
+    check('latex parser: prototype names in the language, theorem and encoding tables are plain names',
+        ['a', 'b', 'c', 'd', 'e', 'f'].every(t => proto.json.includes(t)) && !proto.json.includes('native code') && !proto.json.includes('function') && ({} as any).polluted === undefined, proto.json.slice(0, 200));
 
     const unclosed = await parse('\\begin{itemize}\\item a \\textbf{b \\begin{tabular}{ll} x & y');
     check('latex parser: unclosed groups and environments do not throw', unclosed.json.includes('a'));

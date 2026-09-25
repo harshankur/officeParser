@@ -2273,6 +2273,166 @@ async function testLatexParsing(): Promise<void> {
     const ifExists = await OfficeParser.parseOffice(Buffer.from('\\documentclass{article}\\begin{document}\\IfFileExists{fig.png}{\\includegraphics{fig.png}}{\\fbox{none}}\\end{document}'), { fileType: 'tex', onWarning: () => {} } as any);
     assert.deepStrictEqual(collectAllNodes(ifExists).filter(n => n.type === 'image').map(n => (n.metadata as any).url), ['fig.png'], 'TEX parse: \\IfFileExists reads its then-branch');
 
+    // ── Tier 3b: engines, languages, packages and classes ─────────────────────
+    const texOf = async (src: string | Buffer, extra: any = {}) => {
+        const w: any[] = [];
+        const a = await OfficeParser.parseOffice(Buffer.isBuffer(src) ? src : Buffer.from(src), { fileType: 'tex', onWarning: (x: any) => w.push(x), ...extra } as any);
+        return { ast: a, warnings: w, paras: collectAllNodes(a).filter(n => n.type === 'paragraph' || n.type === 'heading' || n.type === 'list').map(n => n.text) };
+    };
+    const runsOf = (n: OfficeContentNode | undefined) => (n?.children ?? []).map(c => [c.text, c.formatting ?? {}]);
+
+    // Conditionals are decided as pdfLaTeX would: only the branch taken is read.
+    const cond = await texOf(String.raw`\documentclass{article}
+\newif\ifdraft \drafttrue
+\begin{document}
+A\ifXeTeX XE\else\ifLuaTeX LUA\else PDF\fi\fi{} B\ifPDFTeX{} pdf\else{} other\fi{}
+C\ifdraft{} draft\else{} final\fi{} \draftfalse D\ifdraft{} draft\else{} final\fi{}
+E\ifdefined\directlua{} lua\else{} nolua\fi{} F\ifx\XeTeXversion\undefined{} nonxe\else{} xe\fi{} G\unless\ifXeTeX{} unless\fi{}
+H\iffalse{} hidden \ifnum1>2 x\fi{} hidden\else{} shown\fi{} I\ifnum\pdfoutput>0{} pdfout\else{} dvi\fi{} J\ifnum 1>2 {} big\else{} small\fi
+\end{document}`);
+    assert.strictEqual(cond.paras[0], 'APDF B pdf C draft D final E nolua F nonxe G unless H shown I pdfout J small', `TEX parse: engine, \\newif, \\ifdefined, \\ifx, \\unless, \\ifnum conditionals (${cond.paras[0]})`);
+    assert.strictEqual(cond.warnings.length, 0, 'TEX parse: decided conditionals are not reported');
+    const undecided = await texOf(String.raw`\begin{document}\ifnum\value{page}>1 X\else Y\fi\end{document}`);
+    assert.ok(undecided.paras[0]?.includes('X') && undecided.paras[0]?.includes('Y') && undecided.warnings.some(w => JSON.stringify(w).includes('\\\\ifnum')), 'TEX parse: a test that cannot be decided reads both branches and is reported');
+    const pkgTests = await texOf(String.raw`\documentclass{article}\usepackage{hyperref,ifthen,etoolbox}
+\newboolean{long}\setboolean{long}{true}\newtoggle{t}\toggletrue{t}
+\begin{document}\makeatletter\@ifpackageloaded{hyperref}{HYP}{NOHYP} \@ifundefined{directlua}{NOLUA}{LUA}\makeatother{}
+\ifthenelse{\boolean{long}}{LONG}{SHORT} \ifthenelse{\NOT\boolean{long}}{NOT}{YES} \iftoggle{t}{TOG}{NOTOG} \ifthenelse{\equal{a}{b}}{EQ}{NE}\end{document}`);
+    assert.strictEqual(pkgTests.paras[0], 'HYP NOLUA LONG YES TOG NE', `TEX parse: \\@ifpackageloaded, \\@ifundefined, ifthen booleans, etoolbox toggles (${pkgTests.paras[0]})`);
+
+    // Languages: the switch commands keep only their text; the main language becomes metadata.language.
+    const langs = await texOf(String.raw`\documentclass[ngerman]{article}
+\usepackage[english,main=french]{babel}
+\babeltags{de = ngerman}
+\begin{document}
+Hello \foreignlanguage{german}{Hallo} \textde{Welt} \textfrench{Bonjour} \begin{otherlanguage}{spanish}Hola\end{otherlanguage} \begin{german}Tag\end{german}.
+\end{document}`);
+    assert.deepStrictEqual([langs.paras, langs.ast.metadata.language, langs.warnings.length], [['Hello Hallo Welt Bonjour Hola Tag.'], 'fr', 0], 'TEX parse: \\foreignlanguage, \\text<lang>, language environments, babel main=');
+    assert.strictEqual((await texOf(String.raw`\documentclass[british]{article}\usepackage{babel}\begin{document}x\end{document}`)).ast.metadata.language, 'en-GB', 'TEX parse: babel takes the language from the class options');
+    assert.strictEqual((await texOf(String.raw`\usepackage{polyglossia}\setdefaultlanguage[variant=american]{english}\begin{document}x\end{document}`)).ast.metadata.language, 'en-US', 'TEX parse: polyglossia \\setdefaultlanguage (with a variant)');
+    assert.strictEqual((await texOf(String.raw`\usepackage[german]{babel}\usepackage{hyperref}\hypersetup{pdflang=en-US}\begin{document}x\end{document}`)).ast.metadata.language, 'en-US', 'TEX parse: pdflang wins over babel');
+
+    // LaTeX 2.09 font switches (each starts from the normal font), and \documentstyle.
+    const oldFonts = await texOf(String.raw`\documentstyle[12pt]{article}\begin{document}{\bf bold {\it italic} bold} {\tt mono} {\sl slanted} {\sf sans}\end{document}`);
+    assert.deepStrictEqual(runsOf(collectAllNodes(oldFonts.ast).find(n => n.type === 'paragraph')), [['bold ', { bold: true }], ['italic', { italic: true }], [' bold', { bold: true }], [' ', {}], ['mono', { font: 'monospace' }], [' ', {}], ['slanted', { italic: true }], [' ', {}], ['sans', { font: 'sans-serif' }]], 'TEX parse: \\bf \\it \\tt \\sl \\sf');
+    assert.deepStrictEqual([oldFonts.ast.metadata.nativeProperties?.documentClass, oldFonts.ast.metadata.formatting?.size], ['article', '12pt'], 'TEX parse: \\documentstyle names the class and its options');
+
+    // xparse commands and environments (the LaTeX kernel's \NewDocumentCommand), and expl3 code skipped.
+    const xp = await texOf(String.raw`\documentclass{article}
+\NewDocumentCommand{\greet}{s O{World} m}{\IfBooleanTF{#1}{Hi}{Hello}, #2 and #3!}
+\NewDocumentCommand\opt{o m}{\IfNoValueTF{#1}{[#2]}{(#1:#2)}}
+\NewDocumentCommand\dl{d() m}{\IfValueT{#1}{<#1>}#2}
+\NewDocumentEnvironment{boxed}{O{Note} m}{\textbf{#1 #2:} }{ (end #1)}
+\NewDocumentEnvironment{wrap}{m +b}{[#1|#2]}{}
+\ExplSyntaxOn
+\cs_new:Npn \my_fn:n #1 { \tl_upper_case:n {#1} }
+\ExplSyntaxOff
+\begin{document}
+\greet{you} \greet*[Earth]{me} \opt{a} \opt[b]{c} \dl(x){y} \dl{z} \begin{boxed}{Title}Body\end{boxed} \begin{wrap}{W}inner\end{wrap}
+\end{document}`);
+    assert.deepStrictEqual([xp.paras[0], xp.warnings.length], ['Hello, World and you! Hi, Earth and me! [a] (b:c) <x>y z Note Title: Body (end Note) [W|inner]', 0], 'TEX parse: \\NewDocumentCommand/\\NewDocumentEnvironment signatures, \\IfBooleanTF/\\IfNoValueTF, expl3 skipped');
+    assert.ok((await texOf(String.raw`\NewDocumentCommand\e{e{^_}}{x}\begin{document}\e\end{document}`)).warnings.some(w => JSON.stringify(w).includes('argument specification')), 'TEX parse: an unsupported xparse signature is reported');
+
+    // Theorems: numbered (within sections, shared counters), styles, notes, proofs, and \ref to them.
+    const thm = await texOf(String.raw`\documentclass{article}\usepackage{amsthm}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\theoremstyle{definition}\newtheorem{definition}{Definition}\newtheorem*{remark*}{Remark}
+\theoremstyle{remark}\newtheorem{note}{Note}
+\begin{document}
+\section{One}
+\begin{theorem}[Fermat]\label{thm:f}No solutions.\end{theorem}
+\begin{lemma}\label{lem:a}A lemma.\end{lemma}
+\begin{definition}A word is \emph{nice}.\label{def:n}\end{definition}
+\begin{remark*}Unnumbered.\end{remark*}
+\begin{note}Remark style.\end{note}
+\begin{proof}Trivial.\end{proof}
+\begin{proof}[Proof of Theorem~\ref{thm:f}]\begin{itemize}\item one\end{itemize}\end{proof}
+\section{Two}
+\begin{theorem}Again.\end{theorem}
+See \ref{thm:f}, \ref{lem:a}, \ref{def:n}.
+\end{document}`);
+    const thmParas = collectAllNodes(thm.ast).filter(n => n.type === 'paragraph');
+    assert.deepStrictEqual(thmParas.map(p => p.text), ['Theorem 1.1 (Fermat). No solutions.', 'Lemma 1.2. A lemma.', 'Definition 1. A word is nice.', 'Remark. Unnumbered.', 'Note 1. Remark style.', 'Proof. Trivial. □', 'Proof of Theorem\u00A01.1.', '□', 'Theorem 2.1. Again.', 'See 1.1, 1.2, 1.'], 'TEX parse: theorem numbering, notes, proofs, references');
+    assert.deepStrictEqual(runsOf(thmParas[0]), [['Theorem 1.1', { bold: true }], [' (Fermat)', {}], ['.', { bold: true }], [' ', {}], ['No solutions.', { italic: true }]], 'TEX parse: plain-style theorem head bold, body italic');
+    assert.deepStrictEqual([runsOf(thmParas[2])[0], runsOf(thmParas[4])[0], runsOf(thmParas[5])[0]], [['Definition 1.', { bold: true }], ['Note 1.', { italic: true }], ['Proof.', { italic: true }]], 'TEX parse: definition, remark and proof heads');
+    assert.deepStrictEqual((thmParas[0].metadata as any).anchorIds, ['thm:f'], 'TEX parse: a theorem label anchors the theorem');
+    const llncs = await texOf(String.raw`\documentclass{llncs}\begin{document}\begin{theorem}T\end{theorem}\begin{lemma}L\end{lemma}\begin{theorem}T2\end{theorem}\keywords{First \and Second}\end{document}`);
+    assert.deepStrictEqual([llncs.paras, llncs.ast.metadata.keywords], [['Theorem 1. T', 'Lemma 1. L', 'Theorem 2. T2', 'Keywords: First, Second'], 'First, Second'], 'TEX parse: theorem environments a class provides, and \\keywords');
+    const thmDeck = await texOf(String.raw`\documentclass{beamer}\begin{document}\begin{frame}{F}\begin{theorem}[Name]Body\end{theorem}\end{frame}\end{document}`);
+    assert.deepStrictEqual((thmDeck.ast.content[0].children![1].metadata as any), { admonitionType: 'note', title: 'Theorem (Name)' }, 'TEX beamer: a theorem is a titled block');
+
+    // References resolve to numbers with or without internal links, including enumerate items.
+    const refSrc = String.raw`\begin{document}\section{Intro}\label{sec:i}
+\begin{enumerate}\item a\label{it:a} \item b \begin{enumerate}\item c\label{it:c}\end{enumerate}\end{enumerate}
+\begin{figure}\includegraphics{x.png}\caption{Cap}\label{fig:x}\end{figure}
+\begin{equation}x\label{eq:x}\end{equation}
+See \textbf{\ref{sec:i}} \ref{it:a} \ref{it:c} \ref{fig:x} \eqref{eq:x}.\end{document}`;
+    for (const ignoreInternalLinks of [false, true]) {
+        const r = await texOf(refSrc, { ignoreInternalLinks });
+        assert.strictEqual(r.paras[r.paras.length - 1], 'See 1 1 2a 1 (1).', `TEX parse: references resolve (ignoreInternalLinks: ${ignoreInternalLinks})`);
+        const see = collectAllNodes(r.ast).filter(n => n.type === 'paragraph').pop()!;
+        assert.ok(see.children!.some(c => c.text === '1' && c.formatting?.bold), `TEX parse: a reference keeps its run formatting (ignoreInternalLinks: ${ignoreInternalLinks})`);
+    }
+
+    // Class commands: amsart author information, IEEEtran author blocks and keywords, KOMA-Script, epigraphs.
+    const ams = await texOf(String.raw`\documentclass{amsart}\title{T}\author{A. Author}\address{Dept. of Math}\email{a@b.org}\urladdr{https://x.org}\subjclass[2020]{Primary 35K05}\keywords{heat, equation}\begin{document}\maketitle Text.\end{document}`);
+    const amsNative = ams.ast.metadata.nativeProperties as any;
+    assert.deepStrictEqual([amsNative.addresses, amsNative.emails, amsNative.urls, amsNative.subjectClassification, ams.ast.metadata.keywords, ams.warnings.length],
+        [['Dept. of Math'], ['a@b.org'], ['https://x.org'], { codes: 'Primary 35K05', scheme: 'MSC2020' }, 'heat, equation', 0], 'TEX parse: amsart \\address, \\email, \\urladdr, \\subjclass, \\keywords');
+    const ieee = await texOf(String.raw`\documentclass[conference]{IEEEtran}\IEEEoverridecommandlockouts\title{P}
+\author{\IEEEauthorblockN{Alice}\IEEEauthorblockA{MIT\\ alice@mit.edu}\and\IEEEauthorblockN{Bob}\IEEEauthorblockA{CMU}}
+\begin{document}\maketitle\begin{IEEEkeywords}graphs, networks\end{IEEEkeywords}\IEEEPARstart{T}{his} paper.\IEEEpeerreviewmaketitle\end{document}`);
+    assert.deepStrictEqual([ieee.ast.metadata.author, ieee.ast.metadata.keywords, ieee.paras.slice(1), ieee.warnings.length],
+        ['Alice, Bob', 'graphs, networks', ['Alice, MIT alice@mit.edu, Bob, CMU', 'Index Terms—graphs, networks', 'This paper.'], 0], 'TEX parse: IEEEtran author blocks, IEEEkeywords, \\IEEEPARstart');
+    const koma = await texOf(String.raw`\documentclass{scrartcl}\begin{document}\minisec{Small}Text.\epigraph{To be.}{\textit{Hamlet}}\dictum[Author]{Wise.}\end{document}`);
+    const komaParas = collectAllNodes(koma.ast).filter(n => n.type === 'paragraph');
+    assert.deepStrictEqual(komaParas.map(p => [p.text, (p.metadata as any).style, (p.metadata as any).alignment]),
+        [['Small', undefined, undefined], ['Text.', undefined, undefined], ['To be.', 'Quote', undefined], ['Hamlet', 'Quote', 'right'], ['Wise.', 'Quote', undefined], ['(Author)', 'Quote', 'right']], 'TEX parse: \\minisec, \\epigraph, \\dictum');
+    assert.deepStrictEqual(runsOf(komaParas[0]), [['Small', { bold: true }]], 'TEX parse: \\minisec is bold');
+
+    // Legacy input encodings: a declared inputenc encoding, an undeclared 8-bit file, a TeXShop magic line.
+    const latin1 = await texOf(Buffer.from(String.raw`\documentclass{article}\usepackage[latin1]{inputenc}\begin{document}Café Größe\end{document}`, 'latin1'));
+    assert.deepStrictEqual(latin1.paras, ['Café Größe'], 'TEX parse: inputenc latin1');
+    assert.deepStrictEqual((await texOf(Buffer.from(String.raw`\begin{document}Déjà vu\end{document}`, 'latin1'))).paras, ['Déjà vu'], 'TEX parse: an undeclared 8-bit file reads as Windows-1252');
+    assert.deepStrictEqual((await texOf(Buffer.from(String.raw`\usepackage[latin1]{inputenc}\begin{document}Café\end{document}`, 'utf8'))).paras, ['Café'], 'TEX parse: a file converted to UTF-8 that still declares latin1 reads as UTF-8');
+    const koi = Buffer.from([...String.raw`\usepackage[koi8-r]{inputenc}\begin{document}`].map(c => c.charCodeAt(0)).concat([0xf0, 0xd2, 0xc9, 0xd7, 0xc5, 0xd4], [...'\\end{document}'].map(c => c.charCodeAt(0))));
+    assert.deepStrictEqual((await texOf(koi)).paras, ['Привет'], 'TEX parse: inputenc koi8-r');
+    const magic = Buffer.concat([Buffer.from('% !TEX encoding = ISO-8859-15\n\\begin{document}'), Buffer.from([0xa4]), Buffer.from('\\end{document}')]);
+    assert.deepStrictEqual((await texOf(magic)).paras, ['€'], 'TEX parse: % !TEX encoding line');
+    const damaged = Buffer.concat([Buffer.from('\\begin{document}Größe über ', 'utf8'), Buffer.from([0xff]), Buffer.from(' end\\end{document}')]);
+    assert.deepStrictEqual((await texOf(damaged)).paras, ['Größe über � end'], 'TEX parse: mostly-UTF-8 text with a damaged byte stays UTF-8');
+    const includedZip = zipSync({ 'main.tex': strToU8('\\documentclass{article}\\usepackage[latin1]{inputenc}\\begin{document}\\input{ch}\\end{document}'), 'ch.tex': Buffer.from('Chapitre é', 'latin1') });
+    assert.deepStrictEqual((await texOf(Buffer.from(includedZip))).paras, ['Chapitre é'], 'TEX parse: an included file takes the main file\'s encoding');
+
+    // Plain TeX and ConTeXt are other formats: their text is read, with a warning for ConTeXt.
+    const plain = await texOf(String.raw`\magnification=\magstep1 \hsize=6.5truein \parskip 6pt plus 1pt
+\beginsection Introduction
+
+Some text \vskip 12pt plus 2pt more {\it text}.
+\bye
+ignored`);
+    assert.deepStrictEqual([plain.paras, plain.warnings.length], [['Introduction', 'Some text more text.'], 0], 'TEX parse: plain TeX \\beginsection, glue and register assignments, \\bye');
+    const context = await texOf(String.raw`\setupbodyfont[11pt]
+\starttext
+\startsection[title={Introduction},reference=sec:intro]
+Hello {\bf world}.
+\startitemize[n]
+\item One
+\item Two
+\stopitemize
+\starttyping
+code here
+\stoptyping
+\stopsection
+\stoptext`);
+    assert.deepStrictEqual(context.ast.content.map(n => [n.type, n.text, (n.metadata as any)?.listType]), [['heading', 'Introduction', undefined], ['paragraph', 'Hello world.', undefined], ['list', 'One', 'ordered'], ['list', 'Two', 'ordered'], ['code', 'code here', undefined]], 'TEX parse: ConTeXt sections, itemize and typing');
+    assert.ok(context.warnings.some(w => JSON.stringify(w).includes('ConTeXt')), 'TEX parse: a ConTeXt document is reported as not LaTeX');
+
+    // Names from Object.prototype are not table entries.
+    const proto = await texOf(String.raw`\begin{document}\constructor \toString \color{constructor}x \texthasOwnProperty{z}\end{document}`);
+    assert.ok(!JSON.stringify(proto.ast.content).includes('function') && !JSON.stringify(proto.ast.content).includes('native code'), 'TEX parse: \\constructor and \\toString are unknown commands, not table lookups');
+
     // ── Tier 4: round trip with the generator reaches a fixed point ───────────
     const docx = await OfficeParser.parseOffice(path.join(__dirname, 'files/test.docx'), { extractAttachments: true });
     const pin = { metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') } } as any;
