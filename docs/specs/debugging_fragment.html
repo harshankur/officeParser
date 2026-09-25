@@ -181,7 +181,10 @@ await officeParser.parseOffice(latexBuffer,    { fileType: 'tex' });</code></pre
             kept as references to their path (<code>metadata.url</code>).</li>
         <li><strong><code>LATEX_CONSTRUCT_NOT_INTERPRETED</code></strong>: the document uses commands or environments the
             parser does not interpret (a TikZ picture, for example). Text inside them is kept where there is any; drawings
-            are omitted. The message names each construct once.</li>
+            are omitted. The message names each construct once. It also names a conditional the parser could not decide
+            (such as <code>\ifnum</code> on a counter; both of its branches were read, where engine tests and
+            <code>\newif</code> switches are decided as pdfLaTeX would), an <code>xparse</code> argument specification
+            it does not support, and a ConTeXt document (read for its text, as it is not LaTeX).</li>
         <li><strong><code>LATEX_EXPANSION_LIMIT_REACHED</code></strong>: a bound was hit (200,000 macro expansions,
             5,000,000 expanded characters, which included files count toward too, 128 nested input frames, include depth 16,
             nesting depth 128, or 32 nested tables), so content past it was not expanded (content nested too deep is kept as

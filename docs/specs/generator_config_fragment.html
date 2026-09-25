@@ -615,8 +615,9 @@ await ast.to('md', {
     </table>
 
     <h3 id="texgeneratorconfig">TexGeneratorConfig (<code>texConfig</code>)</h3>
-    <p>Writes LaTeX source from any parsed source. The output compiles unmodified with <strong>pdfLaTeX, XeLaTeX and
-        LuaLaTeX</strong>: the preamble selects fonts per engine and loads only the packages the document uses. The
+    <p>Writes LaTeX source from any parsed source. The output compiles unmodified with <strong>pdfLaTeX, XeLaTeX,
+        LuaLaTeX, upLaTeX, pLaTeX and <code>latex</code></strong> (the last three through <code>dvipdfmx</code>), TeX Live
+        2021 and later: the preamble selects fonts per engine and loads only the packages the document uses. The
         value is a <code>string</code>, or a <code>Uint8Array</code> zip when <code>bundle</code> is set. Adds no
         dependencies and runs identically in Node and the browser. Destination <code>'tex'</code> (alias
         <code>'latex'</code>). It is the round-trip partner of the LaTeX parser: the <code>.tex</code> (or the
@@ -699,8 +700,18 @@ await ast.to('md', {
         paths are reduced to safe names under <code>images/</code>. Math is the one place content is emitted as live
         LaTeX; an expression that uses a command able to read or write files, run programs or redefine commands, or
         that is structurally unbalanced, is written as literal text with a <code>MATH_WRITTEN_AS_TEXT</code> warning.
-        A character the default fonts lack gets a <code>\newunicodechar</code> fallback; a script pdfLaTeX cannot
-        typeset is shown there as <code>[U+XXXX]</code>, while XeLaTeX/LuaLaTeX keep the real characters.</p>
+        A character the default fonts lack gets a fallback under every engine; a script pdfLaTeX cannot typeset is
+        shown there as <code>[U+XXXX]</code> (Greek as math letters).</p>
+    <p><strong>Engines and fonts.</strong> The preamble tells the engines apart with <code>iftex</code>. XeLaTeX and
+        LuaLaTeX load <code>fontspec</code>, and for text in scripts Latin Modern lacks, fonts TeX Live ships: Computer
+        Modern Unicode for Greek and Cyrillic, and Fandol, Harano Aji or UnFonts for Chinese, Japanese and Korean
+        (whichever language the text is mostly in, the others as fallbacks) through <code>xeCJK</code> or
+        <code>luatexja</code>, which also break lines between CJK characters. Each font is used only where it is
+        installed, so a smaller TeX installation still compiles the document, those characters left blank. pdfLaTeX,
+        upLaTeX and pLaTeX load 8-bit fonts; upLaTeX and pLaTeX set CJK text in their own Japanese fonts (which lack
+        Hangul; pLaTeX before TeX Live 2023 cannot read Hangul at all). In DVI mode (<code>latex</code>,
+        <code>uplatex</code> or <code>platex</code>, then <code>dvipdfmx</code>) a class option gives every package the
+        <code>dvipdfmx</code> driver, so images, links and colours work there too.</p>
     <pre><code>const { value: tex } = await ast.to('tex');                                   // string
 const { value: zip } = await ast.to('tex', { texConfig: { bundle: true } });  // Uint8Array (main.tex + images/)</code></pre>
 

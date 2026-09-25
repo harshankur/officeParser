@@ -33,7 +33,7 @@ A robust, strictly-typed **Node.js and Browser** library for parsing office file
 - **Password-protected documents.** Encrypted PDF, OOXML (`docx`/`xlsx`/`pptx`) and ODF (`odt`/`ods`/`odp`/`odg`) open through one unified `password` / `onPassword` option, across parsing, conversion and templating.
 - **Native DOCX & ODT generation**, plus a **native PDF engine** (`pdfConfig.engine: 'native'`, built on `pdf-lib`) that produces real PDF bytes with no headless browser, in Node and the browser alike.
 - **Templates / mail-merge** via `OfficeTemplate.render` (fill a DOCX template's `{{placeholders}}`, single or batch), and **ODG parsing** (LibreOffice Draw).
-- **LaTeX in both directions** (8.1): `.tex` files and Overleaf project zips parse into the same AST as every other format (sections, lists, tables with merged cells, figures, math, footnotes, citations, cross-references, user macros, `beamer` slides), so LaTeX converts to DOCX, ODT, HTML, Markdown and the rest. And `to('tex')` turns any parsed document into LaTeX source that compiles unmodified with pdfLaTeX, XeLaTeX and LuaLaTeX, presentations included (as `beamer` frames), with a zip bundle mode that packages the images. See [LaTeX Support](#latex-support).
+- **LaTeX in both directions** (8.1): `.tex` files and Overleaf project zips parse into the same AST as every other format (sections, lists, tables with merged cells, figures, math, footnotes, citations, cross-references, user macros, `beamer` slides), so LaTeX converts to DOCX, ODT, HTML, Markdown and the rest. And `to('tex')` turns any parsed document into LaTeX source that compiles unmodified with pdfLaTeX, XeLaTeX, LuaLaTeX, upLaTeX, pLaTeX and `latex` (the last three through dvipdfmx), presentations included (as `beamer` frames), with a zip bundle mode that packages the images. See [LaTeX Support](#latex-support).
 
 See the [full changelog](CHANGELOG.md) for the complete list, including breaking changes.
 
@@ -1084,7 +1084,17 @@ const project = await OfficeParser.parseOffice('overleaf-project.zip', { extract
 | `\maketitle`, beamer `\titlepage` | a title block where it stands: a `heading` styled `Title`, then `Author` and `Date` lines (beamer adds `Subtitle`), `\thanks` as footnotes |
 | `\title`, `\author`, `\date`, `\hypersetup{pdf...}` | `ast.metadata` (`pdftitle`/`pdfauthor` win over `\title`/`\author`) |
 | `beamer` frames, `\framesubtitle`, `\note`, overlays | `slide` nodes with speaker notes |
-| `\newcommand`, `\renewcommand`, `\def`, `\newenvironment` | expanded |
+| `\newcommand`, `\renewcommand`, `\def`, `\newenvironment`, `\NewDocumentCommand`/`\NewDocumentEnvironment` (`m o O s t d D r R v b` arguments, `\IfBooleanTF`, `\IfNoValueTF`) | expanded; `expl3` code blocks are skipped |
+| `\ifXeTeX`/`\ifLuaTeX`/`\ifPDFTeX` (iftex), `\newif` switches, `\ifdefined`, `\@ifpackageloaded`, `ifthen` booleans, etoolbox toggles | decided as pdfLaTeX would compile the document: only the branch taken is read (a test that cannot be decided, such as `\ifnum` on a counter, reads both and is reported) |
+| `\newtheorem` (shared counters, numbering within sections, `\theoremstyle`), thmtools `\declaretheorem`, `proof` | "**Theorem 2.1** (Note)**.**" before the body (italic in the `plain` style), proofs ending in □; `\ref` reads theorem numbers. Theorem environments a class provides (llncs, svjour) need no `\newtheorem`; beamer's are titled blocks |
+| babel/polyglossia: `\foreignlanguage`, `\text<language>`, `otherlanguage`, language environments, `\babeltags` | their text; the main language (babel's `main=` or last language, polyglossia's `\setdefaultlanguage`) becomes `metadata.language` unless `pdflang` states it |
+| `\keywords`, `keywords`/`IEEEkeywords` environments; amsart `\address`, `\email`, `\urladdr`, `\subjclass`; IEEEtran author blocks, `\IEEEPARstart`; KOMA-Script `\minisec`, `\dictum`; `\epigraph` | `metadata.keywords` (and the printed "Keywords:" line), `nativeProperties`, authors' names in `metadata.author`, text |
+| `\bf`, `\it`, `\tt`, `\sl`, `\sf`, `\rm`, `\sc`, `\documentstyle` (LaTeX 2.09) | formatted text runs, the document class |
+| `inputenc` encodings (`latin1`, `latin9`, `cp1252`, `koi8-r`, ...), a `% !TEX encoding` line | the file decoded in that encoding (an undeclared 8-bit file reads as Windows-1252), included files too |
+
+The parser reads LaTeX (and LaTeX 2.09). Plain TeX's `\bye`, `\beginsection` and glue are understood, and a ConTeXt
+document (`\starttext`) has its sections, lists, code and text read, with a `LATEX_CONSTRUCT_NOT_INTERPRETED`
+warning that it is not LaTeX.
 
 LaTeX is a programming language, so the parser is a bounded interpreter: macro expansion, expanded
 text (included files count toward it), include depth and nesting all have hard limits (past one,
@@ -1103,6 +1113,25 @@ parses back to the same structure, and a generate, parse, generate cycle reaches
 one round (the first regeneration may normalize spacing, and image sizes the source never stated).
 In bundle mode, an image the source only named by path is written as
 `\IfFileExists{path}{\includegraphics{path}}{\fbox{...}}`, so the zip compiles whether or not you add the file.
+
+**Engines.** The generated source compiles unmodified with pdfLaTeX, XeLaTeX, LuaLaTeX, upLaTeX, pLaTeX
+and `latex`, TeX Live 2021 and later (pLaTeX before TeX Live 2023 reads only JIS X 0208 characters,
+so it stops at Korean text). The preamble tells the engines apart with `iftex`: XeLaTeX and LuaLaTeX load `fontspec`; pdfLaTeX,
+upLaTeX and pLaTeX load 8-bit fonts (`fontenc`, `inputenc`, `lmodern`); and in DVI mode (`latex`,
+`uplatex` or `platex`, then `dvipdfmx`) every package gets the `dvipdfmx` driver through a class option,
+so images, links and colours work there too.
+
+| Characters | pdfLaTeX | XeLaTeX, LuaLaTeX | upLaTeX, pLaTeX |
+|---|---|---|---|
+| Latin, symbols, typographic spaces | yes (a fallback for each symbol the fonts lack) | yes | yes |
+| Greek | as math letters | yes, in Computer Modern Unicode | in the Japanese font |
+| Cyrillic | a visible `[U+XXXX]` marker | yes, in Computer Modern Unicode | in the Japanese font |
+| Chinese, Japanese, Korean | a visible `[U+XXXX]` marker | yes: Fandol, Harano Aji or UnFonts (whichever language the text is mostly in, the others as fallbacks) through `xeCJK` or `luatexja`, which also break lines between CJK characters | Japanese, and the Chinese its Japanese fonts cover; Hangul needs other fonts, and pLaTeX before TeX Live 2023 cannot read it at all |
+| Emoji | a visible `[U+XXXX]` marker | blank unless you add a font that has them | a missing-glyph box |
+
+The fonts are TeX Live's own. The preamble uses each only where it is installed, so a smaller
+installation (BasicTeX, TinyTeX) still compiles the document, the characters it has no font for left
+blank.
 
 ---
 
@@ -1515,7 +1544,7 @@ writeFileSync('report.odt', value); // value is a Uint8Array
 
 ### TexGeneratorConfig
 
-Pass as `texConfig` inside `GeneratorConfig`. The LaTeX generator turns any parsed document into LaTeX source that compiles unmodified with **pdfLaTeX, XeLaTeX and LuaLaTeX**: the preamble selects fonts per engine (`fontenc`/`inputenc` under pdfTeX, `fontspec` otherwise) and loads only the packages the document actually uses. The value is a `string` (the `.tex` source), or a `Uint8Array` zip when `bundle` is set. Zero extra dependencies; runs in Node and the browser.
+Pass as `texConfig` inside `GeneratorConfig`. The LaTeX generator turns any parsed document into LaTeX source that compiles unmodified with **pdfLaTeX, XeLaTeX, LuaLaTeX, upLaTeX, pLaTeX and `latex`** (the last three through `dvipdfmx`), TeX Live 2021 or later: the preamble selects fonts per engine (`fontspec` under XeTeX and LuaTeX, with fonts for Greek, Cyrillic and CJK text where the document has it; `fontenc`/`inputenc` otherwise; see [Engines](#latex-support)) and loads only the packages the document actually uses. The value is a `string` (the `.tex` source), or a `Uint8Array` zip when `bundle` is set. Zero extra dependencies; runs in Node and the browser.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
