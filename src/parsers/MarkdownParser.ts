@@ -392,7 +392,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return m ? m[1] : undefined;
     };
 
-    const parseInline = (text: string, currentFormatting: TextFormatting = {}): OfficeContentNode[] => {
+    // `displayMath` is true only for the lines of a paragraph, where display math (`$$...$$` written
+    // inside the text) becomes a block the paragraph is split around (see splitAtDisplayMath).
+    // Everywhere else (a heading, list item, table cell, quote, note, or inside emphasis) a block
+    // cannot go, so it is inline math there.
+    const parseInline = (text: string, currentFormatting: TextFormatting = {}, displayMath = false): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
         const plainText = (t: string): OfficeContentNode => ({ type: 'text', text: t, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined });
 
@@ -445,7 +449,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // footnoteId | citationKey | wikiPage/wikiAlias | refBang/refText/refId=explicit or collapsed
         // reference link/image `[text][ref]`/`[text][]` | shortBang/shortText=shortcut reference `[text]`
         // (deliberately the most generic bracket pattern, so it must stay last among `[`-starting
-        // alternatives) | autolinkUrl=`<url>` autolink | mathInline | htmlComment=an inline `<!-- ... -->`
+        // alternatives) | autolinkUrl=`<url>` autolink | mathDisplay=`$$...$$` (before mathInline, which would
+        // otherwise match its inner `$...$` and leave a stray `$` on each side) | mathInline | htmlComment=an inline `<!-- ... -->`
         // source comment on one line (body can't contain `-->`; a code span that starts earlier on the
         // line wins by leftmost match, so a comment inside backticks stays code).
         //
@@ -465,7 +470,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Inline math requires no whitespace right after the opening $ or right before the
         // closing $, the common heuristic (matching Pandoc/KaTeX) for avoiding false
         // positives on currency like "$5 and $10".
-        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|==(?<highlight>.+?)==|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|(?<lineBreak><br\s*\/?>)|(?<htmlComment><!--)|<span\s+style="(?<spanStyle>[^"]*)">(?<spanContent>.+?)<\/span>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
+        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|==(?<highlight>.+?)==|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|(?<lineBreak><br\s*\/?>)|(?<htmlComment><!--)|<span\s+style="(?<spanStyle>[^"]*)">(?<spanContent>.+?)<\/span>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$\$(?!\$)(?<mathDisplay>(?:\\[\s\S]|[^$\\])+?)\$\$|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
         let lastIndex = 0;
         let match;
         const closes: CommentCloseCache = { at: -1, from: Number.MAX_SAFE_INTEGER };
@@ -590,6 +595,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             } else if (g.autolinkUrl !== undefined) { // <url> autolink
                 const url = g.autolinkUrl;
                 nodes.push({ type: 'text', text: url, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined, metadata: { link: url, linkType: 'external' } as TextMetadata });
+            } else if (g.mathDisplay !== undefined) { // Display math inside the text
+                // As KaTeX, MathJax, GitLab and Pandoc read it: display math, wherever it is written.
+                if (!g.mathDisplay.trim()) nodes.push(plainText(match[0]));
+                else nodes.push({ type: 'code', text: g.mathDisplay.trim(), metadata: { math: displayMath ? 'block' : 'inline' } as CodeMetadata });
             } else if (g.mathInline !== undefined) { // Inline math
                 nodes.push({ type: 'code', text: g.mathInline, metadata: { math: 'inline' } as CodeMetadata });
             } else if (comment) { // Inline source comment: a hidden note, kept verbatim
@@ -684,11 +693,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // newline with no such marker is still a soft break and collapses to a space,
     // unchanged from before - CommonMark itself renders a soft break as a space/newline.
     const splitParagraphLines = (block: string): OfficeContentNode[] => {
-        const lines = joinCommentLines(block.split('\n'));
+        const lines = joinDisplayMathLines(joinCommentLines(block.split('\n')));
         const children: OfficeContentNode[] = [];
         lines.forEach((line, i) => {
             const hardBreak = /(?: {2,}|\\)$/.test(line);
-            children.push(...parseInline(line.replace(/(?: {2,}|\\)$/, '')));
+            children.push(...parseInline(line.replace(/(?: {2,}|\\)$/, ''), {}, true));
             if (i < lines.length - 1) {
                 if (hardBreak) {
                     children.push({ type: 'break', metadata: { breakType: 'carriageReturn' } as BreakMetadata });
@@ -700,15 +709,59 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return children;
     };
 
+    // A `$$` opened on one line of a paragraph and closed on a later one is one display equation:
+    // those lines are rejoined so the inline tokenizer sees the whole of it. An unescaped `$$` count
+    // that stays odd to the end of the paragraph leaves the lines as they are (literal text).
+    const joinDisplayMathLines = (lines: string[]): string[] => {
+        // Counted outside code spans, where a `$$` is literal.
+        const opens = (line: string) => ((line.replace(/(`+)[^`]*?\1/g, '').match(/(?<!\\)\$\$/g) || []).length % 2) === 1;
+        const out: string[] = [];
+        for (let i = 0; i < lines.length; i++) {
+            if (!opens(lines[i])) { out.push(lines[i]); continue; }
+            let j = i + 1;
+            while (j < lines.length && !opens(lines[j])) j++;
+            if (j >= lines.length) { out.push(lines[i]); continue; }
+            out.push(lines.slice(i, j + 1).join('\n'));
+            i = j;
+        }
+        return out;
+    };
+
+    // A paragraph's children with its display math lifted out as blocks: the text before it, the
+    // equation on its own, the text after it (as the LaTeX parser treats display math, which sits in
+    // its paragraph in TeX and is its own block in the AST). Whitespace at each cut is trimmed, and a
+    // part left with nothing but whitespace or breaks is dropped.
+    const splitAtDisplayMath = (children: OfficeContentNode[], makeParagraph: (children: OfficeContentNode[]) => OfficeContentNode): OfficeContentNode[] => {
+        if (!children.some(c => c.type === 'code' && (c.metadata as CodeMetadata)?.math === 'block')) return [makeParagraph(children)];
+        const out: OfficeContentNode[] = [];
+        let run: OfficeContentNode[] = [];
+        const isBlank = (n: OfficeContentNode) => n.type === 'break' || (n.type === 'text' && !(n.text ?? '').trim() && !n.notes?.length && !n.comments?.length);
+        const flush = () => {
+            while (run.length && isBlank(run[0])) run.shift();
+            while (run.length && isBlank(run[run.length - 1])) run.pop();
+            if (run.length) {
+                const first = run[0], last = run[run.length - 1];
+                if (first.type === 'text') run[0] = { ...first, text: (first.text ?? '').replace(/^\s+/, '') };
+                if (last.type === 'text') run[run.length - 1] = { ...run[run.length - 1], text: (run[run.length - 1].text ?? '').replace(/\s+$/, '') };
+                out.push(makeParagraph(run));
+            }
+            run = [];
+        };
+        for (const child of children) {
+            if (child.type === 'code' && (child.metadata as CodeMetadata)?.math === 'block') { flush(); out.push(child); }
+            else run.push(child);
+        }
+        flush();
+        return out;
+    };
+
     // Builds an admonition node from its raw body text, splitting on blank lines into
     // paragraph children. v1 only supports inline content inside admonitions (no nested
     // lists/headings/code) - acceptable per the roadmap's first cut.
     const buildAdmonitionNode = (admonitionType: AdmonitionMetadata['admonitionType'], body: string, sourceSyntax: 'github' | 'gitlab'): OfficeContentNode => {
         const paragraphs = body.split(/\n\n+/).map(p => p.trim()).filter(Boolean);
-        const children: OfficeContentNode[] = paragraphs.map(p => ({
-            type: 'paragraph',
-            children: splitParagraphLines(p)
-        }));
+        const children: OfficeContentNode[] = paragraphs.flatMap(p =>
+            splitAtDisplayMath(splitParagraphLines(p), parts => ({ type: 'paragraph', children: parts })));
         return {
             type: 'admonition',
             metadata: { admonitionType, sourceSyntax } as AdmonitionMetadata,
@@ -1343,12 +1396,12 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             continue;
         }
 
-        // Paragraph
-        content.push({
+        // Paragraph (with any display math written in it lifted out between its parts)
+        content.push(...splitAtDisplayMath(splitParagraphLines(block), parts => ({
             type: 'paragraph',
             metadata: { alignment } as any,
-            children: splitParagraphLines(block)
-        });
+            children: parts
+        })));
     }
 
     // Fold standalone anchor placeholders into the following content node's anchorIds so a

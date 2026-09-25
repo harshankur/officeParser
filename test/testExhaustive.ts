@@ -156,6 +156,30 @@ async function testMarkdown(): Promise<void> {
     assertExists(codeNodes, n => (n.metadata as any)?.math === 'inline', 'MD: inline math code node');
     assertExists(codeNodes, n => (n.metadata as any)?.math === 'block', 'MD: block math code node');
 
+    // `$$...$$` written inside a paragraph is display math, as KaTeX, MathJax, GitLab and Pandoc read it:
+    // the paragraph is split around it, with no stray `$` left on either side. Where a block cannot go
+    // (a heading, list item, table cell, quote, note, or inside emphasis) it is inline math in place.
+    const mdMath = async (src: string) => (await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md' } as any)).content;
+    const shape = (n: OfficeContentNode): any => n.type === 'code' ? [`math:${(n.metadata as any)?.math}`, n.text] : [n.type, (n.children || []).map(c => c.type === 'code' ? `math:${(c.metadata as any)?.math}:${c.text}` : c.text).join('|')];
+    assert.deepStrictEqual((await mdMath('Inline $$a+b$$ end')).map(shape), [['paragraph', 'Inline'], ['math:block', 'a+b'], ['paragraph', 'end']], 'MD: $$...$$ inside a paragraph is display math, the paragraph split around it');
+    assert.deepStrictEqual((await mdMath('A $x$ and $$y$$ and $z$.')).map(shape), [['paragraph', 'A |math:inline:x| and'], ['math:block', 'y'], ['paragraph', 'and |math:inline:z|.']], 'MD: single-dollar inline math is unchanged beside display math');
+    assert.deepStrictEqual((await mdMath('Two $$a$$ and $$b$$')).map(shape), [['paragraph', 'Two'], ['math:block', 'a'], ['paragraph', 'and'], ['math:block', 'b']], 'MD: several display equations in one paragraph');
+    assert.deepStrictEqual((await mdMath('The sum $$a +\nb$$ is here.')).map(shape), [['paragraph', 'The sum'], ['math:block', 'a +\nb'], ['paragraph', 'is here.']], 'MD: display math may span the lines of a paragraph');
+    assert.deepStrictEqual((await mdMath('Escaped $$a\\$b$$ and \\$$5$$')).map(shape), [['paragraph', 'Escaped'], ['math:block', 'a\\$b'], ['paragraph', 'and |$|math:inline:5|$']], 'MD: an escaped \\$ inside display math stays in the formula; an escaped $ before $$ is literal');
+    for (const [src, expected, label] of [
+        ['# Heading $$h$$', [['heading', 'Heading |math:inline:h']], 'heading'],
+        ['- item $$i$$ more', [['list', 'item |math:inline:i| more']], 'list item'],
+        ['**bold $$b$$**', [['paragraph', 'bold |math:inline:b']], 'emphasis'],
+        ['Code `$$x$$` and $$ $$ and $$open', [['paragraph', 'Code |$$x$$| and |$$ $$| and $$open']], 'code spans, blank and unclosed $$ as literal text'],
+    ] as const) {
+        assert.deepStrictEqual((await mdMath(src)).map(shape), expected, `MD: $$...$$ in a ${label}`);
+    }
+    const mathAdmonition = (await mdMath(':::note\nNote $$n$$ body\n:::'))[0];
+    assert.deepStrictEqual(mathAdmonition.children!.map(shape), [['paragraph', 'Note'], ['math:block', 'n'], ['paragraph', 'body']], 'MD: display math splits an admonition paragraph too');
+    const displayOnce = (await (await OfficeParser.parseOffice(Buffer.from('Inline $$a+b$$ end'), { fileType: 'md' } as any)).to('md')).value as string;
+    const displayTwice = (await (await OfficeParser.parseOffice(Buffer.from(displayOnce), { fileType: 'md' } as any)).to('md')).value as string;
+    assert.ok(displayOnce.includes('$$\na+b\n$$') && !displayOnce.includes('Inline $') && displayTwice === displayOnce, 'MD: display math regenerates as a $$ block, a fixed point after one cycle');
+
     // ── Tables ────────────────────────────────────────────────────────────────
     const tables = nodes.filter(n => n.type === 'table');
     assert.ok(tables.length >= 2, `MD: At least 2 tables (pipe + HTML), got ${tables.length}`);

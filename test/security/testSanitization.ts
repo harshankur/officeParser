@@ -334,6 +334,12 @@ async function markdownTests() {
         ['80k unclosed <!-- lines', '<!-- x\n'.repeat(80000)],
         ['20k unclosed <!-- in one line', '<!-- x '.repeat(20000)],
         ['20k unclosed <!-- in one paragraph', 'a <!-- x\n'.repeat(20000)],
+        // Display math inside a paragraph: a `$$` closing on a later line rejoins those lines, and an
+        // unclosed one is literal. Neither may scan the rest of the paragraph once per opener.
+        ['20k unclosed $$ in one paragraph', 'a $$x\n'.repeat(20000) + 'b'],
+        ['20k $$ pairs across lines of one paragraph', 'a $$x\ny$$ b\n'.repeat(20000)],
+        ['20k unclosed $$ in one line', 'a $$ x '.repeat(20000) + '$'],
+        ['1MB display formula', `a $$${'x\\$'.repeat(250000)}$$ b`],
     ] as const) {
         const started = Date.now();
         await OfficeParser.parseOffice(Buffer.from(md), { fileType: 'md' } as any);
