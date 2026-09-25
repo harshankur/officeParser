@@ -110,44 +110,98 @@ function greekFallback(cp: number): LatexFallback | undefined {
 }
 
 /**
+ * Scripts a text uses that Latin Modern, the default font under XeLaTeX and LuaLaTeX, has no glyphs
+ * for, so those engines need other fonts for them: Greek and Cyrillic, and the CJK scripts (Han,
+ * kana, Hangul). `cjkLanguage` is the language its CJK characters are mostly in (Japanese when kana
+ * are a good part of them, Korean when Hangul outnumbers the rest, else Chinese), whose font sets
+ * them; `cjkDominant` says CJK characters outnumber Latin letters, which decides whether the
+ * punctuation both share (curly quotes, dashes, the ellipsis) takes the CJK or the Latin font.
+ */
+export interface LatexScripts {
+    greekCyrillic: boolean;
+    han: boolean;
+    kana: boolean;
+    hangul: boolean;
+    cjkLanguage?: 'ja' | 'ko' | 'zh';
+    cjkDominant: boolean;
+}
+
+/**
  * The preamble declarations a piece of LaTeX needs for its non-ASCII characters.
  *
- * - `everyEngine`: `\newunicodechar` fallbacks applied under every engine (symbols the default fonts
- *   lack everywhere);
- * - `pdfTexOnly`: `\DeclareUnicodeCharacter` lines for pdfLaTeX alone, for characters it cannot
- *   typeset at all (Greek becomes math letters, anything else a visible `[U+XXXX]` marker). XeLaTeX
- *   and LuaLaTeX keep the real character there, so choosing a font that covers it is enough;
+ * - `unicodeEngines`: `\newunicodechar` fallbacks under XeLaTeX and LuaLaTeX, for the symbols and
+ *   spaces the default fonts lack;
+ * - `eightBitEngines`: `\DeclareUnicodeCharacter` lines for pdfLaTeX (and upLaTeX/pLaTeX, for the
+ *   characters they do not read as CJK; `\newunicodechar` fails there on those they do): the same
+ *   fallbacks, and replacements for characters pdfLaTeX cannot typeset at all (Greek becomes math
+ *   letters, anything else a visible `[U+XXXX]` marker). XeLaTeX and LuaLaTeX keep the real
+ *   character there, set in a font that covers its script (see `scripts`);
+ * - `scripts`: the scripts XeLaTeX and LuaLaTeX need fonts beyond Latin Modern for;
  * - `packages`: the packages the fallbacks draw on.
  */
 export interface LatexUnicodePlan {
-    everyEngine: string[];
-    pdfTexOnly: string[];
+    unicodeEngines: string[];
+    eightBitEngines: string[];
+    scripts: LatexScripts;
     packages: Set<'amssymb' | 'pifont' | 'newunicodechar'>;
 }
 
+/** Whether a code point is Greek or Cyrillic (with their extended and supplementary blocks). */
+const isGreekCyrillic = (cp: number) => (cp >= 0x0370 && cp <= 0x052F) || (cp >= 0x1C80 && cp <= 0x1C8F) || (cp >= 0x1F00 && cp <= 0x1FFF)
+    || (cp >= 0x2DE0 && cp <= 0x2DFF) || (cp >= 0xA640 && cp <= 0xA69F);
+/** Han ideographs (unified, extensions, compatibility). */
+const isHan = (cp: number) => (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xF900 && cp <= 0xFAFF)
+    || (cp >= 0x20000 && cp <= 0x3134F);
+/** Hiragana, katakana and their extensions (half-width katakana included). */
+const isKana = (cp: number) => (cp >= 0x3040 && cp <= 0x30FF) || (cp >= 0x31F0 && cp <= 0x31FF) || (cp >= 0xFF65 && cp <= 0xFF9F);
+/** Hangul syllables and jamo. */
+const isHangul = (cp: number) => (cp >= 0xAC00 && cp <= 0xD7FF) || (cp >= 0x1100 && cp <= 0x11FF) || (cp >= 0x3130 && cp <= 0x318F) || (cp >= 0xA960 && cp <= 0xA97F);
+/** CJK punctuation and full-width forms, which count toward a text being CJK. */
+const isCjkPunctuation = (cp: number) => (cp >= 0x3000 && cp <= 0x303F) || (cp >= 0xFF00 && cp <= 0xFF64);
+
+/** A code point as `\DeclareUnicodeCharacter` takes it: four or more uppercase hex digits. */
+const hexOf = (cp: number) => cp.toString(16).toUpperCase().padStart(4, '0');
+
 /** Plans the fallbacks for every character of `text` that some engine cannot typeset as is. */
 export function planLatexUnicode(text: string): LatexUnicodePlan {
-    const plan: LatexUnicodePlan = { everyEngine: [], pdfTexOnly: [], packages: new Set() };
+    const scripts: LatexScripts = { greekCyrillic: false, han: false, kana: false, hangul: false, cjkDominant: false };
+    const plan: LatexUnicodePlan = { unicodeEngines: [], eightBitEngines: [], scripts, packages: new Set() };
     const seen = new Set<number>();
+    // Letters of the text itself, not of the commands around it, decide which script dominates.
+    let latin = 0, cjk = 0, han = 0, kana = 0, hangul = 0;
+    for (const ch of text.replace(/\\[A-Za-z@]+/g, '')) {
+        const cp = ch.codePointAt(0)!;
+        if ((cp >= 0x41 && cp <= 0x5A) || (cp >= 0x61 && cp <= 0x7A) || (cp >= 0xC0 && cp <= 0x24F)) latin++;
+        else if (cp >= 0x0370) {
+            if (isGreekCyrillic(cp)) scripts.greekCyrillic = true;
+            else if (isHan(cp)) { han++; cjk++; }
+            else if (isKana(cp)) { kana++; cjk++; }
+            else if (isHangul(cp)) { hangul++; cjk++; }
+            else if (isCjkPunctuation(cp)) cjk++;
+        }
+    }
+    Object.assign(scripts, { han: han > 0, kana: kana > 0, hangul: hangul > 0, cjkDominant: cjk > latin });
+    if (han + kana + hangul > 0) scripts.cjkLanguage = hangul >= han + kana ? 'ko' : kana * 5 >= han ? 'ja' : 'zh';
     for (const ch of text) {
         const cp = ch.codePointAt(0)!;
         if (cp < 0x80 || seen.has(cp)) continue;
         seen.add(cp);
         const symbol = SYMBOL_FALLBACKS.get(cp);
         if (symbol) {
-            plan.everyEngine.push(`\\newunicodechar{${ch}}{${symbol.tex}}`);
+            plan.unicodeEngines.push(`\\newunicodechar{${ch}}{${symbol.tex}}`);
+            plan.eightBitEngines.push(`\\DeclareUnicodeCharacter{${hexOf(cp)}}{${symbol.tex}}`);
             plan.packages.add('newunicodechar');
             if (symbol.pkg) plan.packages.add(symbol.pkg);
             continue;
         }
         if (isPdfTexSupported(cp)) continue;
-        const hex = cp.toString(16).toUpperCase().padStart(4, '0');
+        const hex = hexOf(cp);
         const greek = greekFallback(cp);
         if (greek?.pkg) plan.packages.add(greek.pkg);
-        plan.pdfTexOnly.push(`\\DeclareUnicodeCharacter{${hex}}{${greek ? greek.tex : `{\\ttfamily[U+${hex}]}`}}`);
+        plan.eightBitEngines.push(`\\DeclareUnicodeCharacter{${hex}}{${greek ? greek.tex : `{\\ttfamily[U+${hex}]}`}}`);
     }
-    plan.everyEngine.sort();
-    plan.pdfTexOnly.sort();
+    plan.unicodeEngines.sort();
+    plan.eightBitEngines.sort();
     return plan;
 }
 

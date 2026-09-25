@@ -227,6 +227,7 @@ const IGNORED_COMMANDS: Record<string, string> = {
     columnwidth: '', paperwidth: '', textheight: '', paperheight: '', baselineskip: '', parindent_: '', tabcolsep: '',
     arraybackslash: '', arrayrulewidth: '', dimexpr: '', fboxsep: '', setbeamersize: 'm', logo: 'm', institute: 'om',
     documentstyle: 'om', NeedsTeXFormat: 'mo', ProvidesPackage: 'mo', ProvidesClass: 'mo', ProvidesFile: 'mo',
+    PassOptionsToPackage: 'mm', PassOptionsToClass: 'mm',
     setotherlanguage: 'om', setotherlanguages: 'm', newtheoremstyle: 'mmmmmmmmm', IEEEpeerreviewmaketitle: '',
     IEEEoverridecommandlockouts: '', IEEEdisplaynontitleabstractindextext: '', IEEEaftertitletext: 'm', ExplSyntaxOff: '',
     BooleanTrue: '', BooleanFalse: '', swapnumbers: '',
@@ -833,7 +834,8 @@ class LatexReader {
         const cls = /\\document(?:class|style)\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/.exec(src);
         if (cls) {
             this.native.documentClass = cls[2].trim();
-            this.native.classOptions = (cls[1] ?? '').split(',').map(s => s.trim()).filter(Boolean);
+            // A macro among the options (the LaTeX generator's driver choice) cannot be expanded here: it is left out.
+            this.native.classOptions = (cls[1] ?? '').replace(/\\[A-Za-z@]+\s*/g, ',').split(',').map(s => s.trim()).filter(Boolean);
             this.beamer = this.native.documentClass === 'beamer';
             const size = this.native.classOptions.map((o: string) => /^(10|11|12)pt$/.exec(o)).find(Boolean);
             if (size) this.classSize = +size[1];
@@ -2822,7 +2824,7 @@ class LatexReader {
     /**
      * Keywords (`\keywords`, and the `keywords`/`keyword` and IEEEtran `IEEEkeywords` environments): the
      * document's keywords metadata unless `\hypersetup` states them, printed where they stand as the
-     * classes print them ("Keywords: a, b"; IEEE's "Index Terms—a, b").
+     * classes print them ("Keywords: a, b"; "Index Terms: a, b" for IEEEtran).
      */
     private keywords(flow: Flow, raw: string | null, ieee: boolean): void {
         if (raw === null) return;
@@ -2833,7 +2835,7 @@ class LatexReader {
         if (!this.pdfMetadata.has('keywords')) this.metadata.keywords = text;
         this.endParagraph(flow);
         const label: OfficeContentNode = ieee
-            ? { type: 'text', text: 'Index Terms—', formatting: { bold: true, italic: true } }
+            ? { type: 'text', text: 'Index Terms: ', formatting: { bold: true, italic: true } }
             : { type: 'text', text: 'Keywords: ', formatting: { bold: true } };
         const body = this.parseBlocksOf(source, undefined, false);
         const first = body[0];

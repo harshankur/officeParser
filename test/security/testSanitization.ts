@@ -1750,8 +1750,23 @@ const LATEX_GENERATOR_COMMANDS = new Set((
     'item centering raggedleft raggedright arraybackslash dimexpr linewidth tabcolsep arrayrulewidth relax hline cline endhead multicolumn multirow cellcolor ' +
     'includegraphics ifdim textheight fbox hfil break newpage clearpage rule quad hspace phantom leftskip rightskip hangindent hangafter par cite ' +
     'textbackslash textasciitilde textasciicircum textless textgreater textbar textasciigrave pagestyle fancyhf fancyhead fancyfoot headrulewidth headheight ' +
-    'fancypagestyle thepage frame frametitle note setbeamertemplate titlepage scriptsize footnotesize checkmark square boxtimes frac'
+    'fancypagestyle thepage frame frametitle note setbeamertemplate titlepage scriptsize footnotesize checkmark square boxtimes frac ' +
+    'RequirePackage officeparserdriver ifpdf ifXeTeX iftutex IfFontExistsTF IfFileExists setmainfont setsansfont setmonofont xeCJKsetup ' +
+    'xeCJKDeclareCharClass setCJKmainfont setCJKsansfont setCJKmonofont setCJKfallbackfamilyfont CJKrmdefault CJKsfdefault CJKttdefault ' +
+    'ltjsetparameter setmainjfont setsansjfont setmonojfont ' +
+    // Greek letters, which pdfLaTeX draws as math symbols.
+    'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi pi rho varsigma sigma tau upsilon phi chi psi omega ' +
+    'Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega'
 ).split(/\s+/));
+
+/**
+ * The generator's own lines that use commands no document content may ever produce (`\def`,
+ * `\directlua`): the DVI driver choice and luatexja's font fallbacks. They are removed, by their
+ * exact form, before the output is checked, so those commands anywhere else still fail it.
+ */
+const withoutGeneratorPrivileged = (tex: string) => tex
+    .replace(/^\\def\\officeparserdriver\{\}\\ifpdf\\else\\ifXeTeX\\else\\def\\officeparserdriver\{dvipdfmx,\}\\fi\\fi$/m, '')
+    .replace(/^ *\\directlua\{luaotfload\.add_fallback\("officeparser(rm|sf)", \{("[A-Za-z-]+\.(otf|ttf):mode=node;"(, )?)*\}\)\}%$/gm, '');
 
 async function latexSanitizationTests() {
     console.log('- LaTeX generator (escaping, URLs, comments, math, bundle paths)...');
@@ -1861,12 +1876,16 @@ async function latexSanitizationTests() {
         ],
         getImages: () => [],
     };
-    for (const [label, config] of [['article', {}], ['beamer', { texConfig: { documentClass: 'beamer' } }], ['fragment', { texConfig: { standalone: false } }]] as const) {
-        const out = (await OfficeGenerator.generate(hostile, 'tex', { renderMetadata: true, onWarning: () => { }, ...config } as any)).value as string;
-        const foreign = [...new Set(liveControlWords(out).filter(w => !LATEX_GENERATOR_COMMANDS.has(w)))];
+    // The same document in Greek, Cyrillic, Chinese, Japanese and Korean, so the per-script font setup is checked too.
+    const scripts = { ...hostile, content: [...hostile.content, { type: 'paragraph', children: [{ type: 'text', text: `Ωμέγα Привет 中文 日本語のテキスト 한국어 ${P}` }] }] };
+    for (const [label, doc, config] of [['article', hostile, {}], ['beamer', hostile, { texConfig: { documentClass: 'beamer' } }], ['fragment', hostile, { texConfig: { standalone: false } }],
+        ['article with CJK, Greek and Cyrillic', scripts, {}]] as const) {
+        const out = (await OfficeGenerator.generate(doc as any, 'tex', { renderMetadata: true, onWarning: () => { }, ...config } as any)).value as string;
+        const foreign = [...new Set(liveControlWords(withoutGeneratorPrivileged(out)).filter(w => !LATEX_GENERATOR_COMMANDS.has(w)))];
         check(`latex ${label}: hostile content adds no command of its own`, foreign.length === 0, foreign.join(', '));
         const docEnds = (liveLatexSource(out).match(/(^|[^\\])\\end\{document\}/g) || []).length;
         check(`latex ${label}: exactly one live document end`, label === 'fragment' ? docEnds === 0 : docEnds === 1, `found ${docEnds}`);
+        if (doc === scripts) check(`latex ${label}: the script fonts were set up`, out.includes('\\setCJKmainfont') && out.includes('\\setmainjfont') && out.includes('cmunrm.otf') && out.includes('luaotfload.add_fallback'));
         check(`latex ${label}: hostile spans and indices stay bounded`, out.length < 250000 && !/\d{8,}pt|\{\d{8,}\}/.test(out), `length ${out.length}`);
     }
     const bundle = (await OfficeGenerator.generate(hostile, 'tex', { texConfig: { bundle: true }, onWarning: () => { } } as any)).value as Uint8Array;
