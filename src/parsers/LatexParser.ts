@@ -146,6 +146,19 @@ const PRIMITIVE_CONDITIONALS = new Set(['if', 'ifcat', 'ifnum', 'ifdim', 'ifodd'
 const UNDEFINED_UNDER_PDFLATEX = new Set(['directlua', 'luatexversion', 'luaescapestring', 'XeTeXversion', 'XeTeXrevision',
     'XeTeXinterchartokenstate', 'kanjiskip', 'ptexversion', 'uptexversion', 'HCode', 'Configure', 'NoValue']);
 
+/**
+ * `\if...` commands that take arguments instead of ending in `\fi` (etoolbox, ifthen, babel), and the
+ * math symbol `\iff`: never counted as conditionals. Any other `\if...` word not followed by a brace is
+ * taken for a conditional a package defined (such as `\ifdraft`), so its `\else` and `\fi` stay its own.
+ */
+const ARGUMENT_TESTS = new Set(['iff', 'ifthenelse', 'iflanguage', 'ifdef', 'ifundef', 'ifcsdef', 'ifcsundef', 'ifdefmacro',
+    'ifcsmacro', 'ifdefparam', 'ifcsparam', 'ifdefprefix', 'ifcsprefix', 'ifdefprotected', 'ifcsprotected', 'ifdefltxprotect',
+    'ifcsltxprotect', 'ifdefempty', 'ifcsempty', 'ifdefvoid', 'ifcsvoid', 'ifdefequal', 'ifcsequal', 'ifdefstring', 'ifcsstring',
+    'ifdefstrequal', 'ifcsstrequal', 'ifdefcounter', 'ifcscounter', 'ifltxcounter', 'ifdeflength', 'ifcslength', 'ifdefdimen',
+    'ifcsdimen', 'ifstrequal', 'ifstrempty', 'ifblank', 'ifnumcomp', 'ifnumequal', 'ifnumgreater', 'ifnumless', 'ifnumodd',
+    'ifdimcomp', 'ifdimequal', 'ifdimgreater', 'ifdimless', 'ifboolexpr', 'ifboolexpe', 'ifbool', 'iftoggle', 'ifinlist',
+    'ifinlistcs', 'ifrmnum', 'ifpatchable']);
+
 /** pdfTeX's integer registers that documents test, with their values under pdfLaTeX. */
 const PDFTEX_REGISTERS: Record<string, number> = { pdfoutput: 1, pdftexversion: 140, pdfshellescape: 0 };
 
@@ -197,6 +210,12 @@ const BEAMER_THEOREMS = new Set(['theorem', 'corollary', 'fact', 'lemma', 'probl
  * a class the parser does not read): headed by their title, unnumbered, since their numbering is unknown.
  */
 const GENERIC_THEOREMS = new Set(['theorem', 'lemma', 'corollary', 'proposition', 'definition', 'conjecture']);
+
+/** LaTeX for the special characters of a verbatim (`v`) argument, which print as themselves. */
+const VERBATIM_CHARS: Record<string, string> = {
+    '\\': '\\textbackslash{}', '{': '\\{', '}': '\\}', $: '\\$', '&': '\\&', '#': '\\#', '^': '\\textasciicircum{}', _: '\\_',
+    '%': '\\%', '~': '\\textasciitilde{}',
+};
 
 /** What an optional `xparse` argument that was not given holds (and prints), as in LaTeX. */
 const NO_VALUE = '-NoValue-';
@@ -350,6 +369,18 @@ class Scanner {
         return c !== undefined && (/[A-Za-z]/.test(c) || (atLetter && c === '@'));
     }
 
+    /**
+     * The letters of a control word, taken from the frame it starts in only: a macro body or an
+     * included file ends a name, as TeX tokenizes them apart (`\def\x{\textbf}\x b` is `\textbf` then `b`).
+     */
+    private readName(atLetter: boolean): string {
+        this.peekCh();
+        const f = this.frames[this.frames.length - 1];
+        let name = '';
+        while (f && f.i < f.s.length && this.isLetter(f.s[f.i], atLetter)) name += f.s[f.i++];
+        return name;
+    }
+
     next(atLetter = false): Tok {
         for (;;) {
             const c = this.nextCh();
@@ -358,8 +389,7 @@ class Scanner {
                 const n = this.peekCh();
                 if (n === undefined) { this.afterCs = false; return { t: 'text', v: '\\' }; }
                 if (this.isLetter(n, atLetter)) {
-                    let name = '';
-                    while (this.isLetter(this.peekCh(), atLetter)) name += this.nextCh();
+                    const name = this.readName(atLetter);
                     while (this.peekCh() === ' ' || this.peekCh() === '\t') this.nextCh();
                     this.afterCs = true;
                     this.lineStart = false;
@@ -433,9 +463,7 @@ class Scanner {
             if (c === '}' ) return null;
             this.nextCh();
             if (c === '\\') {
-                let name = '';
-                if (/[A-Za-z]/.test(this.peekCh() ?? '')) { while (/[A-Za-z@]/.test(this.peekCh() ?? '')) name += this.nextCh(); }
-                else name = this.nextCh() ?? '';
+                const name = /[A-Za-z]/.test(this.peekCh() ?? '') ? this.readName(true) : this.nextCh() ?? '';
                 return this.endRaw('\\' + name);
             }
             return this.endRaw(c);
@@ -504,8 +532,7 @@ class Scanner {
             if (c === undefined) return null;
             if (c === '%') { while (this.peekCh() !== undefined && this.peekCh() !== '\n') this.nextCh(); continue; }
             if (c !== '\\') continue;
-            let name = '';
-            while (this.isLetter(this.peekCh(), true)) name += this.nextCh();
+            const name = this.readName(true);
             if (!name) { this.nextCh(); continue; }
             if (name === 'fi') {
                 if (depth === 0) return this.endWord('fi');
@@ -769,6 +796,8 @@ class LatexReader {
     private theoremStyle = 'plain';
     /** Theorem counters: the last number given, the counter numbered within, and its number then. */
     private theoremCounters = new Map<string, { value: number; within?: string; prefix: string }>();
+    /** Paragraphs a theorem or proof head was put in, which a theorem around them does not merge into. */
+    private theoremHeads = new WeakSet<OfficeContentNode>();
     /** The blocks a keywords command or environment printed, which an abstract's description leaves out. */
     private keywordBlocks = new WeakSet<OfficeContentNode>();
     /** Whether the current proof's end-of-proof mark was placed (`\qedhere`). */
@@ -779,7 +808,7 @@ class LatexReader {
     /** `\babeltags` tags, which name languages in `\text<tag>` and `<tag>` environments. */
     private languageTags = new Map<string, string>();
     /** xparse environments open, with the arguments their end code may use. */
-    private openEnvs: { env: string; args: string[] }[] = [];
+    private openEnvs = new Map<string, string[][]>();
     /** Whether the document is ConTeXt (`\starttext`), read for its text as a fallback. */
     private context = false;
     /** ConTeXt lists open (`\startitemize`), with the LaTeX environment each is read as. */
@@ -1206,10 +1235,15 @@ class LatexReader {
             case 't': return sc.readChar(a.token!) ? '\\BooleanTrue' : '\\BooleanFalse';
             case 'b': return env ? sc.readRawEnvBody(env) : '';
             case 'v': {
-                if (sc.nextIs('{')) return sc.readRawGroup() ?? '';
-                sc.skipBlanks();
-                const delim = sc.nextCh();
-                return delim === undefined ? '' : sc.readRawUntil(delim).text;
+                // Verbatim: the characters themselves, so they are written back as text rather than read as LaTeX.
+                let text: string;
+                if (sc.nextIs('{')) text = sc.readRawGroup() ?? '';
+                else {
+                    sc.skipBlanks();
+                    const delim = sc.nextCh();
+                    text = delim === undefined ? '' : sc.readRawUntil(delim).text;
+                }
+                return text.replace(/[\\{}$&#^_%~]/g, c => VERBATIM_CHARS[c]);
             }
             default: {
                 const open = a.open ?? '[', close = a.close ?? ']';
@@ -1359,24 +1393,31 @@ class LatexReader {
         const args = this.readUserArgs(sc, user, env);
         // An environment whose body is an argument (`b`) consumed its `\end` with it: its end code follows at once.
         if (user.spec?.some(a => a.kind === 'b')) { this.expand(sc, this.fill(user.begin, args) + this.fill(user.end, args)); return; }
-        if (user.spec) this.openEnvs.push({ env, args });
+        if (user.spec) {
+            let open = this.openEnvs.get(env);
+            if (!open) this.openEnvs.set(env, open = []);
+            open.push(args);
+        }
         if (!this.expand(sc, this.fill(user.begin, args))) sc.readRawEnvBody(env);
     }
 
     /** `\end` of a user environment: its end code is read in place (an xparse one's with its arguments). */
     private endUserEnv(sc: Scanner, env: string, user: UserEnv): void {
         if (!user.spec) { this.expand(sc, user.end); return; }
-        let k = this.openEnvs.length - 1;
-        while (k >= 0 && this.openEnvs[k].env !== env) k--;
-        const args = k >= 0 ? this.openEnvs.splice(k, 1)[0].args : [];
+        // Kept per name: an `\end` with no matching `\begin` costs nothing to look up.
+        const args = this.openEnvs.get(env)?.pop() ?? [];
         this.expand(sc, this.fill(user.end, args));
     }
 
     // ── conditionals ──
 
-    /** Whether a control word is a TeX conditional (one that a skipped branch must match with its `\fi`). */
-    private isConditional(name: string): boolean {
-        return own(FIXED_CONDITIONALS, name) || PRIMITIVE_CONDITIONALS.has(name) || this.ifs.has(name) || (name.startsWith('if') && name.includes('@'));
+    /**
+     * Whether a control word, just read from `sc`, is a TeX conditional (one that a skipped branch
+     * must match with its `\fi`): a known one, or an `\if...` word a package defined (see ARGUMENT_TESTS).
+     */
+    private isConditional(name: string, sc: Scanner): boolean {
+        if (own(FIXED_CONDITIONALS, name) || PRIMITIVE_CONDITIONALS.has(name) || this.ifs.has(name) || (name.startsWith('if') && name.includes('@'))) return true;
+        return /^if[A-Za-z]+$/.test(name) && !ARGUMENT_TESTS.has(name) && !this.macros.has(name) && !sc.nextIs('{');
     }
 
     /**
@@ -1387,6 +1428,7 @@ class LatexReader {
         if (UNDEFINED_UNDER_PDFLATEX.has(name)) return false;
         if (this.macros.has(name) || this.ifs.has(name) || this.theorems.has(name) || this.envs.has(name)) return true;
         if (name === 'chapter') return CHAPTER_CLASSES.has(this.native.documentClass);
+        if (own(PDFTEX_REGISTERS, name)) return true;
         if (own(SYMBOLS, name) || own(ACCENTS, name) || own(WRAPPER_COMMANDS, name) || own(IGNORED_COMMANDS, name) || own(FIXED_CONDITIONALS, name)
             || PROTECTED_COMMANDS.has(name) || PRIMITIVE_CONDITIONALS.has(name)) return true;
         return undefined;
@@ -1404,7 +1446,7 @@ class LatexReader {
             case 'else': case 'or': {
                 const top = this.conds.pop();
                 // The end of a taken branch: the rest, to the matching `\fi`, is the branch not taken.
-                if (top === 'taken') { sc.skipBranch(n => this.isConditional(n), false); return true; }
+                if (top === 'taken') { sc.skipBranch(n => this.isConditional(n, sc), false); return true; }
                 if (top !== undefined) this.conds.push(top);
                 return true;
             }
@@ -1417,14 +1459,14 @@ class LatexReader {
             case 'unless': {
                 const snap = sc.save();
                 const tok = sc.next(true);
-                if (tok.t === 'cs' && tok.name !== 'ifcase' && this.isConditional(tok.name)) { this.branch(sc, tok.name, true); return true; }
+                if (tok.t === 'cs' && tok.name !== 'ifcase' && this.isConditional(tok.name, sc)) { this.branch(sc, tok.name, true); return true; }
                 sc.restore(snap);
                 return true;
             }
         }
         const flag = /^(.+)(true|false)$/.exec(name);
         if (flag && this.ifs.has(`if${flag[1]}`)) { this.ifs.set(`if${flag[1]}`, flag[2] === 'true'); return true; }
-        if (!this.isConditional(name)) return false;
+        if (!this.isConditional(name, sc)) return false;
         this.branch(sc, name, false);
         return true;
     }
@@ -1439,7 +1481,7 @@ class LatexReader {
         }
         if (negate) value = !value;
         if (value) { this.conds.push('taken'); return; }
-        if (sc.skipBranch(n => this.isConditional(n), true) === 'else') this.conds.push('else');
+        if (sc.skipBranch(n => this.isConditional(n, sc), true) === 'else') this.conds.push('else');
     }
 
     /** A conditional's value, reading its test, or undefined when it cannot be decided (the test is then left unread). */
@@ -1454,10 +1496,11 @@ class LatexReader {
             return d;
         }
         if (name === 'ifx') {
-            // `\ifx\cs\undefined` (or `\@undefined`): whether `\cs` is undefined.
+            // `\ifx\cs\undefined` (or `\@undefined`, either way round): whether `\cs` is undefined.
             const a = sc.next(true);
             const b = sc.next(true);
-            const d = a.t === 'cs' && b.t === 'cs' && (b.name === 'undefined' || b.name === '@undefined') ? this.isDefined(a.name) : undefined;
+            const marker = (t: Tok) => t.t === 'cs' && (t.name === 'undefined' || t.name === '@undefined');
+            const d = a.t === 'cs' && b.t === 'cs' && (marker(b) || marker(a)) ? this.isDefined(marker(b) ? a.name : b.name) : undefined;
             if (d === undefined) { sc.restore(snap); return undefined; }
             return !d;
         }
@@ -1752,7 +1795,7 @@ class LatexReader {
             let arg = sc.readRawGroup() ?? '';
             if (arg === '\\i') arg = 'i';
             if (arg === '\\j') arg = 'j';
-            const base = arg.startsWith('\\') ? (SYMBOLS[arg.slice(1)] ?? '') : arg;
+            const base = arg.startsWith('\\') ? (own(SYMBOLS, arg.slice(1)) ? SYMBOLS[arg.slice(1)] : '') : arg;
             this.addText(flow, (base + ACCENTS[name]).normalize('NFC'));
             return;
         }
@@ -2118,7 +2161,8 @@ class LatexReader {
                 sc.readRawOptional();
                 // IEEEtran's author blocks: a name, then its affiliation lines, set apart in the title block.
                 const raw = sc.readRawGroup()?.replace(/\\IEEEauthorblockA\b/g, ', \\IEEEauthorblockA') ?? null;
-                this.titleParts.author = raw ?? undefined;                 const a = this.authorText(raw);
+                this.titleParts.author = raw ?? undefined;
+                const a = this.authorText(raw);
                 if (a && !this.pdfMetadata.has('author')) this.metadata.author = a;
                 return;
             }
@@ -2830,13 +2874,16 @@ class LatexReader {
     /** Puts heading runs at the start of an environment's first paragraph (or in a paragraph of their own before it), returning that paragraph. */
     private headInto(blocks: OfficeContentNode[], runs: OfficeContentNode[]): OfficeContentNode {
         const first = blocks[0];
-        if (first?.type === 'paragraph' && !(first.metadata as ParagraphMetadata | undefined)?.style) {
+        // A nested theorem or proof opening the body keeps its own head, on its own line, as amsthm sets it.
+        if (first?.type === 'paragraph' && !(first.metadata as ParagraphMetadata | undefined)?.style && !this.theoremHeads.has(first)) {
             first.children = [...runs, { type: 'text', text: ' ' }, ...(first.children ?? [])];
             first.text = textOf(first.children);
+            this.theoremHeads.add(first);
             return first;
         }
         const para: OfficeContentNode = { type: 'paragraph', text: textOf(runs), children: runs, metadata: {} as ParagraphMetadata };
         blocks.unshift(para);
+        this.theoremHeads.add(para);
         return para;
     }
 
@@ -3500,19 +3547,34 @@ class LatexReader {
  * so it is found in the bytes read as Latin-1, before the file is decoded.
  */
 function declaredEncoding(head: string): string | undefined {
-    const inputenc = /\\usepackage\s*\[([^\]]*)\]\s*\{inputenc\}/.exec(head) ?? /\\inputencoding\s*\{([^}]*)\}/.exec(head);
+    // A commented-out declaration declares nothing.
+    const live = head.replace(/(^|[^\\])%.*$/gm, '$1');
+    const inputenc = /\\usepackage\s*\[([^\]]*)\]\s*\{inputenc\}/.exec(live) ?? /\\inputencoding\s*\{([^}]*)\}/.exec(live);
     if (inputenc) {
         const option = inputenc[1].split(',').map(o => o.trim()).reverse().find(o => own(INPUTENC_ENCODINGS, o));
         if (option) return INPUTENC_ENCODINGS[option];
     }
-    const magic = /^%\s*!TEX\s+encoding\s*=\s*([A-Za-z0-9_ -]+?)\s*$/im.exec(head)?.[1].toLowerCase().replace(/[\s_]+/g, '-');
+    const magic = /^%\s*!TEX\s+encoding\s*=\s*([A-Za-z0-9_ -]+?)\s*$/im.exec(head)?.[1].toLowerCase().replace(/[\s_-]+/g, '');
     if (!magic) return undefined;
-    if (/^utf-?8/.test(magic)) return 'utf-8';
-    if (/^(iso-?latin-?1|latin-?1|iso-?8859-1)$/.test(magic)) return 'windows-1252';
-    if (/^(iso-?latin-?9|latin-?9|iso-?8859-15)$/.test(magic)) return 'iso-8859-15';
-    if (/^mac-?(os-?)?roman$/.test(magic)) return 'macintosh';
-    try { new TextDecoder(magic); return magic; } catch { return undefined; }
+    if (/^utf8/.test(magic)) return 'utf-8';
+    if (own(MAGIC_ENCODINGS, magic)) return MAGIC_ENCODINGS[magic];
+    try { return new TextDecoder(magic).encoding; } catch { return undefined; }
 }
+
+/**
+ * The encoding names a `% !TEX encoding` line uses (TeXShop's and TeXstudio's), lowercased without
+ * spaces, dashes or underscores, as WHATWG encoding labels. Any other name is tried as a label itself.
+ */
+const MAGIC_ENCODINGS: Record<string, string> = {
+    isolatin: 'windows-1252', isolatin1: 'windows-1252', latin1: 'windows-1252', iso88591: 'windows-1252', windowslatin1: 'windows-1252',
+    isolatin2: 'iso-8859-2', latin2: 'iso-8859-2', iso88592: 'iso-8859-2', isolatin5: 'windows-1254', isolatin9: 'iso-8859-15',
+    latin9: 'iso-8859-15', iso885915: 'iso-8859-15', isolatingreek: 'iso-8859-7', macosroman: 'macintosh', macroman: 'macintosh',
+    windowscentraleuropean: 'windows-1250', windowscyrillic: 'windows-1251',
+    maccyrillic: 'x-mac-cyrillic', doscyrillic: 'ibm866', dosrussian: 'ibm866', koi8r: 'koi8-r', gbk: 'gbk', gb2312: 'gbk',
+    gb18030: 'gb18030', eucjp: 'euc-jp', sjis: 'shift_jis', sjisx0213: 'shift_jis', dosjapanese: 'shift_jis', macjapanese: 'shift_jis',
+    maccyrillicukrainian: 'x-mac-cyrillic', mackorean: 'euc-kr', euckr: 'euc-kr', big5: 'big5', macchinesetraditional: 'big5',
+    macchinesesimplified: 'gbk', doschinesetraditional: 'big5', doschinesesimplified: 'gbk',
+};
 
 /**
  * Decodes a `.tex` file. UTF-8 (LaTeX's default input encoding since 2018) when it is valid UTF-8;
@@ -3525,7 +3587,8 @@ function decodeTex(buf: Buffer, inherited?: string): { text: string; declared?: 
     try {
         return { text: new TextDecoder('utf-8', { fatal: true }).decode(buf), declared };
     } catch { /* not valid UTF-8 */ }
-    let label = declared ?? inherited;
+    // A declared UTF-8 the bytes contradict is judged by the bytes, like an undeclared file.
+    let label = declared === 'utf-8' ? undefined : declared ?? (inherited === 'utf-8' ? undefined : inherited);
     if (!label) {
         // Valid multi-byte sequences outnumbering the damaged ones mean UTF-8 text with some damage.
         const lenient = buf.toString('utf8');

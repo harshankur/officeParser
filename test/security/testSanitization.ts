@@ -1972,6 +1972,8 @@ async function latexParserTests() {
         ['1MB unclosed xparse d() argument', '\\NewDocumentCommand\\d{d()}{#1}\\d(' + 'x'.repeat(1_000_000)],
         ['10k theorems numbered within sections', '\\newtheorem{t}{T}[section]' + '\\section{s}\\begin{t}x\\end{t}'.repeat(10000)],
         ['20k unclosed ConTeXt \\startitemize', '\\starttext ' + '\\startitemize \\item x '.repeat(20000)],
+        ['40k xparse \\ends with no \\begin', '\\NewDocumentEnvironment{A}{}{}{}\\NewDocumentEnvironment{B}{}{}{}' + '\\begin{A}'.repeat(40000) + '\\end{B}'.repeat(40000)],
+        ['100k unknown \\if words in a skipped branch', '\\iffalse ' + '\\ifunknown x '.repeat(100000)],
     ] as const) {
         const r = await parse(src);
         check(`latex parser: ${label} parses in linear time`, r.ms < TIME_BUDGET_MS, `${r.ms}ms`);
@@ -1992,9 +1994,10 @@ async function latexParserTests() {
     // Table and switch names from Object.prototype are unknown names, never inherited table entries.
     const proto = await parse('\\usepackage[constructor]{babel}\\usepackage[__proto__]{inputenc}\\babeltags{__proto__ = french}\\newtheorem{constructor}{C}'
         + '\\setdefaultlanguage{toString}\\begin{document}\\begin{constructor}a\\end{constructor}\\begin{toString}b\\end{toString}\\textvalueOf{c}'
-        + '\\foreignlanguage{__proto__}{d}\\newif\\ifconstructor\\constructortrue\\ifconstructor e\\fi\\begin{hasOwnProperty}f\\end{hasOwnProperty}\\end{document}');
+        + '\\foreignlanguage{__proto__}{d}\\newif\\ifconstructor\\constructortrue\\ifconstructor e\\fi\\begin{hasOwnProperty}f\\end{hasOwnProperty}'
+        + '\\\'{\\constructor}g\\"{\\toString}h\\end{document}');
     check('latex parser: prototype names in the language, theorem and encoding tables are plain names',
-        ['a', 'b', 'c', 'd', 'e', 'f'].every(t => proto.json.includes(t)) && !proto.json.includes('native code') && !proto.json.includes('function') && ({} as any).polluted === undefined, proto.json.slice(0, 200));
+        ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].every(t => proto.json.includes(t)) && !proto.json.includes('native code') && !proto.json.includes('function') && ({} as any).polluted === undefined, proto.json.slice(0, 200));
 
     const unclosed = await parse('\\begin{itemize}\\item a \\textbf{b \\begin{tabular}{ll} x & y');
     check('latex parser: unclosed groups and environments do not throw', unclosed.json.includes('a'));
