@@ -75,7 +75,7 @@ const knownGeneratorBooleans = new Set([
     // Dotted generator booleans, same rationale as the parser set above.
     'pdfConfig.tagged', 'pdfConfig.outline', 'pdfConfig.landscape', 'pdfConfig.printBackground', 'pdfConfig.displayHeaderFooter',
     'docxConfig.landscape', 'odtConfig.landscape',
-    'texConfig.standalone', 'texConfig.bundle', 'texConfig.numberSections', 'texConfig.landscape',
+    'texConfig.standalone', 'texConfig.bundle', 'texConfig.embedImages', 'texConfig.numberSections', 'texConfig.landscape',
     'textConfig.preserveLayout', 'textConfig.renderNotes',
     'htmlConfig.standalone', 'htmlConfig.sourceAttributes', 'htmlConfig.gatedEmbeds',
     'mdConfig.fallbackToHtml', 'mdConfig.fallbackToHtml.inlineFormatting',
@@ -389,6 +389,7 @@ if (fileArg && !showHelp) {
     console.log('  --mdConfig.fallbackToHtml=false             Disable HTML fallback for unsupported Markdown features (default: true)');
     console.log('  --mdConfig.fallbackToHtml.inlineFormatting  Round-trip inline color/highlight/font-size as <span style> (opt-in, default: false)');
     console.log('  --texConfig.bundle                          LaTeX: write a zip of main.tex plus its images/ (default: false, .tex only)');
+    console.log('  --texConfig.embedImages=false               LaTeX: reference images/ files instead of carrying PNG/JPEG inside the .tex (default: true)');
     console.log('  --texConfig.documentClass=report            LaTeX class: auto | article | report | book | beamer (default: auto)');
     console.log('  --texConfig.standalone=false                LaTeX: emit the body only, without the preamble (default: true)');
     console.log('');

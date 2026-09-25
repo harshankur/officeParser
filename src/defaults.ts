@@ -266,6 +266,7 @@ const DEFAULT_TEX_GENERATOR_CONFIG: DeepRequired<TexGeneratorConfig> = {
     documentClass: 'auto',
     standalone: true,
     bundle: false,
+    embedImages: true,
     numberSections: false,
     format: 'A4',
     landscape: false,

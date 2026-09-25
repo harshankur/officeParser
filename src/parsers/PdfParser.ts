@@ -36,7 +36,7 @@ import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { assertNode, isBrowser } from '../utils/envUtils.js';
 import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
-import { createAttachment } from '../utils/imageUtils.js';
+import { crc32, createAttachment } from '../utils/imageUtils.js';
 import { loadPdfJs } from '../utils/moduleLoader.js';
 import { performOcr } from '../utils/ocrUtils.js';
 import { collectColorMarks, ColorLookup, makeColorLookup } from './pdf/pdfColor.js';
@@ -84,24 +84,6 @@ class SectionLinks {
         this.targets.push(target);
         return `#__pdfsec_${k}`;
     }
-}
-
-/** Precomputed CRC-32 table (polynomial 0xEDB88320) for PNG chunk checksums. */
-const CRC32_TABLE = (() => {
-    const table = new Uint32Array(256);
-    for (let n = 0; n < 256; n++) {
-        let c = n;
-        for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
-        table[n] = c >>> 0;
-    }
-    return table;
-})();
-
-/** CRC-32 over a byte range, as PNG requires over each chunk's type+data. */
-function crc32(bytes: Uint8Array): number {
-    let c = 0xFFFFFFFF;
-    for (let i = 0; i < bytes.length; i++) c = CRC32_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
-    return (c ^ 0xFFFFFFFF) >>> 0;
 }
 
 /**

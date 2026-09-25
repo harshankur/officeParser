@@ -138,8 +138,9 @@ export enum OfficeWarningType {
     /** A math expression used an unsafe LaTeX command or was malformed, so it was written to LaTeX output as literal text rather than typeset math */
     MATH_WRITTEN_AS_TEXT = 'MATH_WRITTEN_AS_TEXT',
     /**
-     * LaTeX output references image files that are not part of it: the images a `.tex` cannot embed
-     * (when `texConfig.bundle` is off; their bytes are in `ast.attachments`), and, in either mode, images
+     * LaTeX output references image files that are not part of it: without `texConfig.bundle`, the
+     * images the `.tex` does not carry inside it (with `texConfig.embedImages` off, or an image other
+     * than a readable PNG or JPEG; their bytes are in `ast.attachments`), and, in either mode, images
      * the source referred to only by a relative path, with no data to package. The message names each.
      */
     IMAGES_NOT_BUNDLED = 'IMAGES_NOT_BUNDLED',
@@ -1487,13 +1488,24 @@ export interface TexGeneratorConfig {
      */
     standalone?: boolean;
     /**
-     * A `.tex` file cannot embed images: `\includegraphics` reads each one from a separate file. When
-     * true, the result is a zip (`Uint8Array`) holding `main.tex` plus every referenced image under
-     * `images/`, ready to compile or upload to Overleaf. When false (default) the result is the
-     * `.tex` source as a string, still referencing `images/<name>`, and the `IMAGES_NOT_BUNDLED`
-     * warning names the files the caller must place there (their bytes are in `ast.attachments`).
+     * When true, the result is a zip (`Uint8Array`) holding `main.tex` plus every image as a file under
+     * `images/`, ready to compile or upload to Overleaf. When false (default) the result is the `.tex`
+     * source as a string, carrying its PNG and JPEG images inside it (see `embedImages`); any other
+     * image is referenced as `images/<name>`, and the `IMAGES_NOT_BUNDLED` warning names the files the
+     * caller must place there (their bytes are in `ast.attachments`).
      */
     bundle?: boolean;
+    /**
+     * Whether a `.tex` (without `bundle`) carries its PNG and JPEG images inside it, so the one file
+     * compiles with its pictures. LaTeX reads images only from files, so each image is written into
+     * the `.tex` as a `filecontents*` block holding it as a small all-ASCII PDF; compiling writes that
+     * file beside the `.tex` (keeping a file of that name already there) and `\includegraphics` reads
+     * it. Every engine reads it; with `--output-directory`, pdfLaTeX and LuaLaTeX still find the
+     * files, but XeLaTeX and dvipdfmx look beside the `.tex`, so use `bundle` there. The data adds
+     * about a quarter to each image's size. When false, images are referenced as `images/<name>`
+     * files and reported with `IMAGES_NOT_BUNDLED`. Defaults to true. Ignored with `bundle`.
+     */
+    embedImages?: boolean;
     /** Number sections (`1`, `1.1`, ...). Defaults to false, matching office documents, whose headings are unnumbered by default. */
     numberSections?: boolean;
     /**

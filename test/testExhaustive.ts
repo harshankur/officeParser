@@ -1900,6 +1900,16 @@ function liveLatex(tex: string): string {
         .replace(/(^|[^\\])((?:\\\\)*)%.*$/gm, '$1$2');
 }
 
+/** A carried image's PDF: printable ASCII lines, none ending in a space, whose cross-reference offsets land on their objects. */
+function assertTextPdf(pdf: string, label: string): void {
+    assert.ok(!/[^\n\x20-\x7e]/.test(pdf) && !/ \n| $/.test(pdf), `${label}: the carried PDF is printable ASCII with no trailing spaces`);
+    const xref = /(\d+) 0 obj\n<< \/Type \/XRef [^]*?stream\n([^]*?)>\nendstream/.exec(pdf);
+    const rows = xref ? xref[2].split('\n').slice(1) : [];
+    assert.ok(rows.length > 0 && rows.every((row, i) => pdf.startsWith(`${i + 1} 0 obj`, parseInt(row.slice(2, 10), 16))), `${label}: every cross-reference offset lands on its object`);
+    const start = /startxref\n(\d+)\n%%EOF$/.exec(pdf);
+    assert.ok(start && pdf.startsWith(`${xref![1]} 0 obj`, Number(start[1])), `${label}: startxref points at the cross-reference stream`);
+}
+
 async function testLatexGeneration(): Promise<void> {
     // ── Tier 1: exhaustive Markdown fixture ───────────────────────────────────
     const src = await OfficeParser.parseOffice(path.join(__dirname, 'files/exhaustive/markdown.md'));
@@ -1963,15 +1973,28 @@ async function testLatexGeneration(): Promise<void> {
     const docxTex = (await docx.to('tex', { onWarning: (w: any) => docxWarnings.push(w) })).value as string;
     assert.ok(docxTex.includes('\\usepackage{endnotes}') && /\\endnote\{Endnotes are typically/.test(docxTex) && docxTex.includes('\\theendnotes\n\n\\end{document}'), 'TEX docx: endnotes via the endnotes package');
     assert.ok(/\\footnote\{In paged media/.test(docxTex), 'TEX docx: footnote body without the note run size');
-    assert.ok(/\\includegraphics\[width=\{\\ifdim [\d.]+pt>\\linewidth\\linewidth\\else [\d.]+pt\\fi\},height=\{[^}]+\},keepaspectratio\]\{images\/image\.jpg\}/.test(docxTex), 'TEX docx: image bounded to the line and page');
-    const notBundled = docxWarnings.find(w => w.code === 'IMAGES_NOT_BUNDLED');
-    assert.strictEqual(notBundled?.message, `The LaTeX output references 1 image file ('images/image.jpg') that is not part of the .tex source, since a .tex file cannot embed images. Place it at that path, relative to the .tex (the bytes are in ast.attachments), or set texConfig.bundle: true to get a zip containing the .tex and its images.`, 'TEX docx: IMAGES_NOT_BUNDLED names the file (exact message)');
+    // The image travels inside the .tex: a filecontents* block writes it as a PDF, which \includegraphics reads.
+    const carriedImage = /\\includegraphics\[bb=0 0 810 810,width=\{\\ifdim [\d.]+pt>\\linewidth\\linewidth\\else [\d.]+pt\\fi\},height=\{[^}]+\},keepaspectratio\]\{(image-[0-9a-f]{8}\.pdf)\}/.exec(docxTex);
+    assert.ok(carriedImage, 'TEX docx: image bounded to the line and page, carried as a PDF of its stated size');
+    const carriedBlock = new RegExp(`\\\\begin\\{filecontents\\*\\}\\{${carriedImage![1].replace('.', '\\.')}\\}\\n([^]*?)\\n\\\\end\\{filecontents\\*\\}`).exec(docxTex);
+    assert.ok(carriedBlock && docxTex.indexOf(carriedBlock[0]) < docxTex.indexOf('\\begin{document}'), 'TEX docx: the image is carried in a filecontents* block in the preamble');
+    assertTextPdf(carriedBlock![1], 'TEX docx');
+    assert.ok(!docxWarnings.some(w => w.code === 'IMAGES_NOT_BUNDLED'), 'TEX docx: a carried image needs no file placed');
+    const docxBack = await OfficeParser.parseOffice(Buffer.from(docxTex), { fileType: 'tex', extractAttachments: true } as any);
+    const docxJpeg = docx.attachments.find(a => a.mimeType === 'image/jpeg')!.data;
+    assert.deepStrictEqual(docxBack.attachments.map(a => [a.name, a.mimeType, a.data === docxJpeg]), [[carriedImage![1].replace('.pdf', '.jpg'), 'image/jpeg', true]], 'TEX docx: parsing the .tex back gives the very JPEG it carries');
+    assert.ok(((await docxBack.to('tex')).value as string).includes(carriedBlock![0]), 'TEX docx: regenerating the parsed .tex carries the same image block, under the same name');
+    // Without embedImages the .tex refers to the file, and the warning says where it goes.
+    const refDocxWarnings: any[] = [];
+    const referencedTex = (await docx.to('tex', { texConfig: { embedImages: false }, onWarning: (w: any) => refDocxWarnings.push(w) } as any)).value as string;
+    assert.ok(/\]\{images\/image\.jpg\}/.test(referencedTex) && !referencedTex.includes('filecontents'), 'TEX docx: embedImages false refers to images/');
+    assert.strictEqual(refDocxWarnings.find(w => w.code === 'IMAGES_NOT_BUNDLED')?.message, `The LaTeX output references 1 image file ('images/image.jpg') that is not part of the .tex source (texConfig.embedImages is off). Place it at that path, relative to the .tex (the bytes are in ast.attachments), or set texConfig.bundle: true to get a zip containing the .tex and its images.`, 'TEX docx: IMAGES_NOT_BUNDLED names the file (exact message)');
     const bundle = (await docx.to('tex', { texConfig: { bundle: true }, metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') } } as any)).value as Uint8Array;
     assert.ok(bundle instanceof Uint8Array && bundle[0] === 0x50 && bundle[1] === 0x4B, 'TEX bundle: a zip');
     const bundleFiles = unzipSync(bundle);
     assert.deepStrictEqual(Object.keys(bundleFiles), ['main.tex', 'images/image.jpg'], 'TEX bundle: main.tex first, then the image');
-    const pinnedTex = (await docx.to('tex', { metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') } } as any)).value as string;
-    assert.strictEqual(strFromU8(bundleFiles['main.tex']), pinnedTex, 'TEX bundle: main.tex is the same source the string mode returns');
+    const pinnedTex = (await docx.to('tex', { texConfig: { embedImages: false }, metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') }, onWarning: () => {} } as any)).value as string;
+    assert.strictEqual(strFromU8(bundleFiles['main.tex']), pinnedTex, 'TEX bundle: main.tex is the source the string mode returns without embedImages');
     const again = (await docx.to('tex', { texConfig: { bundle: true }, metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') } } as any)).value as Uint8Array;
     assert.ok(Buffer.from(bundle).equals(Buffer.from(again)), 'TEX bundle: byte-identical across runs');
 
@@ -2076,13 +2099,14 @@ async function testLatexGeneration(): Promise<void> {
     assert.ok(!/\\begin\{verbatim\}\nsafe/.test(stex) && stex.includes('{\\ttfamily safe\\hfil\\break{}\\textbackslash{}end\\{verbatim\\}\\textbackslash{}input\\{/etc/passwd\\}}'), 'TEX synthetic: code containing \\end{verbatim} is not put in verbatim');
     assert.ok(stex.includes('\\[\n\\begin{aligned}\na &= b \\\\ c &= d\n\\end{aligned}\n\\]'), 'TEX synthetic: top-level & and \\\\ wrapped in aligned');
     assert.ok(stex.includes('\\begin{align}x&=1\\end{align}') && !stex.includes('\\[\n\\begin{align}'), 'TEX synthetic: a whole display environment is written bare');
-    // Images: sanitized bundle path, placeholder for an unincludable type, remote link.
-    assert.ok(stex.includes('{\\centering \\includegraphics[') && stex.includes(']{images/passwd.png}\\par}'), 'TEX synthetic: attachment name reduced to a safe base file name');
+    // Images: sanitized bundle path, placeholder for an unincludable type, remote link. The tiny PNG is
+    // inconsistent (its header says gray+alpha, its data is RGBA), so it cannot be carried and stays a file.
+    assert.ok(stex.includes('{\\centering \\includegraphics[') && stex.includes(']{images/passwd.png}\\par}') && !stex.includes('filecontents'), 'TEX synthetic: attachment name reduced to a safe base file name; a PNG it cannot read is not carried');
     assert.ok(stex.includes('\\fbox{Image: animation}'), 'TEX synthetic: GIF drawn as a placeholder');
     assert.ok(stex.includes('\\href{https://example.com/a.png}{remote}'), 'TEX synthetic: remote image becomes a link');
     assert.ok(sWarn.some(w => w.code === 'CONTENT_NOT_REPRESENTABLE' && w.details?.feature === 'image/gif image'), 'TEX synthetic: GIF warns');
     const sNotBundled = sWarn.find(w => w.code === 'IMAGES_NOT_BUNDLED');
-    assert.ok(sNotBundled && sNotBundled.message.startsWith(`The LaTeX output references 2 image files ('images/passwd.png', 'images/anim.gif') that are not part of`), 'TEX synthetic: IMAGES_NOT_BUNDLED plural message');
+    assert.strictEqual(sNotBundled?.message.split(' Place')[0], `The LaTeX output references 1 image file ('images/passwd.png') that is not part of the .tex source (a .tex carries only PNG and JPEG images it can read).`, 'TEX synthetic: IMAGES_NOT_BUNDLED names only the file the .tex reads (the GIF is a labelled box)');
     // Images referenced by path, with no image data: a plain relative path stays an \includegraphics of
     // that path (the caller supplies the file), a web image is a link, and any other path is refused.
     const refAst = await OfficeParser.parseOffice(Buffer.from('<p><img src="pics/a.png"> <img src="https://example.com/b.png"> <img src="../up/c.png"> <img src="/etc/d.png"></p>'), { fileType: 'html' });
@@ -2128,13 +2152,25 @@ async function testLatexGeneration(): Promise<void> {
     assert.ok(mixedTex.includes('jacharrange={-2, -3, -9}') && mixedTex.includes('\\xeCJKDeclareCharClass{Default}'), 'TEX scripts: mostly Latin text keeps quotes and dashes in the Latin font');
     assert.ok(/\\IfFontExistsTF\{FandolSong-Regular\.otf\}\{\\IfFontExistsTF\{HaranoAjiMincho-Regular\.otf\}\{%\n {2}\\ifXeTeX\n {4}\\IfFileExists\{xeCJK\.sty\}/.test(zhTex) && zhTex.includes('\\IfFileExists{luatexja-fontspec.sty}'), 'TEX scripts: the CJK setup is guarded by its fonts and packages');
     assert.ok(greekTex.includes('\\IfFontExistsTF{cmunrm.otf}{%') && !greekTex.includes('xeCJK'), 'TEX scripts: Greek and Cyrillic get Computer Modern Unicode');
-    // An image the source embedded as a data: URI carries its bytes: written out like an extracted image.
+    // An image the source embedded as a data: URI carries its bytes: carried inside the .tex like an extracted image.
     const dataPng = fs.readFileSync(path.join(__dirname, '..', 'docs', 'favicon.png')).toString('base64');
     const dataAst = await OfficeParser.parseOffice(Buffer.from(`![logo](data:image/png;base64,${dataPng})`), { fileType: 'md' } as any);
     const dataWarnings: any[] = [];
     const dataTex = (await dataAst.to('tex', { onWarning: (w: any) => dataWarnings.push(w) } as any)).value as string;
-    assert.ok(/\\includegraphics\[[^\]]*\]\{images\/image\.png\}/.test(dataTex) && !dataWarnings.some(w => w.code === 'CONTENT_NOT_REPRESENTABLE'), 'TEX: a data: URI image is included, not reported as a bad path');
-    assert.ok(dataWarnings.some(w => w.code === 'IMAGES_NOT_BUNDLED' && w.message.includes('data: URIs')), 'TEX: IMAGES_NOT_BUNDLED says where a data: image\'s bytes are');
+    const dataCarried = /\\includegraphics\[bb=[^\]]*\]\{(image-[0-9a-f]{8}\.pdf)\}/.exec(dataTex);
+    const dataBlock = dataCarried && new RegExp(`\\\\begin\\{filecontents\\*\\}\\{${dataCarried[1].replace('.', '\\.')}\\}\\n([^]*?)\\n\\\\end\\{filecontents\\*\\}`).exec(dataTex);
+    assert.ok(dataBlock && !dataWarnings.some(w => w.code === 'CONTENT_NOT_REPRESENTABLE' || w.code === 'IMAGES_NOT_BUNDLED'), 'TEX: a data: URI image is carried inside the .tex, not reported as a bad path');
+    assertTextPdf(dataBlock![1], 'TEX data: image');
+    // Parsed back it is a PNG with the same pixels: carried again, it gives the very same block.
+    const dataBack = await OfficeParser.parseOffice(Buffer.from(dataTex), { fileType: 'tex', extractAttachments: true } as any);
+    assert.deepStrictEqual(dataBack.attachments.map(a => a.mimeType), ['image/png'], 'TEX: the carried data: image parses back as a PNG');
+    assert.ok(((await dataBack.to('tex')).value as string).includes(dataBlock![0]), 'TEX: the parsed-back PNG has the same pixels (it is carried as the same block)');
+    const dataRefWarnings: any[] = [];
+    const dataRefTex = (await dataAst.to('tex', { texConfig: { embedImages: false }, onWarning: (w: any) => dataRefWarnings.push(w) } as any)).value as string;
+    assert.ok(/\\includegraphics\[[^\]]*\]\{images\/image\.png\}/.test(dataRefTex) && dataRefWarnings.some(w => w.code === 'IMAGES_NOT_BUNDLED' && w.message.includes('data: URIs')), 'TEX: without embedImages, IMAGES_NOT_BUNDLED says where a data: image\'s bytes are');
+    // A fragment carries its images in its body, where filecontents* is also allowed.
+    const dataFragment = (await dataAst.to('tex', { texConfig: { standalone: false } } as any)).value as string;
+    assert.ok(dataFragment.includes(dataBlock![0]) && !dataFragment.includes('\\begin{document}'), 'TEX: a fragment carries its images in the body');
     const dataZip = unzipSync((await dataAst.to('tex', { texConfig: { bundle: true }, onWarning: () => {} } as any)).value as Uint8Array);
     assert.strictEqual(Buffer.from(dataZip['images/image.png']).toString('base64'), dataPng, 'TEX: the bundle holds the data: image\'s bytes');
     const fragment = (await (await OfficeParser.parseOffice(Buffer.from('中文 ✓ Ωμέγα'), { fileType: 'md' } as any)).to('tex', { texConfig: { standalone: false } } as any)).value as string;
@@ -2279,7 +2315,7 @@ async function testLatexParsing(): Promise<void> {
     assert.strictEqual(ast.auxiliary?.footers, undefined, 'TEX parse: a footer holding only \\thepage is no footer');
     assert.deepStrictEqual(warnings.map(w => w.code).sort(), ['LATEX_CONSTRUCT_NOT_INTERPRETED', 'LATEX_FILE_NOT_FOUND'], 'TEX parse: warnings');
     assert.strictEqual(warnings.find(w => w.code === 'LATEX_CONSTRUCT_NOT_INTERPRETED').message, `The LaTeX input uses 'tikzpicture environment', which the parser does not interpret. Text inside it was kept where there was any; drawing environments (such as TikZ pictures) were omitted.`, 'TEX parse: LATEX_CONSTRUCT_NOT_INTERPRETED exact message');
-    assert.strictEqual(warnings.find(w => w.code === 'LATEX_FILE_NOT_FOUND').message, `The LaTeX input references files the parser could not read ('figures/diagram', 'chapters/missing'). A .tex file does not contain the files it includes or the images it shows; parse the project as a .zip (for example an Overleaf download) to include them. Images were kept as references to their path.`, 'TEX parse: LATEX_FILE_NOT_FOUND exact message');
+    assert.strictEqual(warnings.find(w => w.code === 'LATEX_FILE_NOT_FOUND').message, `The LaTeX input references files the parser could not read ('figures/diagram', 'chapters/missing'). A .tex file holds only the files it carries in filecontents blocks; parse the project as a .zip (for example an Overleaf download) to include the others. Images were kept as references to their path.`, 'TEX parse: LATEX_FILE_NOT_FOUND exact message');
 
     // ── Tier 2: project zip (includes and images) ─────────────────────────────
     const zipOf = (files: Record<string, string | Uint8Array>) => Buffer.from(zipSync(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, typeof v === 'string' ? strToU8(v) : v]))));
@@ -2294,14 +2330,41 @@ async function testLatexParsing(): Promise<void> {
     const pImg = collectAllNodes(pAst).find(n => n.type === 'image')!;
     assert.strictEqual((pImg.metadata as any).attachmentName, 'paper/img/logo.png', 'TEX project: image found through \\graphicspath');
     assert.deepStrictEqual(pAst.attachments.map(a => [a.name, a.mimeType]), [['paper/img/logo.png', 'image/png']], 'TEX project: image extracted as an attachment');
-    // The shipped sample project (test.tex plus the image it shows), which the docs visualizer offers.
+    // The shipped samples: test.tex (the visualizer's LaTeX sample) carries the image it shows, and
+    // latex-project.zip holds the same document with the image as a file.
     const sample = await OfficeParser.parseOffice(path.join(__dirname, 'files/latex-project.zip'), { extractAttachments: true } as any);
-    const lone = await OfficeParser.parseOffice(path.join(__dirname, 'files/test.tex'), { onWarning: () => {} } as any);
+    const loneWarnings: any[] = [];
+    const lone = await OfficeParser.parseOffice(path.join(__dirname, 'files/test.tex'), { extractAttachments: true, onWarning: (w: any) => loneWarnings.push(w) } as any);
     assert.strictEqual(sample.type, 'tex', 'TEX project: latex-project.zip is LaTeX');
     assert.deepStrictEqual(sample.attachments.map(a => [a.name, a.mimeType]), [['images/image.jpg', 'image/jpeg']], 'TEX project: the sample image is attached');
-    // Identical but for the image line: attached in the zip, only a path in the lone .tex.
+    assert.deepStrictEqual(lone.attachments.map(a => [a.mimeType, a.data === sample.attachments[0].data]), [['image/jpeg', true]], 'TEX sample: test.tex carries the very image the project zip holds as a file');
+    assert.ok(!loneWarnings.some(w => ['LATEX_FILE_NOT_FOUND', 'LATEX_CONSTRUCT_NOT_INTERPRETED'].includes(w.code)), `TEX sample: test.tex reads with no missing file or uninterpreted construct (${loneWarnings.map(w => w.code).join(', ')})`);
+    // Identical but for the image's name.
     const withoutImages = (t: unknown) => String(t).replace(/\[Image: [^\]]*\]/g, '[Image]');
     assert.strictEqual(withoutImages((await sample.to('text')).value), withoutImages((await lone.to('text')).value), 'TEX project: the sample holds the same document as test.tex');
+
+    // filecontents: compiling writes the file (keeping one already there unless told to overwrite), so
+    // \input and \includegraphics read it, as TeX would; a name leaving the project writes nothing.
+    const fcWarnings: any[] = [];
+    const fc = await OfficeParser.parseOffice(Buffer.from([
+        '\\documentclass{article}',
+        '\\begin{filecontents*}{part.tex}', '\\section{Written}', 'From a file.   ', '\\end{filecontents*}',
+        '\\begin{filecontents}{part.tex}', '\\section{Ignored}', '\\end{filecontents}',
+        '\\begin{filecontents*}[overwrite]{note.tex}', 'First.', '\\end{filecontents*}',
+        '\\begin{filecontents*}[overwrite]{note.tex}', 'Second.', '\\end{filecontents*}',
+        '\\begin{filecontents*}{../escape.tex}', 'Outside.', '\\end{filecontents*}',
+        '\\begin{document}', '\\input{part}', '\\input{note}', '\\input{../escape}', '\\end{document}',
+    ].join('\n')), { fileType: 'tex', onWarning: (w: any) => fcWarnings.push(w) } as any);
+    const fcText = (await fc.to('text')).value as string;
+    assert.ok(/Written/.test(fcText) && /From a file\./.test(fcText) && /Second\./.test(fcText) && !/Ignored|First\.|Outside\./.test(fcText), `TEX filecontents: written files are read, an existing one kept unless overwritten (${JSON.stringify(fcText)})`);
+    assert.deepStrictEqual(fcWarnings.map(w => w.code), ['LATEX_FILE_NOT_FOUND'], 'TEX filecontents: interpreted, and only the file outside the project is missing');
+    // \RequirePackage (as the generator loads iftex) loads a package as \usepackage does.
+    const required = await OfficeParser.parseOffice(Buffer.from('\\RequirePackage{iftex}\\documentclass{article}\\usepackage{graphicx}\\makeatletter\\@ifpackageloaded{iftex}{\\def\\x{yes}}{\\def\\x{no}}\\makeatother\\begin{document}\\x\\end{document}'), { fileType: 'tex' } as any);
+    assert.deepStrictEqual([(required.metadata as any).nativeProperties.packages, ((await required.to('text')).value as string).trim()], [['iftex', 'graphicx'], 'yes'], 'TEX: \\RequirePackage loads a package as \\usepackage does');
+    // A PDF figure that is more than a picture (a vector drawing, here text) stays a PDF.
+    const vectorPdf = '%PDF-1.5\n1 0 obj\n<< /Type /Page /Contents 2 0 R >>\nendobj\n2 0 obj\n<< /Length 23 >>\nstream\nBT /F1 12 Tf (Hi) Tj ET\nendstream\nendobj\n%%EOF\n';
+    const vector = await OfficeParser.parseOffice(Buffer.from(zipSync({ 'main.tex': strToU8('\\documentclass{article}\\begin{document}\\includegraphics{fig}\\end{document}'), 'fig.pdf': strToU8(vectorPdf) })), { extractAttachments: true } as any);
+    assert.deepStrictEqual(vector.attachments.map(a => [a.name, a.mimeType]), [['fig.pdf', 'application/pdf']], 'TEX project: a vector PDF figure stays a PDF');
 
     // ── Tier 3: beamer ────────────────────────────────────────────────────────
     const deck = await OfficeParser.parseOffice(Buffer.from('\\documentclass{beamer}\\begin{document}\\frame{\\titlepage}\\begin{frame}{First}{Sub}\\begin{itemize}\\item<1-> One\\end{itemize}\\note{Say hi.}\\end{frame}\\begin{frame}[fragile]\\frametitle{Code}\\begin{block}{Idea}Body\\end{block}\\end{frame}\\end{document}'), { fileType: 'tex' });

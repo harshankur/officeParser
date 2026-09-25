@@ -106,13 +106,14 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     [OfficeWarningType.MATH_WRITTEN_AS_TEXT]: (info: { commands?: string[] }) => info.commands && info.commands.length > 0
         ? `A math expression used ${info.commands.map(c => `'${c}'`).join(', ')}, which can read or write files, run programs, or redefine commands, so it was written to the LaTeX output as literal text instead of typeset math.`
         : `A math expression had unbalanced braces or \\begin/\\end environments (or an environment that is not valid there), so it was written to the LaTeX output as literal text instead of typeset math.`,
-    [OfficeWarningType.IMAGES_NOT_BUNDLED]: (info: { files: string[]; external?: string[]; fromDataUris?: boolean }) => {
+    [OfficeWarningType.IMAGES_NOT_BUNDLED]: (info: { files: string[]; external?: string[]; fromDataUris?: boolean; embedImages?: boolean }) => {
         const list = (files: string[]) => files.map(f => `'${f}'`).join(', ');
         const count = (files: string[]) => `${files.length} image file${files.length === 1 ? '' : 's'}`;
         const external = info.external ?? [];
         const parts: string[] = [];
         if (info.files.length) {
-            parts.push(`The LaTeX output references ${count(info.files)} (${list(info.files)}) that ${info.files.length === 1 ? 'is' : 'are'} not part of the .tex source, since a .tex file cannot embed images. Place ${info.files.length === 1 ? 'it at that path' : 'them at those paths'}, relative to the .tex (the bytes are in ast.attachments${info.fromDataUris ? ', or in the data: URIs the source embedded images as' : ''}), or set texConfig.bundle: true to get a zip containing the .tex and its images.`);
+            const why = info.embedImages === false ? 'texConfig.embedImages is off' : 'a .tex carries only PNG and JPEG images it can read';
+            parts.push(`The LaTeX output references ${count(info.files)} (${list(info.files)}) that ${info.files.length === 1 ? 'is' : 'are'} not part of the .tex source (${why}). Place ${info.files.length === 1 ? 'it at that path' : 'them at those paths'}, relative to the .tex (the bytes are in ast.attachments${info.fromDataUris ? ', or in the data: URIs the source embedded images as' : ''}), or set texConfig.bundle: true to get a zip containing the .tex and its images.`);
         }
         if (external.length) {
             parts.push(`The LaTeX output ${info.files.length ? 'also ' : ''}references ${count(external)} (${list(external)}) by the path the source document gave, without the image data, which the source did not contain. Place ${external.length === 1 ? 'it at that path' : 'them at those paths'}, relative to the .tex, before compiling.`);
@@ -121,7 +122,7 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
     },
     [OfficeWarningType.LATEX_CONSTRUCT_NOT_INTERPRETED]: (info: { constructs: string[] }) => `The LaTeX input uses ${info.constructs.map(c => `'${c}'`).join(', ')}, which the parser does not interpret. Text inside ${info.constructs.length === 1 ? 'it' : 'them'} was kept where there was any; drawing environments (such as TikZ pictures) were omitted.`,
     [OfficeWarningType.LATEX_EXPANSION_LIMIT_REACHED]: (info: { limit: string }) => `The LaTeX input reached the ${info.limit} limit, which bounds how much work a document can demand; macros or included files past it were not expanded.`,
-    [OfficeWarningType.LATEX_FILE_NOT_FOUND]: (info: { files: string[] }) => `The LaTeX input references ${info.files.length === 1 ? 'a file' : 'files'} the parser could not read (${info.files.map(f => `'${f}'`).join(', ')}). A .tex file does not contain the files it includes or the images it shows; parse the project as a .zip (for example an Overleaf download) to include them. Images were kept as references to their path.`
+    [OfficeWarningType.LATEX_FILE_NOT_FOUND]: (info: { files: string[] }) => `The LaTeX input references ${info.files.length === 1 ? 'a file' : 'files'} the parser could not read (${info.files.map(f => `'${f}'`).join(', ')}). A .tex file holds only the files it carries in filecontents blocks; parse the project as a .zip (for example an Overleaf download) to include the others. Images were kept as references to their path.`
 };
 
 /**

@@ -9,7 +9,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { strFromU8, unzipSync, zipSync } from 'fflate';
+import { strFromU8, unzipSync, zipSync, zlibSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
 import { OfficeParserAST, OfficeWarningType } from '../../src/types';
@@ -2036,6 +2036,27 @@ async function latexParserTests() {
     const verb = await parse('\\verb|\\input{/etc/passwd}|');
     const regenerated = (await verb.ast.to('tex')).value as string;
     check('latex parser: verbatim command text regenerates escaped', regenerated.includes('\\textbackslash{}input') && !liveControlWords(regenerated).includes('input'));
+
+    // Images carried as PDFs (a filecontents block, or a PDF in a project) are read under fixed bounds:
+    // anything suspect stays the PDF it is, unread.
+    const pdfWith = (image: string) => `%PDF-1.5\n1 0 obj\n<< /Type /Page /Resources << /XObject << /Im0 2 0 R >> >> /Contents 3 0 R >>\nendobj\n2 0 obj\n${image}\nendobj\n3 0 obj\n<< /Length 26 >>\nstream\nq 1 0 0 1 0 0 cm /Im0 Do Q\nendstream\nendobj\n%%EOF\n`;
+    const carried = (pdf: string, name = 'x.pdf') => `\\documentclass{article}\n\\begin{filecontents*}{${name}}\n${pdf}\\end{filecontents*}\n\\begin{document}\\includegraphics{x.pdf}\\end{document}`;
+    const tinyZlib = Buffer.from(zlibSync(new Uint8Array(4096))).toString('latin1');
+    for (const [label, image] of [
+        ['a claimed 10-gigapixel image', '<< /Type /XObject /Subtype /Image /Width 100000 /Height 100000 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length 8 >>\nstream\nxxxxxxxx\nendstream'],
+        ['a 36-megapixel image from a few bytes', `<< /Type /XObject /Subtype /Image /Width 6000 /Height 6000 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length ${tinyZlib.length} >>\nstream\n${tinyZlib}\nendstream`],
+        ['deeply nested dictionaries', '<< /A '.repeat(20000) + '>>'.repeat(20000)],
+        ['broken ASCII85', '<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter [/ASCII85Decode /FlateDecode] /Length 12 >>\nstream\n{{{{vvvv~>xx\nendstream'],
+        ['a Length past the end', '<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 99999999 >>\nstream\nabcd'],
+    ] as const) {
+        const started = process.memoryUsage().heapUsed;
+        const r = await parse(carried(pdfWith(image)));
+        const grew = process.memoryUsage().heapUsed - started;
+        check(`latex parser: ${label} in a carried PDF stays a PDF, within bounds`, r.ms < TIME_BUDGET_MS && grew < 100_000_000 && r.ast.attachments.length === 1 && r.ast.attachments[0].mimeType === 'application/pdf',
+            `${r.ms}ms, heap +${Math.round(grew / 1e6)}MB, ${r.ast.attachments.map(a => a.mimeType).join(',')}`);
+    }
+    const escaping = await parse('\\begin{filecontents*}{../../outside.tex}\nEscaped\n\\end{filecontents*}\\begin{document}\\input{../../outside}\\end{document}');
+    check('latex parser: a filecontents file cannot be written outside the project', !escaping.json.includes('Escaped') && escaping.codes.includes('LATEX_FILE_NOT_FOUND'));
 }
 
 async function main() {

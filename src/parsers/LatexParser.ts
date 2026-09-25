@@ -3,6 +3,7 @@ import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
+import { imageFromPdf } from '../utils/textPdf.js';
 import { LATEX_SYMBOL_CHARACTERS, LISTINGS_LANGUAGE_NAMES } from '../utils/latexUtils.js';
 import { ADMONITION_COLOR } from '../utils/officeGenUtils.js';
 import { performOcr } from '../utils/ocrUtils.js';
@@ -110,7 +111,10 @@ const TABLE_ENVS: Record<string, string> = {
 };
 
 /** Environments that only draw pictures: their content is skipped rather than read as text. */
-const DRAWING_ENVS = new Set(['tikzpicture', 'pgfpicture', 'picture', 'forest', 'axis', 'circuitikz', 'pspicture', 'tikzcd', 'filecontents', 'filecontents*']);
+const DRAWING_ENVS = new Set(['tikzpicture', 'pgfpicture', 'picture', 'forest', 'axis', 'circuitikz', 'pspicture', 'tikzcd']);
+
+/** `filecontents` bodies, which are file data rather than document source. */
+const FILECONTENTS_BODY = /\\begin\s*\{filecontents\*?\}[\s\S]*?\\end\s*\{filecontents\*?\}/g;
 
 /**
  * Environments with no meaning of their own for the AST (layout wrappers): their content is read
@@ -872,6 +876,8 @@ class LatexReader {
      * sections), whether sections are numbered, and the document class.
      */
     private prescan(src: string): void {
+        // File data (an image carried as a PDF, say) is no evidence of the document's structure.
+        src = src.replace(FILECONTENTS_BODY, '');
         // `\documentstyle` is LaTeX 2.09's `\documentclass`.
         const cls = /\\document(?:class|style)\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/.exec(src);
         if (cls) {
@@ -2255,7 +2261,7 @@ class LatexReader {
                 this.readGlue(sc);
                 return;
             case 'hypersetup': this.hypersetup(sc.readRawGroup() ?? ''); return;
-            case 'usepackage': {
+            case 'usepackage': case 'RequirePackage': {
                 const opts = sc.readRawOptional();
                 const pkgs = (sc.readRawGroup() ?? '').split(',').map(p => p.trim()).filter(Boolean);
                 (this.native.packages as string[]).push(...pkgs);
@@ -2599,6 +2605,26 @@ class LatexReader {
         return null;
     }
 
+    /**
+     * `filecontents`: compiling writes the body to a file (a file of that name already there is kept
+     * unless the environment says `overwrite`), so the file joins the project for an `\input` or an
+     * `\includegraphics` to read, as TeX would. The LaTeX generator carries images this way.
+     */
+    private fileContents(sc: Scanner, env: string): void {
+        const options = (sc.readRawOptional() ?? '').split(',').map(o => o.trim());
+        const name = (sc.readRawGroup() ?? '').trim();
+        const body = sc.readRawEnvBody(env);
+        const path = name ? normalizeProjectPath(this.mainDir, name) : null;
+        if (path === null) return;
+        // The file's lines are those after the \begin line, each written as TeX writes a line: without
+        // trailing spaces, ending in LF.
+        const lines = body.split('\n').slice(1, -1).map(line => line.replace(/ +$/, ''));
+        this.project ??= { files: new Map(), root: '' };
+        if (!this.project.files.has(path) || options.includes('overwrite') || options.includes('force')) {
+            this.project.files.set(path, Buffer.from(lines.map(line => line + '\n').join(''), 'utf8'));
+        }
+    }
+
     private image(sc: Scanner, flow: Flow): void {
         sc.readStar();
         const opts = sc.readRawOptional() ?? '';
@@ -2623,8 +2649,13 @@ class LatexReader {
         if (resolved && this.config.extractAttachments) {
             let name = this.attachmentByPath.get(resolved);
             if (!name) {
-                name = resolved;
-                this.attachments.push(createAttachment(name, this.project!.files.get(resolved)!));
+                const bytes = this.project!.files.get(resolved)!;
+                // A PDF that is only a picture (as the LaTeX generator carries images, or an image saved
+                // as PDF) is taken as that picture, which every output format can show.
+                const picture = /\.pdf$/i.test(resolved) ? imageFromPdf(bytes) : null;
+                const renamed = picture && resolved.replace(/\.pdf$/i, picture.mimeType === 'image/png' ? '.png' : '.jpg');
+                name = renamed && !this.attachments.some(a => a.name === renamed) ? renamed : resolved;
+                this.attachments.push(createAttachment(name, picture ? Buffer.from(picture.data) : bytes));
                 this.attachmentByPath.set(resolved, name);
             }
             meta.attachmentName = name;
@@ -2685,6 +2716,7 @@ class LatexReader {
             return;
         }
         if (own(TABLE_ENVS, env)) { this.table(sc, flow, env); return; }
+        if (env === 'filecontents' || env === 'filecontents*') { this.fileContents(sc, env); return; }
         if (DRAWING_ENVS.has(env)) { sc.readRawEnvBody(env); this.unknown.add(`${env} environment`); return; }
         if (env === 'frame') return this.frame(sc, flow, stop);
         if (env === 'block' || env === 'alertblock' || env === 'exampleblock') {

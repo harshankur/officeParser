@@ -33,6 +33,7 @@ export const getMimeFromExtension = (ext: string): string => {
         case 'bmp': return 'image/bmp';
         case 'tiff': return 'image/tiff';
         case 'webp': return 'image/webp';
+        case 'pdf': return 'application/pdf';
         default: return 'application/octet-stream'; // Generic binary MIME type
     }
 };
@@ -53,6 +54,11 @@ export const getMimeFromExtension = (ext: string): string => {
  */
 export const getMimeFromBytes = (buffer: Buffer): string | undefined => {
     if (buffer.length < 4) return undefined;
+
+    // PDF: 25 50 44 46 ("%PDF"), as a LaTeX project's figures often are
+    if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
+        return 'application/pdf';
+    }
 
     // PNG: 89 50 4E 47 (0x89 "PNG")
     if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
@@ -139,3 +145,21 @@ export const createAttachment = (name: string, content: Buffer): OfficeAttachmen
         extension: ext // File extension for reference
     };
 };
+
+/** Precomputed CRC-32 table (polynomial 0xEDB88320) for PNG chunk checksums. */
+const CRC32_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        table[n] = c >>> 0;
+    }
+    return table;
+})();
+
+/** CRC-32 over a byte range, as PNG requires over each chunk's type+data. */
+export function crc32(bytes: Uint8Array): number {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) c = CRC32_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+}

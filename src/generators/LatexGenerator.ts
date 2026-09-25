@@ -5,6 +5,7 @@ import { ADMONITION_COLOR, decodeBase64, fillSheetRowGaps, hexColor, isHeaderRow
 import { LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, planLatexUnicode } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
+import { contentHash, imageToTextPdf } from '../utils/textPdf.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -136,7 +137,8 @@ interface RenderContext {
 }
 
 /** An image written to the output: its path relative to the `.tex`, and whether LaTeX can include it. */
-interface MediaRef { path: string; includable: boolean; mime: string; intrinsic: { w: number; h: number } | null; }
+/** An image as the output refers to it; `bb` is set for one carried inside the .tex, whose size LaTeX then need not measure. */
+interface MediaRef { path: string; includable: boolean; mime: string; intrinsic: { w: number; h: number } | null; bb?: string; }
 
 /** One cell position in a laid-out table row. */
 type TableSlot =
@@ -224,7 +226,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false,
     };
 
-    private readonly media: { path: string; bytes: Uint8Array }[] = [];
+    /** Image files the output refers to by path (written into a bundle); `includable` when `\includegraphics` draws one. */
+    private readonly media: { path: string; bytes: Uint8Array; includable: boolean }[] = [];
+    /** Images carried inside the .tex, in order of first use: each becomes a `filecontents*` block. */
+    private readonly carried: { name: string; pdf: string }[] = [];
+    /** Carried images by content hash, so an image used twice is carried once. */
+    private readonly carriedByHash = new Map<string, MediaRef>();
     /** Images the document references by a relative path, with no image data: the caller supplies them. */
     private readonly externalImages = new Set<string>();
     private readonly mediaByAttachment = new Map<string, MediaRef | null>();
@@ -294,18 +301,22 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const unicode = planLatexUnicode([headerSetup, meta.title, ...meta.hypersetup, ...parts].join('\n'));
         if (unicode.packages.has('amssymb')) this.uses.amssymb = true;
         let tex: string;
+        const carried = this.carriedImageBlocks();
         if (standalone) {
             const titleBlock = this.titleBlock();
-            tex = `${this.preamble(headerSetup, meta, unicode)}\n\\begin{document}\n\n${[titleBlock, ...parts].filter(Boolean).join(BLOCK_SEPARATOR)}\n\n\\end{document}\n`;
+            tex = `${this.preamble(headerSetup, meta, unicode)}${carried ? `\n${carried}\n` : ''}\n\\begin{document}\n\n${[titleBlock, ...parts].filter(Boolean).join(BLOCK_SEPARATOR)}\n\n\\end{document}\n`;
         } else {
-            // \definecolor is legal in the body, so a fragment carries its own color definitions.
-            tex = `${this.fragmentHeader(unicode)}\n${[this.colorDefinitions().join('\n'), ...parts].filter(Boolean).join(BLOCK_SEPARATOR)}\n`;
+            // \definecolor and filecontents* are legal in the body, so a fragment carries its own
+            // color definitions and images.
+            tex = `${this.fragmentHeader(unicode)}\n${[carried, this.colorDefinitions().join('\n'), ...parts].filter(Boolean).join(BLOCK_SEPARATOR)}\n`;
         }
 
         const bundle = this.config.texConfig.bundle === true;
-        const unbundled = bundle ? [] : this.media.map(m => m.path);
+        // The files the .tex reads: an image LaTeX cannot draw is a labelled box, reported on its own.
+        const unbundled = bundle ? [] : this.media.filter(m => m.includable).map(m => m.path);
         if (unbundled.length > 0 || this.externalImages.size > 0) {
-            this.warn(OfficeWarningType.IMAGES_NOT_BUNDLED, { files: unbundled, external: [...this.externalImages], fromDataUris: !bundle && this.mediaByDataUri.size > 0 });
+            const fromDataUris = !bundle && [...this.mediaByDataUri.values()].some(ref => ref?.includable && !ref.bb);
+            this.warn(OfficeWarningType.IMAGES_NOT_BUNDLED, { files: unbundled, external: [...this.externalImages], fromDataUris, embedImages: this.config.texConfig.embedImages !== false });
         }
         if (bundle) {
             const { mtime } = resolveZipInstant(this.effectiveMetadata.modified);
@@ -1291,14 +1302,53 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     // ── images ───────────────────────────────────────────────────────────────────────────────────
 
+    /** An attachment's base name reduced to `[A-Za-z0-9-]`, for the file names the output writes. */
+    private fileStem(attachmentName: string): string {
+        const base = String(attachmentName).split(/[\\/]/).pop()!.replace(/\.[^.]*$/, '');
+        return base.replace(/[^A-Za-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'image';
+    }
+
     /** A safe, unique file name for an attachment: its base name reduced to `[A-Za-z0-9-]`, with the MIME's extension. */
     private uniqueFileName(attachmentName: string, ext: string): string {
-        const base = String(attachmentName).split(/[\\/]/).pop()!.replace(/\.[^.]*$/, '');
-        const stem = base.replace(/[^A-Za-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'image';
+        const stem = this.fileStem(attachmentName);
         let name = `${stem}.${ext}`;
         for (let i = 2; this.usedFileNames.has(name.toLowerCase()); i++) name = `${stem}-${i}.${ext}`;
         this.usedFileNames.add(name.toLowerCase());
         return name;
+    }
+
+    /**
+     * A PNG or JPEG carried inside the .tex: a `filecontents*` block writes it, as a small PDF, beside
+     * the .tex when the document compiles, and `\includegraphics` reads that file. The name holds a
+     * hash of the data, so a changed image never meets a stale file, and without `overwrite` LaTeX
+     * keeps a file of that name already there, which lets a reader replace the picture. Null for a
+     * bundle (which holds the image files themselves), with `embedImages` off, or for an image that
+     * cannot be carried (another format, or damaged).
+     */
+    private carriedImage(bytes: Uint8Array, mime: string, attachmentName: string): MediaRef | null {
+        const { bundle, embedImages } = this.config.texConfig;
+        if (bundle === true || embedImages === false || !['png', 'jpg'].includes(INCLUDABLE_IMAGE_EXT[mime])) return null;
+        const made = imageToTextPdf(bytes, PT_PER_INCH / IMAGE_DPI);
+        if (!made) return null;
+        // Hashing the carried PDF, not the image file, gives an image the same name after a round
+        // trip through the parser (which drops PNG chunks the picture does not need), and a name
+        // already ending in that hash does not gain it twice.
+        const hash = contentHash(new TextEncoder().encode(made.pdf));
+        const known = this.carriedByHash.get(hash);
+        if (known) return known;
+        const name = `${this.fileStem(attachmentName).replace(new RegExp(`-${hash}$`), '')}-${hash}.pdf`;
+        this.usedFileNames.add(name.toLowerCase());
+        const ref: MediaRef = { path: name, includable: true, mime, intrinsic: sniffImageSize(bytes), bb: made.bbox };
+        this.carried.push({ name, pdf: made.pdf });
+        this.carriedByHash.set(hash, ref);
+        return ref;
+    }
+
+    /** The `filecontents*` blocks writing the images carried inside the .tex, headed by what they do. */
+    private carriedImageBlocks(): string {
+        if (!this.carried.length) return '';
+        return latexComment('The images, carried in this file: each block writes one, as a small PDF, beside the .tex when it\ncompiles. A file of that name already there is kept, so an image can be replaced.')
+            + this.carried.map(c => `\\begin{filecontents*}{${c.name}}\n${c.pdf}\n\\end{filecontents*}`).join('\n');
     }
 
     private mediaFor(attachmentName: string): MediaRef | null {
@@ -1314,9 +1364,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         } else {
             try {
                 const bytes = decodeBase64(att.data);
-                const path = `${IMAGE_DIR}/${this.uniqueFileName(attachmentName, ext)}`;
-                this.media.push({ path, bytes });
-                ref = { path, includable: !!INCLUDABLE_IMAGE_EXT[mime], mime, intrinsic: sniffImageSize(bytes) };
+                ref = this.carriedImage(bytes, mime, attachmentName);
+                if (!ref) {
+                    const path = `${IMAGE_DIR}/${this.uniqueFileName(attachmentName, ext)}`;
+                    this.media.push({ path, bytes, includable: !!INCLUDABLE_IMAGE_EXT[mime] });
+                    ref = { path, includable: !!INCLUDABLE_IMAGE_EXT[mime], mime, intrinsic: sniffImageSize(bytes) };
+                }
             } catch {
                 this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName });
             }
@@ -1342,9 +1395,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         } else {
             try {
                 const bytes = m[3] ? decodeBase64(m[4]) : new TextEncoder().encode(decodeURIComponent(m[4]));
-                const path = `${IMAGE_DIR}/${this.uniqueFileName('image', ext)}`;
-                this.media.push({ path, bytes });
-                ref = { path, includable: !!INCLUDABLE_IMAGE_EXT[mime], mime, intrinsic: sniffImageSize(bytes) };
+                ref = this.carriedImage(bytes, mime, 'image');
+                if (!ref) {
+                    const path = `${IMAGE_DIR}/${this.uniqueFileName('image', ext)}`;
+                    this.media.push({ path, bytes, includable: !!INCLUDABLE_IMAGE_EXT[mime] });
+                    ref = { path, includable: !!INCLUDABLE_IMAGE_EXT[mime], mime, intrinsic: sniffImageSize(bytes) };
+                }
             } catch {
                 this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: 'data: URI image', reason: 'undecodable data' });
             }
@@ -1407,7 +1463,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             const ref = dataUri ? this.mediaForDataUri(dataUri) : this.mediaFor(meta!.attachmentName!);
             if (ref?.includable) {
                 this.uses.graphics = true;
-                img = `\\includegraphics[${this.imageSize(node, ref.intrinsic)}]{${ref.path}}`;
+                // A carried image states its size (bb), so the DVI engines need not run extractbb for it.
+                img = `\\includegraphics[${ref.bb ? `bb=${ref.bb},` : ''}${this.imageSize(node, ref.intrinsic)}]{${ref.path}}`;
             } else if (ref) {
                 this.warnOnce(`image:${ref.mime}`, OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: `${ref.mime} image`, format: 'tex' });
                 img = `\\fbox{${escapeLatex(`Image: ${alt || ref.path}`, ' ')}}`;
