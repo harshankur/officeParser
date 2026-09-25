@@ -84,6 +84,20 @@ const { value: fromProject } = await OfficeConverter.convert('overleaf-project.z
         </tbody>
     </table>
 
+    <h3>Return value</h3>
+    <p>A <code>ConversionResult</code>: <code>value</code> is the generated document, of the type
+        <code>ast.to(destination)</code> returns (see <a href="#spec/generator">OfficeGenerator</a>), and
+        <code>messages</code> lists every warning of the conversion once: configuration mistakes first, then the parse's
+        warnings, then the generator's. Each also reaches <code>onWarning</code> as it happens.</p>
+
+    <blockquote>
+        [!IMPORTANT]
+        Parser and generator options go inside <code>parseConfig</code> and <code>generatorConfig</code>; only
+        <code>onWarning</code> is read at the top level. An option placed there has no effect and is reported as
+        <code>UNRECOGNIZED_CONFIG_OPTION</code>, naming where it belongs (<code>{ texConfig }</code> belongs in
+        <code>generatorConfig</code>, <code>{ ocr }</code> in <code>parseConfig</code>).
+    </blockquote>
+
     <blockquote>
         [!NOTE]
         <code>convert()</code> honors <code>parseConfig.ocr</code>. OCR runs over extracted images, so unless you set

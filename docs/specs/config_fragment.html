@@ -254,13 +254,16 @@
             </tr>
             <tr>
                 <td><code>fileType</code></td>
-                <td><code>SupportedFileType | null</code></td>
+                <td><code>SupportedFileType | FileTypeAlias | null</code></td>
                 <td><code>null</code></td>
                 <td><strong>Authoritative Hint</strong>: Manually specify the source format. Essential when parsing
                     <code>md</code>, <code>html</code>, <code>csv</code>, or <code>tex</code> from a Buffer / ArrayBuffer / Uint8Array, as these lack magic byte
                     markers. <code>.latex</code>/<code>.ltx</code> files route to <code>tex</code>, and a file named
                     <code>.zip</code> is routed by what the archive holds (an Overleaf project or
-                    <code>texConfig.bundle</code> zip parses as <code>tex</code>).</td>
+                    <code>texConfig.bundle</code> zip parses as <code>tex</code>). The hint accepts those names too
+                    (<code>FileTypeAlias</code>): <code>'latex'</code> and <code>'ltx'</code> for <code>tex</code>, the ODF
+                    template names <code>'ott'</code>/<code>'ots'</code>/<code>'otp'</code>/<code>'otg'</code>, and
+                    <code>'zip'</code>.</td>
             </tr>
             <tr>
                 <td><code>csvDelimiter</code></td>

@@ -188,11 +188,12 @@ function expandTabs(line: string): string {
  * Generates LaTeX source (`.tex`) from any AST, or with `texConfig.bundle` a zip of the source and
  * its images.
  *
- * The output compiles unmodified with pdfLaTeX, XeLaTeX and LuaLaTeX: the preamble selects fonts per
- * engine and loads only the packages the body uses. Every piece of document text is escaped
- * ({@link escapeLatex}), URLs are scheme-checked and made inert ({@link sanitizeLatexUrl}), and math,
- * the one place content is emitted as live LaTeX, must pass {@link sanitizeLatexMath} or it is
- * written as literal text.
+ * The output compiles unmodified with pdfLaTeX, XeLaTeX, LuaLaTeX, upLaTeX, pLaTeX and `latex` (the
+ * last three through dvipdfmx): the preamble selects fonts per engine, with TeX Live's fonts for the
+ * scripts Latin Modern lacks where they are installed, and loads only the packages the body uses.
+ * Every piece of document text is escaped ({@link escapeLatex}), URLs are scheme-checked and made
+ * inert ({@link sanitizeLatexUrl}), and math, the one place content is emitted as live LaTeX, must
+ * pass {@link sanitizeLatexMath} or it is written as literal text.
  *
  * Mapping, in brief: headings become sectioning commands (unnumbered unless `numberSections`),
  * flat list items are rebuilt into nested `itemize`/`enumerate`, tables become `longtable` (or

@@ -263,6 +263,26 @@ await officeParser.parseOffice(latexBuffer,    { fileType: 'tex' });</code></pre
                 <td>The document hit a macro/include bound (often a runaway recursive macro or an include cycle). Simplify the macro or remove the cycle</td>
             </tr>
             <tr>
+                <td>A config option seems to have no effect</td>
+                <td>Check <code>onWarning</code> or the result's <code>messages</code>: <code>UNRECOGNIZED_CONFIG_OPTION</code> means a typo or an option in the wrong config object (the message names where it belongs), <code>INVALID_CONFIG_VALUE</code> a value the option does not accept (its default was used)</td>
+            </tr>
+            <tr>
+                <td>A LaTeX document's <code>\today</code> reads as the day it was parsed</td>
+                <td>Expected: LaTeX prints the day of the compile. Set <code>texParserConfig.today</code> to a fixed date, or to a placeholder to replace later</td>
+            </tr>
+            <tr>
+                <td>Generated LaTeX shows <code>[U+XXXX]</code> markers</td>
+                <td>pdfLaTeX has no fonts for that script (CJK, Cyrillic, emoji). Compile with XeLaTeX or LuaLaTeX</td>
+            </tr>
+            <tr>
+                <td>Generated LaTeX shows an equation as literal text (<code>MATH_WRITTEN_AS_TEXT</code>)</td>
+                <td>The expression used a command refused for safety or was unbalanced; the message names what. Correct the math in the source document</td>
+            </tr>
+            <tr>
+                <td>Images missing when compiling generated LaTeX (<code>IMAGES_NOT_BUNDLED</code>)</td>
+                <td>Generate with <code>texConfig: { bundle: true }</code> for a zip of the source and its images, or place the files where the message says</td>
+            </tr>
+            <tr>
                 <td>Images missing from generated EPUB</td>
                 <td>Pass <code>extractAttachments: true</code> on the parse step; without it there are no image bytes for the EPUB generator to package. <code>OfficeConverter.convert()</code> sets this automatically.</td>
             </tr>

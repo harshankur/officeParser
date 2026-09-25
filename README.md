@@ -492,7 +492,9 @@ const { value: html, messages } = await OfficeConverter.convert('data.xlsx', 'ht
 
 > [!IMPORTANT]
 > The `OfficeConverterConfig` shape uses **nested** `parseConfig` and `generatorConfig` sub-objects.
-> Do **not** put parser or generator options at the top level; only `onWarning` lives there.
+> Do **not** put parser or generator options at the top level; only `onWarning` lives there. An option
+> placed there has no effect, and is reported as `UNRECOGNIZED_CONFIG_OPTION` naming where it belongs
+> (`texConfig` under `generatorConfig`, `ocr` under `parseConfig`).
 
 ---
 
@@ -1291,7 +1293,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `includeBreakNodes` | `boolean` | `false` | Include typed break nodes: DOCX `w:br`/`w:cr`, ODF `fo:break-before`/`fo:break-after` and `text:soft-page-break`, LaTeX `\newpage`/`\clearpage` (a LaTeX line break, `\\` or `\newline`, is always kept inside its paragraph) |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal cross-references from AST (now honored for PDF too) |
 | `ignorePageGeometry` | `boolean` | `false` | Omit the geometric layout data: per-node bounding boxes (`node.bounds`) and page dimensions. Currently produced by the PDF parser |
-| `fileType` | `SupportedFileType \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`, `'tex'`) as these lack magic bytes. |
+| `fileType` | `SupportedFileType \| FileTypeAlias \| null` | `null` | **Required for text-based binary data** (`'md'`, `'html'`, `'csv'`, `'tex'`) as these lack magic bytes. Also accepts the names the matching extensions route by (`FileTypeAlias`): `'latex'`/`'ltx'` for `tex`, the ODF template names `'ott'`/`'ots'`/`'otp'`/`'otg'`, and `'zip'` (parsed as whatever the archive holds). |
 | `csvDelimiter` | `string` | `','` | Input delimiter when parsing CSV files |
 | `decompressionLimits` | `DecompressionLimits` | `{ maxUncompressedBytes: 512MB, maxZipEntries: 10000, maxTableCells: 1000000 }` | **New**: Limits applied during ZIP extraction (and ODF cell expansion) to protect against excessive memory and resource usage |
 | `htmlParserConfig` | `HtmlParserConfig` | `{}` | HTML/XHTML/EPUB parsing options **(and Markdown input: `preserveIframes`/`embedFolkForms` govern raw `<iframe>` blocks and folk embeds in `.md` too)**. `preserveAttributes` (`boolean`, default `false`): keep generic source attributes no typed field consumed on `node.htmlAttributes`. `preserveIframes` (`boolean \| string[]`, default `false`): preserve non-YouTube `<iframe>` embeds (otherwise dropped) as `embed` nodes: `true` for any, or a hostname allowlist; the src is scheme-checked on generation. `embedFolkForms` (`boolean`, default `false`): opt in to importing ambiguous folk embed forms (Obsidian `![](youtube-url)`, thumbnail-link) as YouTube embeds. `preserveComments` (`boolean`, default `false`): keep `<!-- ... -->` comments in HTML and EPUB input as `comment` nodes (`metadata.sourceSyntax: 'html'`) instead of dropping them; conditional comments (`<!--[if …]>`) are always dropped. The `data-html-comment` shape `sourceAttributes` emits is always read. |
@@ -1592,7 +1594,7 @@ writeFileSync('paper.zip', zip as Uint8Array);
 
 **Safety.** LaTeX is a programming language, so every piece of document text is escaped, URLs are scheme-checked (the same allowlist as the DOCX/ODT generators) and percent-encoded, image paths are reduced to a safe file name inside `images/`, and a code block that contains its own end marker is not put in a verbatim environment. Math is the one place document content is emitted as live LaTeX; an expression that uses a command able to read or write files, run programs, or redefine commands (`\input`, `\write18`, `\openin`, `\catcode`, `\def`, ...), or that is structurally unbalanced, is written as literal text instead, with a `MATH_WRITTEN_AS_TEXT` warning. Compile untrusted output without `--shell-escape`, as you would any LaTeX you did not write.
 
-**Characters.** A character the default fonts lack (check marks, arrows, many math symbols, dingbats, unusual spaces) gets a `\newunicodechar` fallback under every engine. A script pdfLaTeX cannot typeset at all (CJK, Cyrillic, emoji, ...) is shown there as a `[U+XXXX]` marker (Greek as math letters); XeLaTeX and LuaLaTeX keep the real characters, so compile with one of them and set a `\setmainfont` that covers the script.
+**Characters.** A character the default fonts lack (check marks, arrows, many math symbols, dingbats, unusual spaces) gets a fallback under every engine. A script pdfLaTeX cannot typeset at all (CJK, Cyrillic, emoji, ...) is shown there as a `[U+XXXX]` marker (Greek as math letters). XeLaTeX and LuaLaTeX set Greek, Cyrillic and CJK text in fonts TeX Live ships, where they are installed; for emoji or another script, add a `\setmainfont` that covers it. The table under **Engines** in [LaTeX Support](#latex-support) lists what each engine shows.
 
 ### CsvGeneratorConfig
 
