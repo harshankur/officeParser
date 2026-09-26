@@ -333,6 +333,20 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     }
 
     /**
+     * A picture wrapped in the link it is (a badge, `[![alt](src)](target "title")`), by the rules a
+     * linked run of text follows: an internal link is dropped under `ignoreInternalLinks` and points at
+     * the slugged id where ids are generated, and the target is scheme-checked.
+     */
+    private linkedImage(meta: ImageMetadata | undefined, picture: string): string {
+        if (!meta?.link) return picture;
+        const isInternal = meta.linkType !== 'external';
+        if (this.config.ignoreInternalLinks && isInternal) return picture;
+        let link = meta.link;
+        if (isInternal && link.startsWith('#') && (this.config.generateIds || this.resolvedFallbackToHtml.anchors)) link = '#' + this.slugify(link.substring(1));
+        return `[${picture}](${sanitizeMarkdownUrl(link)}${meta.linkTitle ? markdownTitle(meta.linkTitle) : ''})`;
+    }
+
+    /**
      * Whether `_` emphasis can close where the node being rendered ends: after its own trailing
      * whitespace, or before a next sibling that starts with whitespace or punctuation (a leading `_`
      * of its text is escaped) and has no emphasis of its own, whose delimiter would join the closing
@@ -666,7 +680,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const safeAlt = markdownEscapeInline(foldLines(meta?.altText || 'image'));
                     const safeSrc = sanitizeMarkdownUrl(src, { allowDataImage: true });
                     const imgTitle = meta?.title ? markdownTitle(meta.title) : '';
-                    const imageMd = `${anchorPrefix}![${safeAlt}](${safeSrc}${imgTitle})${this.renderAttributeList(meta)}`;
+                    const imageMd = `${anchorPrefix}${this.linkedImage(meta, `![${safeAlt}](${safeSrc}${imgTitle})${this.renderAttributeList(meta)}`)}`;
 
                     // image+ocr-text: the image, then its recognized text.
                     if (mode === 'image+ocr-text' && ocr) return `${imageMd}\n\n${ocrMd}`;

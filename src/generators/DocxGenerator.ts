@@ -394,16 +394,24 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         // Notes/comments anchored on linked text still have to be emitted; place them after the link.
         let trailing = '';
         for (const n of group) trailing += await this.noteRefs(n) + await this.commentRefs(n);
+        return (this.hyperlinkAround(link, linkType, runs) ?? group.map(n => this.textRuns(n)).join('')) + trailing;
+    }
+
+    /**
+     * `runs` inside a hyperlink to `link`: a bookmark for an internal target, a relationship for an
+     * external one. Null when the link is not written: an internal one under `ignoreInternalLinks`,
+     * or a target the scheme check refuses.
+     */
+    private hyperlinkAround(link: string, linkType: string | undefined, runs: string): string | null {
         const internal = linkType === 'internal' || link.startsWith('#');
         if (internal) {
-            if (this.config.ignoreInternalLinks) return group.map(n => this.textRuns(n)).join('') + trailing;
-            const name = this.anchorName(link.replace(/^#/, ''));
-            return `<w:hyperlink w:anchor="${escapeXml(name)}">${runs}</w:hyperlink>${trailing}`;
+            if (this.config.ignoreInternalLinks) return null;
+            return `<w:hyperlink w:anchor="${escapeXml(this.anchorName(link.replace(/^#/, '')))}">${runs}</w:hyperlink>`;
         }
         const safe = sanitizeOfficePackageUrl(link);
-        if (!safe) return group.map(n => this.textRuns(n)).join('') + trailing;
+        if (!safe) return null;
         const rid = this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', escapeXml(encUrl(safe)), 'External');
-        return `<w:hyperlink r:id="${rid}">${runs}</w:hyperlink>${trailing}`;
+        return `<w:hyperlink r:id="${rid}">${runs}</w:hyperlink>`;
     }
 
     private styledRun(text: string, fmt: TextFormatting | undefined, styleId: string): string {
@@ -704,19 +712,17 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
                 + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`
                 + `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
             // A picture that is itself a link (ImageMetadata.link) wraps in a hyperlink run container,
-            // exactly as ODT wraps the frame in <draw:a>. Dropped here until now, so a linked image
-            // survived ODT round-trip but lost its link through DOCX.
-            if (meta?.link) {
-                const safeLink = sanitizeOfficePackageUrl(meta.link);
-                if (safeLink) {
-                    const rid = this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', escapeXml(encUrl(safeLink)), 'External');
-                    drawing = `<w:hyperlink r:id="${rid}">${drawing}</w:hyperlink>`;
-                }
-            }
+            // exactly as ODT wraps the frame in <draw:a>.
+            if (meta?.link) drawing = this.hyperlinkAround(meta.link, meta.linkType, drawing) ?? drawing;
         } else if (meta?.url) {
-            // Remote-only image: degrade to a link on the alt text (never fetch bytes: SSRF).
+            // Remote-only image: degrade to a link on the alt text (never fetch bytes: SSRF), to where
+            // the picture links when it is a link, and to the image otherwise.
             const safe = sanitizeOfficePackageUrl(meta.url);
-            if (safe) { const rid = this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', escapeXml(encUrl(safe)), 'External'); drawing = `<w:hyperlink r:id="${rid}">${this.styledRun(meta.altText || safe, undefined, 'Hyperlink')}</w:hyperlink>`; }
+            if (safe) {
+                const run = this.styledRun(meta.altText || safe, undefined, 'Hyperlink');
+                drawing = (meta.link ? this.hyperlinkAround(meta.link, meta.linkType, run) : null)
+                    ?? `<w:hyperlink r:id="${this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', escapeXml(encUrl(safe)), 'External')}">${run}</w:hyperlink>`;
+            }
         }
         // No renderable image (unresolvable/unsupported attachment, no url): keep the alt text or OCR
         // so the content is not silently lost.

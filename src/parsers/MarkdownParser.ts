@@ -817,9 +817,14 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 return [{ type: 'image', metadata: { url, altText, title, ...attrs } as ImageMetadata }];
             }
             const linkNodes = parseInline(altText, currentFormatting);
+            // A target in this document (`#id`) is internal, as the other parsers read it.
+            const linkType = url.startsWith('#') ? 'internal' : 'external';
             linkNodes.forEach(n => {
                 if (n.type === 'text') {
-                    n.metadata = { link: url, linkType: 'external', title } as TextMetadata;
+                    n.metadata = { link: url, linkType, title } as TextMetadata;
+                } else if (n.type === 'image') {
+                    // A linked image (a badge, `[![alt](src)](target)`) carries the link itself.
+                    n.metadata = { ...n.metadata, link: url, linkType, ...(title !== undefined && { linkTitle: title }) } as ImageMetadata;
                 }
             });
             return linkNodes;

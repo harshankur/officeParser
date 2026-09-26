@@ -2671,6 +2671,12 @@ class LatexReader {
             meta.url = path;
             delete (meta as any).attachmentName;
         }
+        // A picture inside \href is that link, as a run of text inside it is.
+        const link = this.state.link;
+        if (link && (!link.internal || !this.config.ignoreInternalLinks)) {
+            meta.link = link.url;
+            meta.linkType = link.internal ? 'internal' : 'external';
+        }
         this.addInline(flow, { type: 'image', metadata: meta });
     }
 

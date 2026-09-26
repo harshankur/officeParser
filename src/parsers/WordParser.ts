@@ -654,6 +654,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                         if (docPr) {
                             altText = docPr.getAttribute("descr") || docPr.getAttribute("title") || '';
                         }
+                        // A picture that is a link itself (Insert > Link on a picture writes it on docPr).
+                        const pictureLinkRid = docPr ? getFirstElementByTagName(docPr, "a:hlinkClick")?.getAttribute("r:id") : null;
+                        const pictureLink = pictureLinkRid && relsMap[pictureLinkRid] ? { link: relsMap[pictureLinkRid], linkType: 'external' as const } : {};
 
                         // Extract Relationship ID
                         let rId = '';
@@ -674,7 +677,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                                 const imageNode: OfficeContentNode = {
                                     type: 'image',
                                     text: '',
-                                    metadata: { attachmentName: filename, altText: altText }
+                                    metadata: { attachmentName: filename, altText: altText, ...pictureLink } as ImageMetadata
                                 };
                                 if (config.includeRawContent) {
                                     imageNode.rawContent = getRawContent(imgNode, documentContent, config);
@@ -781,11 +784,11 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                     // Capture the current length of children to apply metadata to new nodes
                     const startIndex = children.length;
                     processChildNode(child);
-                    // Apply link metadata to the newly added text nodes
+                    // Apply link metadata to the newly added text nodes, and to a picture in the link
                     if (linkMetadata) {
                         for (let i = startIndex; i < children.length; i++) {
-                            if (children[i].type === 'text') {
-                                children[i].metadata = { ...(children[i].metadata ?? {}), ...linkMetadata };
+                            if (children[i].type === 'text' || children[i].type === 'image') {
+                                children[i].metadata = { ...(children[i].metadata ?? {}), ...linkMetadata } as any;
                             }
                         }
                     }

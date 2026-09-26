@@ -480,8 +480,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     fullText += spanContent.text;
                     children.push(...spanContent.children);
                     anchorIds.push(...spanContent.anchorIds);
-                } else if (tagName === 'text:a') {
-                    // Hyperlink
+                } else if (tagName === 'text:a' || tagName === 'draw:a') {
+                    // Hyperlink: around text (text:a), or around a frame, a picture that is a link (draw:a)
                     let href = element.getAttribute('xlink:href') || '';
                     const isInternal = href.startsWith('#');
                     const linkType = isInternal ? 'internal' : 'external';
@@ -642,7 +642,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 children: [],
                                 metadata: {
                                     attachmentName: imageHref || attachmentName,
-                                    ...(altText ? { altText } : {})
+                                    ...(altText ? { altText } : {}),
+                                    ...(linkMetadata?.link ? { link: linkMetadata.link, linkType: linkMetadata.linkType } : {})
                                 }
                             };
                             if (config.includeRawContent) {
@@ -676,7 +677,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             children: [],
                             metadata: {
                                 attachmentName: imageHref,
-                                ...(altText ? { altText } : {})
+                                ...(altText ? { altText } : {}),
+                                // A picture inside a link (draw:a or text:a) is that link.
+                                ...(linkMetadata?.link ? { link: linkMetadata.link, linkType: linkMetadata.linkType } : {})
                             }
                         };
                         if (config.includeRawContent) {
@@ -1480,6 +1483,20 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         }
                     }
                 }
+            } else if (node.tagName === "draw:a") {
+                // A frame that is a link (a clickable picture on a slide or drawing): its pictures carry the link.
+                const href = node.getAttribute("xlink:href") || '';
+                const internal = href.startsWith('#');
+                const linked: OfficeContentNode[] = [];
+                for (const child of Array.from(node.childNodes)) {
+                    if (isElement(child)) traverse(child as Element, linked, forceHeading, sourceXml);
+                }
+                for (const child of linked) {
+                    if (child.type === 'image' && href && (!internal || !config.ignoreInternalLinks)) {
+                        child.metadata = { ...child.metadata, link: href, linkType: internal ? 'internal' : 'external' } as ImageMetadata;
+                    }
+                }
+                for (const child of linked) targetArray.push(child);
             } else {
                 if (node.childNodes) {
                     for (let i = 0; i < node.childNodes.length; i++) {

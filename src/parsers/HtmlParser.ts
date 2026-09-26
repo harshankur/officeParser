@@ -1277,6 +1277,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     children.forEach(c => {
                         if (c.type === 'text') {
                             c.metadata = { ...c.metadata, link: href, linkType, title: linkTitle } as TextMetadata;
+                        } else if (c.type === 'image') {
+                            // A linked image (`<a href><img></a>`) carries the link itself.
+                            c.metadata = { ...c.metadata, link: href, linkType, ...(linkTitle !== undefined && { linkTitle }) } as ImageMetadata;
                         }
                     });
                 }

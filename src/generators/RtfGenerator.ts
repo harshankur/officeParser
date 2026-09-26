@@ -261,6 +261,11 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         }
                         // Default goals (approx 3 inches wide at 1440 twips per inch)
                         pict = `{\\pict\\${type}\\picwgoal4320\\pichgoal3240\n${hex}\n}\n`;
+                        // A picture that is a link is the result of a HYPERLINK field, as linked text is.
+                        if (meta?.link && (!this.config.ignoreInternalLinks || meta.linkType === 'external')) {
+                            const safeLink = sanitizeRtfUrl(meta.link);
+                            if (safeLink) pict = `{\\field{\\*\\fldinst{HYPERLINK "${safeLink}"}}{\\fldrslt ${pict}}}`;
+                        }
                     }
                     // image+ocr-text: the image, then its recognized text.
                     return mode === 'image+ocr-text' ? pict + ocrRtf : pict;

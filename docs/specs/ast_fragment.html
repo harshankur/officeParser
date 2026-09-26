@@ -252,7 +252,10 @@
         <li><strong><code>image</code></strong>: References an item in the root <code>attachments</code> array via
             <code>metadata.attachmentName</code>. Also carries optional <code>width</code> and
             <code>align</code> (<code>'left' | 'center' | 'right'</code>), round-tripped from HTML
-            <code>data-width</code>/<code>data-align</code> or an inline <code>style="width:..."</code>.</li>
+            <code>data-width</code>/<code>data-align</code> or an inline <code>style="width:..."</code>. An image
+            that is a link (a badge, a clickable picture) carries <code>link</code>, <code>linkType</code>
+            (<code>'internal' | 'external'</code>) and an optional <code>linkTitle</code>, as a linked run
+            carries them on <code>TextMetadata</code>.</li>
         <li><strong><code>chart</code></strong>: References a chart attachment. Contains structured
             <code>chartData</code> in metadata if requested.</li>
         <li><strong><code>drawing</code></strong>: A vector drawing or shape. A member of the node-type union;

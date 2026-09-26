@@ -309,46 +309,46 @@ rop caps are used to emphasize the leading paragraph at the start of a section. 
 <a name="toc1233048813"></a>
 ## Links {#links}
 
-Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the [<u>calibre download page</u>](http://calibre-ebook.com/download). Then we have a link that points back to the section on [<u>paragraph level formatting</u>](#_Paragraph_level_formatting) in this document.
+Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the [<u>calibre download page</u>](http://calibre-ebook.com/download). Then we have a link that points back to the section on [<u>paragraph level formatting</u>](#paragraph-level-formatting) in this document.
 
 <a name="toc64145348"></a>
 ## Table of Contents {#table-of-contents}
 
 You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook.
 
-[<u>Demonstration of DOCX support in calibre1</u>](#_Toc581531977)
+[<u>Demonstration of DOCX support in calibre1</u>](#toc581531977)
 
-[<u>Text Formatting1</u>](#_Toc2054249818)
+[<u>Text Formatting1</u>](#toc2054249818)
 
-[<u>Inline formatting2</u>](#_Toc2137712100)
+[<u>Inline formatting2</u>](#toc2137712100)
 
-[<u>Fun with fonts2</u>](#_Toc1074133965)
+[<u>Fun with fonts2</u>](#toc1074133965)
 
-[<u>Paragraph level formatting2</u>](#_Toc2022725662)
+[<u>Paragraph level formatting2</u>](#toc2022725662)
 
-[<u>Tables2</u>](#_Toc28114276)
+[<u>Tables2</u>](#toc28114276)
 
-[<u>Structural Elements4</u>](#_Toc54889875)
+[<u>Structural Elements4</u>](#toc54889875)
 
-[<u>Footnotes & Endnotes5</u>](#_Toc201580556)
+[<u>Footnotes & Endnotes5</u>](#toc201580556)
 
-[<u>Dropcaps5</u>](#_Toc1977424358)
+[<u>Dropcaps5</u>](#toc1977424358)
 
-[<u>Links5</u>](#_Toc1233048813)
+[<u>Links5</u>](#toc1233048813)
 
-[<u>Table of Contents5</u>](#_Toc64145348)
+[<u>Table of Contents5</u>](#toc64145348)
 
-[<u>Images6</u>](#_Toc484565143)
+[<u>Images6</u>](#toc484565143)
 
-[<u>Lists7</u>](#_Toc1359965655)
+[<u>Lists7</u>](#toc1359965655)
 
-[<u>Bulleted List8</u>](#_Toc1958162433)
+[<u>Bulleted List8</u>](#toc1958162433)
 
-[<u>Numbered List8</u>](#_Toc415190676)
+[<u>Numbered List8</u>](#toc415190676)
 
-[<u>Multi-level Lists8</u>](#_Toc1093260318)
+[<u>Multi-level Lists8</u>](#toc1093260318)
 
-[<u>Continued Lists8</u>](#_Toc1471533984)
+[<u>Continued Lists8</u>](#toc1471533984)
 
 <a name="toc484565143"></a>
 <div style="text-align: center">

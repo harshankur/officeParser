@@ -2506,6 +2506,17 @@ export interface ImageMetadata {
     align?: 'left' | 'center' | 'right';
     /** Advisory image title (Markdown `![alt](url "title")`, HTML `<img title>`), if any. */
     title?: string;
+    /**
+     * Where the image links to, when it is a link: a badge or a clickable picture (Markdown
+     * `[![alt](src)](target)`, HTML `<a href><img></a>`, a hyperlinked picture in Word, PowerPoint,
+     * ODF, RTF or LaTeX's `\href`). An internal target is `#` and an anchor id.
+     * @example "https://example.com/build"
+     */
+    link?: string;
+    /** Whether `link` points inside the document (`'internal'`) or outside it. */
+    linkType?: 'internal' | 'external';
+    /** The link's own advisory title (Markdown `[![alt](src)](target "title")`, HTML `<a title>`), apart from the image's `title`. */
+    linkTitle?: string;
 }
 
 /**

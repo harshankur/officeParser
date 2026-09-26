@@ -1220,7 +1220,9 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                             type: 'image',
                             text: '',
                             metadata: {
-                                attachmentName: attachment.name || `image_${attachments.length}`
+                                attachmentName: attachment.name || `image_${attachments.length}`,
+                                // A picture in a HYPERLINK field's result is that link.
+                                ...(currentLinkUrl ? { link: currentLinkUrl, linkType: classifyLinkType(currentLinkUrl) } : {})
                             }
                         });
                     }

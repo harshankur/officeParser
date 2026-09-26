@@ -255,6 +255,21 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         };
     };
 
+    /**
+     * Where an `a:hlinkClick` leads, for a run or a picture on the given slide: a hyperlink
+     * relationship is external, a slide relationship or a bare action (such as the next slide) internal.
+     */
+    const hlinkClickTarget = (hlinkClick: Element | null | undefined, slideNumber: number): { link: string; linkType: 'internal' | 'external' } | undefined => {
+        if (!hlinkClick) return undefined;
+        const rId = hlinkClick.getAttribute("r:id");
+        const action = hlinkClick.getAttribute("action");
+        const rel = rId ? slideRelsMap[slideNumber]?.[rId] : undefined;
+        if (rel?.type === "hyperlink") return { link: rel.target, linkType: "external" };
+        if (rel?.type === "slide") return { link: rel.target, linkType: "internal" };
+        if (action) return { link: action, linkType: "internal" };
+        return undefined;
+    };
+
     /** Extract an AST node for p:pic */
     const extractImageNode = (imageNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode | null => {
         const blip = getFirstElementByTagName(imageNode, "a:blip");
@@ -272,6 +287,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         const cNvPr = nvPicPr ? getFirstElementByTagName(nvPicPr, "p:cNvPr") : null;
 
         const altText = cNvPr?.getAttribute("descr") || undefined;
+        // A picture that is a link (its click action is a hyperlink or a jump to a slide).
+        const link = hlinkClickTarget(cNvPr ? getFirstElementByTagName(cNvPr, "a:hlinkClick") : null, slideNumber);
 
         return {
             type: "image",
@@ -280,6 +297,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             {
                 attachmentName,
                 altText,
+                ...link,
             }
         };
     }
@@ -592,25 +610,9 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                             };
 
                             // Check for Hyperlinks
-                            const hlinkClick = getFirstElementByTagName(element, "a:hlinkClick");
-                            if (hlinkClick) {
-                                const rId = hlinkClick.getAttribute("r:id");
-                                const action = hlinkClick.getAttribute("action");
-                                let link: string | undefined;
-                                let linkType: "internal" | "external" | undefined;
-                                if (rId && slideRelsMap[slideNumber] && slideRelsMap[slideNumber][rId] && slideRelsMap[slideNumber][rId].type === "hyperlink") {
-                                    link = slideRelsMap[slideNumber][rId].target;
-                                    linkType = "external";
-                                } else if (rId && slideRelsMap[slideNumber] && slideRelsMap[slideNumber][rId] && slideRelsMap[slideNumber][rId].type === "slide") {
-                                    link = slideRelsMap[slideNumber][rId].target;
-                                    linkType = "internal";
-                                } else if (action) {
-                                    link = action;
-                                    linkType = "internal";
-                                }
-                                if (link) {
-                                    textNode.metadata = { link, linkType };
-                                }
+                            const link = hlinkClickTarget(getFirstElementByTagName(element, "a:hlinkClick"), slideNumber);
+                            if (link) {
+                                textNode.metadata = link;
                             }
 
                             activeNode.children?.push(textNode);

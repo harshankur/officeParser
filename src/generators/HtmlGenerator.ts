@@ -996,7 +996,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // alt is the descriptive alt text, not the OCR text: OCR text is surfaced visibly under
                 // 'image+ocr-text' rather than hidden in alt (where a broken/referenced image would leak
                 // it into the rendered page).
-                const img = `<img src="${sanitizeImageUrl(src)}" alt="${this.escape(meta?.altText || '')}"${imgTitle}${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
+                let img = `<img src="${sanitizeImageUrl(src)}" alt="${this.escape(meta?.altText || '')}"${imgTitle}${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
+                // A picture that is a link (a badge) is wrapped in it, as a linked run is.
+                if (meta?.link && (!this.config.ignoreInternalLinks || meta.linkType === 'external')) {
+                    const linkTitle = meta.linkTitle ? ` title="${this.escape(meta.linkTitle)}"` : '';
+                    img = `<a href="${sanitizeUrl(meta.link)}"${linkTitle}${meta.linkType === 'external' ? ' target="_blank"' : ''}>${img}</a>`;
+                }
                 let content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
                 // image+ocr-text: the image, then its recognized text (a <pre> keeps the 2-D layout).
                 if (mode === 'image+ocr-text' && ocr) content += `<pre class="ocr-text">${this.escape(ocr)}</pre>`;

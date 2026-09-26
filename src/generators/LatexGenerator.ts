@@ -344,6 +344,13 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             if (!n) return;
             all.push(n);
             const meta = n.metadata as TextMetadata | undefined;
+            // An image that is a link points at a target as a linked run does.
+            if (n.type === 'image') {
+                const image = n.metadata as ImageMetadata | undefined;
+                if (image?.link && (image.linkType === 'internal' || image.link.startsWith('#'))) {
+                    for (const candidate of this.labelCandidates(image.link)) this.linkTargets.add(candidate);
+                }
+            }
             if (n.type === 'text') {
                 if (meta?.link && (meta.linkType === 'internal' || meta.link.startsWith('#') || meta.wikilink)) {
                     for (const candidate of this.labelCandidates(meta.link)) this.linkTargets.add(candidate);
@@ -1497,15 +1504,23 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                     { feature: remote ? 'remote image' : 'image path that is absolute, leaves its folder or uses characters other than letters, digits, spaces and . _ - /', format: 'tex' });
                 const url = sanitizeLatexUrl(meta.url);
                 const text = escapeLatex(alt || meta.url, ' ');
-                img = url ? `${this.cmd('href')}{${url}}{${text}}` : text;
+                // Linked to the image, unless the picture is a link itself: then to that link, below.
+                img = url && !meta.link ? `${this.cmd('href')}{${url}}{${text}}` : text;
             }
         }
         if (!img) return alt ? escapeLatex(alt, ' ') : this.ocrMarkup(ocr, block);
 
-        const link = (meta as any)?.link;
+        // A picture that is a link, as a linked run is: `\hyperref` to an internal target's label
+        // (none under ignoreInternalLinks), `\href` to an external one.
+        const link = meta?.link;
         if (link) {
-            const url = sanitizeLatexUrl(String(link));
-            if (url) img = `${this.cmd('href')}{${url}}{${img}}`;
+            if (meta.linkType === 'internal' || link.startsWith('#')) {
+                const label = this.config.ignoreInternalLinks ? null : this.resolveLabel(link);
+                if (label) img = `${this.cmd('hyperref')}[${label}]{${img}}`;
+            } else {
+                const url = sanitizeLatexUrl(link);
+                if (url) img = `${this.cmd('href')}{${url}}{${img}}`;
+            }
         }
         if (mode === 'image+ocr-text' && ocr) return `${img}${block ? BLOCK_SEPARATOR : ' '}${this.ocrMarkup(ocr, block)}`;
         return img;

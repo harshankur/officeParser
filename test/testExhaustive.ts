@@ -12,7 +12,7 @@ import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate';
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
-import type { OfficeContentNode, OfficeParserAST } from '../src/types';
+import type { ImageMetadata, OfficeContentNode, OfficeParserAST } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
 import { imageFromPdf, imageToTextPdf, newDecodeBudget } from '../src/utils/textPdf';
@@ -213,10 +213,10 @@ async function testMarkdown(): Promise<void> {
     assert.ok((embed.metadata as any)?.width, 'MD: embed has width');
 
     // ── Text metadata: links ───────────────────────────────────────────────
-    // MD parser always gives linkType='external' for [text](url) links (even #anchor ones)
+    // A link out of the document is external, and a link to `#id` in it internal, as the other parsers read them
     assertExists(textNodes, n => (n.metadata as any)?.linkType === 'external' && (n.metadata as any)?.link?.startsWith('https://'), 'MD: external https link text node');
-    // #anchor links also get linkType=external in the MD parser
-    assertExists(textNodes, n => (n.metadata as any)?.linkType === 'external' && (n.metadata as any)?.link?.startsWith('#'), 'MD: anchor (#) link text node');
+    assertExists(textNodes, n => (n.metadata as any)?.linkType === 'internal' && (n.metadata as any)?.link?.startsWith('#'), 'MD: anchor (#) link text node');
+    assert.ok(!textNodes.some(n => (n.metadata as any)?.linkType === 'external' && (n.metadata as any)?.link?.startsWith('#')), 'MD: no anchor (#) link is external');
     // wikilinks always get linkType='internal'
     assertExists(textNodes, n => (n.metadata as any)?.linkType === 'internal' && (n.metadata as any)?.wikilink === true, 'MD: wikilink has linkType=internal');
 
@@ -3248,6 +3248,72 @@ async function testMarkdownRoundTrips(): Promise<void> {
     console.log('  Markdown round trips: All assertions passed ✓');
 }
 
+/**
+ * An image that is a link (a badge, a clickable picture) keeps its target through every format that has
+ * links: Markdown `[![alt](src)](target "title")`, HTML `<a href><img></a>`, and linked pictures in Word
+ * (a hyperlink around the picture, or a link on the picture itself), PowerPoint, ODF, RTF and LaTeX.
+ */
+async function testImageLinks(): Promise<void> {
+    const findImages = (nodes: OfficeContentNode[]): OfficeContentNode[] => nodes.flatMap(n => [...(n.type === 'image' ? [n] : []), ...findImages(n.children || [])]);
+    const links = (nodes: OfficeContentNode[]) => findImages(nodes).map(n => { const m = n.metadata as any; return [m?.link, m?.linkType, m?.linkTitle]; });
+    const md = async (src: string) => ((await (await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md' } as any)).to('md', { generateIds: false } as any)).value as string).trim();
+
+    // Markdown: the badge is an image carrying the link and its title, written back as it was, also through HTML.
+    const badge = '[![Build](https://img.example/b.svg "badge")](https://ci.example/run "CI") and [![Logo](logo.png)](#intro)';
+    const parsed = await OfficeParser.parseOffice(Buffer.from(badge), { fileType: 'md' } as any);
+    assert.deepStrictEqual(links(parsed.content), [['https://ci.example/run', 'external', 'CI'], ['#intro', 'internal', undefined]], 'Image links: a Markdown badge carries its link');
+    assert.strictEqual(await md(badge), badge, 'Image links: a Markdown badge is written back as it was');
+    const html = (await parsed.to('html', { htmlConfig: { standalone: false } } as any)).value as string;
+    assert.ok(html.includes('<a href="https://ci.example/run" title="CI" target="_blank"><img src="https://img.example/b.svg" alt="Build" title="badge"></a>'), `Image links: HTML wraps the picture in its link (${html})`);
+    const fromHtml = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any);
+    assert.deepStrictEqual(links(fromHtml.content), [['https://ci.example/run', 'external', 'CI'], ['#intro', 'internal', undefined]], 'Image links: HTML reads a linked picture back');
+    const ignored = (await parsed.to('md', { generateIds: false, ignoreInternalLinks: true } as any)).value as string;
+    assert.ok(ignored.includes('![Logo](logo.png)') && !ignored.includes('](#intro)'), `Image links: ignoreInternalLinks drops an internal image link (${ignored})`);
+
+    // The office formats write a linked picture and read it back, external and internal targets alike.
+    const png = fs.readFileSync(path.join(__dirname, '..', 'docs', 'favicon.png'));
+    const office: OfficeParserAST = { type: 'md', metadata: {}, attachments: [{ type: 'image', name: 'p.png', mimeType: 'image/png', extension: 'png', data: png.toString('base64') }], content: [
+        { type: 'paragraph', children: [{ type: 'text', text: 'See ' }, { type: 'image', metadata: { attachmentName: 'p.png', altText: 'pic', link: 'https://example.com/x?a=1&b=2', linkType: 'external' } as ImageMetadata }] },
+        { type: 'heading', metadata: { level: 1, anchorIds: ['target'] } as any, children: [{ type: 'text', text: 'Target' }] },
+        { type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: 'p.png', altText: 'internal', link: '#target', linkType: 'internal' } as ImageMetadata }] },
+    ] } as any;
+    for (const format of ['docx', 'odt', 'rtf', 'tex'] as const) {
+        const out = (await OfficeGenerator.generate(office, format, {} as any)).value;
+        const back = await OfficeParser.parseOffice(Buffer.from(out as any), { fileType: format, extractAttachments: true, onWarning: () => { } } as any);
+        assert.deepStrictEqual(links(back.content).map(l => l.slice(0, 2)), [['https://example.com/x?a=1&b=2', 'external'], ['#target', 'internal']], `Image links: ${format} writes and reads back a linked picture`);
+    }
+
+    // Links a generator does not write, from other producers: a Word picture's own link (on docPr), a
+    // PowerPoint picture's click link, and an ODF frame inside draw:a (which used to lose the picture too).
+    const docx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="png" ContentType="image/png"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        'word/document.xml': strToU8('<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:body><w:p><w:r><w:drawing><wp:inline><wp:docPr id="1" name="p" descr="pic"><a:hlinkClick r:id="rId2"/></wp:docPr><a:graphic><a:graphicData><a:blip r:embed="rId1"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>'),
+        'word/_rels/document.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/p.png"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/docx" TargetMode="External"/></Relationships>'),
+        'word/media/p.png': new Uint8Array(png),
+    }));
+    const pptx = Buffer.from(zipSync({
+        'ppt/presentation.xml': strToU8('<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>'),
+        'ppt/slides/slide1.xml': strToU8('<?xml version="1.0"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="2" name="p" descr="pic"><a:hlinkClick r:id="rId2"/></p:cNvPr><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId1"/></p:blipFill></p:pic></p:spTree></p:cSld></p:sld>'),
+        'ppt/slides/_rels/slide1.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/p.png"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/pptx" TargetMode="External"/></Relationships>'),
+        'ppt/media/p.png': new Uint8Array(png),
+    }));
+    const odp = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.presentation'),
+        'content.xml': strToU8('<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"><office:body><office:presentation><draw:page draw:name="p1"><draw:a xlink:type="simple" xlink:href="https://example.com/odp"><draw:frame><draw:image xlink:href="Pictures/p.png"/><svg:title>pic</svg:title></draw:frame></draw:a></draw:page></office:presentation></office:body></office:document-content>'),
+        'Pictures/p.png': new Uint8Array(png),
+    }));
+    const odt = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.text'),
+        'content.xml': strToU8('<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:body><office:text><text:p>See <draw:a xlink:type="simple" xlink:href="https://example.com/odt"><draw:frame text:anchor-type="as-char"><draw:image xlink:href="Pictures/p.png"/></draw:frame></draw:a></text:p></office:text></office:body></office:document-content>'),
+        'Pictures/p.png': new Uint8Array(png),
+    }));
+    for (const [format, bytes, target] of [['docx', docx, 'https://example.com/docx'], ['pptx', pptx, 'https://example.com/pptx'], ['odp', odp, 'https://example.com/odp'], ['odt', odt, 'https://example.com/odt']] as const) {
+        const ast = await OfficeParser.parseOffice(bytes, { fileType: format, extractAttachments: true, onWarning: () => { } } as any);
+        assert.deepStrictEqual(links(ast.content).map(l => l.slice(0, 2)), [[target, 'external']], `Image links: a linked picture in ${format} carries its link`);
+    }
+    console.log('  Image links: All assertions passed ✓');
+}
+
 async function runTests(): Promise<void> {
     console.log('Starting exhaustive officeParser test suite...');
     let passed = 0;
@@ -3256,6 +3322,7 @@ async function runTests(): Promise<void> {
     const tests: Array<[string, () => Promise<void>]> = [
         ['Markdown', testMarkdown],
         ['Markdown round trips', testMarkdownRoundTrips],
+        ['Image links', testImageLinks],
         ['HTML', testHtml],
         ['SourceComments', testSourceComments],
         ['CSV', testCsv],

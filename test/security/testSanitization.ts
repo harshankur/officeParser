@@ -450,6 +450,22 @@ async function markdownTests() {
     check('md: legitimate LaTeX comparison survives', latex.includes('$a < b$'),
         `real math was corrupted: ${JSON.stringify(latex.slice(0, 160))}`);
 
+    // An image that is a link takes the same URL policy as a linked run in every format, and its link
+    // title cannot leave its attribute or quotes.
+    {
+        const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+        const linked = { ...astWith([{ type: 'paragraph', children: [
+            { type: 'image', metadata: { attachmentName: 'p.png', altText: 'a', link: 'javascript:alert(1)', linkType: 'external', linkTitle: `" onmouseover="alert(1)` } },
+            { type: 'image', metadata: { url: 'https://example.com/i.png', altText: 'b', link: 'javascript:alert(2)', linkType: 'external' } },
+        ] } as any]), attachments: [{ type: 'image', name: 'p.png', mimeType: 'image/png', extension: 'png', data: png }] } as any;
+        for (const format of ['html', 'md', 'docx', 'odt', 'rtf', 'tex'] as const) {
+            const out = (await OfficeGenerator.generate(linked, format, { onWarning: () => { } } as any)).value;
+            const text = typeof out === 'string' ? out : Object.values(unzipSync(out as Uint8Array)).map(b => strFromU8(b)).join('\n');
+            check(`image link: a javascript: target is refused (${format})`, !/javascript:/i.test(text), text.slice(0, 300));
+            if (format === 'html') check('image link: its title stays in its attribute (html)', !/"\s*onmouseover=/.test(text), text.slice(0, 300));
+        }
+    }
+
     // An embed's label is link text or a directive label, from whatever source: escaped in every
     // embed form, so it cannot write a tag.
     for (const [embeds, embed] of [

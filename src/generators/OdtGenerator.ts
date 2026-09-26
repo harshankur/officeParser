@@ -414,15 +414,20 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const spans = group.map(n => this.span(n.text || '', n.formatting)).join('');
         let trailing = '';
         for (const n of group) trailing += (await this.notesFor(n)) + (await this.commentsFor(n));
+        const href = this.linkHref(link, linkType);
+        return (href ? `<text:a xlink:type="simple" xlink:href="${href}">${spans}</text:a>` : spans) + trailing;
+    }
+
+    /**
+     * The escaped `xlink:href` a link is written with: `#` and the bookmark name for an internal
+     * target, the encoded URL for an external one. Empty when the link is not written: an internal
+     * one under `ignoreInternalLinks`, or a target the scheme check refuses.
+     */
+    private linkHref(link: string, linkType: string | undefined): string {
         const internal = linkType === 'internal' || link.startsWith('#');
-        if (internal) {
-            if (this.config.ignoreInternalLinks) return spans + trailing;
-            const name = this.anchorName(link.replace(/^#/, ''));
-            return `<text:a xlink:type="simple" xlink:href="#${xmlText(name)}">${spans}</text:a>${trailing}`;
-        }
+        if (internal) return this.config.ignoreInternalLinks ? '' : `#${xmlText(this.anchorName(link.replace(/^#/, '')))}`;
         const safe = sanitizeOfficePackageUrl(link);
-        if (!safe) return spans + trailing;
-        return `<text:a xlink:type="simple" xlink:href="${xmlText(encUrl(safe))}">${spans}</text:a>${trailing}`;
+        return safe ? xmlText(encUrl(safe)) : '';
     }
 
     private inlineCode(node: OfficeContentNode): string {
@@ -709,10 +714,15 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             const title = meta?.altText ? `<svg:title>${xmlText(meta.altText)}</svg:title>` : '';
             frame = `<draw:frame draw:name="${frameName}" text:anchor-type="as-char" svg:width="${fmtPt(w)}" svg:height="${fmtPt(h)}" draw:z-index="0">`
                 + `<draw:image xlink:href="${media.href}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/>${title}</draw:frame>`;
-            if (meta?.link) { const safe = sanitizeOfficePackageUrl(meta.link); if (safe) frame = `<draw:a xlink:type="simple" xlink:href="${xmlText(encUrl(safe))}">${frame}</draw:a>`; }
+            // A picture that is a link is a frame inside <draw:a>.
+            const href = meta?.link ? this.linkHref(meta.link, meta.linkType) : '';
+            if (href) frame = `<draw:a xlink:type="simple" xlink:href="${href}">${frame}</draw:a>`;
         } else if (meta?.url) {
+            // Remote-only image: a link on the alt text, to where the picture links when it is a link,
+            // and to the image otherwise.
             const safe = sanitizeOfficePackageUrl(meta.url);
-            if (safe) frame = `<text:a xlink:type="simple" xlink:href="${xmlText(encUrl(safe))}">${this.span(meta.altText || safe, undefined)}</text:a>`;
+            const href = (meta.link ? this.linkHref(meta.link, meta.linkType) : '') || (safe ? xmlText(encUrl(safe)) : '');
+            if (safe) frame = `<text:a xlink:type="simple" xlink:href="${href}">${this.span(meta.altText || safe, undefined)}</text:a>`;
         }
         if (!frame) { const fb = meta?.altText || ocr; return fb ? this.span(fb, undefined) : ''; }
         if (mode === 'image+ocr-text' && ocr) return frame + this.span('\n' + ocr, undefined);
