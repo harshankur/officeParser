@@ -189,7 +189,7 @@ export class OfficeParser {
                 buffer = file;
             } else if (typeof file === 'string') {
                 filePath = file;
-                assertNode('path-parsing');
+                assertNode('path-parsing', internalConfig);
 
                 // Safe to use dynamic import here as we've asserted we are in Node.
                 // Modern bundlers will still see this, but our browser builds 

@@ -267,7 +267,7 @@ function clusterToLine(clusterRuns: RawRun[], cfg: PdfLayoutConfig): PdfLine {
     const keptFragments = fragments.filter(f => f.text.length > 0);
 
     const bounds = unionAll((keptFragments.length ? keptFragments : fragments).map(f => f.bounds))!;
-    const visible = keptFragments.map(f => f.text).join('').replace(/\s+$/, '');
+    const visible = keptFragments.map(f => f.text).join('').trimEnd();
     const endsWithHyphen = /[-­]$/.test(visible);
 
     return {

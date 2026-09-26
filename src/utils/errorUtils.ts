@@ -11,6 +11,9 @@ import { OfficeError, OfficeErrorType, OfficeIssue, OfficeParserConfig, OfficeWa
 /** Error header prefix for all error messages */
 const ERRORHEADER = "[OfficeParser]: ";
 
+/** Where an issue is reported: a parser's or a generator's config (their `onWarning`). */
+type IssueHandler = { onWarning?: (issue: OfficeIssue) => void };
+
 // `OfficeError` (the public shape callers catch) lives in types.ts alongside `OfficeIssue`.
 // Every error built by getOfficeError is branded with its issue, which serves two purposes:
 // consumers branch on `err.officeIssue.code` instead of matching message text, and
@@ -158,7 +161,7 @@ const createOfficeError = (type: OfficeErrorType, info?: any): string => {
  */
 const reportIssue = (
     issue: OfficeIssue,
-    config?: OfficeParserConfig
+    config?: IssueHandler
 ): void => {
     if (config?.onWarning) {
         config.onWarning(issue);
@@ -177,21 +180,29 @@ const reportIssue = (
  * Creates, optionally logs to console, and returns a formatted OfficeParser error.
  * 
  * @param type - The type of error
- * @param config - Optional parser configuration (its `onWarning` handler receives the issue)
+ * @param config - Optional parser or generator configuration (its `onWarning` handler receives the issue)
  * @param info - Optional additional information
  * @returns The Error object to be thrown
  */
-export const getOfficeError = (type: OfficeErrorType, config?: OfficeParserConfig, info?: any): OfficeError => {
-    const message = createOfficeError(type, info);
+export const getOfficeError = (type: OfficeErrorType, config?: IssueHandler, info?: any): OfficeError => {
+    const error = buildOfficeError(type, info);
+    reportIssue(error.officeIssue!, config);
+    return error;
+};
+
+/**
+ * An OfficeParser error, built without reporting it anywhere: for an error that each of its consumers
+ * reports with its own config. (The OCR pool rejects every waiting job with one error when it is
+ * terminated, and each parse reports its job's as OCR_FAILED.)
+ */
+export const buildOfficeError = (type: OfficeErrorType, info?: any): OfficeError => {
     const issue: OfficeIssue = {
         type: 'error',
         code: type,
-        message,
+        message: createOfficeError(type, info),
         details: info
     };
-
-    reportIssue(issue, config);
-    const error: OfficeError = new Error(ERRORHEADER + message);
+    const error: OfficeError = new Error(ERRORHEADER + issue.message);
     // Brand the error with the issue that produced it so getWrappedError can tell an
     // already-reported, already-prefixed OfficeParser error from a raw third-party one.
     error.officeIssue = issue;

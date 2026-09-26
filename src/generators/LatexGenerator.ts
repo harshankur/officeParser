@@ -1,4 +1,5 @@
 import { zipSync, Zippable } from 'fflate';
+import { trimEndChars } from '../utils/textUtils.js';
 import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { ADMONITION_COLOR, decodeBase64, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
@@ -1566,7 +1567,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      * is typewriter text with every character escaped.
      */
     private codeText(text: string, language: string | undefined, prefix: string): string {
-        const lines = String(text ?? '').replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n').map(expandTabs);
+        const lines = trimEndChars(String(text ?? '').replace(/\r\n?/g, '\n'), '\n').split('\n').map(expandTabs);
         const code = lines.join('\n');
         if (!this.ctx.verbatim) return prefix + this.inlineCodeLines(code);
         const listingsLang = language ? LISTINGS_LANGUAGES[language.trim().toLowerCase()] : undefined;

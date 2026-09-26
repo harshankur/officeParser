@@ -930,7 +930,7 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     if (isBrowser) {
         pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
     } else {
-        assertNode('pdf-worker-auto-resolution');
+        assertNode('pdf-worker-auto-resolution', config);
         let resolved = false;
         if (workerSrc !== DEFAULT_OFFICE_PARSER_CONFIG.pdfWorkerSrc && workerSrc !== '') {
             pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;

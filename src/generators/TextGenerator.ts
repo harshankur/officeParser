@@ -2,8 +2,7 @@ import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNode
 import { BaseGenerator } from './BaseGenerator.js';
 import { clampRepeat, median } from '../utils/numberUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
-
-const escapeRegExpChars = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+import { trimRepeated } from '../utils/textUtils.js';
 
 /**
  * Separator between table/sheet cells on the paths that don't render an aligned grid (a `table`
@@ -202,11 +201,10 @@ export class TextGenerator extends BaseGenerator<'text'> {
         // thing safe to strip. Nothing else is: not leading/trailing spaces or tabs (e.g. an
         // intentionally-indented opening line, or trailing spaces on the last line - both real
         // content), and not any whitespace that isn't composed of this exact repeated delimiter. A
-        // blanket trim()/trimEnd() would silently destroy all of those.
-        const d = escapeRegExpChars(newline);
-        const leadingOrTrailingArtifact = new RegExp(`^(?:${d})+|(?:${d})+$`, 'g');
+        // blanket trim()/trimEnd() would silently destroy all of those. (Scanned from each end: a
+        // pattern anchored to the end retries every newline of a long run inside the text.)
         return {
-            value: output.replace(leadingOrTrailingArtifact, ''),
+            value: trimRepeated(output, newline),
             messages: this.messages
         };
     }
@@ -357,7 +355,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 line += a.text;
                 prevRight = a.x + a.w;
             }
-            return line.replace(/\s+$/, '');
+            return line.trimEnd();
         });
 
         const centers = rows.map(r => r[0].y + r[0].h / 2);

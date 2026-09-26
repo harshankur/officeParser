@@ -23,6 +23,7 @@ import {
 import { extractFiles } from '../../src/utils/zipUtils';
 import { parseXmlString } from '../../src/utils/xmlUtils';
 import { getOfficeError, getWrappedError } from '../../src/utils/errorUtils';
+import { terminateOcr } from '../../src/utils/ocrUtils';
 import { OfficeErrorType } from '../../src/types';
 
 let passed = 0;
@@ -516,10 +517,69 @@ async function markdownTests() {
         await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'md' } as any);
         check(`md: 200 KB of ${label} parses in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
     }
+    // A long run of one character inside a construct (a line of spaces in a link target, a table, an
+    // aligned div, a definition, a heading) is scanned once. Patterns anchored to the end of a line or
+    // holding runs that can match the same characters used to retry every position of such a run:
+    // quadratic, and for a table's delimiter row cubic (5,000 spaces took 81 seconds).
+    const run = ' '.repeat(200_000);
+    for (const [label, text] of [
+        ['a paragraph line', `a${run}x\nb`], ['a link target', `[a](u${run}x)`], ['a link title', `[a](u "${run}x)`],
+        ['a table and a line of spaces', `a|b\n${run}x`], ['a table attribute line', `| a |\n| - |\n{${run}x`],
+        ['an aligned div', `<div align="center">a${run}x</div>`], ['an iframe line', `<iframe${run}x`], ['a definition', `T\n: a${run}x`],
+        ['a heading', `# a${run}x {#i}`], ['a line of backslashes in a table row', `| a |\n| - |\n| ${'\\'.repeat(200_000)}x`],
+    ] as const) {
+        const started = Date.now();
+        await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'md' } as any);
+        check(`md: 200 KB run in ${label} parses in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+    }
+    // The same for the generators: text holding a long run, in a paragraph, emphasis, a list item, a
+    // cell and a code block, written as Markdown, text and LaTeX.
+    for (const [label, content] of [
+        ['a paragraph', [{ type: 'paragraph', children: [{ type: 'text', text: `a${run}x ` }] }]],
+        ['bold text', [{ type: 'paragraph', children: [{ type: 'text', text: `a${run}x`, formatting: { bold: true } }] }]],
+        ['a list item', [{ type: 'list', metadata: { listType: 'unordered', listId: 'l', indentation: 0, itemIndex: 0 }, children: [{ type: 'text', text: `a${run}x\n${'\\'.repeat(1000)}` }] }]],
+        ['a table cell', [{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'text', text: `a${run}x` }] }] }] }]],
+        ['a code block of blank lines', [{ type: 'code', text: `a${'\n'.repeat(200_000)}x` }, { type: 'paragraph', children: [{ type: 'text', text: 'n', notes: [{ type: 'note', metadata: { noteType: 'footnote', noteId: '1' }, children: [{ type: 'text', text: 'f' }] }] }] }]],
+    ] as const) {
+        for (const format of ['md', 'text', 'tex'] as const) {
+            const started = Date.now();
+            await OfficeGenerator.generate(astWith(content as any), format, { onWarning: () => { } } as any);
+            check(`${format}: 200 KB run in ${label} is written in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+        }
+    }
     // A line of hundreds of thousands of inline nodes is appended, not spread into one call.
     let manyNodes = '';
     await OfficeParser.parseOffice(Buffer.from('*a'.repeat(500_000)), { fileType: 'md' } as any).catch((e: any) => { manyNodes = e.message; });
     check('md: a line of 500,000 emphasis runs parses', !manyNodes, manyNodes);
+    // Lines that each open something no later line closes (a reference, footnote or abbreviation
+    // label, an anchor or a component tag) are each scanned a bounded distance. A label or tag pattern
+    // that can run across lines scanned from every such line to the end of the document.
+    for (const line of ['[a', '[^a', '*[a', '<a a', '<Aa<A', '<a'] as const) {
+        const started = Date.now();
+        await OfficeParser.parseOffice(Buffer.from(`${line}\n`.repeat(40_000)), { fileType: 'md' } as any);
+        check(`md: 40,000 lines of ${JSON.stringify(line)} parse in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+    }
+    // A table cell's alignment wrappers are found once each, not searched for a closing tag from each.
+    const alignDivs = `| a |\n| - |\n| ${'<div style="text-align: left">x'.repeat(80_000)} |`;
+    const alignStarted = Date.now();
+    await OfficeParser.parseOffice(Buffer.from(alignDivs), { fileType: 'md' } as any);
+    check('md: a cell of 80,000 unclosed alignment wrappers parses in linear time', Date.now() - alignStarted < 5000, `${Date.now() - alignStarted}ms`);
+    // Writing many blocks, or a paragraph of many runs, never reads back all it has written: reading
+    // the end of a string grown by appending makes V8 copy the whole of it, which made the Markdown
+    // writer quadratic in the number of blocks (48,000 paragraphs took 3 seconds).
+    const many = 100_000;
+    for (const [label, content] of [
+        ['paragraphs', Array.from({ length: many }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `p${i}` }] }))],
+        ['list items', Array.from({ length: many }, (_, i) => ({ type: 'list', metadata: { listType: 'unordered', listId: 'l', indentation: 0, itemIndex: i }, children: [{ type: 'text', text: `i${i}` }] }))],
+        ['runs in one paragraph', [{ type: 'paragraph', children: Array.from({ length: many }, (_, i) => ({ type: 'text', text: `r${i} `, formatting: i % 2 ? { bold: true } : { italic: true } })) }]],
+        ['paragraphs on one page', [{ type: 'page', children: Array.from({ length: many }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `q${i}` }] })) }]],
+    ] as const) {
+        for (const format of ['md', 'text', 'html', 'tex'] as const) {
+            const started = Date.now();
+            await OfficeGenerator.generate(astWith(content as any), format, { onWarning: () => { } } as any);
+            check(`${format}: 100,000 ${label} are written in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+        }
+    }
 }
 
 async function csvTests() {
@@ -1809,6 +1869,39 @@ function errorReportingTests() {
         `got ${JSON.stringify(rawReported.map(i => i.code))}`);
 }
 
+/**
+ * An error reaches the caller's onWarning, and nothing is printed, wherever it is raised: a parser's
+ * depth limit, a generator asked for an unknown format, an invalid style map. The OCR pool's
+ * termination is reported by each parse whose image it interrupted, not printed on its own.
+ */
+async function errorRoutingTests() {
+    console.log('- Error routing (onWarning, never the console)...');
+    const printed: string[] = [];
+    const { error: consoleError, warn: consoleWarn } = console;
+    console.error = (...args: unknown[]) => { printed.push(String(args[0])); };
+    console.warn = (...args: unknown[]) => { printed.push(String(args[0])); };
+    try {
+        const cases: [string, string, (onWarning: (i: any) => void) => Promise<unknown>][] = [
+            ['html: markup nested past the limit', 'MAX_NESTING_DEPTH_EXCEEDED', onWarning => OfficeParser.parseOffice(Buffer.from('<b>'.repeat(300)), { fileType: 'html', onWarning } as any)],
+            ['rtf: groups nested past the limit (no stack overflow)', 'MAX_NESTING_DEPTH_EXCEEDED', onWarning => OfficeParser.parseOffice(Buffer.from(`{\\rtf1 ${'{\\b a'.repeat(5000)}${'}'.repeat(5000)}}`), { fileType: 'rtf', onWarning } as any)],
+            ['generate: an unknown format', 'FORMAT_UNSUPPORTED', onWarning => OfficeGenerator.generate(astWith([]), 'nope' as any, { onWarning } as any)],
+            ['generate: an invalid style map', 'INVALID_SELECTOR', onWarning => OfficeGenerator.generate(astWith([]), 'md', { onWarning, styleMap: ['p[style-name= => '] } as any)],
+        ];
+        for (const [label, code, run] of cases) {
+            const codes: string[] = [];
+            const thrown = await run(issue => codes.push(issue.code)).then(() => 'none', (e: any) => e?.officeIssue?.code ?? e?.message);
+            check(`error routing: ${label} throws ${code} and reports it to onWarning`, thrown === code && codes.includes(code), `threw ${thrown}, reported ${codes.join(', ')}`);
+        }
+        const rtfDepth = await OfficeParser.parseOffice(Buffer.from(`{\\rtf1 ${'{\\b a'.repeat(200)}${'}'.repeat(200)}}`), { fileType: 'rtf' } as any).then(ast => ast.content.length, (e: any) => e.message);
+        check('rtf: 200 nested groups still parse', rtfDepth === 1, String(rtfDepth));
+        await terminateOcr();
+    } finally {
+        console.error = consoleError;
+        console.warn = consoleWarn;
+    }
+    check('error routing: nothing was printed', printed.length === 0, printed.join(' | '));
+}
+
 async function mdInlineFormattingTests() {
     console.log('- MarkdownGenerator inline formatting (opt-in <span style>)...');
     const cfg = { mdConfig: { fallbackToHtml: { inlineFormatting: true } } };
@@ -2204,6 +2297,7 @@ async function main() {
     await odfTypeResolutionTests();
     await configOwnershipTests();
     errorReportingTests();
+    await errorRoutingTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

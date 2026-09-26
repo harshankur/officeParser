@@ -1797,12 +1797,12 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
     results.push(mk('text', '.to(text) emits the block text verbatim', JSON.stringify(leadingWhitespaceText), JSON.stringify(newText), newText === leadingWhitespaceText, 'a single-paragraph document should render to exactly its text with no added or stripped characters'));
     results.push(mk('text', '.to(text) preserves leading whitespace', 'starts with "   "', newText.startsWith('   '), newText.startsWith('   '), 'a full trim() would silently strip this as if it were a generation artifact'));
 
-    // --- .to('md') must not strip genuine leading whitespace either (defense in depth - see the
-    // comment at MarkdownGenerator.ts's return statement for why this is currently also masked by
-    // frontmatter in the default case; render without metadata truthiness assumptions by directly
-    // checking the body content survives the trailing '\n\n' + hoistedContent join unharmed) ---
+    // --- .to('md') writes the paragraph's text byte-for-byte, without the spaces before it: a Markdown
+    // reader drops a paragraph's leading spaces (and four or more would make it a code block), so
+    // writing them only made the next save differ. Plain text, above, keeps them. ---
     const { value: mdValue } = await ast.to('md', { renderMetadata: false } as any);
-    results.push(mk('md', '.to(md) preserves leading whitespace in body text', 'contains the untrimmed opening text', typeof mdValue === 'string' && mdValue.includes(leadingWhitespaceText), typeof mdValue === 'string' && mdValue.includes(leadingWhitespaceText), 'the paragraph text node itself must survive byte-for-byte, whether or not frontmatter happens to precede it'));
+    const mdText = leadingWhitespaceText.replace(/^ +/, '');
+    results.push(mk('md', '.to(md) writes the paragraph text without its leading spaces', JSON.stringify(mdText), JSON.stringify(mdValue), mdValue === mdText, 'the text itself survives byte-for-byte; the spaces before it are not written, as a Markdown reader drops them'));
 
     // --- Trailing-newline cleanup must still work (the actual original purpose of the trim) ---
     const noTrailingJunkContent: OfficeContentNode[] = [

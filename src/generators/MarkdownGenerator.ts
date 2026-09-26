@@ -1,10 +1,11 @@
-import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextMetadata, WikilinkSyntax } from '../types.js';
+import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
 import { escapeHtml, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
 import { clampRepeat } from '../utils/numberUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
+import { TextBuilder, trimAsciiWhitespace, trimEndChars, trimStartChars } from '../utils/textUtils.js';
 
 /**
  * A fully-resolved dialect: every capability collapsed to its canonical syntax variant (or `'none'`).
@@ -60,9 +61,22 @@ const markdownTitle = (title: unknown): string => ` "${markdownEscapePlain(foldL
 /**
  * Blocks whose Markdown starts with a separator newline, so they stand apart even when they follow
  * inline content. After output that already ends in a blank line, that newline would make a second
- * blank line; {@link joinBlock} drops it.
+ * blank line; {@link appendBlock} drops it.
  */
 const SEPARATED_BLOCK_TYPES = new Set(['code', 'table', 'sheet', 'slide', 'page', 'embed']);
+
+/** Nodes that are blocks of their own in Markdown (the parts of a definition list are laid out by it). */
+const BLOCK_NODE_TYPES = new Set(['paragraph', 'heading', 'list', 'table', 'sheet', 'slide', 'page', 'admonition', 'definitionList', 'embed', 'header', 'footer', 'chart', 'drawing', 'slideMaster']);
+
+/** A footnote or endnote standing among blocks rather than attached to text: a definition no text refers to. */
+const isStandingNote = (node: OfficeContentNode): boolean => {
+    const noteType = node.type === 'note' ? (node.metadata as NoteMetadata | undefined)?.noteType : undefined;
+    return noteType === 'footnote' || noteType === 'endnote';
+};
+
+/** Whether `node` is a block (a code node is one unless it is inline math). */
+const isBlockNode = (node: OfficeContentNode): boolean =>
+    BLOCK_NODE_TYPES.has(node.type) || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math !== 'inline');
 
 /**
  * Collapses each run of blank lines (whitespace-only lines count) to one empty line, outside fenced
@@ -105,12 +119,37 @@ function collapseBlankLines(markdown: string): string {
  * hard break in either form (trailing spaces, or a backslash that is not itself escaped) becomes
  * `br` like any other line end.
  */
-const joinLines = (markdown: string, br: string): string =>
-    markdown.replace(/(?<!\\)((?:\\\\)*)\\\n/g, (_break, escapes: string) => escapes + br).replace(/[ \t]*\n+/g, br);
+const joinLines = (markdown: string, br: string): string => {
+    let out = '';
+    let i = 0;
+    for (;;) {
+        const newline = markdown.indexOf('\n', i);
+        if (newline === -1) return out + markdown.slice(i);
+        const line = markdown.slice(i, newline);
+        let slashes = 0;
+        while (slashes < line.length && line[line.length - 1 - slashes] === '\\') slashes++;
+        i = newline + 1;
+        if (slashes % 2 === 1) {
+            // A hard break written as a backslash: it and its line end are one `br`.
+            out += line.slice(0, -1) + br;
+        } else {
+            // A line end, with the spaces before it and any blank lines after it, is one `br`.
+            out += trimEndChars(line, ' \t') + br;
+            while (markdown[i] === '\n') i++;
+        }
+    }
+};
+
+/**
+ * A block's content without the spaces and tabs at its start and end. Markdown readers drop them
+ * (CommonMark strips a paragraph's leading and trailing whitespace), so writing them only made the
+ * next save differ from this one.
+ */
+const trimBlockEdges = (markdown: string): string => trimEndChars(trimStartChars(markdown, ' \t'), ' \t');
 
 /** Appends a node's Markdown, leaving exactly one blank line before a separated block. */
-const joinBlock = (output: string, node: { type: string }, next: string): string =>
-    SEPARATED_BLOCK_TYPES.has(node.type) && output.endsWith('\n\n') ? output + next.replace(/^\n+/, '') : output + next;
+const appendBlock = (output: TextBuilder, node: { type: string }, next: string): void =>
+    output.append(SEPARATED_BLOCK_TYPES.has(node.type) && output.endsWith('\n\n') ? trimStartChars(next, '\n') : next);
 
 /**
  * Named Markdown dialect presets. `extended` reproduces this library's historical output
@@ -419,14 +458,14 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             const mapping = this.getSemanticMapping(node);
             if (mapping) {
                 // Map common HTML tags to Markdown equivalents
-                if (mapping.tag === 'blockquote') return `> ${childrenOutput}\n\n`;
+                if (mapping.tag === 'blockquote') return `> ${trimBlockEdges(childrenOutput)}\n\n`;
                 if (mapping.tag === 'code') return `\`${childrenOutput}\` `;
                 if (mapping.tag === 'pre') return `\`\`\`\n${childrenOutput}\n\`\`\`\n\n`;
 
                 const hMatch = mapping.tag.match(/^h([1-6])$/);
                 if (hMatch) {
                     const level = parseInt(hMatch[1]);
-                    return `${'#'.repeat(level)} ${childrenOutput}\n\n`;
+                    return `${'#'.repeat(level)} ${trimBlockEdges(childrenOutput)}\n\n`;
                 }
             }
 
@@ -436,7 +475,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // backslash (a block marker too, where it starts a line), and a tag-opening `<`
                     // is entity-encoded, so document text can't inject a raw HTML tag (e.g.
                     // <script>) when the Markdown is rendered to HTML.
-                    let text = markdownEscapeInline(node.text || '', this.atLineStart);
+                    // Where a paragraph line starts, its leading spaces are dropped, as a reader drops
+                    // them (four would make it a code block).
+                    let text = markdownEscapeInline(this.atLineStart ? (node.text || '').replace(/^[ \t]+/, '') : node.text || '', this.atLineStart);
                     if (this.config.includeFormatting && node.formatting) {
                         // Inline code: re-wrap the RAW text in backticks. The content is literal
                         // inside a code span, so the entity-escaped form above must not show through.
@@ -457,7 +498,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         // stays outside: a delimiter next to a space cannot open or close emphasis
                         // (CommonMark's flanking rule), so `**Note: **` would not be bold at all.
                         // Whitespace alone takes no delimiters.
-                        const [, lead, core, trail] = node.formatting.font === 'monospace' ? ['', '', text, ''] : /^(\s*)([\s\S]*?)(\s*)$/.exec(text)!;
+                        const core = node.formatting.font === 'monospace' ? text : text.trim();
+                        const lead = core === text ? '' : text.slice(0, text.length - text.trimStart().length);
+                        const trail = core === text || !core ? '' : text.slice(text.trimEnd().length);
                         text = core;
                         // `_` emphasis must start and end at a word boundary, and must not touch
                         // another underscore run (the two would read as one run): intraword emphasis,
@@ -579,7 +622,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const anchors = this.resolvedFallbackToHtml.anchors
                         ? remainingAnchors.map(aid => `<a name="${this.slugify(aid)}"></a>`).join('')
                         : '';
-                    let content = `${prefix}${childrenOutput}${id}`;
+                    let content = `${prefix}${trimBlockEdges(childrenOutput)}${id}`;
 
                     // Alignment fallback via HTML div/p
                     if (this.resolvedFallbackToHtml.alignment && meta?.alignment && meta.alignment !== 'left') {
@@ -593,14 +636,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 case 'paragraph': {
                     const meta = node.metadata as any;
                     const anchors = this.renderAnchors(meta);
-                    let content = childrenOutput;
+                    let content = trimBlockEdges(childrenOutput);
+                    if (!content) return '';
 
                     // Alignment fallback via HTML div/p
                     if (this.resolvedFallbackToHtml.alignment && meta?.alignment && meta.alignment !== 'left') {
                         content = `<div style="text-align: ${sanitizeCssValue(meta.alignment)}">${content}</div>`;
                     }
 
-                    return childrenOutput ? `${anchors}${content}\n\n` : '';
+                    return `${anchors}${content}\n\n`;
                 }
 
                 case 'list': {
@@ -623,7 +667,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // fallback is on, a space when off. Block children (code fences, tables) inside
                     // an item degrade under this join, exactly as they do inside a cell.
                     const br = this.resolvedFallbackToHtml.itemLineBreaks ? '<br>' : ' ';
-                    const content = joinLines(childrenOutput.trim(), br);
+                    // Only the whitespace a reader strips: a no-break space starting the item is text.
+                    const content = joinLines(trimAsciiWhitespace(childrenOutput), br);
                     return `${indent}${marker}${anchors}${content}\n`;
                 }
 
@@ -632,7 +677,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (mode === 'none') return '';
                     const meta = node.metadata as ImageMetadata;
                     const anchors = this.renderAnchors(meta);
-                    const anchorPrefix = anchors ? `${anchors}\n` : '';
+                    // On the image's line, as a paragraph's are: a line break after them is a line break
+                    // in the paragraph holding the image. On a line of their own only before a fenced
+                    // block of recognized text, which must start a line.
+                    const withAnchors = (markdown: string) => (anchors && markdown.startsWith('`') ? `${anchors}\n` : anchors) + markdown;
                     const ocr = (node.text || '').trim();
 
                     // OCR text from a scanned page carries meaning in its whitespace and line breaks
@@ -652,7 +700,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     }
 
                     // ocr-text-only: emit just the recognized text, no image markup.
-                    if (mode === 'ocr-text-only') return ocr ? `${anchorPrefix}${ocrMd}` : '';
+                    if (mode === 'ocr-text-only') return ocr ? withAnchors(ocrMd) : '';
 
                     // Build the image markup: inline as a data URI when small, otherwise reference by
                     // name (never inline a multi-MB image, which would emit a single line that overflows
@@ -673,7 +721,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                                 // name reference when there is none.
                                 // ('image+ocr-text' already emits both, so only 'image-only' changes.)
                                 this.warn(OfficeWarningType.IMAGE_NOT_INLINED, { name: meta.attachmentName, bytes, limit: this.config.maxInlineImageBytes });
-                                if (ocr && mode === 'image-only') return `${anchorPrefix}${ocrMd}`;
+                                if (ocr && mode === 'image-only') return withAnchors(ocrMd);
                             }
                         }
                     }
@@ -682,7 +730,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const safeAlt = markdownEscapeInline(foldLines(meta?.altText || 'image'));
                     const safeSrc = sanitizeMarkdownUrl(src, { allowDataImage: true });
                     const imgTitle = meta?.title ? markdownTitle(meta.title) : '';
-                    const imageMd = `${anchorPrefix}${this.linkedImage(meta, `![${safeAlt}](${safeSrc}${imgTitle})${this.renderAttributeList(meta)}`)}`;
+                    const imageMd = withAnchors(this.linkedImage(meta, `![${safeAlt}](${safeSrc}${imgTitle})${this.renderAttributeList(meta)}`));
 
                     // image+ocr-text: the image, then its recognized text.
                     if (mode === 'image+ocr-text' && ocr) return `${imageMd}\n\n${ocrMd}`;
@@ -801,14 +849,14 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             // Dialect has no footnote syntax - the caller inlines this bare body
                             // as a parenthetical at the reference point instead of collecting it
                             // into an end-of-document "### Notes" section under a [^id] marker.
-                            return childrenOutput.trim();
+                            return trimAsciiWhitespace(childrenOutput);
                         }
                         // Indent continuation lines one level so a multi-line body re-parses as a
                         // single definition (a bare newline would end it). Single-line bodies, the
                         // common case, are unaffected.
-                        return `[^${this.getFootnoteKey(node)}]: ${childrenOutput.trim().replace(/\n/g, '\n    ')}\n\n`;
+                        return `[^${this.getFootnoteKey(node)}]: ${trimAsciiWhitespace(childrenOutput).replace(/\n/g, '\n    ')}\n\n`;
                     }
-                    return `> **Note:** ${childrenOutput.trim()}\n\n`;
+                    return `> **Note:** ${trimAsciiWhitespace(childrenOutput)}\n\n`;
                 }
 
                 case 'embed': {
@@ -890,7 +938,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // branches, could emit a stray `:::` line. `title` is never parser-set, so
                     // there is no round-trip to preserve and escaping is free.
                     const title = meta?.title ? markdownEscapeInline(foldLines(meta.title)) : '';
-                    const body = childrenOutput.trim();
+                    const body = trimAsciiWhitespace(childrenOutput);
 
                     switch (this.resolvedDialect.admonitions) {
                         case 'fence':
@@ -945,20 +993,23 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         };
 
         const optimizedContent = this.optimizeNodes(this.ast.content);
+        const body = new TextBuilder();
+        body.append(output);
         for (let i = 0; i < optimizedContent.length; i++) {
             const node = optimizedContent[i];
-            const nextNode = optimizedContent[i + 1];
 
             // A top-level footnote/endnote note is an orphan definition (unreferenced `[^id]: ...`
             // the MarkdownParser recovered). Collect it so it's emitted with the other definitions
             // at the document end rather than inline before them.
-            const orphanNoteType = (node.metadata as NoteMetadata)?.noteType;
-            if (node.type === 'note' && (orphanNoteType === 'footnote' || orphanNoteType === 'endnote')) {
+            if (isStandingNote(node)) {
                 this.collectedNotes.push(node);
                 continue;
             }
+            let following = i + 1;
+            while (following < optimizedContent.length && isStandingNote(optimizedContent[following])) following++;
+            const nextNode = optimizedContent[following];
 
-            this.atLineStart = output === '' || output.endsWith('\n');
+            this.atLineStart = body.isEmpty() || body.endsWith('\n');
             this.previousOutputChar = '';
             this.nextSibling = undefined;
             let result = await this.processNodeRecursive(node, processor);
@@ -974,8 +1025,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
             }
 
-            output = joinBlock(output, node, result);
+            appendBlock(body, node, result);
         }
+        output = body.toString();
 
         if (this.collectedNotes.length > 0) {
             // No decorative `---\n\n### Notes` preamble: `[^id]:` definitions are valid on their own
@@ -986,7 +1038,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             // Collapse the preceding block's trailing blank lines so exactly one blank line separates
             // the body from the definitions (rather than the doubled `\n\n\n\n` the concatenation
             // would otherwise leave).
-            output = output.replace(/\n+$/, '');
+            output = trimEndChars(output, '\n');
             let notesMd = '\n\n';
             // De-duplicate by node identity: a footnote referenced more than once shares a single
             // note object (see MarkdownParser), pushed here once per reference. Emit its definition
@@ -1000,7 +1052,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
         if (this.collectedAbbreviations.size > 0) {
             // One blank line before the definitions, as before the notes above.
-            output = output.replace(/\n+$/, '') + '\n\n';
+            output = trimEndChars(output, '\n') + '\n\n';
             for (const [abbr, title] of this.collectedAbbreviations) {
                 output += `*[${markdownEscapePlain(String(abbr).replace(/[[\]\r\n]+/g, ''))}]: ${markdownEscapePlain(foldLines(title))}\n`;
             }
@@ -1017,7 +1069,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         // whitespace, and not any other kind of trailing whitespace, both of which would be real
         // document content. See the identical reasoning in TextGenerator.generate().
         return {
-            value: collapseBlankLines(output + '\n\n' + this.hoistedContent.join('\n\n')).replace(/^\n+|\n+$/g, ''),
+            value: trimEndChars(trimStartChars(collapseBlankLines(output + '\n\n' + this.hoistedContent.join('\n\n')), '\n'), '\n'),
             messages: this.messages
         };
     }
@@ -1050,16 +1102,34 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         if (!walkedByProcessor && node.children && node.children.length > 0) {
             // Optimization: Merge adjacent text nodes with identical formatting
             const optimizedChildren = this.optimizeNodes(node.children);
+            const children = new TextBuilder();
             for (let i = 0; i < optimizedChildren.length; i++) {
                 const child = optimizedChildren[i];
+                // A footnote or endnote standing in a container (a page's endnote no text refers to) is
+                // an unreferenced definition: written with the others at the end, as at the top level.
+                if (isStandingNote(child)) {
+                    this.collectedNotes.push(child);
+                    continue;
+                }
                 // A paragraph's lines stay lines; every other container puts its content after a
                 // marker on one line (a heading, list item or cell), so nothing in it starts one. A
                 // pipe-table cell holds inline content only, so nothing in it begins a block either.
-                this.atLineStart = node.type === 'paragraph' && !this.inPipeTableCell && (childrenOutput === '' || childrenOutput.endsWith('\n'));
-                this.previousOutputChar = childrenOutput.slice(-1);
-                this.nextSibling = optimizedChildren[i + 1];
-                childrenOutput = joinBlock(childrenOutput, child, await this.processNodeRecursive(child, processor));
+                this.atLineStart = node.type === 'paragraph' && !this.inPipeTableCell && (children.isEmpty() || children.endsWith('\n'));
+                this.previousOutputChar = children.lastChar();
+                let following = i + 1;
+                while (following < optimizedChildren.length && isStandingNote(optimizedChildren[following])) following++;
+                const next = this.nextSibling = optimizedChildren[following];
+                let childOutput = await this.processNodeRecursive(child, processor);
+                // Blocks in a container (a page, a slide, a cell) stand apart as top-level blocks do:
+                // one blank line where a block ends or begins, except between a list's items. A heading
+                // after a picture would otherwise share its line and read back as text, and a paragraph
+                // on the line after a list item as part of the item. Runs of inline content stay joined.
+                if (next && childOutput && (isBlockNode(child) || isBlockNode(next)) && !(child.type === 'list' && next.type === 'list') && !childOutput.endsWith('\n\n')) {
+                    childOutput += childOutput.endsWith('\n') ? '\n' : '\n\n';
+                }
+                appendBlock(children, child, childOutput);
             }
+            childrenOutput = children.toString();
         }
 
         this.inImplicitBold = wasInImplicitBold;
@@ -1142,13 +1212,25 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         return result;
     }
 
-    private areFormattingEqual(f1: any, f2: any): boolean {
-        if (f1 === f2) return true;
-        if (!f1 || !f2) return false;
-        const keys1 = Object.keys(f1);
-        const keys2 = Object.keys(f2);
-        if (keys1.length !== keys2.length) return false;
-        return keys1.every(key => f1[key] === f2[key]);
+    /**
+     * Whether two runs' formatting is written the same way in Markdown, so the runs can be written as
+     * one. A font, size or colour Markdown does not write (without the inline-HTML fallback) does not
+     * keep apart runs that would otherwise come out side by side as two identical spans: a link's space
+     * in the link colour was written `[ ](u)[text](u)`, and read back as one link.
+     */
+    private areFormattingEqual(f1: TextFormatting | undefined, f2: TextFormatting | undefined): boolean {
+        return f1 === f2 || this.markdownFormattingKey(f1) === this.markdownFormattingKey(f2);
+    }
+
+    /** The part of a run's formatting the text writer writes (see the `text` case of generate). */
+    private markdownFormattingKey(f: TextFormatting | undefined): string {
+        if (!f || !this.config.includeFormatting) return '';
+        const html = this.resolvedFallbackToHtml;
+        return JSON.stringify([
+            f.font === 'monospace', !!f.bold, !!f.italic, !!f.strikethrough, f.backgroundColor ?? null,
+            html.textFormatting && [!!f.underline, !!f.subscript, !!f.superscript],
+            html.inlineFormatting && [f.color ?? null, f.size ?? null],
+        ]);
     }
 
     private async renderMarkdownTable(node: OfficeContentNode, processor: any): Promise<string> {
@@ -1229,7 +1311,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
                         // Fill gaps with empty cells
                         while (lastCol < currentCol - 1) {
-                            rowCells.push(' ');
+                            rowCells.push('');
                             lastCol++;
                         }
 
@@ -1246,13 +1328,13 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         const br = this.resolvedFallbackToHtml.cellLineBreaks ? '<br>' : ' ';
                         // Consume any trailing spaces before the newline(s) too, so a hard-break's
                         // `  \n` collapses to a single `<br>` instead of leaving `  <br>` in the cell.
-                        cellContent = joinLines(cellContent.trim(), br).replace(/\|/g, '\\|');
+                        cellContent = joinLines(trimAsciiWhitespace(cellContent), br).replace(/\|/g, '\\|');
                         rowCells.push(cellContent);
 
                         // Handle colspan by adding empty cells
                         const colSpan = (cellNode.metadata as any)?.colSpan || 1;
                         for (let i = 1; i < colSpan; i++) {
-                            rowCells.push(' ');
+                            rowCells.push('');
                         }
                         lastCol = currentCol + colSpan - 1;
                     }
@@ -1278,7 +1360,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         for (let i = 0; i < processedRows.length; i++) {
             const row = processedRows[i];
             // Pad row with empty cells if it has fewer than maxCols
-            while (row.length < maxCols) row.push(' ');
+            while (row.length < maxCols) row.push('');
 
             tableOutput += `| ${row.join(' | ')} |\n`;
 

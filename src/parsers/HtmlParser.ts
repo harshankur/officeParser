@@ -236,7 +236,14 @@ const parseStyleDeclarations = (styleAttr: string): Map<string, string> => {
         if (idx === -1) continue;
         const prop = chunk.slice(0, idx).trim().toLowerCase();
         if (!prop) continue;
-        const value = chunk.slice(idx + 1).trim().replace(/\s*!\s*important\s*$/i, '').trim();
+        let value = chunk.slice(idx + 1).trim();
+        // A trailing `!important` is dropped, found from the end (a pattern searching from the start
+        // retried every run of whitespace in a long value).
+        if (value.toLowerCase().endsWith('important')) {
+            let bang = value.length - 'important'.length;
+            while (bang > 0 && /\s/.test(value[bang - 1])) bang--;
+            if (value[bang - 1] === '!') value = value.slice(0, bang - 1).trim();
+        }
         if (value) decls.set(prop, value);
     }
     return decls;
@@ -274,7 +281,7 @@ const firstFontFamily = (fontFamily: string): string => {
     return first.trim();
 };
 
-const parseHtmlTree = (html: string, preserveComments: boolean = false): HtmlNode => {
+const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveComments: boolean = false): HtmlNode => {
     const root: HtmlNode = { type: 'element', tagName: 'root', children: [], attributes: {}, depth: 0 };
     let current = root;
     let cursor = 0;
@@ -387,7 +394,7 @@ const parseHtmlTree = (html: string, preserveComments: boolean = false): HtmlNod
             };
             // Nesting deeper than the parser reads is refused here, with the typed error, before any
             // walk of the tree could run out of stack on it.
-            if (node.depth! > MAX_HTML_NESTING_DEPTH) throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED);
+            if (node.depth! > MAX_HTML_NESTING_DEPTH) throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, config);
             current.children.push(node);
 
             const voidElements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr', '!doctype']);
@@ -426,7 +433,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
     checkAbortSignal(config.abortSignal);
 
     const textStr = buffer.toString('utf-8');
-    const root = parseHtmlTree(textStr, config.htmlParserConfig?.preserveComments === true);
+    const root = parseHtmlTree(textStr, config, config.htmlParserConfig?.preserveComments === true);
 
     // Find head and body
     let head: HtmlNode | undefined;
@@ -591,7 +598,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
         // document both bounded and cancellable rather than only bounded.
         checkAbortSignal(config.abortSignal);
         if (depth > MAX_HTML_NESTING_DEPTH) {
-            throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED);
+            throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, config);
         }
         if (node.type === 'comment') {
             // A preserved HTML comment: the author's hidden note, kept verbatim (never entity-decoded -

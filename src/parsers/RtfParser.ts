@@ -40,9 +40,9 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeMimeType, OfficeParserAST, TextFormatting } from '../types.js';
+import { FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
-import { checkAbortSignal } from '../utils/errorUtils.js';
+import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 
 /**
@@ -175,6 +175,14 @@ const IMAGE_MIME_MAP: Record<RtfImageFormat, OfficeMimeType> = {
  * // tree.content contains parsed RTF nodes
  * ```
  */
+/**
+ * How deeply groups may nest before the parser refuses the document. The tree is walked recursively,
+ * and a few thousand levels exhaust the stack, at a depth that differs by engine; a fixed limit far
+ * above real documents (Word nests a handful of levels) makes the outcome the typed error everywhere,
+ * as for HTML.
+ */
+const MAX_RTF_GROUP_DEPTH = 256;
+
 export class SimpleRtfParser {
     /** Current position in the buffer */
     private index: number = 0;
@@ -198,7 +206,10 @@ export class SimpleRtfParser {
      * Creates a new RTF parser.
      * @param buffer - The RTF file content as a Buffer
      */
-    constructor(buffer: Buffer) {
+    /**
+     * @param config - The parse's config, whose `onWarning` a refused document is reported to.
+     */
+    constructor(buffer: Buffer, private readonly config?: OfficeParserConfig) {
         this.buffer = buffer;
         this.length = buffer.length;
     }
@@ -212,6 +223,7 @@ export class SimpleRtfParser {
             const currentGroup = stack[stack.length - 1];
 
             if (char === 0x7B) { // '{'
+                if (stack.length > MAX_RTF_GROUP_DEPTH) throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, this.config);
                 this.index++;
                 this.flushPendingText(currentGroup);
                 const newGroup: RtfGroup = { type: 'group', content: [] };
@@ -460,7 +472,7 @@ export class SimpleRtfParser {
  */
 export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     checkAbortSignal(config.abortSignal);
-    const parser = new SimpleRtfParser(buffer);
+    const parser = new SimpleRtfParser(buffer, config);
     const doc = parser.parse();
 
     // Extract font and color tables

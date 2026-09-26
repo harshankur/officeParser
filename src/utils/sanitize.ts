@@ -392,9 +392,8 @@ export function markdownEscapePlain(text: string): string {
  * escape what follows it. At the start of a line (the text's own start when `atLineStart`, and after
  * each line break in it), the markers that would begin a block are escaped too: a heading's `#`,
  * `>`, a list item's `-`, `+` or `1.`, a line of only `-` or `=` (a rule or setext underline), and
- * the `:` of a definition or fenced div. When the text itself starts a line with four columns of indentation, which would
- * make it a code block, its first space or tab is written as a character reference. An escape is
- * harmless where it was not needed; it always reads back as the character.
+ * the `:` of a definition or fenced div. An escape is harmless where it was not needed; it always
+ * reads back as the character.
  */
 export function markdownEscapeInline(text: string, atLineStart = false): string {
     if (typeof text !== 'string') return '';
@@ -405,12 +404,7 @@ export function markdownEscapeInline(text: string, atLineStart = false): string 
     const blockMarker = /[ \t]*(?:(#{1,6}(?=[ \t\n]|$)|>|[-+](?=[ \t\n]|$)|-(?=[- \t]*(?:\n|$))|=(?=[= \t]*(?:\n|$))|:(?=[ \t:]))|(\d{1,9})(?=[.)](?:[ \t\n]|$)))/y;
     const reference = /&(?:#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/y;
     let out = '';
-    let i = 0;
-    if (atLineStart && /^(?: {4}| {0,3}\t)/.test(text)) {
-        out += text[0] === '\t' ? '&#9;' : '&#32;';
-        i = 1;
-    }
-    for (; i < text.length; i++) {
+    for (let i = 0; i < text.length; i++) {
         if ((i === 0 && atLineStart) || text[i - 1] === '\n') {
             blockMarker.lastIndex = i;
             const marker = blockMarker.exec(text);

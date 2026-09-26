@@ -1,4 +1,5 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextAlignment, TextFormatting, TextMetadata } from '../types.js';
+import { trimEndChars } from '../utils/textUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -1051,7 +1052,7 @@ class LatexReader {
         const first = out.find(n => n.type === 'text');
         if (first && out.indexOf(first) === 0) first.text = (first.text ?? '').replace(/^[ \t]+/, '');
         const last = [...out].reverse().find(n => n.type === 'text');
-        if (last && out.indexOf(last) === out.length - 1) last.text = (last.text ?? '').replace(/[ \t]+$/, '');
+        if (last && out.indexOf(last) === out.length - 1) last.text = trimEndChars(last.text ?? '', ' \t');
         while (out.length && out[out.length - 1].type === 'break' && (out[out.length - 1].metadata as any)?.breakType === 'carriageReturn') out.pop();
         return out.filter(n => !(n.type === 'text' && n.text === '' && !n.notes?.length && !n.comments?.length));
     }
@@ -2620,7 +2621,7 @@ class LatexReader {
         if (path === null) return;
         // The file's lines are those after the \begin line, each written as TeX writes a line: without
         // trailing spaces, ending in LF.
-        const lines = body.split('\n').slice(1, -1).map(line => line.replace(/ +$/, ''));
+        const lines = body.split('\n').slice(1, -1).map(line => trimEndChars(line, ' '));
         this.project ??= { files: new Map(), root: '' };
         if (!this.project.files.has(path) || options.includes('overwrite') || options.includes('force')) {
             this.project.files.set(path, Buffer.from(lines.map(line => line + '\n').join(''), 'utf8'));

@@ -29,7 +29,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             } catch (err: any) {
                 if (this.config.abortSignal?.aborted) throw getAbortError();
                 if (err?.officeIssue) throw err;
-                throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.ast.config, err?.message || String(err));
+                throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.config, err?.message || String(err));
             }
         }
 
@@ -93,7 +93,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
                 // @ts-ignore
                 puppeteerModule = await import('puppeteer');
             } catch {
-                throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.ast.config,
+                throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.config,
                     "the default PDF engine requires the optional peer dependency 'puppeteer' (install it with `npm install puppeteer`), or use pdfConfig.engine: 'native' (which uses pdf-lib and needs no browser)");
             }
             const puppeteer = puppeteerModule.default || puppeteerModule;
@@ -212,7 +212,7 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             }
             // Never return an empty PDF: a zero-byte buffer looks like success to callers who don't
             // inspect `messages` and silently produces broken files. Fail loudly with a typed error.
-            throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.ast.config, err?.message || String(err));
+            throw getOfficeError(OfficeErrorType.PDF_GENERATION_FAILED, this.config, err?.message || String(err));
         } finally {
             if (signal) {
                 signal.removeEventListener('abort', onAbort);

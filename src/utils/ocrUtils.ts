@@ -12,7 +12,7 @@
 
 import { FullOfficeParserConfig, OcrConfig, OfficeErrorType, OfficeWarningType } from '../types.js';
 import { isBrowser } from './envUtils.js';
-import { getAbortError, getOfficeError, logWarning } from './errorUtils.js';
+import { buildOfficeError, getAbortError, logWarning } from './errorUtils.js';
 import { median } from './numberUtils.js';
 
 /**
@@ -152,7 +152,7 @@ export function layoutOcrText(page: any): string {
             s += w.text;
             col += w.text.length;
         }
-        out.push(s.replace(/\s+$/, ''));
+        out.push(s.trimEnd());
     }
     return out.join('\n');
 }
@@ -585,7 +585,8 @@ class OcrSchedulerManager {
             this.timeoutId = null;
         }
 
-        const err = getOfficeError(OfficeErrorType.OCR_TERMINATED);
+        // Not reported here: each job's parse reports its own as OCR_FAILED, to its own config.
+        const err = buildOfficeError(OfficeErrorType.OCR_TERMINATED);
         this.queue = [];
         for (const job of [...this.unfinished]) {
             job.cancel(err);

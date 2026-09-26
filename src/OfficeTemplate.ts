@@ -43,7 +43,7 @@ export type TemplateInput = string | Buffer | ArrayBuffer | Uint8Array | BlobLik
 /** Reads the template input into a Node Buffer (path via fs in Node; bytes/blob anywhere). */
 async function readInput(input: TemplateInput, errCfg: OfficeParserConfig): Promise<Buffer> {
     if (typeof input === 'string') {
-        assertNode('path-parsing');
+        assertNode('path-parsing', errCfg);
         const fs = await import('fs');
         try { return fs.readFileSync(input); }
         catch { throw getOfficeError(OfficeErrorType.FILE_DOES_NOT_EXIST, errCfg, input); }

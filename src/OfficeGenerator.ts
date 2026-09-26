@@ -12,6 +12,7 @@ import { RtfGenerator } from './generators/RtfGenerator.js';
 import { TextGenerator } from './generators/TextGenerator.js';
 import { ConversionResult, GeneratorConfig, OfficeErrorType, OfficeParserAST, SupportedDestination, SupportedFileType, UniversalGeneratorFormat } from './types.js';
 import { withoutSourceComments } from './utils/commentUtils.js';
+import { withKnownNodeTypes } from './utils/nodeTypeUtils.js';
 import { getOfficeError } from './utils/errorUtils.js';
 
 /**
@@ -51,7 +52,10 @@ export class OfficeGenerator {
         // has no hidden-comment construct (EPUB is XHTML, where `--` inside a comment is illegal), so it is
         // removed here, once, rather than each generator having to remember to skip it.
         const keepsComments = normalizedDestination === 'md' || normalizedDestination === 'html' || normalizedDestination === 'tex';
-        const input = keepsComments ? ast : withoutSourceComments(ast);
+        // A node of a type the AST does not define is written as its content, which no generator
+        // then has to know how to handle.
+        const known = withKnownNodeTypes(ast);
+        const input = keepsComments ? known : withoutSourceComments(known);
 
         switch (normalizedDestination) {
             case 'text':
@@ -88,7 +92,8 @@ export class OfficeGenerator {
                 generator = new LatexGenerator(input, config as GeneratorConfig<'tex'>);
                 break;
             default:
-                throw getOfficeError(OfficeErrorType.FORMAT_UNSUPPORTED, undefined, destination);
+                // Reported where a generator would report it: the caller's handler, else the AST's.
+                throw getOfficeError(OfficeErrorType.FORMAT_UNSUPPORTED, config?.onWarning ? config : ast.config ?? config, destination);
         }
 
         return generator.generate() as Promise<ConversionResult<D>>;

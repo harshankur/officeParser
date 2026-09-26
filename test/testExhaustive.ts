@@ -1410,6 +1410,26 @@ async function testGeneratedOutput(): Promise<void> {
     assert.ok(/src="big\.png"/.test(bigFragment) && !/data:image/.test(bigFragment), 'fragment HTML references an over-cap image by name');
     assert.ok(imgWarned, 'over-cap image in a fragment emits an IMAGE_NOT_INLINED warning');
 
+    // A node of a type the AST does not define (a hand-built AST, or one from a newer version) is written
+    // as its content by every generator: it made four of them fail and two leave it out. In a row it is
+    // a cell, in a table a row, and among blocks its inline content is a paragraph.
+    const unknownAst = { type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'paragraph', children: [{ type: 'text', text: 'before ' }, { type: 'mark', children: [{ type: 'text', text: 'inline unknown', formatting: { bold: true } }] }] },
+        { type: 'callout', children: [{ type: 'text', text: 'loose' }, { type: 'paragraph', children: [{ type: 'text', text: 'inside unknown' }] }] }, { type: 'widget', text: 'text only' },
+        { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'text', text: 'c1' }] }, { type: 'fancyCell', children: [{ type: 'text', text: 'cell unknown' }] }] }, { type: 'tbody', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'text', text: 'row in tbody' }] }, { type: 'cell', children: [] }] }] }] },
+    ] } as any;
+    const unknownBefore = JSON.stringify(unknownAst);
+    for (const format of ['md', 'text', 'html', 'tex', 'rtf', 'docx', 'odt', 'epub', 'chunks', 'csv'] as const) {
+        const out = await OfficeGenerator.generate(unknownAst, format);
+        const value: any = out.value;
+        const written = typeof value === 'string' ? value : Array.isArray(value) ? JSON.stringify(value)
+            : Object.entries(unzipSync(new Uint8Array(value))).filter(([name]) => /\.(xml|xhtml|html)$/.test(name)).map(([, data]) => strFromU8(data)).join('');
+        const expected = format === 'csv' ? ['cell unknown', 'row in tbody'] : ['inline unknown', 'loose', 'inside unknown', 'text only', 'cell unknown', 'row in tbody'];
+        assert.deepStrictEqual(expected.filter(t => !written.includes(t)), [], `Generated output: ${format} writes the content of unknown node types`);
+    }
+    assert.strictEqual(JSON.stringify(unknownAst), unknownBefore, 'Generated output: the AST is not changed');
+    assert.strictEqual((await OfficeGenerator.generate(unknownAst, 'md')).value, 'before **inline unknown**\n\nloose\n\ninside unknown\n\ntext only\n\n| c1 | cell unknown |\n| --- | --- |\n| row in tbody |  |', 'Generated output: unknown node types in Markdown');
+
     console.log('  Generated output: All assertions passed ✓');
 }
 
@@ -3260,6 +3280,52 @@ async function testMarkdownRoundTrips(): Promise<void> {
     // ends at the next one instead of holding it.
     const omitted = await OfficeParser.parseOffice(Buffer.from('<p>a<p>b<ul><li>c<li>d</ul><table><tr><td>1<td>2<tr><td>3</table>'), { fileType: 'html' } as any);
     assert.deepStrictEqual(omitted.content.map(n => (n.type === 'table' ? n.children!.map(r => r.children!.length) : [n.type, n.children!.map(c => c.text).join('')])), [['paragraph', 'a'], ['paragraph', 'b'], ['list', 'c'], ['list', 'd'], [2, 1]], 'HTML: omitted end tags');
+
+    // Only spaces, tabs and line endings are whitespace to Markdown: a no-break or em space at the edge
+    // of a paragraph, heading, list item, quote or cell is text, and one before a list marker makes the
+    // line a paragraph. (JavaScript's trim() and \s take them too, and each save lost them.)
+    const exact = async (src: string) => (await (await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md' } as any)).to('md', { generateIds: false } as any)).value as string;
+    for (const src of ['\u00a0a\u2003', '# \u00a0Title\u00a0', '- \u2003item', '1. \u00a0one', '> \u00a0quoted', '| \u00a0a | b |\n| --- | --- |\n| c\u00a0 | d |', '\u00a0- not a list']) {
+        await stable(exact, src, src, `Unicode spaces kept in ${JSON.stringify(src)}`);
+    }
+    assert.strictEqual((await OfficeParser.parseOffice(Buffer.from('\u00a0- x'), { fileType: 'md' } as any)).content[0].type, 'paragraph', 'MD: a no-break space before a list marker makes a paragraph');
+    // A backslash escaping a line's last backslash is not a hard break; a table may have no body rows;
+    // empty anchors starting a paragraph or a list item are its anchor ids.
+    const escapedBreak = await OfficeParser.parseOffice(Buffer.from('a\\\\\nb'), { fileType: 'md' } as any);
+    assert.strictEqual(escapedBreak.content[0].children!.map(c => (c.type === 'break' ? '<br>' : c.text)).join(''), 'a\\ b', 'MD: an escaped trailing backslash is text, not a hard break');
+    await stable(md, '| a | b |\n| --- | --- |', '| a | b |\n| --- | --- |', 'a table with no body rows');
+    const anchored = await OfficeParser.parseOffice(Buffer.from('<a id="x"></a>Text\n\n- <a id="y"></a>item'), { fileType: 'md' } as any);
+    assert.deepStrictEqual(anchored.content.map(n => [n.type, (n.metadata as any)?.anchorIds, n.children!.map(c => c.text).join('')]), [['paragraph', ['x'], 'Text'], ['list', ['y'], 'item']], 'MD: leading anchors are anchor ids');
+    await stable(md, '<a id="x"></a>Text\n\n- <a id="y"></a>item', '<a id="x"></a>Text\n\n- <a id="y"></a>item', 'leading anchors');
+
+    // Blocks in a container stand apart as top-level blocks do, and an endnote standing among them is
+    // written with the definitions at the end: a heading after a picture on a page stays a heading, and
+    // a paragraph after a list item stays a paragraph. An image's anchors go on its line, as a
+    // paragraph's do; runs differing only in what Markdown does not write are one span; a row missing a
+    // cell is filled with an empty one.
+    const text = (t: string, extra: object = {}) => ({ type: 'text', text: t, ...extra });
+    const writeMd = async (content: any[]) => (await OfficeGenerator.generate({ type: 'pdf', metadata: {}, attachments: [], content } as any, 'md')).value as string;
+    assert.strictEqual(await writeMd([{ type: 'page', children: [
+        { type: 'image', metadata: { url: 'a.png', altText: 'pic' } }, { type: 'note', metadata: { noteType: 'endnote', noteId: '9' }, children: [{ type: 'paragraph', children: [text('an endnote')] }] },
+        { type: 'heading', metadata: { level: 1 }, children: [text('Title')] }, { type: 'list', metadata: { listType: 'ordered', listId: 'l', indentation: 0, itemIndex: 0 }, children: [text('one')] },
+        { type: 'paragraph', children: [text('7. after')] },
+    ] }]), '---\n\n![pic](a.png)\n\n# Title {#title}\n\n1. one\n\n7\\. after\n\n[^9]: an endnote', 'MD: blocks on a page stand apart');
+    assert.strictEqual(await writeMd([{ type: 'paragraph', children: [text('x '), { type: 'image', metadata: { url: 'a.png', altText: 'pic', anchorIds: ['fig'] } }, text(' y')] }]), 'x <a id="fig"></a>![pic](a.png) y', 'MD: an image\'s anchors go on its line');
+    assert.strictEqual(await writeMd([{ type: 'paragraph', children: [
+        text('see the', { formatting: { font: 'A' } }), text(' ', { formatting: { font: 'A', color: '#0000ff' }, metadata: { link: 'http://x.y', linkType: 'external' } }),
+        text('page', { formatting: { font: 'A' }, metadata: { link: 'http://x.y', linkType: 'external' } }),
+    ] }]), 'see the[ page](http://x.y)', 'MD: runs differing only in an unwritten colour are one link');
+    assert.strictEqual(await writeMd([{ type: 'table', children: [
+        { type: 'row', children: [{ type: 'cell', children: [text('a')] }, { type: 'cell', children: [text('b')] }] }, { type: 'row', children: [{ type: 'cell', children: [text('c')] }] },
+    ] }]), '| a | b |\n| --- | --- |\n| c |  |', 'MD: a missing cell is written empty');
+    // So a document from any format reads back from its Markdown as the same Markdown.
+    for (const file of ['test.docx', 'test.pptx', 'test.xlsx', 'test.odt', 'test.odp', 'test.ods', 'test.rtf', 'test.html', 'test.tex', 'test.pdf']) {
+        const first = (await (await OfficeParser.parseOffice(path.join(__dirname, 'files', file), { extractAttachments: true } as any)).to('md')).value as string;
+        const second = (await (await OfficeParser.parseOffice(Buffer.from(first), { fileType: 'md', extractAttachments: true } as any)).to('md')).value as string;
+        let at = 0;
+        while (at < first.length && first[at] === second[at]) at++;
+        assert.ok(first === second, `MD: ${file} saves the same Markdown twice (first difference at ${at}: ${JSON.stringify(first.slice(at - 40, at + 40))} became ${JSON.stringify(second.slice(at - 40, at + 40))})`);
+    }
 
     // HTML decodes every numeric reference and HTML 4's names, in text and in attribute values.
     const html = await OfficeParser.parseOffice(Buffer.from('<p>it&rsquo;s &copy; &#8217; &#x2019; &eacute; &amp;quot; <a href="http://x.com/?a=1&amp;b=2" title="t &amp; u">l</a> <img src="i.png" alt="Tom &amp; Jerry" title="q &quot;x&quot;"></p>'), { fileType: 'html' } as any);

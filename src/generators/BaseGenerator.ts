@@ -22,7 +22,7 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         // Problems with the configuration itself are among the result's messages too.
         this.config = resolveGeneratorConfig(destination, ast.config, config, issue => this.messages.push(issue));
         this.ast = ast;
-        this.styleMapper = new StyleMapper(this.config.styleMap, this.config.ignoreDefaultStyleMap);
+        this.styleMapper = new StyleMapper(this.config.styleMap, this.config.ignoreDefaultStyleMap, this.config);
     }
 
     /**
