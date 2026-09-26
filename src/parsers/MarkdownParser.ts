@@ -1,5 +1,6 @@
 import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
+import { parseHtml } from './HtmlParser.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { decodeCharacterReference, decodeCharacterReferences } from '../utils/htmlEntities.js';
@@ -245,41 +246,6 @@ function splitHeadingAnchor(rest: string): { text: string; anchor?: string } {
         }
     }
     return { text };
-}
-
-/**
- * The elements of `html` with one of the given names, each running from its start tag to the nearest
- * closing tag of those names: its attributes and its content, as a lazy `<tr[^>]*>([\s\S]*?)<\/tr>`
- * pattern reads them, found in time linear in the text (that pattern rescanned to the end of the text
- * for each start tag that never closes). Names match whole and in any case (`<thead>` is not a `<th>`).
- */
-function htmlElements(html: string, names: readonly string[]): { attrs: string; content: string }[] {
-    const lower = html.toLowerCase();
-    // The first `needle` at or after a position, for positions asked in increasing order.
-    const cursor = (needle: string) => {
-        let at = -2;
-        return (from: number) => {
-            if (at === -2 || (at !== -1 && at < from)) at = lower.indexOf(needle, from);
-            return at;
-        };
-    };
-    const tagEnd = cursor('>');
-    const closers = names.map(name => cursor(`</${name}>`));
-    const opener = new RegExp(`<(?:${names.join('|')})(?=[\\s/>])`, 'g');
-    const elements: { attrs: string; content: string }[] = [];
-    for (let match = opener.exec(lower); match; match = opener.exec(lower)) {
-        const end = tagEnd(opener.lastIndex);
-        if (end === -1) break;
-        let close = -1;
-        for (const closer of closers) {
-            const at = closer(end + 1);
-            if (at !== -1 && (close === -1 || at < close)) close = at;
-        }
-        if (close === -1) break;
-        elements.push({ attrs: html.slice(opener.lastIndex, end), content: html.slice(end + 1, close) });
-        opener.lastIndex = lower.indexOf('>', close) + 1;
-    }
-    return elements;
 }
 
 /**
@@ -770,6 +736,26 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return m ? m[1] : undefined;
     };
 
+    // The note for a footnote reference to `noteId`, marking the definition as used. The same note
+    // object serves every reference to the id (see the map's declaration): the first reference builds
+    // the body, the rest share it, so the generators assign one key and emit one definition.
+    const footnoteNode = (noteId: string): OfficeContentNode => {
+        referencedFootnoteIds.add(noteId);
+        let noteNode = footnoteNodesById.get(noteId);
+        if (!noteNode) {
+            const definition = footnoteDefinitions.get(noteId);
+            const noteChildren = definition !== undefined ? parseInline(definition) : [];
+            noteNode = {
+                type: 'note',
+                text: plainTextOf(noteChildren),
+                children: noteChildren,
+                metadata: { noteType: 'footnote', noteId }
+            };
+            footnoteNodesById.set(noteId, noteNode);
+        }
+        return noteNode;
+    };
+
     // `displayMath` is true only for the lines of a paragraph, where display math (`$$...$$` written
     // inside the text) becomes a block the paragraph is split around (see splitAtDisplayMath).
     // Everywhere else (a heading, list item, table cell, quote, note, or inside emphasis) a block
@@ -921,21 +907,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 // attach nothing. Advance lastIndex past the marker (so the gap text is not re-emitted)
                 // before skipping. The orphan sweep below is likewise skipped.
                 if (config.ignoreNotes) { lastIndex = next; continue; }
-                // Reuse the same note object across every reference to this id (see the map's
-                // declaration): the first reference builds the body, the rest share it, so the
-                // generators assign one key and emit one definition.
-                let noteNode = footnoteNodesById.get(noteId);
-                if (!noteNode) {
-                    const definition = footnoteDefinitions.get(noteId);
-                    const noteChildren = definition !== undefined ? parseInline(definition) : [];
-                    noteNode = {
-                        type: 'note',
-                        text: plainTextOf(noteChildren),
-                        children: noteChildren,
-                        metadata: { noteType: 'footnote', noteId }
-                    };
-                    footnoteNodesById.set(noteId, noteNode);
-                }
+                const noteNode = footnoteNode(noteId);
                 // Notes attach to the preceding text node (matches WordParser's convention);
                 // fall back to an empty text node if the reference opens the inline run.
                 if (nodes.length > 0) {
@@ -1660,37 +1632,37 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
 
             if (block.includes('<table')) {
-                // Basic HTML table recognition (extracting rows/cells)
-                const tableTagMatch = block.match(/<table([^>]*)>/i);
-                const tableAlignMatch = tableTagMatch?.[1]?.match(/data-align=["']?(left|center|right)["']?/i);
-
-                const rows: OfficeContentNode[] = [];
-                for (const row of htmlElements(block, ['tr'])) {
-                    const cells: OfficeContentNode[] = [];
-                    for (const cell of htmlElements(row.content, ['td', 'th'])) {
-                        const attrs = cell.attrs;
-                        const contentStr = cell.content.trim();
-                        const colSpanMatch = attrs.match(/colspan=["']?(\d+)["']?/i);
-                        const rowSpanMatch = attrs.match(/rowspan=["']?(\d+)["']?/i);
-
-                        cells.push({
-                            type: 'cell',
-                            metadata: {
-                                colSpan: colSpanMatch ? parseInt(colSpanMatch[1]) : undefined,
-                                rowSpan: rowSpanMatch ? parseInt(rowSpanMatch[1]) : undefined
-                            } as any,
-                            children: parseInline(contentStr.replace(/<[^>]*>/g, ''))
-                        });
+                // An HTML table is HTML: a Markdown renderer shows it as written, and it is read with
+                // the HTML parser, so its cells keep their formatting, links, pictures, math, line
+                // breaks and nested tables, and text around it in the block is kept too. Its
+                // pictures join this document's attachments, and its footnote references take their
+                // `[^id]:` definitions from this document.
+                const html = await parseHtml(Buffer.from(block), config);
+                if (html.content.some(n => n.type === 'table')) {
+                    const renamed = new Map<string, string>();
+                    for (const attachment of html.attachments) {
+                        const name = `image_${attachments.length + 1}.${attachment.extension || 'png'}`;
+                        renamed.set(attachment.name, name);
+                        attachments.push({ ...attachment, name });
                     }
-                    if (cells.length > 0) rows.push({ type: 'row', children: cells });
-                }
-                const resolvedAlign = tableAlign || (tableAlignMatch ? tableAlignMatch[1].toLowerCase() as 'left' | 'center' | 'right' : undefined);
-                if (rows.length > 0) {
-                    content.push({
-                        type: 'table',
-                        metadata: resolvedAlign ? { align: resolvedAlign } : undefined,
-                        children: rows
-                    });
+                    const adopt = (nodes: OfficeContentNode[]) => {
+                        for (const node of nodes) {
+                            const image = node.type === 'image' ? node.metadata as ImageMetadata | undefined : undefined;
+                            if (image?.attachmentName && renamed.has(image.attachmentName)) image.attachmentName = renamed.get(image.attachmentName)!;
+                            if (node.notes?.length) {
+                                node.notes = node.notes.map(note => {
+                                    const noteId = (note.metadata as any)?.noteId;
+                                    return noteId !== undefined && footnoteDefinitions.has(noteId) ? footnoteNode(noteId) : note;
+                                });
+                            }
+                            if (node.children) adopt(node.children);
+                        }
+                    };
+                    adopt(html.content);
+                    for (const node of html.content) {
+                        if (node.type === 'table' && tableAlign) node.metadata = { ...node.metadata, align: tableAlign };
+                        content.push(node);
+                    }
                     continue;
                 }
             } else {

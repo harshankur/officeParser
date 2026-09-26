@@ -13,7 +13,7 @@
 \usepackage[paperwidth=595.28pt,paperheight=841.89pt,top=72pt,bottom=72pt,left=72pt,right=72pt]{geometry}
 \usepackage{parskip}
 \usepackage{graphicx}
-\usepackage{array,longtable}
+\usepackage{array,longtable,multirow}
 \usepackage[normalem]{ulem}
 \usepackage[hyperfootnotes=false]{hyperref}
 \hypersetup{colorlinks=true,
@@ -1407,9 +1407,15 @@ Next, we have something a little more complex, a nested table, i.e. a table insi
 
 \begin{longtable}{|*{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-4\tabcolsep-3\arrayrulewidth)/2\relax}|}}
 \hline
-\hfil\break{}  \hfil\break{}    OneThree & Two \\
+\begin{tabular}{|*{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-4\tabcolsep-3\arrayrulewidth)/2\relax}|}}
 \hline
-Four &  \\
+\multirow{2}{=}{One
+
+Three} & Two \\
+\cline{2-2}
+ & Four \\
+\hline
+\end{tabular} & To the left is a table inside a table, with some cells merged. \\
 \hline
 \end{longtable}
 

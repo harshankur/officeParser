@@ -21,7 +21,37 @@ interface HtmlNode {
     text?: string;
     children: HtmlNode[];
     parent?: HtmlNode;
+    /** Elements between this one and the root, set while the tree is built. */
+    depth?: number;
 }
+
+/**
+ * HTML's optional end tags (omitted `</p>`, `</li>`, `</td>`...), as a browser reads them. For an
+ * opening tag, either the open elements it closes (`closes`: the nearest of them found walking up from
+ * the current element, with everything inside it, unless a `stop` element is met first), or, for a
+ * row, a cell or a table section, the element it belongs directly under (`under`: everything inside the
+ * nearest of them is closed, so a new row ends the previous row, a new cell the previous cell).
+ */
+type ImpliedEnd = { closes: Set<string>; stop: Set<string> } | { under: Set<string> };
+const IMPLIED_END: Record<string, ImpliedEnd> = (() => {
+    const pScope = new Set(['applet', 'button', 'caption', 'html', 'marquee', 'object', 'table', 'td', 'template', 'th']);
+    const closesP = { closes: new Set(['p']), stop: pScope };
+    const rules: Record<string, ImpliedEnd> = {};
+    for (const tag of ['address', 'article', 'aside', 'blockquote', 'details', 'dialog', 'div', 'dl', 'fieldset', 'figcaption', 'figure',
+        'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'main', 'menu', 'nav', 'ol', 'p', 'pre', 'section', 'table', 'ul']) {
+        rules[tag] = closesP;
+    }
+    // A list item or definition closes the previous one (and an open paragraph inside it).
+    rules.li = { closes: new Set(['li', 'p']), stop: new Set([...pScope, 'ul', 'ol', 'menu']) };
+    rules.dt = rules.dd = { closes: new Set(['dt', 'dd', 'p']), stop: new Set([...pScope, 'dl']) };
+    rules.option = { closes: new Set(['option']), stop: new Set(['select', 'datalist', 'optgroup']) };
+    rules.optgroup = { closes: new Set(['option', 'optgroup']), stop: new Set(['select']) };
+    // A row goes directly under its table or table section, a cell under its row, a section under its table.
+    rules.tr = { under: new Set(['table', 'thead', 'tbody', 'tfoot']) };
+    rules.td = rules.th = { under: new Set(['tr']) };
+    rules.thead = rules.tbody = rules.tfoot = { under: new Set(['table']) };
+    return rules;
+})();
 
 /**
  * Decode the character references in a text node. Text nodes are kept in their raw escaped form
@@ -71,6 +101,33 @@ const collapseSpacesAcrossNodes = (nodes: OfficeContentNode[]): OfficeContentNod
     }
     return out;
 };
+
+/**
+ * The text of `parent.children[i]` (a text node) as HTML shows it: its whitespace collapsed, the space
+ * at a line's end or start around a `<br>` dropped, and whitespace alone kept only between two pieces of
+ * inline content (`<code>a</code> <code>b</code>` is two spans with a space, not one), since anywhere
+ * else it is layout. That holds for a text of only no-break spaces too (a spacer paragraph's
+ * `&nbsp;`); between inline content it is kept as it is. Null when none of it shows.
+ */
+function visibleText(parent: HtmlNode, i: number): string | null {
+    // The sibling next to children[i] in direction `step`, passing over comments.
+    const sibling = (step: number): HtmlNode | undefined => {
+        let j = i + step;
+        while (parent.children[j]?.type === 'comment') j += step;
+        return parent.children[j];
+    };
+    const isBreak = (sib: HtmlNode | undefined) => sib?.type === 'element' && sib.tagName === 'br';
+    // Inline content: text, an inline element, or (at the edge of an inline element such as `<b> </b>`)
+    // whatever lies beyond it.
+    const isInline = (sib: HtmlNode | undefined) => sib === undefined
+        ? INLINE_ELEMENTS.has(parent.tagName ?? '')
+        : sib.type === 'text' || (sib.type === 'element' && INLINE_ELEMENTS.has(sib.tagName ?? ''));
+    let text = collapseWhitespace(decodeEntities(parent.children[i].text || ''));
+    if (isBreak(sibling(-1))) text = text.replace(/^ /, '');
+    if (isBreak(sibling(1))) text = text.replace(/ $/, '');
+    if (!text || (!text.trim() && !(isInline(sibling(-1)) && isInline(sibling(1))))) return null;
+    return text;
+}
 
 /**
  * A block's inline content without the space at its start and at its end, which HTML does not show
@@ -218,7 +275,7 @@ const firstFontFamily = (fontFamily: string): string => {
 };
 
 const parseHtmlTree = (html: string, preserveComments: boolean = false): HtmlNode => {
-    const root: HtmlNode = { type: 'element', tagName: 'root', children: [], attributes: {} };
+    const root: HtmlNode = { type: 'element', tagName: 'root', children: [], attributes: {}, depth: 0 };
     let current = root;
     let cursor = 0;
 
@@ -309,13 +366,28 @@ const parseHtmlTree = (html: string, preserveComments: boolean = false): HtmlNod
                 current = p.parent;
             }
         } else {
+            // An omitted end tag, as a browser reads it: this tag closes the element it implies ends.
+            const implied = IMPLIED_END[tagName];
+            if (implied && 'under' in implied) {
+                for (let p: HtmlNode | undefined = current; p && p !== root; p = p.parent) {
+                    if (implied.under.has(p.tagName!)) { current = p; break; }
+                }
+            } else if (implied) {
+                for (let p: HtmlNode | undefined = current; p && p !== root && !implied.stop.has(p.tagName!); p = p.parent) {
+                    if (implied.closes.has(p.tagName!)) { current = p.parent!; break; }
+                }
+            }
             const node: HtmlNode = {
                 type: 'element',
                 tagName,
                 attributes: parseAttributes(attrString),
                 children: [],
-                parent: current
+                parent: current,
+                depth: (current.depth ?? 0) + 1
             };
+            // Nesting deeper than the parser reads is refused here, with the typed error, before any
+            // walk of the tree could run out of stack on it.
+            if (node.depth! > MAX_HTML_NESTING_DEPTH) throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED);
             current.children.push(node);
 
             const voidElements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr', '!doctype']);
@@ -621,31 +693,11 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
 
             const parseChildren = (n: HtmlNode, fmt: TextFormatting, lCtx?: any): OfficeContentNode[] => {
                 const kids: OfficeContentNode[] = [];
-                // The sibling next to children[i] in direction `step`, passing over comments.
-                const sibling = (i: number, step: number): HtmlNode | undefined => {
-                    let j = i + step;
-                    while (n.children[j]?.type === 'comment') j += step;
-                    return n.children[j];
-                };
-                const isBreak = (sib: HtmlNode | undefined) => sib?.type === 'element' && sib.tagName === 'br';
-                // Inline content: text, an inline element, or (at the edge of an inline element such
-                // as `<b> </b>`) whatever lies beyond it.
-                const isInline = (sib: HtmlNode | undefined) => sib === undefined
-                    ? INLINE_ELEMENTS.has(n.tagName ?? '')
-                    : sib.type === 'text' || (sib.type === 'element' && INLINE_ELEMENTS.has(sib.tagName ?? ''));
                 for (let i = 0; i < n.children.length; i++) {
                     const child = n.children[i];
                     if (child.type === 'text' && !config.preserveXmlWhitespace) {
-                        // Whitespace as HTML shows it: spaces at a line's end or start around a
-                        // <br> are not shown, and whitespace alone is one space between two pieces
-                        // of inline content (`<code>a</code> <code>b</code>` is two spans, not one)
-                        // and layout anywhere else.
-                        let text = collapseWhitespace(decodeEntities(child.text || ''));
-                        if (isBreak(sibling(i, -1))) text = text.replace(/^ /, '');
-                        if (isBreak(sibling(i, 1))) text = text.replace(/ $/, '');
-                        // (A text of only no-break spaces, a spacer paragraph's `&nbsp;`, is layout
-                        // too where it stands alone; between inline content it is kept as it is.)
-                        if (!text || (!text.trim() && !(isInline(sibling(i, -1)) && isInline(sibling(i, 1))))) continue;
+                        const text = visibleText(n, i);
+                        if (text === null) continue;
                         const textNode: OfficeContentNode = { type: 'text', text, formatting: Object.keys(fmt).length > 0 ? { ...fmt } : undefined };
                         if (config.includeRawContent && child.text) textNode.rawContent = child.text;
                         kids.push(textNode);
@@ -1383,27 +1435,30 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             footnoteDefinitions.set(key, contentNodes);
         }
     }
-    for (const child of body.children) {
+    // Inline content written directly in the body (text, and inline elements such as <b> or <a>) is one
+    // paragraph per run between blocks, as a browser lays it out in an anonymous block: not one
+    // paragraph for each piece of text.
+    let inlineRun: OfficeContentNode[] = [];
+    const flushInlineRun = () => {
+        const children = config.preserveXmlWhitespace ? inlineRun : trimBlockEdges(collapseSpacesAcrossNodes(inlineRun));
+        if (children.some(n => n.type !== 'text' || n.text || n.notes?.length || n.comments?.length)) content.push({ type: 'paragraph', children });
+        inlineRun = [];
+    };
+    const isInlineNode = (n: OfficeContentNode) => n.type === 'text' || n.type === 'break' || (n.type === 'code' && (n.metadata as CodeMetadata | undefined)?.math === 'inline');
+    for (let i = 0; i < body.children.length; i++) {
+        const child = body.children[i];
+        if (child.type === 'text' && !config.preserveXmlWhitespace) {
+            const text = visibleText(body, i);
+            if (text !== null) inlineRun.push({ type: 'text', text, ...(config.includeRawContent && child.text ? { rawContent: child.text } : {}) });
+            continue;
+        }
         const parsed = parseNode(child);
-        if (parsed) {
-            if (Array.isArray(parsed)) {
-                parsed.forEach(p => {
-                    if (p.type === 'text') {
-                        // Wrap direct body text in paragraphs
-                        content.push({ type: 'paragraph', children: [p] });
-                    } else {
-                        content.push(p);
-                    }
-                });
-            } else {
-                if (parsed.type === 'text') {
-                    content.push({ type: 'paragraph', children: [parsed] });
-                } else {
-                    content.push(parsed);
-                }
-            }
+        for (const node of parsed ? (Array.isArray(parsed) ? parsed : [parsed]) : []) {
+            if (isInlineNode(node)) inlineRun.push(node);
+            else { flushInlineRun(); content.push(node); }
         }
     }
+    flushInlineRun();
 
     // Orphan footnote definitions: a `<section data-footnotes>` entry that no `<sup
     // data-footnote-ref>` consumed would otherwise be dropped (it is skipped in the body walk and

@@ -325,6 +325,22 @@ async function iframePreservationTests() {
     let cyc = String((await OfficeGenerator.generate(await parseHtml('<iframe src="https://x.co/v?a=1&amp;b=2"></iframe>', { htmlParserConfig: { preserveIframes: true } }), 'md')).value);
     for (let i = 0; i < 2; i++) cyc = String((await OfficeGenerator.generate(await OfficeParser.parseOffice(Buffer.from(cyc), mdCfg), 'md')).value);
     check('iframe: src does not compound &amp; over md save/reload cycles', cyc.includes('a=1&amp;b=2') && !cyc.includes('&amp;amp;'), cyc.slice(0, 200));
+
+    // HTML with its optional end tags omitted (`<p>`, `<li>`, `<tr>`, `<td>` left open) nests
+    // nothing, as a browser reads it: thousands of them parse, quickly. Nesting that is really that
+    // deep is refused with the typed error before anything can run out of stack on it.
+    for (const [label, html, count] of [
+        ['paragraphs', '<p>x'.repeat(5000), (ast: any) => ast.content.filter((n: any) => n.type === 'paragraph').length === 5000],
+        ['list items', `<ul>${'<li>x'.repeat(5000)}</ul>`, (ast: any) => ast.content.filter((n: any) => n.type === 'list').length === 5000],
+        ['table rows and cells', `<table>${'<tr><td>x<td>y'.repeat(5000)}</table>`, (ast: any) => ast.content[0]?.children?.length === 5000],
+    ] as const) {
+        const started = Date.now();
+        let error = '';
+        const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html', ...QUIET } as any).catch((e: any) => { error = e.message; return null; });
+        check(`html: 5000 ${label} with omitted end tags parse flat`, !!ast && count(ast) && Date.now() - started < 5000, `${Date.now() - started}ms ${error}`);
+    }
+    const deep = await rejectionMessage(() => OfficeParser.parseOffice(Buffer.from('<div>'.repeat(30000)), { fileType: 'html', ...QUIET } as any));
+    check('html: 30000 nested elements reject with the nesting-depth error', /nesting depth/i.test(deep), deep);
 }
 
 async function markdownTests() {

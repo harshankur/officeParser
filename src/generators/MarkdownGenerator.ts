@@ -1,5 +1,5 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextMetadata, WikilinkSyntax } from '../types.js';
-import { escapeHtml, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
+import { escapeHtml, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
 import { clampRepeat } from '../utils/numberUtils.js';
@@ -254,6 +254,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
      * each child is rendered.
      */
     private atLineStart = false;
+    /** Rendering the cells of an HTML table (the fallback for merged cells, or the `html` table dialect): their content is HTML. */
+    private inHtmlTable = 0;
     /** The last character written before the node being rendered, within its parent ('' for none). */
     private previousOutputChar = '';
     /** The sibling after the node being rendered, if any. */
@@ -1093,7 +1095,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // Emit the [^id] reference marker at the point of reference. Without this,
                     // a footnote/endnote would only ever show up in the collected ### Notes
                     // section at the end, with no indication of where it was originally cited.
-                    result += `[^${this.getFootnoteKey(note)}]`;
+                    // In an HTML table cell the reference is HTML too (as HtmlGenerator writes it), which
+                    // the parser ties to its `[^id]:` definition.
+                    const key = this.getFootnoteKey(note);
+                    result += this.inHtmlTable ? `<sup data-footnote-ref="${escapeHtml(key)}">${escapeHtml(key)}</sup>` : `[^${key}]`;
                 }
             }
         }
@@ -1315,6 +1320,107 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     /**
      * Renders a complex table as HTML since Markdown doesn't support nested tables or rowspans.
      */
+    /**
+     * One node of an HTML table cell's content, as HtmlGenerator writes it: text with its formatting,
+     * link, citation or wikilink; a line break; code, and math in the markup the HTML parser reads back
+     * as math; a picture (inlined as a `data:` URI up to `maxInlineImageBytes`, like a Markdown image)
+     * with its link; a list item; a comment; a nested table.
+     */
+    private async htmlCellNode(n: OfficeContentNode, co: string): Promise<string> {
+        const link = (href: string, linkType: string | undefined, title: string | undefined, inner: string) => {
+            const internal = linkType !== 'external';
+            if (internal && this.config.ignoreInternalLinks) return inner;
+            const target = internal && href.startsWith('#') && (this.config.generateIds || this.resolvedFallbackToHtml.anchors) ? `#${this.slugify(href.slice(1))}` : href;
+            return `<a href="${sanitizeUrl(target)}"${title ? ` title="${escapeHtml(title)}"` : ''}>${inner}</a>`;
+        };
+        switch (n.type) {
+            case 'text': {
+                const meta = n.metadata as TextMetadata | undefined;
+                if (meta?.abbreviationTitle) this.collectedAbbreviations.set(n.text || '', meta.abbreviationTitle);
+                let text = escapeHtml(n.text || '');
+                const f = n.formatting;
+                if (this.config.includeFormatting && f) {
+                    if (f.font === 'monospace') text = `<code>${text}</code>`;
+                    if (f.bold && !this.inImplicitBold) text = `<b>${text}</b>`;
+                    if (f.italic) text = `<i>${text}</i>`;
+                    if (f.underline) text = `<u>${text}</u>`;
+                    if (f.strikethrough) text = `<s>${text}</s>`;
+                    if (f.subscript) text = `<sub>${text}</sub>`;
+                    if (f.superscript) text = `<sup>${text}</sup>`;
+                    if (f.backgroundColor === '#ffff00') text = `<mark>${text}</mark>`;
+                    const styles = [['color', f.color], ['background-color', f.backgroundColor !== '#ffff00' ? f.backgroundColor : undefined], ['font-size', f.size]]
+                        .map(([prop, value]) => [prop, value ? sanitizeCssValue(value) : ''])
+                        .filter(([, value]) => value).map(([prop, value]) => `${prop}: ${value}`);
+                    if (styles.length) text = `<span style="${escapeHtml(styles.join('; '))}">${text}</span>`;
+                }
+                if (meta?.citationKey) return `<cite data-citation-key="${escapeHtml(meta.citationKey)}">[@${escapeHtml(meta.citationKey)}]</cite>`;
+                if (meta?.wikilink) return `<a href="#${escapeHtml(this.slugify(meta.link || ''))}" data-wikilink-page="${escapeHtml(meta.link || '')}">${text}</a>`;
+                return meta?.link ? link(meta.link, meta.linkType, meta.title, text) : text;
+            }
+            case 'break':
+                return (n.metadata as BreakMetadata | undefined)?.breakType === 'page' || (n.metadata as BreakMetadata | undefined)?.breakType === 'thematic' ? '<hr>' : '<br>';
+            case 'code': {
+                const meta = n.metadata as CodeMetadata | undefined;
+                const code = n.text || '';
+                if (meta?.math === 'inline') return `<span class="math math-inline" data-math="inline">${escapeHtml(`$${code}$`)}</span>`;
+                if (meta?.math === 'block') return `<div class="math math-block" data-math="block">${escapeHtml(`$$${code}$$`)}</div>`;
+                const lang = meta?.language ? ` class="language-${escapeHtml(meta.language)}"` : '';
+                return `<pre><code${lang}>${escapeHtml(code)}</code></pre>`;
+            }
+            case 'image': {
+                const mode = this.imageMode();
+                const meta = n.metadata as ImageMetadata | undefined;
+                const ocr = escapeHtml((n.text || '').trim());
+                if (mode === 'none') return '';
+                if (mode === 'ocr-text-only') return ocr;
+                let src = meta?.url || meta?.attachmentName || '';
+                const attachment = !meta?.url && meta?.attachmentName ? this.getAttachment(meta.attachmentName) : undefined;
+                if (attachment) {
+                    const bytes = base64ByteLength(attachment.data);
+                    if (bytes <= this.config.maxInlineImageBytes) src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
+                    else this.warn(OfficeWarningType.IMAGE_NOT_INLINED, { name: meta!.attachmentName, bytes, limit: this.config.maxInlineImageBytes });
+                }
+                let img = `<img src="${sanitizeImageUrl(src)}" alt="${escapeHtml(meta?.altText || '')}"${meta?.title ? ` title="${escapeHtml(meta.title)}"` : ''}>`;
+                if (meta?.link) img = link(meta.link, meta.linkType, meta.linkTitle, img);
+                return mode === 'image+ocr-text' && ocr ? `${img}<br>${ocr}` : img;
+            }
+            case 'paragraph': return `<p>${co}</p>`;
+            case 'heading': {
+                const level = Math.min(Math.max(Number((n.metadata as any)?.level) || 1, 1), 6);
+                return `<h${level}>${co}</h${level}>`;
+            }
+            case 'list': {
+                const ordered = (n.metadata as ListMetadata | undefined)?.listType === 'ordered';
+                return ordered ? `<ol><li>${co}</li></ol>` : `<ul><li>${co}</li></ul>`;
+            }
+            case 'table': return await this.renderTableAsHtml(n);
+            case 'embed': {
+                const meta = n.metadata as EmbedMetadata | undefined;
+                const url = meta?.url || (meta?.videoId ? `https://youtu.be/${meta.videoId}` : '');
+                return url ? link(url, 'external', undefined, escapeHtml(meta?.label || url)) : co;
+            }
+            case 'comment':
+                if (isSourceComment(n)) return `<!--${sanitizeCommentText(n.text || '')}-->`;
+                return co;
+            case 'chart':
+            case 'drawing':
+            case 'slide':
+            case 'note':
+            case 'sheet':
+            case 'row':
+            case 'cell':
+            case 'page':
+            case 'header':
+            case 'footer':
+            case 'slideMaster':
+            case 'admonition':
+            case 'definitionList':
+            case 'definitionTerm':
+            case 'definitionDescription':
+                return co;
+        }
+    }
+
     private async renderTableAsHtml(node: OfficeContentNode, override?: string | false | void): Promise<string> {
         if (override === false) return '';
         if (typeof override === 'string') {
@@ -1325,10 +1431,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
         if (node.type === 'table') {
             let rows = '';
-            if (node.children) {
-                for (const row of node.children) {
-                    rows += await this.renderTableAsHtml(row, await this.handleOnNode(row));
+            this.inHtmlTable++;
+            try {
+                if (node.children) {
+                    for (const row of node.children) {
+                        rows += await this.renderTableAsHtml(row, await this.handleOnNode(row));
+                    }
                 }
+            } finally {
+                this.inHtmlTable--;
             }
             // Carry table-layout alignment through the HTML fallback so it isn't lost
             // just because the table also needed HTML for merged cells.
@@ -1352,59 +1463,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
             let content = '';
             if (node.children) {
-                // Use a simplified HTML processor for cell content
+                // Cell content as HTML, which is what the cell is (a Markdown renderer shows an HTML
+                // block as it is, and the parser reads it with the HTML parser): the markup
+                // HtmlGenerator writes for each inline construct, so nothing in a cell is dropped.
                 for (const child of this.optimizeNodes(node.children)) {
-                    content += await this.processNodeRecursive(child, async (n, co) => {
-                        switch (n.type) {
-                            case 'text': {
-                                if (n.metadata) {
-                                    const m = n.metadata as TextMetadata;
-                                    if (m.abbreviationTitle) {
-                                        this.collectedAbbreviations.set(n.text || '', m.abbreviationTitle);
-                                    }
-                                }
-                                // Inside HTML table cells, entity-encode angle brackets so cell
-                                // text can't inject a raw tag (e.g. </td><script>).
-                                let text = markdownEscapeText(n.text || '');
-                                if (n.formatting?.bold && !this.inImplicitBold) text = `<b>${text}</b>`;
-                                if (n.formatting?.italic) text = `<i>${text}</i>`;
-                                if (n.formatting?.underline) text = `<u>${text}</u>`;
-                                if (n.formatting?.subscript) text = `<sub>${text}</sub>`;
-                                if (n.formatting?.superscript) text = `<sup>${text}</sup>`;
-                                return text;
-                            }
-                            case 'paragraph': return `<p>${co}</p>`;
-                            case 'heading': {
-                                const level = Math.min(Math.max(Number((n.metadata as any)?.level) || 1, 1), 6);
-                                return `<h${level}>${co}</h${level}>`;
-                            }
-                            case 'table': return await this.renderTableAsHtml(n);
-                            case 'list':
-                            case 'image':
-                            case 'chart':
-                            case 'drawing':
-                            case 'slide':
-                            case 'note':
-                            case 'sheet':
-                            case 'row':
-                            case 'cell':
-                            case 'page':
-                            case 'comment':
-                                if (isSourceComment(n)) return `<!--${sanitizeCommentText(n.text || '')}-->`;
-                                return co;
-                            case 'break':
-                            case 'code':
-                            case 'header':
-                            case 'footer':
-                            case 'slideMaster':
-                            case 'embed':
-                            case 'admonition':
-                            case 'definitionList':
-                            case 'definitionTerm':
-                            case 'definitionDescription':
-                                return co;
-                        }
-                    });
+                    content += await this.processNodeRecursive(child, (n, co) => this.htmlCellNode(n, co));
                 }
             }
             return `    <td${rs}${cs}>${content}</td>\n`;

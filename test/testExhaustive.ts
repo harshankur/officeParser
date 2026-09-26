@@ -3237,6 +3237,30 @@ async function testMarkdownRoundTrips(): Promise<void> {
     const split = (await (await OfficeParser.parseOffice(Buffer.from('<p id="x">a <pre>code</pre> b</p>'), { fileType: 'html' } as any)).to('html', { htmlConfig: { standalone: false } } as any)).value as string;
     assert.ok(!/<p[^>]*>(?:(?!<\/p>)[\s\S])*<pre/.test(split) && /<p id="x">a ?<\/p>/.test(split) && (split.match(/id="x"/g) || []).length === 1, `HTML: a code block is not written inside a paragraph (${split})`);
 
+    // A table written as HTML in Markdown (merged cells, or the commonmark dialect) keeps what its cells
+    // hold, and reads back to the same table: formatting, a link, a line break, code, math, literal
+    // Markdown characters, a footnote and a linked picture. Text around it in its block is kept.
+    const cellText = (text: string, extra: object = {}) => ({ type: 'text', text, ...extra });
+    const htmlTableAst = { type: 'md', metadata: {}, attachments: [{ type: 'image', name: 'p.png', mimeType: 'image/png', extension: 'png', data: fs.readFileSync(path.join(__dirname, '..', 'docs', 'favicon.png')).toString('base64') }], content: [{ type: 'table', children: [
+        { type: 'row', children: [{ type: 'cell', metadata: { colSpan: 2 }, children: [{ type: 'paragraph', children: [cellText('Head')] }] }] },
+        { type: 'row', children: [
+            { type: 'cell', children: [{ type: 'paragraph', children: [cellText('a', { formatting: { bold: true } }), cellText(' link', { metadata: { link: 'https://x.y', linkType: 'external' } }), { type: 'break', metadata: { breakType: 'carriageReturn' } }, cellText('code', { formatting: { font: 'monospace' } }), { type: 'code', text: 'x^2', metadata: { math: 'inline' } }, cellText(' 2*3 & <b>')] }] },
+            { type: 'cell', children: [{ type: 'paragraph', children: [cellText('b', { notes: [{ type: 'note', metadata: { noteType: 'footnote', noteId: '1' }, children: [cellText('note text')] }] }), { type: 'image', metadata: { attachmentName: 'p.png', altText: 'pic', link: 'https://l.k', linkType: 'external' } }] }] },
+        ] },
+    ] }] } as any;
+    const htmlTableMd = (await OfficeGenerator.generate(htmlTableAst, 'md')).value as string;
+    const htmlTableBack = await OfficeParser.parseOffice(Buffer.from(htmlTableMd), { fileType: 'md', extractAttachments: true } as any);
+    const backCells = htmlTableBack.content[0].children!.map(r => r.children!.map(c => c.children![0].children!.map(n => (n.type === 'text' ? [n.text, n.formatting?.bold || n.formatting?.font || (n.metadata as any)?.link || n.notes?.[0]?.children?.[0]?.text || ''] : [n.type, (n.metadata as any)?.math || (n.metadata as any)?.link || '']))));
+    assert.deepStrictEqual(backCells, [[[['Head', '']]], [[['a', true], [' link', 'https://x.y'], ['break', ''], ['code', 'monospace'], ['code', 'inline'], [' 2*3 & <b>', '']], [['b', 'note text'], ['image', 'https://l.k']]]], `MD: an HTML table's cells read back as written (${htmlTableMd.slice(0, 400)})`);
+    assert.strictEqual((await OfficeGenerator.generate(htmlTableBack, 'md')).value, htmlTableMd, 'MD: an HTML table is stable over saves');
+    const aroundTable = await OfficeParser.parseOffice(Buffer.from('Intro\n<table><tr><td>x</td></tr></table>'), { fileType: 'md' } as any);
+    assert.deepStrictEqual(aroundTable.content.map(n => n.type), ['paragraph', 'table'], 'MD: text beside an HTML table in its block is kept');
+
+    // HTML's optional end tags, as a browser reads them: an unclosed paragraph, list item, row or cell
+    // ends at the next one instead of holding it.
+    const omitted = await OfficeParser.parseOffice(Buffer.from('<p>a<p>b<ul><li>c<li>d</ul><table><tr><td>1<td>2<tr><td>3</table>'), { fileType: 'html' } as any);
+    assert.deepStrictEqual(omitted.content.map(n => (n.type === 'table' ? n.children!.map(r => r.children!.length) : [n.type, n.children!.map(c => c.text).join('')])), [['paragraph', 'a'], ['paragraph', 'b'], ['list', 'c'], ['list', 'd'], [2, 1]], 'HTML: omitted end tags');
+
     // HTML decodes every numeric reference and HTML 4's names, in text and in attribute values.
     const html = await OfficeParser.parseOffice(Buffer.from('<p>it&rsquo;s &copy; &#8217; &#x2019; &eacute; &amp;quot; <a href="http://x.com/?a=1&amp;b=2" title="t &amp; u">l</a> <img src="i.png" alt="Tom &amp; Jerry" title="q &quot;x&quot;"></p>'), { fileType: 'html' } as any);
     // (The space between the link and the image is a node of its own, as in HTML.)
