@@ -63,7 +63,7 @@ const markdownTitle = (title: unknown): string => ` "${markdownEscapePlain(foldL
  * inline content. After output that already ends in a blank line, that newline would make a second
  * blank line; {@link appendBlock} drops it.
  */
-const SEPARATED_BLOCK_TYPES = new Set(['code', 'table', 'sheet', 'slide', 'page', 'embed']);
+const SEPARATED_BLOCK_TYPES = new Set(['code', 'table', 'sheet', 'slide', 'page', 'embed', 'break']);
 
 /** Nodes that are blocks of their own in Markdown (the parts of a definition list are laid out by it). */
 const BLOCK_NODE_TYPES = new Set(['paragraph', 'heading', 'list', 'table', 'sheet', 'slide', 'page', 'admonition', 'definitionList', 'embed', 'header', 'footer', 'chart', 'drawing', 'slideMaster']);
@@ -322,6 +322,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private pendingAnchorIds: string[] = [];
     /** How many list items are being written: an item is one line of Markdown (see the `code` case). */
     private inListItem = 0;
+    /** How many definition terms or descriptions are being written: each is one line too. */
+    private inDefinition = 0;
     /** Each list item's written depth (see assignListDepths). */
     private listDepths = new WeakMap<OfficeContentNode, number>();
     /**
@@ -467,7 +469,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             let fields = '';
             // JSON-encoded, with `<` written `\u003c`: a renderer that does not know front matter shows
             // it as text, and a tag in a title would otherwise be live there.
-            const scalar = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c');
+            const scalar = (value: unknown) => JSON.stringify(value).replace(/[<\u2028\u2029]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
             if (meta.title) fields += `title: ${scalar(meta.title)}\n`;
             if (meta.author) fields += `author: ${scalar(meta.author)}\n`;
             const createdIso = this.toIsoDate(meta.created);
@@ -500,7 +502,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             const mapping = this.getSemanticMapping(node);
             if (mapping) {
                 // Map common HTML tags to Markdown equivalents
-                if (mapping.tag === 'blockquote') return `> ${trimBlockEdges(childrenOutput)}\n\n`;
+                if (mapping.tag === 'blockquote') return `> ${this.renderAnchors(node.metadata)}${trimBlockEdges(childrenOutput)}\n\n`;
                 if (mapping.tag === 'code') return `\`${childrenOutput}\` `;
                 if (mapping.tag === 'pre') return `\`\`\`\n${childrenOutput}\n\`\`\`\n\n`;
 
@@ -646,15 +648,18 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     let remainingAnchors: string[] = [];
 
                     // (An id that slugifies to nothing is not written: `{#}` is no id, and read as text.)
-                    if (!this.config.ignoreInternalLinks && meta?.anchorIds && meta.anchorIds.length > 0) {
-                        const ids = [...meta.anchorIds];
+                    // Anchors waiting from an empty paragraph come first (see pendingAnchorIds), so the
+                    // heading's own id, or the generated one, stays its id.
+                    const waiting = this.resolvedFallbackToHtml.anchors && !this.config.ignoreInternalLinks ? this.pendingAnchorIds.splice(0) : [];
+                    const generated = this.config.generateIds && !meta?.anchorIds?.length ? this.slugify(this.getNodeText(node)) : '';
+                    if (!this.config.ignoreInternalLinks && (meta?.anchorIds?.length || waiting.length)) {
+                        const ids = [...waiting, ...(meta?.anchorIds ?? []), ...(generated ? [generated] : [])];
                         const lastId = this.slugify(ids.pop()!);
                         // Slugify the explicit ID to ensure it's a valid Markdown identifier
                         if (lastId) id = ` {#${lastId}}`;
                         remainingAnchors = ids;
-                    } else if (this.config.generateIds) {
-                        const slug = this.slugify(this.getNodeText(node));
-                        if (slug) id = ` {#${slug}}`;
+                    } else if (generated) {
+                        id = ` {#${generated}}`;
                     }
                     // An empty heading is its hashes alone (with its id, if any): `#` ends the line.
                     const headingText = trimBlockEdges(childrenOutput);
@@ -680,7 +685,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // An empty paragraph (a bookmark on an empty line) keeps its anchors for the block
                     // that follows (see pendingAnchorIds).
                     if (!content) {
-                        if (meta?.anchorIds?.length) this.pendingAnchorIds.push(...meta.anchorIds);
+                        if (meta?.anchorIds?.length && this.resolvedFallbackToHtml.anchors && !this.config.ignoreInternalLinks) this.pendingAnchorIds.push(...meta.anchorIds);
                         return '';
                     }
                     const anchors = this.renderAnchors(meta);
@@ -715,7 +720,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const br = this.resolvedFallbackToHtml.itemLineBreaks ? '<br>' : ' ';
                     // Only the whitespace a reader strips: a no-break space starting the item is text.
                     const content = joinLines(trimAsciiWhitespace(childrenOutput), br);
-                    // An empty item is its marker alone, with no trailing space.
+                    // An empty item is its marker alone, with no trailing space. In a definition (one line)
+                    // an item cannot be one, and its marker is text there, escaped as text is.
+                    if (this.inDefinition > 0) return `${markdownEscapeInline(marker, true)}${anchors}${content}\n`;
                     return `${indent}${anchors || content ? marker : marker.trimEnd()}${anchors}${content}\n`;
                 }
 
@@ -818,8 +825,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // Where the break starts a line (after another break), two trailing spaces would
                     // make a whitespace-only line, which ends the paragraph: a backslash does not.
                     if (meta?.breakType === 'carriageReturn') return this.atLineStart ? '\\\n' : '  \n';
-                    // A rule is a block, blank lines around it: `a---b` in a paragraph was text.
-                    if (meta?.breakType === 'thematic') return '\n\n---\n\n';
+                    // A rule is a block, blank lines around it: `a---b` in a paragraph was text. In a list
+                    // item, cell or definition (one line of Markdown) it cannot be one, and is a line break.
+                    if (meta?.breakType === 'thematic') return this.inPipeTableCell || this.inListItem > 0 || this.inDefinition > 0 ? '\n' : '\n\n---\n\n';
                     return '\n';
                 }
 
@@ -840,7 +848,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // parser behaviour change with its own baseline consequences.)
                     // A list item and a pipe-table cell are one line of Markdown, where no block can go:
                     // block math is written as inline math, its line ends as spaces (whitespace to TeX).
-                    const inLine = this.inPipeTableCell || this.inListItem > 0;
+                    const inLine = this.inPipeTableCell || this.inListItem > 0 || this.inDefinition > 0;
                     if (meta?.math === 'block' && inLine) {
                         const mathInline = markdownEscapeTags(node.text || '').replace(/[$]+/g, '').replace(/\s*[\r\n]+\s*/g, ' ').trim();
                         return this.resolvedDialect.math === 'dollar' ? `$${mathInline}$` : mathInline;
@@ -1171,6 +1179,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             // inline content only.
             const startsLines = (node.type === 'paragraph' || node.type === 'list' || node.type === 'definitionTerm' || node.type === 'definitionDescription') && !this.inPipeTableCell;
             if (node.type === 'list') this.inListItem++;
+            const definition = node.type === 'definitionTerm' || node.type === 'definitionDescription';
+            if (definition) this.inDefinition++;
             const children = new TextBuilder();
             for (let i = 0; i < optimizedChildren.length; i++) {
                 const child = optimizedChildren[i];
@@ -1200,6 +1210,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             }
             childrenOutput = children.toString();
             if (node.type === 'list') this.inListItem--;
+            if (definition) this.inDefinition--;
         }
 
         this.inImplicitBold = wasInImplicitBold;
@@ -1279,9 +1290,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 // A note anchors to the end of its text run and its `[^id]` marker is emitted there;
                 // merging a following run onto a note-carrying run would slide the marker past it
                 // (`Body[^1].` -> `Body.[^1]`). Keep such runs separate so the marker stays put and
-                // matches where HtmlGenerator emits it.
+                // matches where HtmlGenerator emits it. (A note-carrying run can join the run before
+                // it: its note still ends the merged run.)
                 (!current.notes || current.notes.length === 0) &&
-                (!node.notes || node.notes.length === 0) &&
+                // Review comments stay on their own run (merging dropped the second run's).
+                !current.comments?.length && !node.comments?.length &&
                 this.areFormattingEqual(node.formatting, current.formatting) &&
                 JSON.stringify(node.metadata) === JSON.stringify(current.metadata)) {
                 current.text = (current.text || '') + (node.text || '');
@@ -1290,12 +1303,17 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (!current.notes) current.notes = [];
                     current.notes.push(...node.notes);
                 }
-            } else {
-                current = { ...node }; // Clone
+            } else if (node.type === 'text') {
+                current = { ...node }; // Clone: the runs merged into it are appended to its text
                 if (node.notes) {
                     current.notes = [...node.notes];
                 }
                 result.push(current);
+            } else {
+                // Any other node is kept itself: a note standing among blocks must stay the note
+                // object text elsewhere refers to, or it is written twice under two keys.
+                current = node;
+                result.push(node);
             }
         }
         return result;

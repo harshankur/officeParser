@@ -53,6 +53,11 @@ const IMPLIED_END: Record<string, ImpliedEnd> = (() => {
     return rules;
 })();
 
+/** Elements that are blocks in HTML's layout: what one holds is never part of the text around it. */
+const BLOCK_LEVEL_TAGS = new Set(['address', 'article', 'aside', 'blockquote', 'center', 'details', 'dialog', 'dd', 'div', 'dl', 'dt', 'fieldset',
+    'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'li', 'main', 'menu', 'nav', 'ol', 'p',
+    'pre', 'section', 'summary', 'table', 'ul']);
+
 /**
  * Decode the character references in a text node. Text nodes are kept in their raw escaped form
  * during parsing, so any branch that lifts text into AST content has to decode first: `&lt;` inside
@@ -983,8 +988,19 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 }
             }
 
-            // Skip structural containers produced by HtmlGenerator to avoid deep AST nesting. (Not a
-            // caption: its text is a block of its own, which must not run into the picture before it.)
+            // The caption HtmlGenerator writes under a picture (its file name, which the image node
+            // already holds) is a label, not document text: read as text, it grew a paragraph on every
+            // save. Any other caption, and a <figcaption>, is a block of its own, which must not run
+            // into the picture before it.
+            const isClass = (name: string) => (node.attributes?.class || '').split(/\s+/).includes(name);
+            if (tagName === 'div' && isClass('caption') && node.parent?.tagName === 'div' && (node.parent.attributes?.class || '').split(/\s+/).includes('image-container')) {
+                return [];
+            }
+            if (tagName === 'figcaption' || (tagName === 'div' && isClass('caption'))) {
+                const caption = parseChildren(node, newFormatting, listContext);
+                return caption.some(c => c.type !== 'text' || c.text?.trim()) ? { type: 'paragraph', children: caption } : [];
+            }
+            // Skip structural containers produced by HtmlGenerator to avoid deep AST nesting
             if (tagName === 'div' && (
                 node.attributes?.class === 'container' ||
                 node.attributes?.class === 'spreadsheet-container' ||
@@ -1471,10 +1487,15 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             continue;
         }
         const parsed = parseNode(child);
+        // What a block element holds never joins the inline content around it (a container read
+        // through, such as <figure> or <section>, can hand back bare text).
+        const isBlockElement = child.type === 'element' && BLOCK_LEVEL_TAGS.has(child.tagName!);
+        if (isBlockElement) flushInlineRun();
         for (const node of parsed ? (Array.isArray(parsed) ? parsed : [parsed]) : []) {
             if (isInlineNode(node)) inlineRun.push(node);
             else { flushInlineRun(); content.push(node); }
         }
+        if (isBlockElement) flushInlineRun();
     }
     flushInlineRun();
 

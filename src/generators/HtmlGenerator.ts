@@ -725,6 +725,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      * Overridden to handle children using processNodeArray for list grouping.
      */
     private tableNestingLevel = 0;
+    /** How many paragraphs or headings are being written: a picture in one is written inline. */
+    private inlineDepth = 0;
 
     protected override async processNodeRecursive(
         node: OfficeContentNode,
@@ -778,7 +780,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         // and XHTML (EPUB's) rejects it. Each run of inline content is a paragraph, each block stands
         // on its own, and the paragraph's id and anchors go on its first part.
         const splitsAroundBlocks = node.type === 'paragraph' && processor === this.boundNodeProcessor && !!node.children?.some(isBlockInParagraph);
+        // A paragraph or heading holds phrasing content only: a picture in one is written inline.
+        const holdsInline = node.type === 'paragraph' || node.type === 'heading';
         let splitResult: string | undefined;
+        let childrenOutput = '';
+        if (holdsInline) this.inlineDepth++;
+        try {
         if (splitsAroundBlocks) {
             splitResult = '';
             let run: OfficeContentNode[] = [];
@@ -801,7 +808,6 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             await flush();
         }
 
-        let childrenOutput = '';
         if (!splitsAroundBlocks && node.children && node.children.length > 0) {
             // A node whose own branch lays its children out throws this output away, so skip producing
             // it: the subtree would otherwise be walked twice, firing `onNode` twice for every node in
@@ -813,6 +819,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         } else if (node.text && node.type !== 'text') {
             // Fallback for nodes that have text property but no children (e.g. simple paragraphs)
             childrenOutput = this.escape(node.text);
+        }
+        } finally {
+            if (holdsInline) this.inlineDepth--;
         }
 
         if (node.notes && node.notes.length > 0) {
@@ -1004,6 +1013,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 if (meta?.link && (!this.config.ignoreInternalLinks || meta.linkType === 'external')) {
                     const linkTitle = meta.linkTitle ? ` title="${this.escape(meta.linkTitle)}"` : '';
                     img = `<a href="${sanitizeUrl(meta.link)}"${linkTitle}${meta.linkType === 'external' ? ' target="_blank"' : ''}>${img}</a>`;
+                }
+                // In a paragraph or heading (phrasing content only) the picture is written inline: the
+                // block markup below inside a <p> is split apart by every browser and parser.
+                if (this.inlineDepth > 0) {
+                    const ocrText = mode === 'image+ocr-text' && ocr ? `<br><span class="ocr-text">${this.escape(ocr)}</span>` : '';
+                    return `${extraAnchors}${idAttr ? `<span${idAttr}>${img}</span>` : img}${ocrText}`;
                 }
                 let content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
                 // image+ocr-text: the image, then its recognized text (a <pre> keeps the 2-D layout).

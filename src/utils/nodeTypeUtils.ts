@@ -57,8 +57,8 @@ function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place): OfficeCo
                 } as OfficeContentNode] : [];
             }
             let replaced = replaceUnknownNodes(node.children, inner);
-            // An inline wrapper's formatting and link reach the text it holds (the text's own first).
-            if (inner === 'inline' && (node.formatting || node.metadata)) {
+            // A wrapper's formatting and link reach the text directly in it (the text's own first).
+            if (node.formatting || node.metadata) {
                 replaced = replaced.map(child => (child.type === 'text'
                     ? { ...child, ...((node.formatting || child.formatting) && { formatting: { ...node.formatting, ...child.formatting } }), ...((child.metadata ?? node.metadata) && { metadata: child.metadata ?? node.metadata }) } as OfficeContentNode
                     : child));

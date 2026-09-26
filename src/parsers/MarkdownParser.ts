@@ -440,6 +440,9 @@ function unwrapAlignDivs(text: string): { text: string; align?: 'left' | 'center
     return { text: pos === 0 ? text : out + text.slice(pos), align };
 }
 
+/** Nodes the generator writes anchors for: waiting anchors go to the next of these. */
+const ANCHOR_HOLDERS = new Set<string>(['paragraph', 'heading', 'list', 'image', 'table', 'sheet', 'slide', 'page']);
+
 /** A thematic break: three or more `-`, `*` or `_`, spaces between allowed, indented at most three spaces. */
 const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 
@@ -1347,10 +1350,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         };
     };
 
-    // Fold standalone anchor placeholders into the following content node's anchorIds so a
-    // bookmark target emitted on its own line round-trips as a real anchor. A trailing placeholder
-    // with no following node attaches to the previous node instead; if the document is nothing but
-    // anchors, they are dropped (there is no node to host them).
+    // Fold standalone anchor placeholders into the anchorIds of the next node that can hold them (one
+    // the generator writes anchors for: a code block, rule or comment is passed over) so a bookmark
+    // target emitted on its own line round-trips as a real anchor. Anchors no node follows are an
+    // empty paragraph holding them, where they stand, as the generator writes a bookmark on an empty
+    // paragraph (they joined the node before them, which could not always hold them).
     const foldAnchorPlaceholders = (content: OfficeContentNode[]): void => {
         if (!content.some(n => (n.type as any) === ANCHOR_PLACEHOLDER)) return;
         const merged: OfficeContentNode[] = [];
@@ -1360,17 +1364,14 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 carried.push(...(((node.metadata as any)?.anchorIds as string[]) || []));
                 continue;
             }
-            if (carried.length > 0 && !isSourceComment(node)) {
+            if (carried.length > 0 && ANCHOR_HOLDERS.has(node.type)) {
                 const meta: any = node.metadata || (node.metadata = {} as any);
                 meta.anchorIds = [...carried, ...((meta.anchorIds as string[]) || [])];
                 carried = [];
             }
             merged.push(node);
         }
-        if (carried.length > 0 && merged.length > 0) {
-            const last: any = merged[merged.length - 1].metadata || (merged[merged.length - 1].metadata = {} as any);
-            last.anchorIds = [...((last.anchorIds as string[]) || []), ...carried];
-        }
+        if (carried.length > 0) merged.push({ type: 'paragraph', metadata: { anchorIds: carried } as any, children: [] });
         content.length = 0;
         appendAll(content, merged);
     };
@@ -1378,7 +1379,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // A text's blocks: split at blank lines, then at headings, lists and HTML divs that start
     // without one. Used for the document and, recursively, for what a quote or note holds.
     const splitIntoBlocks = (text: string): string[] => {
-    const rawBlocks = text.split(/\n\n+/);
+    // A line of only spaces and tabs is a blank line too (CommonMark).
+    const rawBlocks = text.split(/\n(?:[ \t]*\n)+/);
     const blocks: string[] = [];
 
     // Sub-split blocks that contain headings or lists without double newlines
@@ -1407,7 +1409,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             // A line of `=` or `-` under paragraph text is a setext heading's underline; otherwise
             // three or more `-`, `*` or `_` (spaces between allowed) are a thematic break, which
             // is never a list item.
-            const isSetextUnderline: boolean = inParagraph && SETEXT_UNDERLINE.test(line);
+            // (Not under a quote's paragraph: an underline cannot continue a quote lazily.)
+            const isSetextUnderline: boolean = inParagraph && !currentSubBlock[0].startsWith('>') && SETEXT_UNDERLINE.test(line);
             const isRule: boolean = !isSetextUnderline && THEMATIC_BREAK.test(line);
             const isHeading: boolean = !isSetextUnderline && ATX_HEADING_START.test(line);
             const item: RegExpExecArray | null = isSetextUnderline || isRule ? null : LIST_ITEM_START.exec(line);

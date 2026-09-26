@@ -3416,7 +3416,8 @@ async function testMarkdownRoundTrips(): Promise<void> {
     for (const [src, shape] of [
         ['<p>a</p><hr><p>b</p>', 'paragraph|break|paragraph'], ['a<hr>b', 'paragraph|break|paragraph'],
         ['<dl><dt><p>a<dd>b<dt>c<dd>d</dl>', 'definitionList(definitionTerm,definitionDescription,definitionTerm,definitionDescription)'],
-        ['<ul><li><p>a<li>b</ul>', 'list|list'], ['text <img src="a.png"> more', 'paragraph'], ['<div class="image-container"><img src="x.png"><div class="caption">cap</div></div>', 'image|paragraph'],
+        ['<ul><li><p>a<li>b</ul>', 'list|list'], ['text <img src="a.png"> more', 'paragraph'], ['<div><img src="x.png"><div class="caption">cap</div></div>', 'image|paragraph'],
+        ['<div class="image-container"><img src="x.png"><div class="caption">x.png</div></div>', 'image'],
     ] as const) {
         const parsed = await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'html' } as any);
         const shapeOf = (n: any): string => n.type === 'definitionList' ? `definitionList(${n.children.map((c: any) => c.type).join(',')})` : n.type;
@@ -3424,6 +3425,52 @@ async function testMarkdownRoundTrips(): Promise<void> {
     }
     const splitHtml = (await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [T('a'), { type: 'break', metadata: { breakType: 'page' } }, T('b')] }] } as any, 'html', { htmlConfig: { standalone: false } } as any)).value as string;
     assert.ok(/<p>a<\/p><hr class="page-break">/.test(splitHtml) && !/<p>[^<]*<hr/.test(splitHtml), `HTML: a page break is not written inside a paragraph (${splitHtml})`);
+
+    // HTML round trips add nothing: the caption HtmlGenerator writes under a picture (its file name) is a
+    // label, and a picture in a paragraph is written inline; a <figcaption> or other caption stays a
+    // block of its own.
+    const htmlOnce = async (src: string) => (await (await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'html' } as any)).to('html', { htmlConfig: { standalone: false } } as any)).value as string;
+    for (const src of ['<div><div class="image-container"><img src="a.png" alt=""><div class="caption">a.png</div></div></div>', 'text <img src="a.png" alt="A"> more',
+        '<p>before</p><figure><img src="a.png" alt="A"><figcaption>cap</figcaption></figure><p>after</p>']) {
+        const first = await htmlOnce(src);
+        assert.strictEqual(await htmlOnce(first), first, `HTML: ${src} saves the same HTML twice (${first})`);
+    }
+    const figure = await OfficeParser.parseOffice(Buffer.from('<figure><img src="a.png" alt="A"><figcaption>cap</figcaption></figure>'), { fileType: 'html' } as any);
+    assert.deepStrictEqual(figure.content.map(n => n.type), ['image', 'paragraph'], 'HTML: a figure caption is a block beside its picture');
+    for (const file of ['test.html', 'test.epub']) {
+        let ast: any = await OfficeParser.parseOffice(path.join(__dirname, 'files', file), {} as any);
+        const counts: number[] = [];
+        for (let save = 0; save < 3; save++) {
+            counts.push(ast.content.length);
+            ast = await OfficeParser.parseOffice(Buffer.from((await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: false } } as any)).value as string), { fileType: 'html' } as any);
+        }
+        assert.ok(counts[1] === counts[0] && counts[2] === counts[0], `HTML: ${file} keeps its blocks over HTML saves (${counts.join(', ')})`);
+    }
+
+    // Markdown: code and lists in a definition, rules in a list item or cell, a bookmark on an empty
+    // paragraph before a heading, quote or code block, a rule in an admonition, a note-carrying run,
+    // and a note cited by a note defined after it all save the same Markdown twice.
+    const dlCode = await OfficeParser.parseOffice(Buffer.from('<dl><dt>t</dt><dd><pre>a\nb</pre></dd></dl>'), { fileType: 'html' } as any);
+    assert.strictEqual((await dlCode.to('md', { generateIds: false } as any)).value, 't\n: `a`<br>`b`', 'MD: code in a definition is inline');
+    for (const [label, content] of [
+        ['a list in a definition', [{ type: 'definitionList', children: [{ type: 'definitionTerm', children: [T('t')] }, { type: 'definitionDescription', children: [item([T('x')]), item([T('y')], 0, 1)] }] }]],
+        ['a rule in a list item', [item([T('a'), { type: 'break', metadata: { breakType: 'thematic' } }, T('b')])]],
+        ['a bookmark before a heading', [{ type: 'paragraph', metadata: { anchorIds: ['a'] }, children: [] }, { type: 'heading', metadata: { level: 2 }, children: [T('x')] }, { type: 'paragraph', children: [T('more')] }]],
+        ['a bookmark before a closing quote', [{ type: 'paragraph', metadata: { anchorIds: ['a'] }, children: [] }, { type: 'paragraph', metadata: { style: 'Quote' }, children: [T('q')] }]],
+        ['a bookmark before a closing code block', [{ type: 'paragraph', metadata: { anchorIds: ['a'] }, children: [] }, { type: 'code', text: 'c' }]],
+        ['a rule in an admonition', [{ type: 'admonition', metadata: { admonitionType: 'note' }, children: [{ type: 'paragraph', children: [T('a'), { type: 'break', metadata: { breakType: 'thematic' } }, T('b')] }] }]],
+        ['bold text ending in its delimiter, with a note', [{ type: 'paragraph', children: [T('a*', { formatting: { bold: true }, notes: [{ type: 'note', metadata: { noteType: 'footnote', noteId: '1' }, children: [T('n')] }] })] }]],
+    ] as const) {
+        const written = await writeDoc(content as any);
+        await stable(md, written, written, `${label} (${written})`);
+    }
+    assert.strictEqual(await md('[^b]: bbb\n\n[^a]: see [^b]\n\nbody'), 'body\n\n[^b]: bbb\n\n[^a]: see [^b]', 'MD: a note cited by a note defined after it is written once');
+    // A quote followed by a rule is a quote and a rule (not a heading); a line of spaces is a blank line.
+    for (const [src, types] of [['> quote\n---', ['paragraph', 'break']], ['a\n  \nb', ['paragraph', 'paragraph']]] as const) {
+        assert.deepStrictEqual((await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md' } as any)).content.map(n => n.type), types, `MD: blocks of ${JSON.stringify(src)}`);
+    }
+    // An unknown node's link reaches its text at block level too.
+    assert.strictEqual((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'mystery', children: [T('inner')], metadata: { link: 'http://l.k', linkType: 'external' } }] } as any, 'md')).value, '[inner](http://l.k)', 'MD: an unknown node keeps its link');
 
     // HTML decodes every numeric reference and HTML 4's names, in text and in attribute values.
     const html = await OfficeParser.parseOffice(Buffer.from('<p>it&rsquo;s &copy; &#8217; &#x2019; &eacute; &amp;quot; <a href="http://x.com/?a=1&amp;b=2" title="t &amp; u">l</a> <img src="i.png" alt="Tom &amp; Jerry" title="q &quot;x&quot;"></p>'), { fileType: 'html' } as any);

@@ -5692,17 +5692,6 @@
     {
       "type": "paragraph",
       "metadata": {},
-      "children": [
-        {
-          "type": "text",
-          "text": "image.jpg",
-          "rawContent": "image.jpg"
-        }
-      ]
-    },
-    {
-      "type": "paragraph",
-      "metadata": {},
       "children": []
     },
     {
