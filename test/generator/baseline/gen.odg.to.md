@@ -22,7 +22,6 @@ Grouped shape B beside it in the same group
 
 ---
 
-
 | Name | Value | Description |
 | --- | --- | --- |
 | Alpha | 42 | The first data row of the table |

@@ -8,7 +8,6 @@ TestBool: true
 
 ---
 
-
 | Demonstration of DOCX support in calibre |   |
 | --- | --- |
 | This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action. |   |
@@ -27,10 +26,7 @@ TestBool: true
 |   | We now resume our normal programming |
 |   | Four |
 
-
-
 ---
-
 
 | Text Formatting |
 | --- |
@@ -46,10 +42,7 @@ TestBool: true
 | ==You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background. == |
 | For the lovers of poetry amongst you, paragraphs with hanging indents, like this often<br>come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph. |
 
-
-
 ---
-
 
 | Tables |   |   |   |   |   |
 | --- | --- | --- | --- | --- | --- |
@@ -68,10 +61,7 @@ TestBool: true
 | ==Point D == | 37 | 32 | 91 | — |  |
 | ==Point E == | ==93 == | ==35 == | ==54 == | ==43 == | ==— == |
 
-
-
 ---
-
 
 | Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved. |   |   |   |
 | --- | --- | --- | --- |
@@ -90,10 +80,7 @@ TestBool: true
 |   | Four |   |   |
 |  |   |   |   |
 
-
-
 ---
-
 
 | We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks. |   |   |   |   |   |   |   |   |   |   |   |   |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -111,10 +98,7 @@ TestBool: true
 |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | 30 |  | 31 |  |  |  |  |  |  |  |  |  |  |
 
-
-
 ---
-
 
 | Structural Elements |
 | --- |
@@ -127,10 +111,7 @@ TestBool: true
 | **Links ** |
 | Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the <u>calibre download page</u>. Then we have a link that points back to the section on <u>paragraph level formatting</u> in this document. |
 
-
-
 ---
-
 
 | Images |
 | --- |
@@ -138,10 +119,7 @@ TestBool: true
 | There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was *inserted*, not necessarily where it appears on the page in Word. |
 |   |
 
-
-
 ---
-
 
 | Lists |   |
 | --- | --- |
@@ -172,10 +150,7 @@ TestBool: true
 | iii | We now resume our normal programming |
 | iv | Four |
 
-
-
 ---
-
 
 | Charts |   |   |   |   |   |
 | --- | --- | --- | --- | --- | --- |

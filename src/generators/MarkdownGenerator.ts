@@ -64,6 +64,40 @@ const markdownTitle = (title: unknown): string => ` "${markdownEscapeText(foldLi
  */
 const SEPARATED_BLOCK_TYPES = new Set(['code', 'table', 'sheet', 'slide', 'page', 'embed']);
 
+/**
+ * Collapses each run of blank lines (whitespace-only lines count) to one empty line, outside fenced
+ * code and `$$` math blocks, whose blank lines are content. However blocks were joined (a page break,
+ * a table, a slide note or a rule each brought its own separator), they end up one blank line apart:
+ * a renderer shows the same either way, but the file and every diff of it stay tidy.
+ */
+function collapseBlankLines(markdown: string): string {
+    const out: string[] = [];
+    let fence: { char: string; length: number } | null = null;
+    let inMath = false;
+    for (const line of markdown.split('\n')) {
+        if (fence) {
+            out.push(line);
+            const close = /^[ \t]*(`{3,}|~{3,})[ \t]*$/.exec(line);
+            if (close && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
+            continue;
+        }
+        if (inMath) {
+            out.push(line);
+            if (line.trim() === '$$') inMath = false;
+            continue;
+        }
+        const open = /^[ \t]*(`{3,}|~{3,})/.exec(line);
+        if (open) fence = { char: open[1][0], length: open[1].length };
+        else if (line.trim() === '$$') inMath = true;
+        else if (line.trim() === '') {
+            if (out.length > 0 && out[out.length - 1] !== '') out.push('');
+            continue;
+        }
+        out.push(line);
+    }
+    return out.join('\n');
+}
+
 /** Appends a node's Markdown, leaving exactly one blank line before a separated block. */
 const joinBlock = (output: string, node: { type: string }, next: string): string =>
     SEPARATED_BLOCK_TYPES.has(node.type) && output.endsWith('\n\n') ? output + next.replace(/^\n+/, '') : output + next;
@@ -904,7 +938,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         // whitespace, and not any other kind of trailing whitespace, both of which would be real
         // document content. See the identical reasoning in TextGenerator.generate().
         return {
-            value: (output + '\n\n' + this.hoistedContent.join('\n\n')).replace(/^\n+|\n+$/g, ''),
+            value: collapseBlankLines(output + '\n\n' + this.hoistedContent.join('\n\n')).replace(/^\n+|\n+$/g, ''),
             messages: this.messages
         };
     }
