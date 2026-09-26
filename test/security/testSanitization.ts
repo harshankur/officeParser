@@ -580,6 +580,24 @@ async function markdownTests() {
             check(`${format}: 100,000 ${label} are written in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
         }
     }
+    // A colour table found each run's colour by scanning it.
+    const colours = astWith([{ type: 'paragraph', children: Array.from({ length: many }, (_, i) => ({ type: 'text', text: `r${i} `, formatting: { color: `#${i.toString(16).padStart(6, '0')}` } })) }] as any);
+    const coloursStarted = Date.now();
+    await OfficeGenerator.generate(colours, 'rtf', { onWarning: () => { } } as any);
+    check('rtf: 100,000 runs of distinct colours are written in linear time', Date.now() - coloursStarted < 5000, `${Date.now() - coloursStarted}ms`);
+    // The same for text built while reading or writing: an ODF table cell of many paragraphs, and LaTeX
+    // output of a paragraph of many inline comments or a math block of many display environments,
+    // each tested the end of all the text so far at every step.
+    const cellOdt = await OfficeGenerator.generate(astWith([{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: Array.from({ length: many }, (_, i) => ({ type: 'paragraph', children: [{ type: 'text', text: `c${i}` }] })) }] }] }] as any), 'odt');
+    const cellStarted = Date.now();
+    await OfficeParser.parseOffice(Buffer.from(cellOdt.value as any), { fileType: 'odt' } as any);
+    check('odt: a table cell of 100,000 paragraphs parses in linear time', Date.now() - cellStarted < 5000, `${Date.now() - cellStarted}ms`);
+    for (const [label, markdown] of [['100,000 inline comments', 'a<!--x-->'.repeat(many)], ['a math block of 100,000 display environments', `$$\nx ${'\\begin{equation}y\\end{equation}'.repeat(many)}\n$$`]] as const) {
+        const parsed = await OfficeParser.parseOffice(Buffer.from(markdown), { fileType: 'md' } as any);
+        const started = Date.now();
+        await OfficeGenerator.generate(parsed, 'tex', { onWarning: () => { } } as any);
+        check(`tex: ${label} are written in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+    }
 }
 
 async function csvTests() {

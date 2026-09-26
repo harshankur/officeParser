@@ -785,6 +785,10 @@ export function sanitizeLatexMath(source: string, mode: 'inline' | 'block'): Lat
     let braceDepth = 0;
     const envStack: { name: string; braceDepth: number }[] = [];
     let displayEnvironment = false;
+    // Whether a top-level display environment has begun: only the first can open the display (before
+    // it nothing but whitespace may be written; after it, either it opened or something was written),
+    // so the written text is tested for being blank once, not at every later `\begin`.
+    let displayTried = false;
     let displayEnvironmentEnd = -1;
     let topLevelAmpersand = false;
     let topLevelRowBreak = false;
@@ -807,8 +811,10 @@ export function sanitizeLatexMath(source: string, mode: 'inline' | 'block'): Lat
                     if (!env) { structural = true; out += text.slice(i, j); i = j; continue; }
                     const envName = env[1];
                     if (name === 'begin') {
-                        const opensDisplay = LATEX_DISPLAY_MATH_ENVIRONMENTS.has(envName) && mode === 'block'
-                            && envStack.length === 0 && braceDepth === 0 && out.trim() === '' && !displayEnvironment;
+                        const topLevelDisplay = LATEX_DISPLAY_MATH_ENVIRONMENTS.has(envName) && mode === 'block'
+                            && envStack.length === 0 && braceDepth === 0 && !displayEnvironment;
+                        const opensDisplay = topLevelDisplay && !displayTried && out.trim() === '';
+                        if (topLevelDisplay) displayTried = true;
                         if (opensDisplay) displayEnvironment = true;
                         else if (!LATEX_INNER_MATH_ENVIRONMENTS.has(envName)) structural = true;
                         envStack.push({ name: envName, braceDepth });

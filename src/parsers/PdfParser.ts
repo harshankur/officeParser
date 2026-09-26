@@ -1352,12 +1352,16 @@ function rotatedTextNodes(runs: RawRun[], pageCtx: PageContext, pdfCfg: PdfLayou
     for (const angle of [90, 270, 180] as const) {
         const group = runs.filter(r => r.angle === angle && r.text.trim().length > 0);
         if (!group.length) continue;
-        let text = '';
+        // Joined once, a space between runs that do not already meet at one; testing the end of the
+        // growing text for each run instead copied all of it every time.
+        const parts: string[] = [];
+        let endsInSpace = true;
         for (const r of group) {
-            if (text && !/\s$/.test(text) && !/^\s/.test(r.text)) text += ' ';
-            text += r.text;
+            if (!endsInSpace && !/^\s/.test(r.text)) parts.push(' ');
+            parts.push(r.text);
+            if (r.text) endsInSpace = /\s/.test(r.text[r.text.length - 1]);
         }
-        text = text.replace(/\s+/g, ' ').trim();
+        const text = parts.join('').replace(/\s+/g, ' ').trim();
         if (!text) continue;
         const node: OfficeContentNode = { type: 'paragraph', text, children: [{ type: 'text', text }] };
         const box = unionAll(group.map(r => ({ x: r.x, y: r.yTop, width: r.width, height: r.height })));

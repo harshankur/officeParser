@@ -8,6 +8,8 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
  */
 export class RtfGenerator extends BaseGenerator<'rtf'> {
     private colorTable: string[] = [];
+    /** Each colour's index in {@link colorTable}, so a run finds its colour without scanning the table. */
+    private colorIndex = new Map<string, number>();
     private inTable = false;
     /**
      * Set while rendering a heading's children.
@@ -29,6 +31,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
 
     async generate(): Promise<ConversionResult<'rtf'>> {
         this.colorTable = [];
+        this.colorIndex = new Map();
 
         // We first process all nodes to collect colors and analyze structure
         const bodyContent = await this.renderBody(this.ast);
@@ -324,10 +327,11 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
 
     private getColorIndex(hex: string): number {
         const h = hex.toUpperCase();
-        let idx = this.colorTable.indexOf(h);
-        if (idx === -1) {
+        let idx = this.colorIndex.get(h);
+        if (idx === undefined) {
             idx = this.colorTable.length;
             this.colorTable.push(h);
+            this.colorIndex.set(h, idx);
         }
         return idx;
     }

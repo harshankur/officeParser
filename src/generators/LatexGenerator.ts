@@ -692,17 +692,25 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      */
     private async renderInline(nodes: OfficeContentNode[]): Promise<string> {
         let out = '';
+        // The last character written, so a comment can tell whether a space precedes it without
+        // reading back `out`, which would copy all of it at each comment.
+        let lastWritten = '';
+        const write = (text: string) => {
+            if (!text) return;
+            out += text;
+            lastWritten = text[text.length - 1];
+        };
         let runs: OfficeContentNode[] = [];
         let group: OfficeContentNode[] = [];
         let groupLink = '';
         const flushRuns = () => {
             if (runs.length === 0) return;
-            out += this.formatRuns(runs);
+            write(this.formatRuns(runs));
             runs = [];
         };
         const flushGroup = async () => {
             if (group.length === 0) return;
-            out += await this.hyperlink(groupLink, group);
+            write(await this.hyperlink(groupLink, group));
             group = [];
             groupLink = '';
         };
@@ -716,7 +724,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             checkAbortSignal(this.config.abortSignal);
             const override = await this.handleOnNode(node);
             if (override === false) continue;
-            if (typeof override === 'string') { flushRuns(); await flushGroup(); out += override; continue; }
+            if (typeof override === 'string') { flushRuns(); await flushGroup(); write(override); continue; }
             if (isSourceComment(node)) {
                 // A hidden note inside a run: `% <!--...-->` lines. The `%` swallows its line end and TeX
                 // skips the next line's leading spaces, so a space that follows the comment is written in
@@ -726,8 +734,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 const next = list[i + 1];
                 const prev = list[i - 1];
                 const spaceAfter = next?.type === 'text' && /^\s/.test(next.text || '');
-                const spaceBefore = /\s$/.test(out) || (prev?.type === 'text' && /\s$/.test(prev.text || ''));
-                out += `${spaceAfter && !spaceBefore ? ' ' : ''}${latexSourceComment(node.text || '')}`;
+                const spaceBefore = /\s/.test(lastWritten) || (prev?.type === 'text' && /\s$/.test(prev.text || ''));
+                write(`${spaceAfter && !spaceBefore ? ' ' : ''}${latexSourceComment(node.text || '')}`);
                 commentEnd = out.length;
                 continue;
             }
@@ -743,15 +751,15 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 runs.push(node);
                 if (node.notes?.length || node.comments?.length) {
                     flushRuns();
-                    out += this.inlineComments(node);
+                    write(this.inlineComments(node));
                     if (node.comments?.length) commentEnd = out.length;
-                    out += await this.notesFor(node);
+                    write(await this.notesFor(node));
                 }
                 continue;
             }
             flushRuns();
             await flushGroup();
-            out += await this.inlineNode(node);
+            write(await this.inlineNode(node));
         }
         flushRuns();
         await flushGroup();

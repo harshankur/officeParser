@@ -1145,7 +1145,9 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
     const cfg = doc.cfg;
     const children: OfficeContentNode[] = [];
     const boxes: NodeBounds[] = [];
-    let text = '';
+    // The paragraph's text in pieces, joined once at the end: a hyphen dropped at a line join comes off
+    // the last piece, where reading the whole text back at each join made a long paragraph quadratic.
+    const parts: string[] = [];
 
     for (let li = 0; li < group.lines.length; li++) {
         const line = group.lines[li];
@@ -1181,11 +1183,13 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
                 // drop the trailing hyphen from the last emitted child and join with no space
                 const lastChild = children[children.length - 1];
                 if (lastChild?.text) { lastChild.text = lastChild.text.replace(/[-­]$/, ''); }
-                text = text.replace(/[-­]$/, '');
+                let last = parts.length - 1;
+                while (last >= 0 && parts[last] === '') last--;
+                if (last >= 0) parts[last] = parts[last].replace(/[-­]$/, '');
             } else if (!glyphStack) {
                 const lastChild = children[children.length - 1];
                 if (lastChild?.text && !lastChild.text.endsWith(' ')) lastChild.text += ' ';
-                text += ' ';
+                parts.push(' ');
             }
         }
         for (const frag of line.fragments) {
@@ -1199,11 +1203,12 @@ function paragraphNode(group: ParaGroup, page: PageContext, doc: DocContext, for
             if (frag.link) child.metadata = frag.link;
             children.push(child);
             boxes.push(frag.bounds);
-            text += frag.text;
+            parts.push(frag.text);
         }
     }
 
     if (!children.length) return null;
+    const text = parts.join('');
     const level = forcedLevel !== undefined ? forcedLevel : (doc.cfg.headingDetection === 'off' ? 0 : headingLevel(group, doc));
     const container = emitBounds(unionAll(boxes)!, page, cfg);
 

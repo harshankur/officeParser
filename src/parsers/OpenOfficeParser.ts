@@ -27,6 +27,7 @@ import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { mathmlToLatex } from '../utils/mathUtils.js';
 import { clampRepeat } from '../utils/numberUtils.js';
+import { TextBuilder } from '../utils/textUtils.js';
 
 /**
  * Tracks how many table cells a single document has been allowed to materialize.
@@ -853,7 +854,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
             for (const cell of tableCells) {
                 const cellChildren: OfficeContentNode[] = [];
-                let cellTextRef = { value: '' };
+                // Built without reading back what it holds, which would copy all of it per paragraph.
+                const cellTextParts = new TextBuilder();
                 const colsRepeated = toRepeatCount(cell.getAttribute("table:number-columns-repeated"));
                 const colSpan = parseInt(cell.getAttribute("table:number-columns-spanned") || "1");
                 const rowSpan = parseInt(cell.getAttribute("table:number-rows-spanned") || "1");
@@ -903,10 +905,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 }
 
                                 cellChildren.push(pNode);
-                                cellTextRef.value += pContent.text;
+                                cellTextParts.append(pContent.text);
                                 // Add newline if there are multiple paragraphs/headings
-                                if (cellTextRef.value && !cellTextRef.value.endsWith('\n')) {
-                                    cellTextRef.value += '\n';
+                                if (!cellTextParts.isEmpty() && !cellTextParts.endsWith('\n')) {
+                                    cellTextParts.append('\n');
                                 }
                             } else if (element.tagName === "table:table") {
                                 // Recursive call for nested table
@@ -922,7 +924,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                 processChildren(cell);
 
-                let cellText = cellTextRef.value;
+                let cellText = cellTextParts.toString();
                 // Trim trailing newline from cellText
                 if (cellText.endsWith('\n')) {
                     cellText = cellText.slice(0, -1);
