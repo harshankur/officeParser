@@ -559,6 +559,35 @@ async function markdownTests() {
         await OfficeParser.parseOffice(Buffer.from(`${line}\n`.repeat(40_000)), { fileType: 'md' } as any);
         check(`md: 40,000 lines of ${JSON.stringify(line)} parse in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
     }
+    // The patterns read since: link targets holding parenthesis pairs (a pattern that let a group match
+    // nothing backtracked exponentially on one Wikipedia URL), emphasis, strikethrough and highlight
+    // openers that never close, code spans across lines, thematic breaks, setext underlines, empty
+    // items, nested quotes, list continuations, definitions and footnotes continued across blank lines.
+    for (const [label, text] of [
+        ['nested link parentheses', `[a](${'(b'.repeat(20_000)})`], ['unclosed link parentheses', `[a](x${'(b'.repeat(40_000)}`],
+        ['closed link parentheses', `[a](b${'(c)'.repeat(40_000)}`], ['unclosed emphasis', '*a '.repeat(60_000)], ['unclosed bold', '**a '.repeat(50_000)],
+        ['escaped closers', '*a\\*'.repeat(40_000)], ['unclosed strikethrough', '~~a '.repeat(50_000)], ['unclosed highlights', '==a '.repeat(50_000)],
+        ['code spans across lines', 'x `a\n'.repeat(40_000)], ['thematic breaks', '* * *\n'.repeat(40_000)], ['setext underlines', 'text\n-\n'.repeat(40_000)],
+        ['empty list items', '-\n'.repeat(80_000)], ['nested quote markers', `> ${'>'.repeat(200_000)} x`], ['list continuation lines', `- a\n${'  b\n'.repeat(50_000)}`],
+        ['a definition list', 't\n: d\n'.repeat(40_000)], ['a footnote continued across blank lines', `a[^1]\n\n[^1]: a${'\n\n    b'.repeat(20_000)}`],
+        ['footnotes across blank lines', 'x[^1]\n\n' + Array.from({ length: 10_000 }, (_, i) => `[^${i}]: a\n\n    b\n`).join('\n')],
+        ['a quote of blocks', `> - a\n${'> - b\n'.repeat(40_000)}`],
+    ] as const) {
+        const started = Date.now();
+        await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'md' } as any);
+        check(`md: ${label} parse in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+    }
+    // Footnotes that refer to themselves, to each other, or along a long chain: a note referring to
+    // itself recursed until the stack ran out, and a chain made an AST too deep to serialize. A note in
+    // a note refers to none; other references stay text.
+    for (const [label, text] of [
+        ['a footnote referring to itself', 'a[^1]\n\n[^1]: see [^1]'], ['two footnotes referring to each other', 'a[^1]\n\n[^1]: one [^2]\n[^2]: two [^1]'],
+        ['a chain of 20,000 footnotes', `x[^1]\n\n${Array.from({ length: 20_000 }, (_, i) => `[^${i + 1}]: n [^${i + 2}]`).join('\n')}`],
+    ] as const) {
+        const started = Date.now();
+        const outcome = await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'md' } as any).then(ast => { JSON.stringify(ast); return 'ok'; }, (e: any) => e.message);
+        check(`md: ${label} parses, serializes, in linear time`, outcome === 'ok' && Date.now() - started < 5000, `${outcome} ${Date.now() - started}ms`);
+    }
     // A table cell's alignment wrappers are found once each, not searched for a closing tag from each.
     const alignDivs = `| a |\n| - |\n| ${'<div style="text-align: left">x'.repeat(80_000)} |`;
     const alignStarted = Date.now();

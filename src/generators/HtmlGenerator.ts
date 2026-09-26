@@ -6,7 +6,10 @@ import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeComment
 import { isSourceComment } from '../utils/commentUtils.js';
 
 /** A child that is a block of its own (a code block or display equation), which a <p> cannot hold. */
-const isBlockInParagraph = (child: OfficeContentNode): boolean => child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math !== 'inline';
+const isBlockInParagraph = (child: OfficeContentNode): boolean =>
+    (child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math !== 'inline')
+    // A rule or page break is an <hr>, which cannot sit in a <p> either (a Word page break is a break in its paragraph).
+    || (child.type === 'break' && ['thematic', 'page'].includes((child.metadata as { breakType?: string } | undefined)?.breakType ?? ''));
 
 type ResolvedStandalone = Required<StandaloneConfig>;
 

@@ -13,13 +13,11 @@ There is support for images, tables, lists, footnotes, endnotes, links, dropcaps
 
 To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books”** button and then click “**Convert”.** Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**.
 
-\
-
 # Text Formatting {#id-toc2054249818}
 
 ### Inline formatting {#id-toc2137712100}
 
-Here, we demonstrate various types of inline text formatting and the use of embedded fonts.  
+Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
 
 Here is some **bold,** *italic,* bold-italic, underlined and struck out text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
 

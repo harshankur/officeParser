@@ -45,9 +45,33 @@ function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place): OfficeCo
             continue;
         }
         changed = true;
-        const content = (inner: Place): OfficeContentNode[] => node.children?.length
-            ? replaceUnknownNodes(node.children, inner)
-            : node.text ? [{ type: 'text', text: node.text, ...(node.formatting && { formatting: node.formatting }) } as OfficeContentNode] : [];
+        const notes = node.notes?.length ? replaceUnknownNodes(node.notes, 'block') : undefined;
+        const comments = node.comments?.length ? replaceUnknownNodes(node.comments, 'block') : undefined;
+        const content = (inner: Place): OfficeContentNode[] => {
+            if (!node.children?.length) {
+                // Its text, with its formatting, link, notes and comments.
+                return node.text || notes || comments ? [{
+                    type: 'text', text: node.text ?? '',
+                    ...(node.formatting && { formatting: node.formatting }), ...(node.metadata && { metadata: node.metadata }),
+                    ...(notes && { notes }), ...(comments && { comments }),
+                } as OfficeContentNode] : [];
+            }
+            let replaced = replaceUnknownNodes(node.children, inner);
+            // An inline wrapper's formatting and link reach the text it holds (the text's own first).
+            if (inner === 'inline' && (node.formatting || node.metadata)) {
+                replaced = replaced.map(child => (child.type === 'text'
+                    ? { ...child, ...((node.formatting || child.formatting) && { formatting: { ...node.formatting, ...child.formatting } }), ...((child.metadata ?? node.metadata) && { metadata: child.metadata ?? node.metadata }) } as OfficeContentNode
+                    : child));
+            }
+            // Its notes and comments are carried by the last of its content.
+            if (notes || comments) {
+                const last = replaced.length ? { ...replaced[replaced.length - 1] } : { type: 'text', text: '' } as OfficeContentNode;
+                if (notes) last.notes = [...(last.notes ?? []), ...notes];
+                if (comments) last.comments = [...(last.comments ?? []), ...comments];
+                replaced = [...replaced.slice(0, -1), last];
+            }
+            return replaced;
+        };
         if (place === 'inline') {
             for (const child of content('inline')) out.push(child);
         } else if (place === 'row') {

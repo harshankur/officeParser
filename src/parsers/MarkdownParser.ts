@@ -87,6 +87,45 @@ function newlineCursor(text: string): (from: number) => number {
 }
 
 /**
+ * Paragraph lines, with the lines a code span runs across joined into one, each line end in it read
+ * as a space, as CommonMark reads a line end inside a code span, so a span an editor wrapped
+ * (`` x `a `` then `` b` y ``) is code rather than two backticks of text. A backtick run not escaped
+ * with a backslash opens a span that the next run of as many backticks closes, on its line or a
+ * later one (codeSpanCloser, so linear); a line joined earlier (for a comment or display math) stays
+ * whole.
+ */
+function joinCodeSpanLines(lines: string[]): string[] {
+    if (lines.length < 2 || !lines.some(line => line.includes('`'))) return lines;
+    const text = lines.join('\n');
+    // Where each line after the first starts, less one: the newline joining it to the previous.
+    const breaks: number[] = [];
+    for (let i = 0, at = -1; i < lines.length - 1; i++) breaks.push(at += lines[i].length + 1);
+    const close = codeSpanCloser(text);
+    const joined = new Set<number>();
+    let b = 0;
+    for (let i = 0; i < text.length; i++) {
+        if (text[i] === '\\' && i + 1 < text.length && text[i + 1] !== '\n') { i++; continue; }
+        if (text[i] !== '`') continue;
+        let end = i + 1;
+        while (text[end] === '`') end++;
+        const closeAt = close(end, end - i);
+        if (closeAt === -1) { i = end - 1; continue; }
+        while (b < breaks.length && breaks[b] < i) b++;
+        while (b < breaks.length && breaks[b] < closeAt) joined.add(b++);
+        i = closeAt + (end - i) - 1;
+    }
+    if (joined.size === 0) return lines;
+    const out: string[] = [];
+    let current = lines[0];
+    for (let k = 1; k < lines.length; k++) {
+        if (joined.has(k - 1)) current += ` ${lines[k]}`;
+        else { out.push(current); current = lines[k]; }
+    }
+    out.push(current);
+    return out;
+}
+
+/**
  * Paragraph lines, with the lines a comment spans joined back into one (with their line breaks), so a
  * comment that opens on one line and closes on a later one is parsed as one comment rather than as
  * visible text. An opener inside a code span on its line (after an odd number of backticks) is not a
@@ -137,6 +176,15 @@ function joinCommentLines(lines: string[]): string[] {
  * punctuation and character references decoded, in one pass, so an escaped `\&` stays a literal
  * `&` rather than starting a reference.
  */
+/** A YAML double-quoted scalar's value: decoded as JSON when it is valid JSON, else its quotes removed. */
+const decodeDoubleQuoted = (quoted: string): string => {
+    try {
+        const value = JSON.parse(quoted);
+        if (typeof value === 'string') return value;
+    } catch { /* not JSON: keep the text between the quotes */ }
+    return quoted.slice(1, -1);
+};
+
 const decodeMarkdownText = (text: string): string =>
     text.replace(/\\([!-/:-@[-`{-~])|&(#\d+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g,
         (full: string, escaped: string | undefined, ref: string | undefined) => (escaped !== undefined ? escaped : decodeCharacterReference(ref!) ?? full));
@@ -251,6 +299,36 @@ function underscoreCloser(text: string): (from: number, length: number) => numbe
 }
 
 /**
+ * For one text, a function giving where the emphasis (`*`), strikethrough (`~~`) or highlight (`==`)
+ * opened by a run of `char` ending at `from` closes: the start of the first run of at least `length`
+ * of them later on its line, after at least one character, that is not escaped with a backslash (so
+ * `**a\***` is bold `a*`), or -1. (An opener is a run not followed by whitespace, so `5 * 3 * 2` holds
+ * none. A closer may follow whitespace, which CommonMark does not allow, because this library's
+ * earlier versions wrote a run's trailing space inside its delimiters, `**Note: **body`, and files
+ * saved that way keep their bold.) As for underscores, a line found to hold no closer for a length is
+ * remembered, so a line full of openers that never close costs time linear in it.
+ */
+function delimiterCloser(text: string, char: string): (from: number, length: number) => number {
+    const newlineFrom = newlineCursor(text);
+    const noCloserBefore: number[] = [];
+    return (from, length) => {
+        if (from < (noCloserBefore[length] ?? -1)) return -1;
+        const newline = newlineFrom(from);
+        const lineEnd = newline === -1 ? text.length : newline;
+        for (let i = from; i < lineEnd; i++) {
+            if (text[i] === '\\') { i++; continue; }
+            if (text[i] !== char) continue;
+            let end = i + 1;
+            while (end < lineEnd && text[end] === char) end++;
+            if (end - i >= length && i > from) return i;
+            i = end - 1;
+        }
+        noCloserBefore[length] = lineEnd;
+        return -1;
+    };
+}
+
+/**
  * The cells of a pipe-table row, as GFM splits it: at each `|` not escaped with a backslash, with an
  * escaped `\|` read as `|` (in code spans too); the pipes at either end bound the row rather than
  * delimit empty cells. Other backslash escapes are left for inline parsing.
@@ -295,7 +373,8 @@ function splitHeadingAnchor(rest: string): { text: string; anchor?: string } {
     if (text.endsWith('}')) {
         const previousClose = text.lastIndexOf('}', text.length - 2);
         for (let open = text.indexOf('{#', previousClose + 1); open !== -1 && open < text.length - 3; open = text.indexOf('{#', open + 1)) {
-            if (/[ \t]/.test(text[open - 1] ?? '')) return { text: trimEndChars(text.slice(0, open), ASCII_WHITESPACE), anchor: text.slice(open + 2, -1) };
+            // (At the very start, the id is an empty heading's: `## {#x}`.)
+            if (open === 0 || /[ \t]/.test(text[open - 1])) return { text: trimEndChars(text.slice(0, open), ASCII_WHITESPACE), anchor: text.slice(open + 2, -1) };
         }
     }
     return { text };
@@ -361,6 +440,22 @@ function unwrapAlignDivs(text: string): { text: string; align?: 'left' | 'center
     return { text: pos === 0 ? text : out + text.slice(pos), align };
 }
 
+/** A thematic break: three or more `-`, `*` or `_`, spaces between allowed, indented at most three spaces. */
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+
+/** A setext heading's underline, under paragraph text: `=` or `-` only, indented at most three spaces. */
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
+
+/** The start of an ATX heading (after any empty anchors): up to three spaces, one to six `#`, then a space or the end. */
+const ATX_HEADING_START = /^(?:<a[^>]*><\/a>)* {0,3}#{1,6}(?:[ \t]|$)/;
+
+/**
+ * A list item's marker line: the indentation, the marker, and the first character of its content
+ * (a no-break space counts: only spaces and tabs are Markdown whitespace), which is missing for an
+ * empty item (a marker alone on its line).
+ */
+const LIST_ITEM_START = /^([ \t]*)([-*+]|\d{1,9}[.)])(?:[ \t]+([^ \t])|[ \t]*$)/;
+
 /** An empty anchor (a bookmark target, `<a id="x"></a>`) where the scan stands, after any whitespace. */
 const EMPTY_ANCHOR = /\s*<a\s[^>]*>\s*<\/a>/iy;
 
@@ -401,16 +496,28 @@ const LINK_TEXT = (() => {
     return text;
 })();
 
+/** A link target: characters and parenthesis pairs nested up to three deep (a Wikipedia `Foo_(bar)`). */
+/** A footnote reference, `[^id]`, anywhere in a text. */
+const FOOTNOTE_REFERENCE = /\[\^[^\[\]\n]+\]/;
+
+const LINK_DESTINATION = (() => {
+    const unit = String.raw`[^()\n\]]|\](?!\()`;
+    let destination = `(?:${unit})*`;
+    for (let depth = 0; depth < 3; depth++) destination = `(?:${unit}|\\(${destination}\\))*`;
+    return destination;
+})();
+
 /**
  * The inline tokenizer's alternatives, as named groups (so adding one never renumbers the dispatch):
  *
  * - `esc`: a backslash-escaped ASCII punctuation character. Listed first, as only a backslash starts
  *   it; a backslash inside a code span is never offered to it, since the span is consumed whole.
  * - `imgBang`/`imgAlt`/`imgUrl`/`imgAttrs`: an inline image or link, `[text](target "title")`, with an
- *   optional attribute list (`{width=50%}`). The target stops at its first `)` (or at a following
- *   `](`), except that a quoted title after a target without spaces may hold `(`, `)` and brackets.
- * - `boldItalicStar` (`***`), `boldStar` (`**`), `italicStar` (`*`), `strike` (`~~`), `highlight`
- *   (`==`): emphasis, closed by the next matching marker on the line.
+ *   optional attribute list (`{width=50%}`). The target may hold parenthesis pairs (LINK_DESTINATION)
+ *   and stops at its first unpaired `)` (or at a following `](`), except that a quoted title after a
+ *   target without spaces may hold `(`, `)` and brackets.
+ * - `stars` (`*`, `**`, `***`), `tildes` (`~~`) and `equals` (`==`): the opener of emphasis,
+ *   strikethrough or a highlight, a run not followed by whitespace; see delimiterCloser.
  * - `underscores`: the opener of `_italic_`, `__bold__` or `___both___`, a run of one to three
  *   underscores that is not inside a word (CommonMark's rule for `_`); see underscoreCloser.
  * - `codeFence`: a backtick run, the opener of a code span; see codeSpanCloser.
@@ -432,13 +539,11 @@ const LINK_TEXT = (() => {
  */
 const INLINE_TOKENS = [
     String.raw`\\(?<esc>[!-\/:-@\[-\x60{-~])`,
-    String.raw`(?<imgBang>!?)\[(?<imgAlt>${LINK_TEXT})\]\((?<imgUrl>[^\s()\[\]]*\s+(?:"(?:[^"\\\n]|\\[^\n])*"|'(?:[^'\\\n]|\\[^\n])*')\s*|(?:[^)\n\]]|\](?!\())*)\)(?:\{(?<imgAttrs>[^}\n]{0,1000})\})?`,
-    String.raw`\*\*\*(?<boldItalicStar>.+?)\*\*\*`,
-    String.raw`\*\*(?<boldStar>.+?)\*\*`,
+    String.raw`(?<imgBang>!?)\[(?<imgAlt>${LINK_TEXT})\]\((?<imgUrl>[^\s()\[\]]*\s+(?:"(?:[^"\\\n]|\\[^\n])*"|'(?:[^'\\\n]|\\[^\n])*')\s*|${LINK_DESTINATION})\)(?:\{(?<imgAttrs>[^}\n]{0,1000})\})?`,
+    String.raw`(?<stars>\*{1,3})(?![\s*])`,
     String.raw`(?<!(?:^|[^\\])_)(?<![^\s!-\/:-@\[-\x60{-~])(?<underscores>_{1,3})(?![\s_])`,
-    String.raw`\*(?<italicStar>.+?)\*`,
-    String.raw`~~(?<strike>.+?)~~`,
-    String.raw`==(?<highlight>.+?)==`,
+    String.raw`(?<tildes>~~)(?![\s~])`,
+    String.raw`(?<equals>==)(?![\s=])`,
     String.raw`(?<codeFence>\x60+)`,
     String.raw`<u>(?<underline>(?:(?!<u>).)+?)<\/u>`,
     String.raw`<sub>(?<subscript>(?:(?!<sub>).)+?)<\/sub>`,
@@ -584,7 +689,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     // next parse (which the generator would then re-emit unquoted, losing the type
                     // permanently). Only bare, unquoted scalars coerce.
                     const isQuoted = /^"(.*)"$/.test(rawVal) || /^'(.*)'$/.test(rawVal);
-                    const val = rawVal.replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
+                    // A double-quoted scalar's escapes (`\"`, `\\`, `\u003c`, as the generator writes
+                    // them) are decoded as JSON decodes them, which YAML's double-quoted form extends;
+                    // in a single-quoted one, `''` is a quote.
+                    const val = /^"(.*)"$/.test(rawVal) ? decodeDoubleQuoted(rawVal)
+                        : /^'(.*)'$/.test(rawVal) ? rawVal.slice(1, -1).replace(/''/g, "'") : rawVal;
 
                     let parsedVal: any = val;
                     if (!isQuoted && rawVal.startsWith('[') && rawVal.endsWith(']')) {
@@ -596,7 +705,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                             parsedVal = Array.isArray(jsonParsed) ? jsonParsed : val;
                         } catch {
                             const inner = rawVal.slice(1, -1).trim();
-                            parsedVal = inner === '' ? [] : splitFlowArrayItems(inner).map(item => item.replace(/^['"](.*)['"]$/, '$1'));
+                            // Quoted items decoded as quoted scalars are (above).
+                            parsedVal = inner === '' ? [] : splitFlowArrayItems(inner).map(item => (/^"(.*)"$/.test(item) ? decodeDoubleQuoted(item)
+                                : /^'(.*)'$/.test(item) ? item.slice(1, -1).replace(/''/g, "'") : item));
                         }
                     } else if (isQuoted) parsedVal = val;
                     else if (val === 'true') parsedVal = true;
@@ -760,7 +871,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // A label here (as below, for abbreviations and link references) holds at most 999 characters,
     // CommonMark's limit for a link label. The bound also bounds the work: a label may run across
     // lines, so without it every line starting with `[` would be scanned to the end of the document.
-    textStr = textStr.replace(/^\[\^([^\]]{1,999})\]:[ \t]*(.*(?:\n(?: {4}|\t).*)*)$/gm, (_match, id, definition) => {
+    // A definition continues on lines indented four columns, blank lines between them allowed, so a
+    // note may hold several paragraphs or a list (as Pandoc and the generator write one).
+    textStr = textStr.replace(/^\[\^([^\]]{1,999})\]:[ \t]*(.*(?:\n(?:[ \t]*\n)*(?: {4}|\t).*)*)$/gm, (_match, id, definition) => {
         const dedented = String(definition)
             .split('\n')
             .map((line: string, i: number) => i === 0 ? line : line.replace(/^(?: {4}|\t)/, ''))
@@ -840,22 +953,27 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // The note for a footnote reference to `noteId`, marking the definition as used. The same note
     // object serves every reference to the id (see the map's declaration): the first reference builds
     // the body, the rest share it, so the generators assign one key and emit one definition.
-    const footnoteNode = (noteId: string): OfficeContentNode => {
+    //
+    // A note's body is read after the document (readQueuedNoteBodies), from a queue rather than while
+    // the reference is read, so notes referring to notes cost no stack (a note referring to itself
+    // recursed without end). A note may refer to another note only if that one refers to none: nesting
+    // stays one level deep and never loops back, so the AST is a tree of bounded depth, which writers
+    // walk and JSON serializes. Any other reference is null (the caller keeps it as text), and a note
+    // referred to only that way stays an unreferenced definition.
+    const footnoteNode = (noteId: string): OfficeContentNode | null => {
+        if (readingNote && FOOTNOTE_REFERENCE.test(footnoteDefinitions.get(noteId) ?? '')) return null;
         referencedFootnoteIds.add(noteId);
         let noteNode = footnoteNodesById.get(noteId);
         if (!noteNode) {
-            const definition = footnoteDefinitions.get(noteId);
-            const noteChildren = definition !== undefined ? parseInline(definition) : [];
-            noteNode = {
-                type: 'note',
-                text: plainTextOf(noteChildren),
-                children: noteChildren,
-                metadata: { noteType: 'footnote', noteId }
-            };
+            noteNode = { type: 'note', text: '', children: [], metadata: { noteType: 'footnote', noteId } };
             footnoteNodesById.set(noteId, noteNode);
+            notesToRead.push({ note: noteNode, definition: footnoteDefinitions.get(noteId) ?? '' });
         }
         return noteNode;
     };
+    // Bodies waiting to be read, and the note whose body is being read.
+    const notesToRead: { note: OfficeContentNode; definition: string }[] = [];
+    let readingNote: OfficeContentNode | undefined;
 
     // `displayMath` is true only for the lines of a paragraph, where display math (`$$...$$` written
     // inside the text) becomes a block the paragraph is split around (see splitAtDisplayMath).
@@ -894,6 +1012,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 return [{ type: 'image', metadata: { url, altText, title, ...attrs } as ImageMetadata }];
             }
             const linkNodes = parseInline(altText, currentFormatting);
+            // A link with no text (`[](url)`) keeps its target, on an empty run.
+            if (linkNodes.length === 0) linkNodes.push(plainText(''));
             // A target in this document (`#id`) is internal, as the other parsers read it.
             const linkType = url.startsWith('#') ? 'internal' : 'external';
             linkNodes.forEach(n => {
@@ -916,6 +1036,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // so the nested calls made while handling a match cannot disturb this one.
         const closeCodeSpan = codeSpanCloser(text);
         const closeUnderscores = underscoreCloser(text);
+        const closeStars = delimiterCloser(text, '*');
+        const closeTildes = delimiterCloser(text, '~');
+        const closeEquals = delimiterCloser(text, '=');
         let lastIndex = 0; // end of the text already emitted
         let next = 0; // where the next search starts
         const closes: CommentCloseCache = { at: -1, from: Number.MAX_SAFE_INTEGER };
@@ -933,35 +1056,49 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 next = comment.end;
             }
             let closeAt = -1;
+            // The stars of a run that open emphasis: as many as a closing run allows, from three down,
+            // the rest are text (`***a**` is a star, then bold `a`).
+            let starLength = 0;
             if (g.codeFence !== undefined || g.underscores !== undefined) {
                 const run = g.codeFence ?? g.underscores;
                 closeAt = g.codeFence !== undefined ? closeCodeSpan(next, run.length) : closeUnderscores(next, run.length);
                 if (closeAt === -1) continue;
                 next = closeAt + run.length;
+            } else if (g.stars !== undefined) {
+                for (starLength = g.stars.length; starLength > 0; starLength--) {
+                    closeAt = closeStars(next, starLength);
+                    if (closeAt !== -1) break;
+                }
+                if (closeAt === -1) continue;
+                next = closeAt + starLength;
+            } else if (g.tildes !== undefined || g.equals !== undefined) {
+                closeAt = (g.tildes !== undefined ? closeTildes : closeEquals)(next, 2);
+                if (closeAt === -1) continue;
+                next = closeAt + 2;
             }
-            if (match.index > lastIndex) {
-                nodes.push(plainText(text.substring(lastIndex, match.index)));
+            const constructStart = g.stars !== undefined ? match.index + g.stars.length - starLength : match.index;
+            if (constructStart > lastIndex) {
+                nodes.push(plainText(text.substring(lastIndex, constructStart)));
             }
 
             if (g.esc !== undefined) { // Backslash-escaped punctuation
                 nodes.push(plainText(g.esc));
             } else if (g.imgAlt !== undefined) { // Image or Link
                 appendAll(nodes, buildLinkOrImageNodes(g.imgBang === '!', g.imgAlt, g.imgUrl, g.imgAttrs));
-            } else if (g.boldItalicStar !== undefined) { // Bold and italic (***)
-                appendAll(nodes, parseInline(g.boldItalicStar, { ...currentFormatting, bold: true, italic: true }));
-            } else if (g.boldStar !== undefined) { // Bold (**)
-                appendAll(nodes, parseInline(g.boldStar, { ...currentFormatting, bold: true }));
+            } else if (g.stars !== undefined) { // Italic (*), bold (**), or both (***)
+                const formatting: TextFormatting = { ...currentFormatting };
+                if (starLength >= 2) formatting.bold = true;
+                if (starLength !== 2) formatting.italic = true;
+                appendAll(nodes, parseInline(text.slice(match.index + g.stars.length, closeAt), formatting));
             } else if (g.underscores !== undefined) { // Italic (_), bold (__), or both (___)
                 const formatting: TextFormatting = { ...currentFormatting };
                 if (g.underscores.length !== 2) formatting.italic = true;
                 if (g.underscores.length >= 2) formatting.bold = true;
                 appendAll(nodes, parseInline(text.slice(match.index + g.underscores.length, closeAt), formatting));
-            } else if (g.italicStar !== undefined) { // Italic (*)
-                appendAll(nodes, parseInline(g.italicStar, { ...currentFormatting, italic: true }));
-            } else if (g.strike !== undefined) { // Strikethrough
-                appendAll(nodes, parseInline(g.strike, { ...currentFormatting, strikethrough: true }));
-            } else if (g.highlight !== undefined) { // ==highlight== (Obsidian/extended); additive on import
-                appendAll(nodes, parseInline(g.highlight, { ...currentFormatting, backgroundColor: '#ffff00' }));
+            } else if (g.tildes !== undefined) { // Strikethrough
+                appendAll(nodes, parseInline(text.slice(match.index + 2, closeAt), { ...currentFormatting, strikethrough: true }));
+            } else if (g.equals !== undefined) { // ==highlight== (Obsidian/extended); additive on import
+                appendAll(nodes, parseInline(text.slice(match.index + 2, closeAt), { ...currentFormatting, backgroundColor: '#ffff00' }));
             } else if (g.codeFence !== undefined) { // Inline code, closed by a run of as many backticks
                 nodes.push({ type: 'text', text: codeSpanContent(text.slice(match.index + g.codeFence.length, closeAt)), formatting: { ...currentFormatting, font: 'monospace' } });
             } else if (g.underline !== undefined) { // Underline
@@ -993,15 +1130,17 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 appendAll(nodes, parseInline(g.spanContent, styled));
             } else if (g.footnoteId !== undefined) { // Footnote reference
                 const noteId = g.footnoteId;
-                referencedFootnoteIds.add(noteId);
                 // ignoreNotes drops footnotes at parse time (as in DOCX/ODT/PDF): swallow the marker and
                 // attach nothing. Advance lastIndex past the marker (so the gap text is not re-emitted)
                 // before skipping. The orphan sweep below is likewise skipped.
                 if (config.ignoreNotes) { lastIndex = next; continue; }
                 const noteNode = footnoteNode(noteId);
                 // Notes attach to the preceding text node (matches WordParser's convention);
-                // fall back to an empty text node if the reference opens the inline run.
-                if (nodes.length > 0) {
+                // fall back to an empty text node if the reference opens the inline run. A reference
+                // that would make a note contain itself stays text.
+                if (!noteNode) {
+                    nodes.push(plainText(match[0]));
+                } else if (nodes.length > 0) {
                     const target = nodes[nodes.length - 1];
                     if (!target.notes) target.notes = [];
                     target.notes.push(noteNode);
@@ -1123,14 +1262,18 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // newline with no such marker is still a soft break and collapses to a space,
     // unchanged from before - CommonMark itself renders a soft break as a space/newline.
     const splitParagraphLines = (block: string): OfficeContentNode[] => {
-        const lines = joinDisplayMathLines(joinCommentLines(block.split('\n')));
+        // A continuation line's leading spaces and tabs are not part of the text (CommonMark); a
+        // comment's lines, joined first, keep theirs.
+        const lines = joinCodeSpanLines(joinDisplayMathLines(joinCommentLines(block.split('\n'))
+            .map((line, i) => (i === 0 ? line : trimStartChars(line, ' \t')))));
         const children: OfficeContentNode[] = [];
         lines.forEach((line, i) => {
             // Two or more trailing spaces, or a trailing backslash that is not itself escaped (a
             // line ending in an escaped `\\` has no break), found from the end: an end-anchored
             // pattern retried every run of spaces in the line, quadratic in a long one.
             const spaces = line.length - trimEndChars(line, ' ').length;
-            const backslash = spaces === 0 && line.endsWith('\\') && !isEscapedAt(line, line.length - 1);
+            // On the last line a backslash has no line end to break, and is text.
+            const backslash = spaces === 0 && i < lines.length - 1 && line.endsWith('\\') && !isEscapedAt(line, line.length - 1);
             const hardBreak = spaces >= 2 || backslash;
             appendAll(children, parseInline(spaces >= 2 ? line.slice(0, -spaces) : backslash ? line.slice(0, -1) : line, {}, true));
             if (i < lines.length - 1) {
@@ -1190,14 +1333,13 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return out;
     };
 
-    // Builds an admonition node from its raw body text, splitting on blank lines into
-    // paragraph children. v1 only supports inline content inside admonitions (no nested
-    // lists/headings/code) - acceptable per the roadmap's first cut.
-    const buildAdmonitionNode = (admonitionType: AdmonitionMetadata['admonitionType'], body: string, sourceSyntax: 'github' | 'gitlab'): OfficeContentNode => {
+    // Builds an admonition node from its raw body text, read as blocks (paragraphs, lists, headings,
+    // tables, code), as the document is.
+    const buildAdmonitionNode = async (admonitionType: AdmonitionMetadata['admonitionType'], body: string, sourceSyntax: 'github' | 'gitlab'): Promise<OfficeContentNode> => {
         // A fenced block in the body (dequoted, so the top-level pass could not see it) is a code child.
-        const paragraphs = liftCode(body).split(/\n\n+/).map(trimAsciiWhitespace).filter(Boolean);
-        const children: OfficeContentNode[] = paragraphs.flatMap(p => liftedCodeNode(p)
-            ?? splitAtDisplayMath(splitParagraphLines(p), parts => ({ type: 'paragraph', children: parts })));
+        const children: OfficeContentNode[] = [];
+        await parseBlocks(splitIntoBlocks(liftCode(body)), children);
+        foldAnchorPlaceholders(children);
         return {
             type: 'admonition',
             metadata: { admonitionType, sourceSyntax } as AdmonitionMetadata,
@@ -1205,7 +1347,38 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         };
     };
 
-    const rawBlocks = textStr.split(/\n\n+/);
+    // Fold standalone anchor placeholders into the following content node's anchorIds so a
+    // bookmark target emitted on its own line round-trips as a real anchor. A trailing placeholder
+    // with no following node attaches to the previous node instead; if the document is nothing but
+    // anchors, they are dropped (there is no node to host them).
+    const foldAnchorPlaceholders = (content: OfficeContentNode[]): void => {
+        if (!content.some(n => (n.type as any) === ANCHOR_PLACEHOLDER)) return;
+        const merged: OfficeContentNode[] = [];
+        let carried: string[] = [];
+        for (const node of content) {
+            if ((node.type as any) === ANCHOR_PLACEHOLDER) {
+                carried.push(...(((node.metadata as any)?.anchorIds as string[]) || []));
+                continue;
+            }
+            if (carried.length > 0 && !isSourceComment(node)) {
+                const meta: any = node.metadata || (node.metadata = {} as any);
+                meta.anchorIds = [...carried, ...((meta.anchorIds as string[]) || [])];
+                carried = [];
+            }
+            merged.push(node);
+        }
+        if (carried.length > 0 && merged.length > 0) {
+            const last: any = merged[merged.length - 1].metadata || (merged[merged.length - 1].metadata = {} as any);
+            last.anchorIds = [...((last.anchorIds as string[]) || []), ...carried];
+        }
+        content.length = 0;
+        appendAll(content, merged);
+    };
+
+    // A text's blocks: split at blank lines, then at headings, lists and HTML divs that start
+    // without one. Used for the document and, recursively, for what a quote or note holds.
+    const splitIntoBlocks = (text: string): string[] => {
+    const rawBlocks = text.split(/\n\n+/);
     const blocks: string[] = [];
 
     // Sub-split blocks that contain headings or lists without double newlines
@@ -1221,10 +1394,29 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // see the "Lists" block dispatch below, which merges such a line into the
         // previous item's content instead of dropping it.
         let inList: boolean = false;
+        const flush = () => {
+            if (currentSubBlock.length > 0) blocks.push(currentSubBlock.join('\n'));
+            currentSubBlock = [];
+        };
         for (const line of lines) {
             checkAbortSignal(config.abortSignal);
-            const isHeading = !!line.match(/^(?:<a[^>]*><\/a>)*[ \t]*#{1,6}[ \t]+/);
-            const isList = !!line.match(/^([ \t]*)([-*+]|\d+[.)])[ \t]+/);
+            // Paragraph text is open when the sub-block holds lines that are neither a list's nor a
+            // table's: what follows it may continue it rather than start a block (CommonMark).
+            const inTable: boolean = currentSubBlock.length >= 2 && currentSubBlock[1].includes('-') && /^[-:| \t]+$/.test(currentSubBlock[1]);
+            const inParagraph: boolean = currentSubBlock.length > 0 && !inList && !inTable;
+            // A line of `=` or `-` under paragraph text is a setext heading's underline; otherwise
+            // three or more `-`, `*` or `_` (spaces between allowed) are a thematic break, which
+            // is never a list item.
+            const isSetextUnderline: boolean = inParagraph && SETEXT_UNDERLINE.test(line);
+            const isRule: boolean = !isSetextUnderline && THEMATIC_BREAK.test(line);
+            const isHeading: boolean = !isSetextUnderline && ATX_HEADING_START.test(line);
+            const item: RegExpExecArray | null = isSetextUnderline || isRule ? null : LIST_ITEM_START.exec(line);
+            const itemIndent: number = item ? item[1].replace(/\t/g, '    ').length : 0;
+            // An item starts a list where a block may start (four columns of indentation make that
+            // a code block, unless the line is nested in a list), and interrupts a paragraph only if
+            // it has content and, when ordered, starts at 1.
+            const isList: boolean = !!item && (inList || itemIndent < 4)
+                && !(inParagraph && (item[3] === undefined || (/\d/.test(item[2]) && parseInt(item[2], 10) !== 1)));
             const isHtmlTag = !!line.match(/^<\/?div[^>]*>$/i);
             // A non-list, non-blank, indented (>=2 columns or a tab) line encountered
             // while already inside a list is a continuation of the current item, not a
@@ -1234,22 +1426,26 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const isContinuation: boolean = !isList && inList && /^(?: {2,}|\t)/.test(line) && trimAsciiWhitespace(line).length > 0;
             const staysInListMode: boolean = isList || isContinuation;
 
+            if (isSetextUnderline) {
+                // The underline ends the heading's block, so the heading is its last line.
+                currentSubBlock.push(line);
+                flush();
+                inList = false;
+                continue;
+            }
+
             // Split if:
-            // 1. Current line is a heading
+            // 1. Current line is a heading or a thematic break
             // 2. Current line enters or leaves "list mode" relative to the previous line
             // 3. Current line is an HTML tag (div)
-            if ((isHeading || isHtmlTag || (staysInListMode !== inList)) && currentSubBlock.length > 0) {
-                blocks.push(currentSubBlock.join('\n'));
-                currentSubBlock = [];
-            }
+            if (isHeading || isRule || isHtmlTag || staysInListMode !== inList) flush();
 
             currentSubBlock.push(line);
             inList = staysInListMode;
 
-            // Headings and HTML tags are single-line blocks for our state machine
-            if (isHeading || isHtmlTag) {
-                blocks.push(currentSubBlock.join('\n'));
-                currentSubBlock = [];
+            // Headings, thematic breaks and HTML tags are single-line blocks for our state machine
+            if (isHeading || isRule || isHtmlTag) {
+                flush();
                 inList = false;
             }
         }
@@ -1267,23 +1463,26 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // the current block OPENS with an INDENTED marker. An unindented `- b` after a blank line is
     // deliberately left split (a flat loose list keeps its own listId), and anything that is not
     // an indented marker (continuation text, indented code, placeholders) never triggers a merge.
-    const listMarkerStart = /^([ \t]*)([-*+]|\d+[.)])[ \t]+/;
-    const indentedMarkerStart = /^(?: {2,}|\t)[ \t]*(?:[-*+]|\d+[.)])[ \t]+/;
+    const indentedMarkerStart = /^(?: {2,}|\t)[ \t]*(?:[-*+]|\d+[.)])(?:[ \t]|$)/;
     const mergedBlocks: string[] = [];
     for (const block of blocks) {
         const prev = mergedBlocks[mergedBlocks.length - 1];
         if (prev !== undefined
-            && listMarkerStart.test(prev.split('\n', 1)[0])
+            && LIST_ITEM_START.test(prev.split('\n', 1)[0])
             && indentedMarkerStart.test(block.split('\n', 1)[0])) {
             mergedBlocks[mergedBlocks.length - 1] = `${prev}\n${block}`;
         } else {
             mergedBlocks.push(block);
         }
     }
-    blocks.length = 0;
-    appendAll(blocks, mergedBlocks);
+    return mergedBlocks;
+    };
 
     let listIdCounter = 1;
+
+    // Parses blocks (see splitIntoBlocks) into nodes appended to `content`: the document's, or those
+    // of a quote or note being read.
+    const parseBlocks = async (blocks: string[], content: OfficeContentNode[]): Promise<void> => {
     let currentAlignment: 'left' | 'center' | 'right' | 'justify' | undefined = undefined;
 
     for (let block of blocks) {
@@ -1505,7 +1704,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         const admonitionIndex = placeholderIndex(block, 'ADMONITION');
         if (admonitionIndex !== null && admonitionIndex < admonitionBlocks.length) {
             const data = JSON.parse(admonitionBlocks[admonitionIndex]);
-            content.push(buildAdmonitionNode(data.admonitionType, data.body, 'gitlab'));
+            content.push(await buildAdmonitionNode(data.admonitionType, data.body, 'gitlab'));
             continue;
         }
 
@@ -1520,11 +1719,34 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             continue;
         }
 
-        // Heading (allowing for leading HTML anchors and trailing {#anchor})
-        const headingMatch = block.match(/^((?:<a[^>]*><\/a>)*)[ \t]*(#{1,6})[ \t]+([\s\S]*)$/);
+        // Indented code block (4-space or tab indent on every non-blank line), before any other
+        // construct: four columns of indentation make a code block of what would otherwise read as
+        // a heading, quote, list or table (CommonMark). A nested list item indented under its
+        // parent never gets here alone: the splitter keeps it in its list's block. A partially
+        // indented block (some lines indented, some not) falls through to the other branches.
+        {
+            const codeLines = untrimmedBlock.split('\n');
+            const nonBlankLines = codeLines.filter(l => trimAsciiWhitespace(l).length > 0);
+            if (nonBlankLines.length > 0 && nonBlankLines.every(l => /^(?: {4}|\t)/.test(l))) {
+                const stripped = codeLines.map(l => l.replace(/^(?: {4}|\t)/, '')).join('\n');
+                content.push({ type: 'code', text: stripped });
+                continue;
+            }
+        }
+
+        // Hr - a thematic break (horizontal rule), not a page break, so it survives a save as
+        // `---` rather than collapsing to a bare newline. Three or more `-`, `*` or `_`, spaces
+        // between allowed; before lists, as `* * *` and `- - -` are breaks and not list items.
+        if (THEMATIC_BREAK.test(block)) {
+            content.push({ type: 'break', metadata: { breakType: 'thematic' } });
+            continue;
+        }
+
+        // Heading (allowing for leading HTML anchors and trailing {#anchor}); `#` alone is an empty one.
+        const headingMatch = block.match(/^((?:<a[^>]*><\/a>)*)[ \t]*(#{1,6})(?:[ \t]+([\s\S]*))?$/);
         if (headingMatch) {
             const leadingAnchorsRaw = headingMatch[1];
-            const { text: rawText, anchor: explicitAnchor } = splitHeadingAnchor(headingMatch[3]);
+            const { text: rawText, anchor: explicitAnchor } = splitHeadingAnchor(headingMatch[3] ?? '');
 
             const anchorIds: string[] = [];
             if (leadingAnchorsRaw) {
@@ -1577,69 +1799,61 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             continue;
         }
 
-        // Blockquote
-        const quoteMatch = block.match(/^>[ \t\n\r\f\v]+(.*)$/s);
-        if (quoteMatch) {
-            // [ \t]? (not \s+) so a bare ">" paragraph-separator line (used between
-            // multi-paragraph admonition bodies) also dequotes to an empty line. Repeat
-            // until no line still starts with ">" so arbitrarily-nested blockquotes
-            // (`> > quoted`, `> > > quoted`, ...) are fully unwrapped rather than only
-            // stripping one level.
-            let dequoted = quoteMatch[1];
-            while (/^>/m.test(dequoted)) {
-                dequoted = dequoted.replace(/^>[ \t]?/gm, '');
-            }
+        // Blockquote: `>` starts it, a space after it optional. The markers of every nesting level
+        // come off each line in one pass (a nested quote reads as part of this one; stripping one
+        // level per pass made a deeply nested line quadratic), and a line without one is a lazy
+        // continuation of the quote's paragraph.
+        if (block.startsWith('>')) {
+            const dequoted = block.replace(/^(?:>[ \t]?)+/gm, '');
 
             // GitHub-style admonition: `> [!NOTE]` on the first quoted line.
             const admonitionHeaderMatch = dequoted.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*\n?([\s\S]*)$/i);
             if (admonitionHeaderMatch) {
                 const admonitionType = admonitionHeaderMatch[1].toLowerCase() as AdmonitionMetadata['admonitionType'];
-                content.push(buildAdmonitionNode(admonitionType, admonitionHeaderMatch[2], 'github'));
+                content.push(await buildAdmonitionNode(admonitionType, admonitionHeaderMatch[2], 'github'));
                 continue;
             }
 
-            // A fenced block in the quote (dequoted, so the top-level pass could not see it) stays a
-            // code block, between the quote's paragraphs: a quote is a paragraph style, so the
-            // block cannot sit inside it, but its code and language survive.
-            const lifted = liftCode(dequoted);
-            if (lifted === dequoted) {
-                content.push({ type: 'paragraph', metadata: { style: 'Quote' } as any, children: parseInline(dequoted) });
-                continue;
+            // What the quote holds is read as blocks. Its paragraphs are quote paragraphs (a quote is a
+            // paragraph style in the AST); a list, heading, table or code block in it cannot sit
+            // inside a paragraph, so it stands between them, keeping its structure. (A fenced block
+            // in it is lifted here: the top-level pass could not see it behind the markers.)
+            const quoted: OfficeContentNode[] = [];
+            await parseBlocks(splitIntoBlocks(liftCode(dequoted)), quoted);
+            for (const node of quoted) {
+                if (node.type === 'paragraph') node.metadata = { ...node.metadata, style: 'Quote' } as any;
+                content.push(node);
             }
-            let text: string[] = [];
-            const flushQuote = () => {
-                const quoted = trimAsciiWhitespace(text.join('\n\n'));
-                if (quoted) content.push({ type: 'paragraph', metadata: { style: 'Quote' } as any, children: parseInline(quoted) });
-                text = [];
-            };
-            for (const part of lifted.split(/\n\n+/)) {
-                const code = liftedCodeNode(part);
-                if (code) { flushQuote(); content.push(code); } else text.push(part);
-            }
-            flushQuote();
             continue;
         }
 
-        // Definition list (Markdown Extra / Pandoc / Kramdown): a term line followed by
-        // one or more ": definition" lines, e.g.:
+        // Definition list (Markdown Extra / Pandoc / Kramdown): a term line followed by one or more
+        // ": definition" lines, any number of such groups in the block, e.g.:
         //   Term
         //   : Definition of the term.
-        const definitionListMatch = block.match(/^([^\n:][^\n]*)\n(:[ \t]+\S[^\n]*(?:\n:[ \t]+\S[^\n]*)*)$/);
-        if (definitionListMatch) {
-            const term = definitionListMatch[1];
-            const definitions = definitionListMatch[2].split('\n').map(line => line.replace(/^:[ \t]+/, ''));
-            content.push({
-                type: 'definitionList',
-                children: [
-                    { type: 'definitionTerm', children: parseInline(term) },
-                    ...definitions.map(def => ({ type: 'definitionDescription' as const, children: parseInline(def) }))
-                ]
-            });
-            continue;
+        //   Another term
+        //   : Its definition.
+        {
+            const lines = block.split('\n');
+            const isDefinition = (line: string) => /^:[ \t]+\S/.test(line);
+            let valid = lines.length >= 2;
+            for (let i = 0; valid && i < lines.length; i++) {
+                // A term does not start with `:`, and a definition follows it.
+                if (!isDefinition(lines[i])) valid = !lines[i].startsWith(':') && i + 1 < lines.length && isDefinition(lines[i + 1]);
+            }
+            if (valid) {
+                content.push({
+                    type: 'definitionList',
+                    children: lines.map((line): OfficeContentNode => (isDefinition(line)
+                        ? { type: 'definitionDescription', children: parseInline(line.replace(/^:[ \t]+/, '')) }
+                        : { type: 'definitionTerm', children: parseInline(line) })),
+                });
+                continue;
+            }
         }
 
         // Lists
-        if (block.match(/^([ \t]*)([-*+]|\d+[.)])[ \t]+/)) {
+        if (LIST_ITEM_START.test(block.split('\n', 1)[0])) {
             const lines = block.split('\n');
             const listId = `md-list-${listIdCounter++}`;
             const listCounters = new Map<number, number>();
@@ -1653,9 +1867,12 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             // continuation line (see the sub-splitter above) can be merged into it
             // instead of being silently dropped.
             let lastListNode: OfficeContentNode | undefined;
+            // Items that took continuation lines; their text is set once, after the block.
+            const continued = new Set<OfficeContentNode>();
 
             for (const line of lines) {
-                const match = line.match(/^([ \t]*)([-*+]|\d+[.)])[ \t]+(.*)$/);
+                // A marker alone on its line is an empty item.
+                const match = line.match(/^([ \t]*)([-*+]|\d+[.)])(?:[ \t]+(.*))?$/);
                 if (match) {
                     const rawIndent = match[1].replace(/\t/g, '    ').length;
                     while (indentStack.length > 0 && rawIndent <= indentStack[indentStack.length - 1]) {
@@ -1687,14 +1904,14 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                         listCounters.set(level, listCounters.get(level)! + 1);
                     }
 
-                    let itemText = match[3];
+                    let itemText = match[3] ?? '';
                     let isTask: boolean | undefined;
                     let checked: boolean | undefined;
-                    const taskMatch = itemText.match(/^\[([ xX])\][ \t]+(.*)$/);
+                    const taskMatch = itemText.match(/^\[([ xX])\](?:[ \t]+(.*))?$/);
                     if (taskMatch) {
                         isTask = true;
                         checked = taskMatch[1].toLowerCase() === 'x';
-                        itemText = taskMatch[2];
+                        itemText = taskMatch[2] ?? '';
                     }
                     // Empty anchors right after the marker (as the generator writes an item's
                     // bookmark targets) are the item's anchor ids, not visible text.
@@ -1724,11 +1941,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     // Indented continuation line: merge its inline content into the
                     // previous item rather than dropping it. Scoped to a single such
                     // line (no nested code/blockquote/sub-list/multi-paragraph items).
-                    const continuationChildren = parseInline(trimAsciiWhitespace(line));
-                    lastListNode.children = [...(lastListNode.children || []), { type: 'text', text: ' ' }, ...continuationChildren];
-                    lastListNode.text = plainTextOf(lastListNode.children || []);
+                    // Appended in place, and the item's text set once below: rebuilding the children
+                    // and their text for every line made an item of many lines quadratic.
+                    const children = lastListNode.children ?? (lastListNode.children = []);
+                    children.push({ type: 'text', text: ' ' });
+                    appendAll(children, parseInline(trimAsciiWhitespace(line)));
+                    continued.add(lastListNode);
                 }
             }
+            for (const item of continued) item.text = plainTextOf(item.children ?? []);
             continue;
         }
 
@@ -1765,7 +1986,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                             if (node.notes?.length) {
                                 node.notes = node.notes.map(note => {
                                     const noteId = (note.metadata as any)?.noteId;
-                                    return noteId !== undefined && footnoteDefinitions.has(noteId) ? footnoteNode(noteId) : note;
+                                    return (noteId !== undefined && footnoteDefinitions.has(noteId) ? footnoteNode(noteId) : null) ?? note;
                                 });
                             }
                             if (node.children) adopt(node.children);
@@ -1827,30 +2048,6 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
         }
 
-        // Indented code block (4-space or tab indent on every non-blank line). Only
-        // reaches this point once heading/blockquote/definition-list/list/table have
-        // already failed to claim the block; since list continuation lines are now
-        // handled inside the "Lists" branch above and the sub-splitter already isolates
-        // list/heading content into their own blocks, a block that's uniformly indented
-        // here is not a list by construction. A partially-indented block (some lines
-        // indented, some not) falls through to Paragraph unchanged.
-        {
-            const codeLines = untrimmedBlock.split('\n');
-            const nonBlankLines = codeLines.filter(l => trimAsciiWhitespace(l).length > 0);
-            if (nonBlankLines.length > 0 && nonBlankLines.every(l => /^(?: {4}|\t)/.test(l))) {
-                const stripped = codeLines.map(l => l.replace(/^(?: {4}|\t)/, '')).join('\n');
-                content.push({ type: 'code', text: stripped });
-                continue;
-            }
-        }
-
-        // Hr - a thematic break (horizontal rule), not a page break, so it survives a save as
-        // `---` rather than collapsing to a bare newline.
-        if (block.match(/^---+$|^\*\*\*+$|^___+$/)) {
-            content.push({ type: 'break', metadata: { breakType: 'thematic' } });
-            continue;
-        }
-
         // Paragraph (with any display math written in it lifted out between its parts)
         appendAll(content, splitAtDisplayMath(splitParagraphLines(block), parts => ({
             type: 'paragraph',
@@ -1858,33 +2055,33 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             children: parts
         })));
     }
+    };
 
-    // Fold standalone anchor placeholders into the following content node's anchorIds so a
-    // bookmark target emitted on its own line round-trips as a real anchor. A trailing placeholder
-    // with no following node attaches to the previous node instead; if the document is nothing but
-    // anchors, they are dropped (there is no node to host them).
-    if (content.some(n => (n.type as any) === ANCHOR_PLACEHOLDER)) {
-        const merged: OfficeContentNode[] = [];
-        let carried: string[] = [];
-        for (const node of content) {
-            if ((node.type as any) === ANCHOR_PLACEHOLDER) {
-                carried.push(...(((node.metadata as any)?.anchorIds as string[]) || []));
-                continue;
+    await parseBlocks(splitIntoBlocks(textStr), content);
+    foldAnchorPlaceholders(content);
+
+    // Note bodies, read now that the document has been: a one-line definition is the note's text, one
+    // of several lines is read as blocks (paragraphs, a list, code). Reading one can refer to further
+    // notes, whose bodies join the queue.
+    let notesRead = 0;
+    const readQueuedNoteBodies = async (): Promise<void> => {
+        for (; notesRead < notesToRead.length; notesRead++) {
+            const { note, definition } = notesToRead[notesRead];
+            readingNote = note;
+            if (definition.includes('\n')) {
+                const children: OfficeContentNode[] = [];
+                await parseBlocks(splitIntoBlocks(liftCode(definition)), children);
+                foldAnchorPlaceholders(children);
+                note.children = children;
+                note.text = children.map(child => child.text ?? plainTextOf(child.children ?? [])).join('\n');
+            } else {
+                note.children = parseInline(definition);
+                note.text = plainTextOf(note.children);
             }
-            if (carried.length > 0 && !isSourceComment(node)) {
-                const meta: any = node.metadata || (node.metadata = {} as any);
-                meta.anchorIds = [...carried, ...((meta.anchorIds as string[]) || [])];
-                carried = [];
-            }
-            merged.push(node);
+            readingNote = undefined;
         }
-        if (carried.length > 0 && merged.length > 0) {
-            const last: any = merged[merged.length - 1].metadata || (merged[merged.length - 1].metadata = {} as any);
-            last.anchorIds = [...((last.anchorIds as string[]) || []), ...carried];
-        }
-        content.length = 0;
-        appendAll(content, merged);
-    }
+    };
+    await readQueuedNoteBodies();
 
     // Orphan footnote definitions (defined but never referenced) would otherwise vanish entirely -
     // a user who deletes a `[^x]` reference but keeps its `[^x]: ...` definition loses the
@@ -1894,14 +2091,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // html: a `div[data-footnote-id]` inside `section[data-footnotes]`, which re-parses on import).
     for (const [id, definition] of footnoteDefinitions) {
         if (config.ignoreNotes) break; // ignoreNotes drops footnotes, orphan definitions included
+        // Referenced from no text, but perhaps from an unreferenced note read below: its body is read
+        // at once, so a note it refers to counts as referenced, and is the same note as any other
+        // reference to that id.
         if (referencedFootnoteIds.has(id)) continue;
-        const noteChildren = parseInline(definition);
-        content.push({
-            type: 'note',
-            text: plainTextOf(noteChildren),
-            children: noteChildren,
-            metadata: { noteType: 'footnote', noteId: id, unreferenced: true },
-        });
+        const note: OfficeContentNode = { type: 'note', text: '', children: [], metadata: { noteType: 'footnote', noteId: id, unreferenced: true } };
+        footnoteNodesById.set(id, note);
+        notesToRead.push({ note, definition });
+        await readQueuedNoteBodies();
+        content.push(note);
     }
 
     return createAST('md', metadata, content, attachments, config, undefined);

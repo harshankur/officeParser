@@ -27,8 +27,8 @@ interface HtmlNode {
 
 /**
  * HTML's optional end tags (omitted `</p>`, `</li>`, `</td>`...), as a browser reads them. For an
- * opening tag, either the open elements it closes (`closes`: the nearest of them found walking up from
- * the current element, with everything inside it, unless a `stop` element is met first), or, for a
+ * opening tag, either the open elements it closes (`closes`: the outermost of them found walking up
+ * from the current element before a `stop` element, with everything inside it), or, for a
  * row, a cell or a table section, the element it belongs directly under (`under`: everything inside the
  * nearest of them is closed, so a new row ends the previous row, a new cell the previous cell).
  */
@@ -380,9 +380,13 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
                     if (implied.under.has(p.tagName!)) { current = p; break; }
                 }
             } else if (implied) {
+                // The outermost element it closes before a `stop`: a new item closes the item before it
+                // and the paragraph open inside that item (`<dt><p>a<dd>`), not only the paragraph.
+                let closed: HtmlNode | undefined;
                 for (let p: HtmlNode | undefined = current; p && p !== root && !implied.stop.has(p.tagName!); p = p.parent) {
-                    if (implied.closes.has(p.tagName!)) { current = p.parent!; break; }
+                    if (implied.closes.has(p.tagName!)) closed = p;
                 }
+                if (closed) current = closed.parent!;
             }
             const node: HtmlNode = {
                 type: 'element',
@@ -979,7 +983,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 }
             }
 
-            // Skip structural containers produced by HtmlGenerator to avoid deep AST nesting
+            // Skip structural containers produced by HtmlGenerator to avoid deep AST nesting. (Not a
+            // caption: its text is a block of its own, which must not run into the picture before it.)
             if (tagName === 'div' && (
                 node.attributes?.class === 'container' ||
                 node.attributes?.class === 'spreadsheet-container' ||
@@ -989,7 +994,6 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 node.attributes?.class === 'image-container' ||
                 node.attributes?.class === 'chart-container' ||
                 node.attributes?.class === 'table-container' ||
-                node.attributes?.class === 'caption' ||
                 node.attributes?.class === 'sheet' ||
                 node.attributes?.class === 'page' ||
                 node.attributes?.class === 'slide' ||
@@ -1448,10 +1452,17 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
     let inlineRun: OfficeContentNode[] = [];
     const flushInlineRun = () => {
         const children = config.preserveXmlWhitespace ? inlineRun : trimBlockEdges(collapseSpacesAcrossNodes(inlineRun));
-        if (children.some(n => n.type !== 'text' || n.text || n.notes?.length || n.comments?.length)) content.push({ type: 'paragraph', children });
+        // Pictures with nothing else in the run stand as blocks of their own, as before; beside text
+        // they are part of its paragraph.
+        if (children.some(n => n.type === 'image') && children.every(n => n.type === 'image' || (n.type === 'text' && !n.text?.trim() && !n.notes?.length && !n.comments?.length))) {
+            for (const n of children) if (n.type === 'image') content.push(n);
+        } else if (children.some(n => n.type !== 'text' || n.text || n.notes?.length || n.comments?.length)) content.push({ type: 'paragraph', children });
         inlineRun = [];
     };
-    const isInlineNode = (n: OfficeContentNode) => n.type === 'text' || n.type === 'break' || (n.type === 'code' && (n.metadata as CodeMetadata | undefined)?.math === 'inline');
+    // A line break, inline math and a picture sit in a line of text; a rule or page break (<hr>) is a block.
+    const isInlineNode = (n: OfficeContentNode) => n.type === 'text' || n.type === 'image'
+        || (n.type === 'break' && !['thematic', 'page'].includes((n.metadata as { breakType?: string } | undefined)?.breakType ?? ''))
+        || (n.type === 'code' && (n.metadata as CodeMetadata | undefined)?.math === 'inline');
     for (let i = 0; i < body.children.length; i++) {
         const child = body.children[i];
         if (child.type === 'text' && !config.preserveXmlWhitespace) {

@@ -3327,6 +3327,104 @@ async function testMarkdownRoundTrips(): Promise<void> {
         assert.ok(first === second, `MD: ${file} saves the same Markdown twice (first difference at ${at}: ${JSON.stringify(first.slice(at - 40, at + 40))} became ${JSON.stringify(second.slice(at - 40, at + 40))})`);
     }
 
+    // Emphasis is read as CommonMark reads it: a delimiter run followed by whitespace opens nothing
+    // (`5 * 3 * 2` holds no emphasis), and an escaped delimiter before the closing run is text.
+    // (A closer after whitespace still closes: earlier versions wrote `**Note: **body`.)
+    for (const [src, expected] of [
+        ['5 * 3 * 2', '5 \\* 3 \\* 2'], ['a ** b ** c', 'a \\*\\* b \\*\\* c'], ['a ~~ b ~~ c', 'a \\~\\~ b \\~\\~ c'],
+        ['if a == b or a === c', 'if a \\=\\= b or a \\=\\=\\= c'], ['x* y*', 'x\\* y\\*'], ['**a\\*** b', '**a\\*** b'], ['~~a\\~~~ b', '~~a\\~~~ b'],
+    ] as const) await stable(md, src, expected, `emphasis ${JSON.stringify(src)}`);
+    const legacyBold = await OfficeParser.parseOffice(Buffer.from('**Note: **body'), { fileType: 'md' } as any);
+    assert.deepStrictEqual(legacyBold.content[0].children!.map(c => [c.text, !!c.formatting?.bold]), [['Note: ', true], ['body', false]], 'MD: a closer after whitespace still closes');
+    for (const [label, formatting] of [['bold', { bold: true }], ['italic', { italic: true }], ['strikethrough', { strikethrough: true }]] as const) {
+        const written = await gen([T(label === 'strikethrough' ? 'a~' : 'a*', formatting), T(' after')]);
+        const back = await OfficeParser.parseOffice(Buffer.from(written), { fileType: 'md' } as any);
+        assert.strictEqual(back.content[0].children!.map(c => c.text).join(''), label === 'strikethrough' ? 'a~ after' : 'a* after', `MD: ${label} text ending in its delimiter reads back (${written})`);
+    }
+
+    // Blocks as CommonMark reads them: a thematic break may have spaces and is never a list item; a
+    // setext underline ends its heading's block; an item interrupts a paragraph only if it has content
+    // and, when ordered, starts at 1; a marker alone is an empty item; four columns of indentation make
+    // code, even of a line starting `#`; `>` needs no space after it.
+    for (const [src, types] of [
+        ['* * *', ['break']], ['- - -', ['break']], ['_ _ _', ['break']], ['text\n***', ['paragraph', 'break']], ['text\n-\nmore', ['heading', 'paragraph']],
+        ['text\n2. not a list', ['paragraph']], ['text\n1. a list', ['paragraph', 'list']], ['-\n- b', ['list', 'list']], ['    # comment\n    ls -la', ['code']],
+        ['>quote', ['paragraph']], ['#', ['heading']],
+    ] as const) {
+        const blocks = await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md' } as any);
+        assert.deepStrictEqual(blocks.content.map(n => n.type), types, `MD: blocks of ${JSON.stringify(src)}`);
+        await stable(md, await md(src), await md(src), `blocks of ${JSON.stringify(src)} over saves`);
+    }
+    // A quote or an admonition holds blocks: a list, heading or table in it keeps its structure.
+    for (const [src, expected] of [
+        ['> - a\n> - b', '- a\n- b'], ['> # Heading\n> text', '# Heading\n\n> text'], ['> para\n>\n> 1. one\n> 2. two', '> para\n\n1. one\n2. two'],
+        ['> [!NOTE]\n> - a\n> - b', '> [!NOTE]\n> - a\n> - b'], ['> a  \n> b', '> a  \nb'],
+    ] as const) await stable(md, src, expected, `quote ${JSON.stringify(src)}`);
+
+    // A footnote may hold several paragraphs, a list, and references to other notes.
+    for (const src of [
+        'Body[^1] continues.\n\n[^1]: First para.\n\n    Second para.', 'Body[^1]\n\n[^1]: intro\n\n    - li',
+        'x[^1]\n\n[^1]: body with [^2] inside\n\n[^2]: inner', 'x[^1]\n\n[^1]: body with [^2] inside\n\n    more\n\n[^2]: inner',
+    ]) await stable(md, src, src, `footnote ${JSON.stringify(src)}`);
+
+    // Inline: a code span may run across lines, a link target may hold parenthesis pairs, a link may
+    // have no text, and a backslash ending a paragraph is text.
+    await stable(md, 'x `a\nb` y', 'x `a b` y', 'a code span across lines');
+    const wiki = await OfficeParser.parseOffice(Buffer.from('[w](https://en.wikipedia.org/wiki/Foo_(bar)) end'), { fileType: 'md' } as any);
+    assert.deepStrictEqual(wiki.content[0].children!.map(c => [c.text, (c.metadata as any)?.link]), [['w', 'https://en.wikipedia.org/wiki/Foo_(bar)'], [' end', undefined]], 'MD: a link target holding parentheses');
+    await stable(md, '[](http://x) after', '[](http://x) after', 'a link with no text');
+    await stable(md, 'path C:\\dir\\', 'path C:\\dir\\\\', 'a backslash ending a paragraph');
+
+    // Writing: an empty heading is its hashes (with its id); line breaks ending a paragraph, and a
+    // paragraph of breaks, are not written; an empty paragraph's bookmark goes to the next block; code
+    // and math in a list item or cell are inline; block markers starting a list item or definition
+    // are escaped; a list starts at the left margin and nests one level at a time.
+    const writeDoc = async (content: any[]) => (await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content } as any, 'md', { generateIds: false } as any)).value as string;
+    const item = (children: any[], indentation = 0, itemIndex = 0) => ({ type: 'list', metadata: { listType: 'unordered', listId: 'l', indentation, itemIndex }, children });
+    for (const [label, content, expected] of [
+        ['an empty heading', [{ type: 'heading', metadata: { level: 1 }, children: [] }, { type: 'paragraph', children: [T('after')] }], '#\n\nafter'],
+        ['an empty heading with an id', [{ type: 'heading', metadata: { level: 2, anchorIds: ['h'] }, children: [] }, { type: 'paragraph', children: [T('after')] }], '## {#h}\n\nafter'],
+        ['breaks ending a paragraph', [{ type: 'paragraph', children: [T('a'), BR, BR] }, { type: 'paragraph', children: [BR] }, { type: 'paragraph', children: [T('next')] }], 'a\n\nnext'],
+        ['a bookmark on an empty paragraph', [{ type: 'paragraph', metadata: { anchorIds: ['bm'] }, children: [] }, { type: 'paragraph', children: [T('text')] }], '<a id="bm"></a>text'],
+        ['a rule inside a paragraph', [{ type: 'paragraph', children: [T('a'), { type: 'break', metadata: { breakType: 'thematic' } }, T('b')] }], 'a\n\n---\n\nb'],
+        ['code in a list item', [item([T('see'), { type: 'code', text: 'a\nb' }])], '- see<br>`a`<br>`b`'],
+        ['math in a list item', [item([T('see '), { type: 'code', text: 'x^2\n+1', metadata: { math: 'block' } }])], '- see<br>$x^2 +1$'],
+        ['code in a cell', [{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [T('h')] }] }, { type: 'row', children: [{ type: 'cell', children: [{ type: 'code', text: 'a\nb' }] }] }] }], '| h |\n| --- |\n| `a`<br>`b` |'],
+        ['a list item starting with #', [item([T('# not a heading')])], '- \\# not a heading'],
+        ['a definition term starting with -', [{ type: 'definitionList', children: [{ type: 'definitionTerm', children: [T('- term')] }, { type: 'definitionDescription', children: [T('def')] }] }], '\\- term\n: def'],
+        ['a list starting deeper', [item([T('a')], 2), item([T('b')], 4, 1), item([T('c')], 0, 2)], '- a\n    - b\n- c'],
+        ['an empty list item', [item([]), item([T('b')], 0, 1)], '-\n- b'],
+    ] as const) {
+        const written = await writeDoc(content as any);
+        assert.strictEqual(written, expected, `MD: ${label}`);
+        await stable(md, written, written, `${label} over saves`);
+    }
+    // A table written as HTML keeps a blank line inside its code: the Markdown HTML block ends at one.
+    const htmlTableCode = await writeDoc([{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', metadata: { colSpan: 2 }, children: [{ type: 'code', text: 'a\n\nb' }] }] }, { type: 'row', children: [{ type: 'cell', children: [T('a')] }, { type: 'cell', children: [T('b')] }] }] }]);
+    assert.ok(!/\n[ \t]*\n/.test(htmlTableCode), `MD: no blank line inside an HTML table (${htmlTableCode})`);
+    assert.strictEqual((await OfficeParser.parseOffice(Buffer.from(htmlTableCode), { fileType: 'md' } as any)).content[0].children![0].children![0].children![0].text, 'a\n\nb', 'MD: an HTML table cell\'s code keeps its blank line');
+    // Front matter: a tag in a value is written `\u003c`, and quoted values decode their escapes.
+    const frontAst = { type: 'md', metadata: { title: 'say "hi" <b>x</b>', author: 'A\\B', customProperties: { tags: ['a', '<script>', 'c,d'] } }, attachments: [], content: [{ type: 'paragraph', children: [T('t')] }] } as any;
+    const frontMd = (await OfficeGenerator.generate(frontAst, 'md')).value as string;
+    assert.ok(!frontMd.includes('<'), `MD: no tag in front matter (${frontMd})`);
+    const frontBack = await OfficeParser.parseOffice(Buffer.from(frontMd), { fileType: 'md' } as any);
+    assert.deepStrictEqual([frontBack.metadata.title, frontBack.metadata.author, (frontBack.metadata.customProperties as any)?.tags], ['say "hi" <b>x</b>', 'A\\B', ['a', '<script>', 'c,d']], 'MD: front matter reads back as written');
+
+    // HTML: a rule in the body is a block, beside text too; a new item closes the one before it and a
+    // paragraph open in it; a picture beside text in the body is part of its paragraph, one alone (or
+    // with its caption) stands apart.
+    for (const [src, shape] of [
+        ['<p>a</p><hr><p>b</p>', 'paragraph|break|paragraph'], ['a<hr>b', 'paragraph|break|paragraph'],
+        ['<dl><dt><p>a<dd>b<dt>c<dd>d</dl>', 'definitionList(definitionTerm,definitionDescription,definitionTerm,definitionDescription)'],
+        ['<ul><li><p>a<li>b</ul>', 'list|list'], ['text <img src="a.png"> more', 'paragraph'], ['<div class="image-container"><img src="x.png"><div class="caption">cap</div></div>', 'image|paragraph'],
+    ] as const) {
+        const parsed = await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'html' } as any);
+        const shapeOf = (n: any): string => n.type === 'definitionList' ? `definitionList(${n.children.map((c: any) => c.type).join(',')})` : n.type;
+        assert.strictEqual(parsed.content.map(shapeOf).join('|'), shape, `HTML: ${src}`);
+    }
+    const splitHtml = (await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [T('a'), { type: 'break', metadata: { breakType: 'page' } }, T('b')] }] } as any, 'html', { htmlConfig: { standalone: false } } as any)).value as string;
+    assert.ok(/<p>a<\/p><hr class="page-break">/.test(splitHtml) && !/<p>[^<]*<hr/.test(splitHtml), `HTML: a page break is not written inside a paragraph (${splitHtml})`);
+
     // HTML decodes every numeric reference and HTML 4's names, in text and in attribute values.
     const html = await OfficeParser.parseOffice(Buffer.from('<p>it&rsquo;s &copy; &#8217; &#x2019; &eacute; &amp;quot; <a href="http://x.com/?a=1&amp;b=2" title="t &amp; u">l</a> <img src="i.png" alt="Tom &amp; Jerry" title="q &quot;x&quot;"></p>'), { fileType: 'html' } as any);
     // (The space between the link and the image is a node of its own, as in HTML.)
