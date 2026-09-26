@@ -14,7 +14,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type { OfficeContentNode, OfficeParserAST } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
-import { ocrTestHooks, terminateOcr } from '../src/utils/ocrUtils';
+import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
 import { imageFromPdf, imageToTextPdf, newDecodeBudget } from '../src/utils/textPdf';
 import { decodeBase64, hexColor, isHeaderRow, lengthToPt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw } from '../src/utils/officeGenUtils';
 
@@ -3047,6 +3047,25 @@ async function testCancellation(): Promise<void> {
         const timersAfter = process.getActiveResourcesInfo().filter(r => r === 'Timeout').length;
         assert.ok(timersAfter <= timersBefore, `Cancellation: no timer outlives a cancelled recognition (${timersBefore} before, ${timersAfter} after)`);
 
+        // A worker re-initializing for another language (the pool full of idle workers of the first)
+        // is let finish before it is terminated; one that never finishes, as a language download that
+        // hangs, holds terminateOcr() only until the load timeout, never for ever.
+        ocrTestHooks.createWorker = async () => ({
+            recognize: async () => ({ data: { text: 'x' } }),
+            reinitialize: () => new Promise(() => { }),
+            terminate: async () => { },
+        });
+        try {
+            await Promise.all(Array.from({ length: 4 }, () => performOcr(Buffer.from('x'), { language: 'eng' })));
+            const hung = performOcr(Buffer.from('x'), { language: 'fra', timeout: { workerLoad: 200 } }).catch(() => 'rejected');
+            await new Promise(resolve => setTimeout(resolve, 20));
+            const ended = await Promise.race([terminateOcr().then(() => 'ended'), new Promise(resolve => setTimeout(() => resolve('hung'), 3000))]);
+            assert.strictEqual(ended, 'ended', 'Cancellation: terminateOcr() during a re-initialization that never finishes ends by the load timeout');
+            assert.strictEqual(await hung, 'rejected', 'Cancellation: the job waiting on that re-initialization fails');
+        } finally {
+            ocrTestHooks.createWorker = undefined;
+        }
+
         // A recognition outlasting the idle period is not cut short: the pool is idle only when no job is left.
         const idleCodes: string[] = [];
         const idle = await OfficeParser.parseOffice(file('docx'), { ocr: true, extractAttachments: true, ocrConfig: { timeout: { autoTerminate: 1 } }, onWarning: (w: any) => idleCodes.push(w.code) } as any);
@@ -3060,6 +3079,7 @@ async function testCancellation(): Promise<void> {
         assert.strictEqual(ocrSignalOutcome, 'AbortError', 'Cancellation: a fired ocrConfig.abortSignal rejects the parse');
     } finally {
         ocrTestHooks.afterRecognizeCall = undefined;
+        ocrTestHooks.createWorker = undefined;
         await terminateOcr();
     }
     console.log('  Cancellation: All assertions passed ✓');
@@ -3141,9 +3161,86 @@ async function testMarkdownRoundTrips(): Promise<void> {
     const pre = (await (await OfficeParser.parseOffice(Buffer.from('```\nls\n```'), { fileType: 'md' } as any)).to('html', { htmlConfig: { standalone: false } } as any)).value as string;
     assert.ok(/<pre><code>ls<\/code><\/pre>/.test(pre), `HTML: a one-line code block is a <pre> (${pre})`);
 
+    // Text reads back as itself: its Markdown characters are escaped where they would be markup (a
+    // block marker only where a line starts), and an underscore inside a word is left as it is.
+    for (const save of [md, viaHtml]) {
+        const how = save === md ? 'md' : 'md -> html -> md';
+        for (const src of [
+            'Price: \\$5-\\$10 and 2\\*3\\*4 = 24, snake_case_name, -8 and +7',
+            'a \\[bracket\\], \\[link\\](x), !\\[img\\](y), \\[^1\\], \\[@cite\\] and \\[\\[wiki\\]\\]',
+            'C:\\path\\\\(x), \\`tick\\`, \\~tilde\\~, \\=\\=mark\\=\\=, \\{#id} and trailing\\\\',
+            '\\# not a heading', '\\- not a list', '1\\. not ordered', '\\> not a quote', '\\---', '\\: not a definition',
+        ]) await stable(save, src, src, `literal Markdown characters ${JSON.stringify(src)} (${how})`);
+        await stable(save, 'a  \n\\\nb', 'a  \n\\\nb', `consecutive hard breaks stay in the paragraph (${how})`);
+    }
+    const words = await OfficeParser.parseOffice(Buffer.from('snake_case_name and a_b_c'), { fileType: 'md' } as any);
+    assert.deepStrictEqual(words.content[0].children!.map(c => [c.text, !!c.formatting?.italic]), [['snake_case_name and a_b_c', false]], 'MD: an underscore inside a word is not emphasis');
+
+    // Emphasis a renderer reads as emphasis: whitespace stays outside the delimiters (`**Note: **` is
+    // not bold in CommonMark), bold and italic together read back as both, and `_` emphasis inside a
+    // word or next to other emphasis takes the `*` form.
+    const T = (text: string, formatting?: object) => ({ type: 'text', text, ...(formatting && { formatting }) });
+    const BR = { type: 'break', metadata: { breakType: 'carriageReturn' } };
+    const gen = async (children: any[], dialect: any = 'extended') => ((await OfficeGenerator.generate({ type: 'md', metadata: {}, content: [{ type: 'paragraph', children }], attachments: [] } as any, 'md', { mdConfig: { dialect } } as any)).value as string).trim();
+    const underscore = { extends: 'extended', emphasisMarker: 'underscore' };
+    for (const [children, dialect, expected, label] of [
+        [[T('Note: ', { bold: true }), T('body')], 'extended', '**Note:** body', 'whitespace outside emphasis'],
+        [[T('a '), T('both', { bold: true, italic: true }), T(' b')], 'extended', 'a ***both*** b', 'bold and italic'],
+        [[T('x', { bold: true }), T('y', { italic: true })], underscore, '**x**_y_', 'underscore emphasis never touches another'],
+        [[T('un'), T('believ', { italic: true }), T('able')], underscore, 'un*believ*able', 'emphasis inside a word'],
+        [[T('a '), T('b', { italic: true }), T(' c')], underscore, 'a _b_ c', 'underscore emphasis where it fits'],
+        [[T('a'), BR, BR, T('b')], 'extended', 'a  \n\\\nb', 'a hard break starting a line is a backslash'],
+    ] as const) {
+        assert.strictEqual(await gen(children as any, dialect), expected, `MD: ${label}`);
+    }
+    await stable(md, 'a ***both*** b and ___also___', 'a ***both*** b and ***also***', 'bold and italic together read back as both');
+    // Code spans keep their spaces and backticks, as CommonMark reads a padded span.
+    await stable(md, '`` `x` `` and `  a  `', '`` `x` `` and `  a  `', 'code spans keep their spaces and backticks');
+    // Titles may hold parentheses; alt text and link text may hold brackets and backslashes.
+    await stable(md, '[see](http://h/x "Figure 1 (a)") ![arr\\[0\\] C:\\path\\\\(y)](a.png "t\\\\* (1)")', '[see](http://h/x "Figure 1 (a)") ![arr\\[0\\] C:\\path\\\\(y)](a.png "t\\\\* (1)")', 'titles, alt text');
+    const nested = await OfficeParser.parseOffice(Buffer.from('[a [b [c]] d](e) and [' + 'w'.repeat(5000) + '](f)'), { fileType: 'md' } as any);
+    const nestedLinks = nested.content[0].children!.filter(c => (c.metadata as any)?.link);
+    assert.deepStrictEqual([nestedLinks.filter(c => (c.metadata as any).link === 'e').map(c => c.text).join(''), nestedLinks.filter(c => (c.metadata as any).link === 'f').map(c => c.text).join('').length], ['a [b [c]] d', 5000], 'MD: link text may hold nested brackets, and be long');
+    await stable(md, '[a \\[b\\] c](e)', '[a \\[b\\] c](e)', 'link text holding brackets');
+    // A pipe in a table cell, in text or code, stays in its cell.
+    await stable(md, '| a | b |\n| --- | --- |\n| x\\|y | `p\\|q` |', '| a | b |\n| --- | --- |\n| x\\|y | `p\\|q` |', 'a pipe in a table cell');
+    // A fence indented under a list item (four spaces, as editors write it) is a fence.
+    await stable(md, '- item\n\n    ```js\n    x\n    ```\n\n- next', '- item\n\n```js\nx\n```\n\n- next', 'a fence indented under a list item');
+    // A math line that is itself `$$` (or an indented one) reads back as written.
+    const mathMd = (await OfficeGenerator.generate({ type: 'md', metadata: {}, content: [{ type: 'code', text: 'a\n$$\n $$\n\n\nb', metadata: { math: 'block' } }], attachments: [] } as any, 'md')).value as string;
+    const mathBack = await OfficeParser.parseOffice(Buffer.from(mathMd), { fileType: 'md' } as any);
+    assert.strictEqual(mathBack.content[0].text, 'a\n$$\n $$\n\n\nb', `MD: a math line of $$ reads back as written (${JSON.stringify(mathMd)})`);
+    // An embed's label is escaped (it cannot write a tag) and a directive label reads back as written.
+    const embedAst = { type: 'md', metadata: {}, content: [{ type: 'embed', text: 'https://www.youtube.com/watch?v=abc', metadata: { embedType: 'youtube', videoId: 'abc', label: 'A <b>bold</b> & [odd] label' } }], attachments: [] };
+    for (const embeds of ['directive', 'link', 'thumbnail'] as const) {
+        const out = (await OfficeGenerator.generate(embedAst as any, 'md', { mdConfig: { dialect: { extends: 'extended', embeds } } } as any)).value as string;
+        assert.ok(!out.includes('<b>'), `MD: an embed label cannot write a tag (${embeds}: ${out})`);
+        if (embeds === 'directive') {
+            const back = await OfficeParser.parseOffice(Buffer.from(out), { fileType: 'md' } as any);
+            assert.strictEqual((back.content[0].metadata as any)?.label, 'A <b>bold</b> & [odd] label', `MD: a directive label reads back as written (${out})`);
+        }
+    }
+
+    // MDX components are stripped and their content kept, except in code, where they are code.
+    const mdx = await OfficeParser.parseOffice(Buffer.from('<Callout>\nSee `<Br/>` and <Badge />! <Open>unclosed\n</Callout>\n\n```jsx\n<Button>click</Button>\n```'), { fileType: 'md' } as any);
+    assert.deepStrictEqual(mdx.content.map(n => (n.type === 'code' ? n.text : n.children!.map(c => c.text).join(''))), ['See <Br/> and ! <Open>unclosed', '<Button>click</Button>'], 'MD: MDX components are stripped, not in code');
+    // A heading's id is the `{#id}` ending it.
+    const headingIds = await OfficeParser.parseOffice(Buffer.from('## a {#x}\n\n## b{#y} {#z}\n\n## c {#p {#q}'), { fileType: 'md' } as any);
+    assert.deepStrictEqual(headingIds.content.map(h => [h.text, (h.metadata as any).anchorIds]), [['a', ['x']], ['b{#y}', ['z']], ['c', ['p {#q']]], 'MD: heading ids');
+
+    // HTML whitespace as a browser shows it: a space between two inline elements is kept (two code
+    // spans stay two), spaces at a line's edges and around <br> are not shown, a lone &nbsp; spacer
+    // is layout, and &nbsp; between words is content.
+    const ws = await OfficeParser.parseOffice(Buffer.from('<p> <code>a</code> <code>b</code><br>\n c&nbsp;&nbsp;d </p><p>&nbsp;</p><p><b>x </b> <i>y</i></p>'), { fileType: 'html' } as any);
+    assert.deepStrictEqual(ws.content.map(b => b.children!.map(c => (c.type === 'text' ? c.text : c.type))), [['a', ' ', 'b', 'break', 'c\u00a0\u00a0d'], [], ['x ', 'y']], 'HTML: whitespace as a browser shows it');
+    // A code block inside a paragraph is written beside it: HTML cannot nest a <pre> in a <p>.
+    const split = (await (await OfficeParser.parseOffice(Buffer.from('<p id="x">a <pre>code</pre> b</p>'), { fileType: 'html' } as any)).to('html', { htmlConfig: { standalone: false } } as any)).value as string;
+    assert.ok(!/<p[^>]*>(?:(?!<\/p>)[\s\S])*<pre/.test(split) && /<p id="x">a ?<\/p>/.test(split) && (split.match(/id="x"/g) || []).length === 1, `HTML: a code block is not written inside a paragraph (${split})`);
+
     // HTML decodes every numeric reference and HTML 4's names, in text and in attribute values.
     const html = await OfficeParser.parseOffice(Buffer.from('<p>it&rsquo;s &copy; &#8217; &#x2019; &eacute; &amp;quot; <a href="http://x.com/?a=1&amp;b=2" title="t &amp; u">l</a> <img src="i.png" alt="Tom &amp; Jerry" title="q &quot;x&quot;"></p>'), { fileType: 'html' } as any);
-    const [htmlText, htmlLink, htmlImage] = html.content[0].children!;
+    // (The space between the link and the image is a node of its own, as in HTML.)
+    const [htmlText, htmlLink, htmlImage] = html.content[0].children!.filter(c => c.type !== 'text' || c.text !== ' ');
     assert.deepStrictEqual(
         [htmlText.text, (htmlLink.metadata as any).link, (htmlLink.metadata as any).title, (htmlImage.metadata as any).altText, (htmlImage.metadata as any).title],
         ['it’s © ’ ’ é &quot; ', 'http://x.com/?a=1&b=2', 't & u', 'Tom & Jerry', 'q "x"'],

@@ -18,7 +18,7 @@
     }
   },
   {
-    "text": "To see the DOCX conversion in action, simply add this file to calibre using the “Add Books” button and then click “Convert”.  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click “OK”.",
+    "text": "To see the DOCX conversion in action, simply add this file to calibre using the “Add Books” button and then click “Convert”. Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click “OK”.",
     "metadata": {
       "sourceType": "epub"
     }
@@ -45,7 +45,7 @@
     }
   },
   {
-    "text": "Here is some bold, italic, bold-italic, underlined and struck out  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.",
+    "text": "Here is some bold, italic, bold-italic, underlined and struck out text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Inline formatting"
@@ -252,119 +252,119 @@
     }
   },
   {
-    "text": "Demonstration of DOCX support in calibre1",
+    "text": "Demonstration of DOCX support in calibre 1",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Text Formatting1",
+    "text": "Text Formatting 1",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Inline formatting2",
+    "text": "Inline formatting 2",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Fun with fonts2",
+    "text": "Fun with fonts 2",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Paragraph level formatting2",
+    "text": "Paragraph level formatting 2",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Tables2",
+    "text": "Tables 2",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Structural Elements4",
+    "text": "Structural Elements 4",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Footnotes & Endnotes5",
+    "text": "Footnotes & Endnotes 5",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Dropcaps5",
+    "text": "Dropcaps 5",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Links5",
+    "text": "Links 5",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Table of Contents5",
+    "text": "Table of Contents 5",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Images6",
+    "text": "Images 6",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Lists7",
+    "text": "Lists 7",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Bulleted List8",
+    "text": "Bulleted List 8",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Numbered List8",
+    "text": "Numbered List 8",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Multi-level Lists8",
+    "text": "Multi-level Lists 8",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Continued Lists8",
+    "text": "Continued Lists 8",
     "metadata": {
       "sourceType": "epub",
       "closestHeading": "Table of Contents"

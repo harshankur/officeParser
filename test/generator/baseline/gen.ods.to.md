@@ -32,10 +32,10 @@ TestBool: true
 | --- |
 | Inline formatting |
 | Here, we demonstrate various types of inline text formatting and the use of embedded fonts. |
-| Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~struck out ~~ text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in |
+| Here is some **bold,** *italic,* ***bold-italic,*** <u>underlined </u>and ~~struck out~~  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in |
 | inverse video |
 | . |
-| *subtle emphasis  ***strong text *****intense emphasis*** |
+| *subtle emphasis*  **strong text** ***intense emphasis*** |
 | Fun with fonts |
 | some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m |
 | Paragraph level formatting |

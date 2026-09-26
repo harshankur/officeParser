@@ -144,7 +144,7 @@
         },
         {
           "type": "text",
-          "text": " Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click ",
+          "text": "Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click ",
           "rawContent": " Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click "
         },
         {
@@ -272,7 +272,7 @@
         },
         {
           "type": "text",
-          "text": " text. Then, we have a super",
+          "text": "text. Then, we have a super",
           "rawContent": " text. Then, we have a super"
         },
         {
@@ -439,7 +439,7 @@
         },
         {
           "type": "text",
-          "text": ". Every embedded font will automatically be embedded in the output ebook during conversion. ",
+          "text": ". Every embedded font will automatically be embedded in the output ebook during conversion.",
           "rawContent": ". Every embedded font will automatically be embedded in the output ebook during conversion. "
         }
       ]
@@ -3828,6 +3828,15 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "  ",
+          "metadata": {
+            "link": "index_split_000.html#id_Toc581531977",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
           "text": "1",
           "rawContent": "1",
           "metadata": {
@@ -3845,6 +3854,15 @@
           "type": "text",
           "text": "Text Formatting",
           "rawContent": "Text Formatting",
+          "metadata": {
+            "link": "index_split_001.html#id_Toc2054249818",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "  ",
           "metadata": {
             "link": "index_split_001.html#id_Toc2054249818",
             "linkType": "external"
@@ -3876,6 +3894,15 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "  ",
+          "metadata": {
+            "link": "index_split_001.html#id_Toc2137712100",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
           "text": "2",
           "rawContent": "2",
           "metadata": {
@@ -3893,6 +3920,15 @@
           "type": "text",
           "text": "Fun with fonts",
           "rawContent": "Fun with fonts",
+          "metadata": {
+            "link": "index_split_001.html#id_Toc1074133965",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "  ",
           "metadata": {
             "link": "index_split_001.html#id_Toc1074133965",
             "linkType": "external"
@@ -3924,6 +3960,15 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "  ",
+          "metadata": {
+            "link": "index_split_001.html#id_Toc2022725662",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
           "text": "2",
           "rawContent": "2",
           "metadata": {
@@ -3941,6 +3986,15 @@
           "type": "text",
           "text": "Tables",
           "rawContent": "Tables",
+          "metadata": {
+            "link": "index_split_002.html#id_Toc28114276",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "  ",
           "metadata": {
             "link": "index_split_002.html#id_Toc28114276",
             "linkType": "external"
@@ -3972,6 +4026,15 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "  ",
+          "metadata": {
+            "link": "#id_Toc54889875",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
           "text": "4",
           "rawContent": "4",
           "metadata": {
@@ -3989,6 +4052,15 @@
           "type": "text",
           "text": "Footnotes & Endnotes",
           "rawContent": "Footnotes &amp; Endnotes",
+          "metadata": {
+            "link": "#id_Toc201580556",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "  ",
           "metadata": {
             "link": "#id_Toc201580556",
             "linkType": "internal"
@@ -4020,6 +4092,15 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "  ",
+          "metadata": {
+            "link": "#id_Toc1977424358",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
           "text": "5",
           "rawContent": "5",
           "metadata": {
@@ -4037,6 +4118,15 @@
           "type": "text",
           "text": "Links",
           "rawContent": "Links",
+          "metadata": {
+            "link": "#id_Toc1233048813",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "  ",
           "metadata": {
             "link": "#id_Toc1233048813",
             "linkType": "internal"
@@ -4068,6 +4158,15 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "  ",
+          "metadata": {
+            "link": "#id_Toc64145348",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
           "text": "5",
           "rawContent": "5",
           "metadata": {
@@ -4085,6 +4184,15 @@
           "type": "text",
           "text": "Images",
           "rawContent": "Images",
+          "metadata": {
+            "link": "index_split_004.html#id_Toc484565143",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "  ",
           "metadata": {
             "link": "index_split_004.html#id_Toc484565143",
             "linkType": "external"
@@ -4116,6 +4224,15 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "  ",
+          "metadata": {
+            "link": "index_split_005.html#id_Toc1359965655",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
           "text": "7",
           "rawContent": "7",
           "metadata": {
@@ -4133,6 +4250,15 @@
           "type": "text",
           "text": "Bulleted List",
           "rawContent": "Bulleted List",
+          "metadata": {
+            "link": "index_split_005.html#id_Toc1958162433",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "  ",
           "metadata": {
             "link": "index_split_005.html#id_Toc1958162433",
             "linkType": "external"
@@ -4164,6 +4290,15 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "  ",
+          "metadata": {
+            "link": "index_split_005.html#id_Toc415190676",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
           "text": "8",
           "rawContent": "8",
           "metadata": {
@@ -4188,6 +4323,15 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "  ",
+          "metadata": {
+            "link": "index_split_005.html#id_Toc1093260318",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
           "text": "8",
           "rawContent": "8",
           "metadata": {
@@ -4205,6 +4349,15 @@
           "type": "text",
           "text": "Continued Lists",
           "rawContent": "Continued Lists",
+          "metadata": {
+            "link": "index_split_005.html#id_Toc1471533984",
+            "linkType": "external"
+          }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "  ",
           "metadata": {
             "link": "index_split_005.html#id_Toc1471533984",
             "linkType": "external"

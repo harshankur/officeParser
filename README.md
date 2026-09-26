@@ -1007,8 +1007,17 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 | Frontmatter arrays | `tags: [a, b]` or `tags: ["a","b"]` | Real array in `metadata.customProperties`/`nativeProperties` |
 | MDX components (import-only) | `<Component prop="x">...</Component>` | Stripped; inner Markdown is kept. Never generated back. |
 
+Text is written so that it reads back as itself, in CommonMark renderers and in the parser alike: a
+character that would be markup gets a backslash (`\*`, `` \` ``, `\[`, `\$`, and `\_` except inside a
+word), a block marker gets one only where it starts a line (`\# `, `\- `, `1\. `), and the `&` of a
+character reference is written `&amp;`. The parser reads emphasis, code spans, links and fences as
+CommonMark does: `***text***` is bold and italic, an underscore inside a word is text, link text may
+hold brackets and a title parentheses, a hard break is two trailing spaces or a backslash, and a fence
+may be indented under a list item.
+
 > [!NOTE]
-> MDX/JSX stripping is one-directional (parse-only): officeParser never authors JSX back into Markdown.
+> MDX/JSX stripping is one-directional (parse-only): officeParser never authors JSX back into Markdown,
+> and a component inside code is code, left as written.
 > Wikilink enable/disable and citekey→bibliography resolution are application-level concerns; officeParser
 > always parses/generates the syntax itself.
 

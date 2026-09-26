@@ -11,7 +11,9 @@ This document demonstrates the ability of the calibre DOCX Input plugin to conve
 
 There is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting.
 
-To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books” **button and then click “**Convert”. ** Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**.
+To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books”** button and then click “**Convert”.** Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**.
+
+\
 
 # Text Formatting {#id-toc2054249818}
 
@@ -19,13 +21,13 @@ To see the DOCX conversion in action, simply add this file to calibre using the 
 
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.  
 
-Here is some **bold, ***italic, *bold-italic, underlined and struck out  text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
+Here is some **bold,** *italic,* bold-italic, underlined and struck out text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
 
-A paragraph with styled text: subtle emphasis followed by **strong text **and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
+A paragraph with styled text: subtle emphasis followed by **strong text** and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
 
 ## Fun with fonts {#id-toc1074133965}
 
-This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion. 
+This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion.
 
 ## Paragraph level formatting {#id-toc2022725662}
 
@@ -297,39 +299,39 @@ Two kinds of links are possible, those that refer to an external website and tho
 
 You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook.
 
-[Demonstration of DOCX support in calibre1](index_split_000.html#id_Toc581531977)
+[Demonstration of DOCX support in calibre 1](index_split_000.html#id_Toc581531977)
 
-[Text Formatting1](index_split_001.html#id_Toc2054249818)
+[Text Formatting 1](index_split_001.html#id_Toc2054249818)
 
-[Inline formatting2](index_split_001.html#id_Toc2137712100)
+[Inline formatting 2](index_split_001.html#id_Toc2137712100)
 
-[Fun with fonts2](index_split_001.html#id_Toc1074133965)
+[Fun with fonts 2](index_split_001.html#id_Toc1074133965)
 
-[Paragraph level formatting2](index_split_001.html#id_Toc2022725662)
+[Paragraph level formatting 2](index_split_001.html#id_Toc2022725662)
 
-[Tables2](index_split_002.html#id_Toc28114276)
+[Tables 2](index_split_002.html#id_Toc28114276)
 
-[Structural Elements4](#id-toc54889875)
+[Structural Elements 4](#id-toc54889875)
 
-[Footnotes & Endnotes5](#id-toc201580556)
+[Footnotes & Endnotes 5](#id-toc201580556)
 
-[Dropcaps5](#id-toc1977424358)
+[Dropcaps 5](#id-toc1977424358)
 
-[Links5](#id-toc1233048813)
+[Links 5](#id-toc1233048813)
 
-[Table of Contents5](#id-toc64145348)
+[Table of Contents 5](#id-toc64145348)
 
-[Images6](index_split_004.html#id_Toc484565143)
+[Images 6](index_split_004.html#id_Toc484565143)
 
-[Lists7](index_split_005.html#id_Toc1359965655)
+[Lists 7](index_split_005.html#id_Toc1359965655)
 
-[Bulleted List8](index_split_005.html#id_Toc1958162433)
+[Bulleted List 8](index_split_005.html#id_Toc1958162433)
 
-[Numbered List8](index_split_005.html#id_Toc415190676)
+[Numbered List 8](index_split_005.html#id_Toc415190676)
 
-[Multi-level Lists8](index_split_005.html#id_Toc1093260318)
+[Multi-level Lists 8](index_split_005.html#id_Toc1093260318)
 
-[Continued Lists8](index_split_005.html#id_Toc1471533984)
+[Continued Lists 8](index_split_005.html#id_Toc1471533984)
 
 # Images {#id-toc484565143}
 
@@ -387,8 +389,8 @@ An interruption in our regularly scheduled listing, for this essential and very 
 
 # Notes {#calibre-pb-5}
 
-[[←1](index_split_003.html#back_note_1 "1")]
+\[[←1](index_split_003.html#back_note_1 "1")\]
 : In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.
 
-[[←2](index_split_003.html#back_note_2 "2")]
+\[[←2](index_split_003.html#back_note_2 "2")\]
 : Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.

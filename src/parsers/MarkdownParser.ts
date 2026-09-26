@@ -72,15 +72,30 @@ function commentAt(text: string, open: number, closes: CommentCloseCache): { bod
 }
 
 /**
+ * A function returning the first `\n` at or after a position of `text` (-1 when there is none), for
+ * positions asked in increasing order: it resumes from its last answer, so any number of questions
+ * costs one scan of the text.
+ */
+function newlineCursor(text: string): (from: number) => number {
+    let at = -2;
+    return from => {
+        if (at === -2 || (at !== -1 && at < from)) at = text.indexOf('\n', from);
+        return at;
+    };
+}
+
+/**
  * Paragraph lines, with the lines a comment spans joined back into one (with their line breaks), so a
  * comment that opens on one line and closes on a later one is parsed as one comment rather than as
  * visible text. An opener inside a code span on its line (after an odd number of backticks) is not a
- * comment. Linear: each line is scanned once, and `-->` searches share one cache.
+ * comment. Linear: each line is scanned once, and `-->` and newline searches each resume from their
+ * last answer.
  */
 function joinCommentLines(lines: string[]): string[] {
     if (!lines.some(l => l.includes('<!--'))) return lines;
     const text = lines.join('\n');
     const closes: CommentCloseCache = { at: -1, from: Number.MAX_SAFE_INTEGER };
+    const newlineFrom = newlineCursor(text);
     const joins = new Set<number>(); // newline offsets inside a comment
     let pos = 0; // everything before pos has been accounted for
     let ticks = 0; // backticks between the start of pos's line and pos
@@ -96,7 +111,7 @@ function joinCommentLines(lines: string[]): string[] {
         const found = commentAt(text, open, closes);
         if (!found) continue;
         let spansLines = false;
-        for (let k = text.indexOf('\n', open); k !== -1 && k < found.end; k = text.indexOf('\n', k + 1)) {
+        for (let k = newlineFrom(open); k !== -1 && k < found.end; k = newlineFrom(k + 1)) {
             joins.add(k);
             spansLines = true;
         }
@@ -114,7 +129,6 @@ function joinCommentLines(lines: string[]): string[] {
     return out;
 }
 
-/** Plain text of parsed inline nodes, leaving out source comments: a hidden note is not text. */
 /**
  * Text that is not parsed as inline Markdown but is still Markdown text (image alt text, link and
  * image titles, abbreviation definitions), read as CommonMark reads it: backslash-escaped
@@ -134,41 +148,336 @@ function appendAll<T>(target: T[], items: readonly T[]): void {
     for (const item of items) target.push(item);
 }
 
+/** ASCII punctuation, the characters a backslash escapes in CommonMark. */
+const ASCII_PUNCTUATION = /[!-/:-@[-`{-~]/;
+
+/** A letter, digit or other character that is neither whitespace nor ASCII punctuation (a word character, for emphasis). */
+const isWordCharacter = (char: string | undefined): boolean => char !== undefined && !/\s/.test(char) && !ASCII_PUNCTUATION.test(char);
+
+/**
+ * For one text, a function giving where the code span opened by a run of `length` backticks ending
+ * at `from` closes (the index of the closing run), or -1. As CommonMark reads it, a code span closes
+ * at the next run of exactly as many backticks (runs are maximal, and a backslash is literal inside a
+ * code span). The text's runs are listed by length once, and each length's cursor only moves
+ * forward, as the tokenizer's openers do, so a text full of openers that never close costs time
+ * linear in its length.
+ */
+function codeSpanCloser(text: string): (from: number, length: number) => number {
+    let runs: Map<number, number[]> | undefined;
+    const cursors = new Map<number, number>();
+    return (from, length) => {
+        if (!runs) {
+            runs = new Map();
+            for (let start = text.indexOf('`'); start !== -1;) {
+                let end = start + 1;
+                while (text[end] === '`') end++;
+                const starts = runs.get(end - start);
+                if (starts) starts.push(start); else runs.set(end - start, [start]);
+                start = text.indexOf('`', end);
+            }
+        }
+        const starts = runs.get(length);
+        if (!starts) return -1;
+        let k = cursors.get(length) ?? 0;
+        while (k < starts.length && starts[k] < from) k++;
+        cursors.set(length, k);
+        return k < starts.length ? starts[k] : -1;
+    };
+}
+
+/**
+ * For one text, a function giving where the underscore emphasis opened by a run of `length`
+ * underscores ending at `from` closes (the index of the closing run), or -1. As CommonMark has it
+ * for `_`, the closer is a run of exactly as many underscores later on the same line, not preceded
+ * by whitespace and not followed by a word character, so an underscore inside a word (snake_case)
+ * never closes emphasis. A line found to hold no closer for a length is remembered, so a line full
+ * of openers costs time linear in its length.
+ */
+function underscoreCloser(text: string): (from: number, length: number) => number {
+    const newlineFrom = newlineCursor(text);
+    const noCloserBefore = [0, 0, 0, 0];
+    return (from, length) => {
+        if (from < noCloserBefore[length]) return -1;
+        const newline = newlineFrom(from);
+        const lineEnd = newline === -1 ? text.length : newline;
+        for (let start = text.indexOf('_', from + 1); start !== -1 && start < lineEnd; start = text.indexOf('_', start + 1)) {
+            let end = start + 1;
+            while (text[end] === '_') end++;
+            if (end - start === length && !/\s/.test(text[start - 1]) && !isWordCharacter(text[end])) return start;
+            start = end - 1;
+        }
+        noCloserBefore[length] = lineEnd;
+        return -1;
+    };
+}
+
+/**
+ * The cells of a pipe-table row, as GFM splits it: at each `|` not escaped with a backslash, with an
+ * escaped `\|` read as `|` (in code spans too); the pipes at either end bound the row rather than
+ * delimit empty cells. Other backslash escapes are left for inline parsing.
+ */
+function tableRowCells(line: string): string[] {
+    const cells: string[] = [];
+    let cell = '';
+    for (let i = 0; i < line.length; i++) {
+        if (line[i] === '\\' && line[i + 1] === '|') { cell += '|'; i++; }
+        else if (line[i] === '\\' && i + 1 < line.length) { cell += line[i] + line[i + 1]; i++; }
+        else if (line[i] === '|') { cells.push(cell); cell = ''; }
+        else cell += line[i];
+    }
+    cells.push(cell);
+    if (cells.length > 1 && !cells[0].trim() && line.trimStart().startsWith('|')) cells.shift();
+    if (cells.length > 1 && !cells[cells.length - 1].trim() && /(?:^|[^\\])(?:\\\\)*\|\s*$/.test(line)) cells.pop();
+    return cells;
+}
+
+/**
+ * A heading's text and the id written after it (`## Title {#id}`): the id runs from the first ` {#`
+ * after any earlier `}` to a `}` ending the heading. Found by index searches, not a backtracking
+ * pattern, which took minutes on a heading holding many unclosed `{#`.
+ */
+function splitHeadingAnchor(rest: string): { text: string; anchor?: string } {
+    const text = rest.trimEnd();
+    if (text.endsWith('}')) {
+        const previousClose = text.lastIndexOf('}', text.length - 2);
+        for (let open = text.indexOf('{#', previousClose + 1); open !== -1 && open < text.length - 3; open = text.indexOf('{#', open + 1)) {
+            if (/\s/.test(text[open - 1] ?? '')) return { text: text.slice(0, open).trimEnd(), anchor: text.slice(open + 2, -1) };
+        }
+    }
+    return { text };
+}
+
+/**
+ * The elements of `html` with one of the given names, each running from its start tag to the nearest
+ * closing tag of those names: its attributes and its content, as a lazy `<tr[^>]*>([\s\S]*?)<\/tr>`
+ * pattern reads them, found in time linear in the text (that pattern rescanned to the end of the text
+ * for each start tag that never closes). Names match whole and in any case (`<thead>` is not a `<th>`).
+ */
+function htmlElements(html: string, names: readonly string[]): { attrs: string; content: string }[] {
+    const lower = html.toLowerCase();
+    // The first `needle` at or after a position, for positions asked in increasing order.
+    const cursor = (needle: string) => {
+        let at = -2;
+        return (from: number) => {
+            if (at === -2 || (at !== -1 && at < from)) at = lower.indexOf(needle, from);
+            return at;
+        };
+    };
+    const tagEnd = cursor('>');
+    const closers = names.map(name => cursor(`</${name}>`));
+    const opener = new RegExp(`<(?:${names.join('|')})(?=[\\s/>])`, 'g');
+    const elements: { attrs: string; content: string }[] = [];
+    for (let match = opener.exec(lower); match; match = opener.exec(lower)) {
+        const end = tagEnd(opener.lastIndex);
+        if (end === -1) break;
+        let close = -1;
+        for (const closer of closers) {
+            const at = closer(end + 1);
+            if (at !== -1 && (close === -1 || at < close)) close = at;
+        }
+        if (close === -1) break;
+        elements.push({ attrs: html.slice(opener.lastIndex, end), content: html.slice(end + 1, close) });
+        opener.lastIndex = lower.indexOf('>', close) + 1;
+    }
+    return elements;
+}
+
+/**
+ * MDX components removed, their content kept (parse-only: MDX is never written back). A component is
+ * a tag whose name starts with a capital, as React and MDX tell it from HTML. `<Component ... />` goes,
+ * and `<Component ...>inner</Component>` becomes `inner`, nested ones too. A tag inside a code span on its line (after an odd
+ * number of backticks) is code, and one with no matching closing tag is text. One scan finds the tags
+ * and pairs each closing tag with the latest open one of its name, so the time is linear in the text.
+ */
+function stripMdxComponents(text: string): string {
+    const token = /(`)|(\n)|<(\/?)([A-Z][A-Za-z0-9]*)(?:\s[^<>]*?)?(\/?)>/g;
+    const open = new Map<string, { start: number; end: number }[]>();
+    const removed: { start: number; end: number }[] = [];
+    let ticks = 0;
+    for (let match = token.exec(text); match; match = token.exec(text)) {
+        if (match[1]) { ticks++; continue; }
+        if (match[2]) { ticks = 0; continue; }
+        if (ticks % 2 === 1) continue;
+        const [whole, , , closing, name, selfClosing] = match;
+        const span = { start: match.index, end: match.index + whole.length };
+        if (selfClosing && !closing) removed.push(span);
+        else if (!closing) (open.get(name) ?? open.set(name, []).get(name)!).push(span);
+        else {
+            const opener = open.get(name)?.pop();
+            if (opener) removed.push(opener, span);
+        }
+    }
+    if (!removed.length) return text;
+    removed.sort((a, b) => a.start - b.start);
+    let out = '';
+    let pos = 0;
+    for (const span of removed) {
+        out += text.slice(pos, span.start);
+        pos = span.end;
+    }
+    return out + text.slice(pos);
+}
+
+/**
+ * A code span's content as CommonMark reads it: line endings become spaces, and when it both begins
+ * and ends with a space (and is not all spaces) one is stripped from each end, so the padding that
+ * lets a span start or end with a backtick (`` `` `x` `` ``) is not part of the code.
+ */
+function codeSpanContent(raw: string): string {
+    const text = raw.replace(/\n/g, ' ');
+    return text.length > 2 && text.startsWith(' ') && text.endsWith(' ') && /[^ ]/.test(text) ? text.slice(1, -1) : text;
+}
+
+/** Link text: characters, backslash escapes, and bracket pairs nested up to three deep. */
+const LINK_TEXT = (() => {
+    const unit = String.raw`[^\[\]\\\n]|\\[^\n]`;
+    let text = `(?:${unit})*`;
+    for (let depth = 0; depth < 3; depth++) text = `(?:${unit}|\\[${text}\\])*`;
+    return text;
+})();
+
+/**
+ * The inline tokenizer's alternatives, as named groups (so adding one never renumbers the dispatch):
+ *
+ * - `esc`: a backslash-escaped ASCII punctuation character. Listed first, as only a backslash starts
+ *   it; a backslash inside a code span is never offered to it, since the span is consumed whole.
+ * - `imgBang`/`imgAlt`/`imgUrl`/`imgAttrs`: an inline image or link, `[text](target "title")`, with an
+ *   optional attribute list (`{width=50%}`). The target stops at its first `)` (or at a following
+ *   `](`), except that a quoted title after a target without spaces may hold `(`, `)` and brackets.
+ * - `boldItalicStar` (`***`), `boldStar` (`**`), `italicStar` (`*`), `strike` (`~~`), `highlight`
+ *   (`==`): emphasis, closed by the next matching marker on the line.
+ * - `underscores`: the opener of `_italic_`, `__bold__` or `___both___`, a run of one to three
+ *   underscores that is not inside a word (CommonMark's rule for `_`); see underscoreCloser.
+ * - `codeFence`: a backtick run, the opener of a code span; see codeSpanCloser.
+ * - `underline`/`subscript`/`superscript`/`spanStyle`+`spanContent`: HTML-style inline formatting,
+ *   each ending before another opening tag of its kind.
+ * - `lineBreak` (`<br>`), `htmlComment` (the `<!--` of an inline source comment; see commentAt).
+ * - `footnoteId` (`[^id]`), `citationKey` (`[@key]`), `wikiPage`/`wikiAlias` (`[[page|alias]]`),
+ *   `refBang`/`refText`/`refId` (`[text][ref]`, `[text][]`), and `shortBang`/`shortText` (`[text]`,
+ *   the most generic bracket pattern, so last among those starting with `[`).
+ * - `autolinkUrl` (`<https://...>`), `mathDisplay` (`$$...$$`, before `mathInline`, which would
+ *   otherwise match its inner `$...$`), and `mathInline` (`$...$`, with no whitespace just inside
+ *   either `$`, the Pandoc/KaTeX heuristic that keeps "$5 and $10" as text).
+ *
+ * Every alternative stops scanning early, so a paragraph costs time in proportion to its length
+ * however it is written: link text holds no stray `[`, a target stops at its first `)`, labels hold
+ * no `[`, an HTML-style span stops at another opening tag of its kind, an attribute list is at most
+ * 1000 characters, and the closers of code spans and underscore emphasis are looked up rather than
+ * scanned for. Nothing else is capped, so a long link or span is still a link or span.
+ */
+const INLINE_TOKENS = [
+    String.raw`\\(?<esc>[!-\/:-@\[-\x60{-~])`,
+    String.raw`(?<imgBang>!?)\[(?<imgAlt>${LINK_TEXT})\]\((?<imgUrl>[^\s()\[\]]*\s+(?:"(?:[^"\\\n]|\\[^\n])*"|'(?:[^'\\\n]|\\[^\n])*')\s*|(?:[^)\n\]]|\](?!\())*)\)(?:\{(?<imgAttrs>[^}\n]{0,1000})\})?`,
+    String.raw`\*\*\*(?<boldItalicStar>.+?)\*\*\*`,
+    String.raw`\*\*(?<boldStar>.+?)\*\*`,
+    String.raw`(?<!(?:^|[^\\])_)(?<![^\s!-\/:-@\[-\x60{-~])(?<underscores>_{1,3})(?![\s_])`,
+    String.raw`\*(?<italicStar>.+?)\*`,
+    String.raw`~~(?<strike>.+?)~~`,
+    String.raw`==(?<highlight>.+?)==`,
+    String.raw`(?<codeFence>\x60+)`,
+    String.raw`<u>(?<underline>(?:(?!<u>).)+?)<\/u>`,
+    String.raw`<sub>(?<subscript>(?:(?!<sub>).)+?)<\/sub>`,
+    String.raw`<sup>(?<superscript>(?:(?!<sup>).)+?)<\/sup>`,
+    String.raw`(?<lineBreak><br\s*\/?>)`,
+    String.raw`(?<htmlComment><!--)`,
+    String.raw`<span\s+style="(?<spanStyle>[^"\n]*)">(?<spanContent>(?:(?!<span[\s>]).)+?)<\/span>`,
+    String.raw`\[\^(?<footnoteId>[^\[\]\n]+)\]`,
+    String.raw`\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]`,
+    String.raw`\[\[(?<wikiPage>[^\[\]|\n]+)(?:\|(?<wikiAlias>[^\[\]\n]+))?\]\]`,
+    String.raw`(?<refBang>!?)\[(?<refText>[^\[\]\n]*)\]\[(?<refId>[^\[\]\n]*)\]`,
+    String.raw`(?<shortBang>!?)\[(?<shortText>[^\[\]\n]+)\]`,
+    String.raw`<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>`,
+    String.raw`\$\$(?!\$)(?<mathDisplay>(?:\\[\s\S]|[^$\\])+?)\$\$`,
+    String.raw`\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$`,
+].join('|');
+
+/** The inline tokenizer, compiled once. Its `lastIndex` is set before every search (see parseInline). */
+const INLINE_TOKEN_REGEX = new RegExp(INLINE_TOKENS, 'g');
+
 /**
  * Replaces each fenced code block in `text` with what `replace` returns for it, read as CommonMark
- * reads a fence: three or more backticks or tildes, indented up to three spaces, whose info
- * string's first word is the language (`c++`, `objective-c`, `js title="a.js"`; a backtick fence's
- * info string holds no backtick), closed by a fence of the same character at least as long (so a
- * `~~~` block isn't closed by a stray ``` inside it). Content lines lose up to the opening fence's
- * indentation. A fence that is never closed is left as text.
+ * reads a fence: three or more backticks or tildes, whose info string's first word is the language
+ * (`c++`, `objective-c`, `js title="a.js"`; a backtick fence's info string holds no backtick), closed
+ * by a fence of the same character at least as long (so a `~~~` block isn't closed by a stray ```
+ * inside it). A fence may be indented up to three spaces past the start of what holds it: the line,
+ * or, inside a list item, the column the item's content starts at (so the four-space-indented fence
+ * under `- item` is a fence, not indented code); an item's fence closes within the item. Content
+ * lines lose up to the opening fence's indentation. A fence that is never closed is left as text.
  */
 function liftFencedCode(text: string, replace: (lang: string, code: string) => string): string {
     const lines = text.split('\n');
     const out: string[] = [];
-    // Per fence character, the shortest fence already known to have no closer after it: a later
-    // opener at least that long has none either, so a run of unclosed fences is not rescanned.
-    const unclosedFrom: Record<string, number> = { '`': Infinity, '~': Infinity };
+    const closingFence = /^( *)(`{3,}|~{3,})[ \t]*$/;
+    const indentOf = (line: string) => /^ */.exec(line)![0].length;
+    // Per fence character, the longest closing fence indented at most three spaces on each line or
+    // any line after it (0 for none), so a top-level opener that is never closed is known at once
+    // instead of by scanning to the end: any number of unclosed fences costs time linear in the text.
+    const longestAfter: Record<string, Int32Array> = { '`': new Int32Array(lines.length + 1), '~': new Int32Array(lines.length + 1) };
+    for (let i = lines.length - 1; i >= 0; i--) {
+        longestAfter['`'][i] = longestAfter['`'][i + 1];
+        longestAfter['~'][i] = longestAfter['~'][i + 1];
+        const close = closingFence.exec(lines[i]);
+        if (close && close[1].length <= 3) longestAfter[close[2][0]][i] = Math.max(longestAfter[close[2][0]][i], close[2].length);
+    }
+    // The list items the scan is inside, innermost last: the column each one's content starts at.
+    const items: { column: number; start: number }[] = [];
+    // For a list item holding a fence, computed once: per fence character, the longest closing
+    // fence indented as the item's fences are (up to three spaces past its content) on each of its
+    // lines or any later one of it, where a line with content indented less than its content ends
+    // it. An opener in the item is then decided at once, as a top-level one is.
+    const itemClosers = new Map<number, Record<string, Int32Array>>();
+    const closersIn = (item: { column: number; start: number }) => {
+        let longest = itemClosers.get(item.start);
+        if (!longest) {
+            let end = item.start + 1;
+            while (end < lines.length && !(lines[end].trim() && indentOf(lines[end]) < item.column)) end++;
+            const size = end - item.start;
+            longest = { '`': new Int32Array(size + 1), '~': new Int32Array(size + 1) };
+            for (let k = end - 1; k > item.start; k--) {
+                const at = k - item.start;
+                longest['`'][at] = longest['`'][at + 1];
+                longest['~'][at] = longest['~'][at + 1];
+                const close = closingFence.exec(lines[k]);
+                if (close && close[1].length >= item.column && close[1].length - item.column <= 3) {
+                    longest[close[2][0]][at] = Math.max(longest[close[2][0]][at], close[2].length);
+                }
+            }
+            itemClosers.set(item.start, longest);
+        }
+        return longest;
+    };
     for (let i = 0; i < lines.length; i++) {
-        const open = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(lines[i]);
+        const line = lines[i];
+        const indent = indentOf(line);
+        const item = /^( *)(?:[-*+]|\d{1,9}[.)])( {1,4})(?=\S)/.exec(line);
+        while (items.length && (item ? item[1].length < items[items.length - 1].column : line.trim() && indent < items[items.length - 1].column)) items.pop();
+        if (item) items.push({ column: item[0].length, start: i });
+        const container = items.length && !item ? items[items.length - 1] : undefined;
+        const base = container?.column ?? 0;
+        const open = /^( *)(`{3,}|~{3,})(.*)$/.exec(line);
         const char = open?.[2][0];
-        if (open && char && !(char === '`' && open[3].includes('`')) && open[2].length < unclosedFrom[char]) {
-            const [, indent, fence, info] = open;
-            const close = new RegExp(`^ {0,3}${char === '`' ? '`' : '~'}{${fence.length},}[ \\t]*$`);
-            let j = i + 1;
-            while (j < lines.length && !close.test(lines[j])) j++;
-            if (j < lines.length) {
-                const dedent = new RegExp(`^ {0,${indent.length}}`);
-                out.push(replace(info.trim().split(/\s+/)[0] || '', lines.slice(i + 1, j).map(line => line.replace(dedent, '')).join('\n')));
+        if (open && char && indent - base <= 3 && !(char === '`' && open[3].includes('`'))) {
+            const [, indentStr, fence, info] = open;
+            const closes = (candidate: string) => {
+                const close = closingFence.exec(candidate);
+                return !!close && close[2][0] === char && close[2].length >= fence.length && close[1].length >= base && close[1].length - base <= 3;
+            };
+            const closed = container ? closersIn(container)[char][i + 1 - container.start] >= fence.length : longestAfter[char][i + 1] >= fence.length;
+            if (closed) {
+                let j = i + 1;
+                while (!closes(lines[j])) j++;
+                const dedent = new RegExp(`^ {0,${indentStr.length}}`);
+                out.push(replace(info.trim().split(/\s+/)[0] || '', lines.slice(i + 1, j).map(content => content.replace(dedent, '')).join('\n')));
                 i = j;
                 continue;
             }
-            unclosedFrom[char] = fence.length;
         }
-        out.push(lines[i]);
+        out.push(line);
     }
     return out.join('\n');
 }
 
+/** Plain text of parsed inline nodes, leaving out source comments: a hidden note is not text. */
 const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
 
 export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
@@ -245,24 +554,6 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             if (Object.keys(nativeProps).length > 0) metadata.nativeProperties = nativeProps;
         }
     }
-
-    // Strip MDX/JSX component tags (parse-only - we never author MDX). Components are
-    // distinguished from plain HTML by an uppercase-leading tag name, matching React/MDX
-    // convention. Self-closing components are removed entirely; paired components keep
-    // their inner Markdown content. Iterate to a fixed point so nested components (of
-    // different names) are all unwrapped, not just the outermost one.
-    // Cap the passes: each iteration unwraps one nesting level, so a pathologically
-    // deep `<A><A>...</A></A>` input would otherwise be O(depth * n). Real documents
-    // nest only a handful of levels; anything past the cap is left as-is.
-    let previousTextStr;
-    let mdxPasses = 0;
-    const MAX_MDX_PASSES = 100;
-    do {
-        previousTextStr = textStr;
-        textStr = textStr.replace(/<[A-Z][A-Za-z0-9]*(?:\s+[^>]*?)?\/>/g, '');
-        textStr = textStr.replace(/<([A-Z][A-Za-z0-9]*)(?:\s+[^>]*?)?>([\s\S]*?)<\/\1>/g, (_m, _name, inner) => inner);
-    } while (textStr !== previousTextStr && ++mdxPasses < MAX_MDX_PASSES);
-
     // Blocks lifted out before block splitting (code, math, admonitions, comments) are replaced by a
     // placeholder line. The placeholder is built from private-use characters the document does not
     // contain, so literal text such as `__CODE_BLOCK_0__` in the document is never mistaken for one.
@@ -290,13 +581,19 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     };
     textStr = liftCode(textStr);
 
+    // MDX components (`<Callout>...</Callout>`, `<Chart />`) are stripped and their inner Markdown kept,
+    // after code blocks are lifted, so a component in a code sample stays code (see stripMdxComponents).
+    textStr = stripMdxComponents(textStr);
+
     // Extract block math ($$\n...\n$$) before block splitting, mirroring the code-block
     // pre-pass above - its body may contain blank lines that would otherwise fragment it.
     // Inline math ($...$) is handled directly in parseInline below.
     const mathBlocks: string[] = [];
-    textStr = textStr.replace(/^\$\$\n([\s\S]*?)\n\$\$$/gm, (_match, latex) => {
+    textStr = textStr.replace(/^\$\$\n([\s\S]*?)\n\$\$$/gm, (_match, latex: string) => {
         const id = placeholder('MATH_BLOCK', mathBlocks.length);
-        mathBlocks.push(latex);
+        // The generator indents a content line of `$$` (which would close the block) by one space,
+        // and one already indented likewise: one space comes off each.
+        mathBlocks.push(latex.replace(/^ (?= *\$\$$)/gm, ''));
         return `\n\n${id}\n\n`;
     });
     // Single-line `$$...$$` occupying its own line is display (block) math too. Without this it
@@ -313,14 +610,34 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // since their body may itself contain blank lines that would otherwise fragment them.
     // The `> [!NOTE]` GitHub form doesn't need this - it's detected inline in the blockquote
     // branch below, since a `>`-prefixed block never contains a real blank line.
+    // A `:::type` line opens one and the next `:::` line closes it; one of an unrecognised type is left
+    // as literal text, its body included. Lines are scanned once, with each line's next closing line
+    // found in advance (a lazy pattern rescanned to the end for every line that opened one unclosed).
     const admonitionBlocks: string[] = [];
-    textStr = textStr.replace(/^:::(\w+)[ \t]*\n([\s\S]*?)\n:::[ \t]*$/gm, (match, type, body) => {
-        const admonitionType = ADMONITION_TYPE_MAP[type.toLowerCase()];
-        if (!admonitionType) return match; // Unrecognised type - leave as literal text.
-        const id = placeholder('ADMONITION', admonitionBlocks.length);
-        admonitionBlocks.push(JSON.stringify({ admonitionType, body }));
-        return `\n\n${id}\n\n`;
-    });
+    {
+        const lines = textStr.split('\n');
+        const nextClose = new Int32Array(lines.length + 1).fill(lines.length);
+        for (let i = lines.length - 1; i >= 0; i--) nextClose[i] = /^:::[ \t]*$/.test(lines[i]) ? i : nextClose[i + 1];
+        const out: string[] = [];
+        for (let i = 0; i < lines.length; i++) {
+            const open = /^:::(\w+)[ \t]*$/.exec(lines[i]);
+            const close = open ? nextClose[i + 1] : lines.length;
+            if (open && close < lines.length) {
+                const admonitionType = ADMONITION_TYPE_MAP[open[1].toLowerCase()];
+                if (admonitionType) {
+                    const id = placeholder('ADMONITION', admonitionBlocks.length);
+                    admonitionBlocks.push(JSON.stringify({ admonitionType, body: lines.slice(i + 1, close).join('\n') }));
+                    out.push('', '', id, '', '');
+                } else {
+                    appendAll(out, lines.slice(i, close + 1));
+                }
+                i = close;
+                continue;
+            }
+            out.push(lines[i]);
+        }
+        textStr = out.join('\n');
+    }
 
     // Extract source comments that stand on their own lines (`<!-- ... -->`, possibly spanning several
     // lines, blank ones included) before block splitting, mirroring the code/math/admonition pre-passes -
@@ -472,7 +789,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const m = raw.trim().match(/^(.*?)\s+(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|\(((?:[^)\\]|\\.)*)\))\s*$/);
             const title = m ? m[2] ?? m[3] ?? m[4] : undefined;
             // The target is decoded too, as a renderer decodes it (the generator escapes what it must).
-            return m ? { url: decodeMarkdownText(m[1].trim()), title: title === undefined ? undefined : decodeMarkdownText(title) } : { url: decodeMarkdownText(raw) };
+            return m ? { url: decodeMarkdownText(m[1].trim()), title: title === undefined ? undefined : decodeMarkdownText(title) } : { url: decodeMarkdownText(raw.trim()) };
         };
         const buildLinkOrImageNodes = (isImage: boolean, altText: string, rawUrl: string, attrsStr?: string): OfficeContentNode[] => {
             const { url, title } = splitUrlTitle(rawUrl);
@@ -508,57 +825,37 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             return linkNodes;
         };
 
-        // Regex matches (named groups): esc=escaped punctuation char | imgBang/imgAlt/imgUrl/imgAttrs=inline
-        // image or link | boldStar/boldUnderscore=bold | italicStar/italicUnderscore=italic | strike=strikethrough |
-        // codeFence/codeContent=inline code (backreferenced fence run, so a shorter embedded backtick run
-        // doesn't close the span early) | underline/subscript/superscript=HTML tag formatting |
-        // footnoteId | citationKey | wikiPage/wikiAlias | refBang/refText/refId=explicit or collapsed
-        // reference link/image `[text][ref]`/`[text][]` | shortBang/shortText=shortcut reference `[text]`
-        // (deliberately the most generic bracket pattern, so it must stay last among `[`-starting
-        // alternatives) | autolinkUrl=`<url>` autolink | mathDisplay=`$$...$$` (before mathInline, which would
-        // otherwise match its inner `$...$` and leave a stray `$` on each side) | mathInline | htmlComment=an inline `<!-- ... -->`
-        // source comment on one line (body can't contain `-->`; a code span that starts earlier on the
-        // line wins by leftmost match, so a comment inside backticks stays code).
-        //
-        // Named groups (rather than positional match[N] indices) mean adding a new alternative never
-        // requires renumbering every existing dispatch arm.
-        //
-        // Every alternative stops scanning early, so a paragraph costs time in proportion to its length
-        // however it is written: a code span opens only at the start of a backtick run (the whole run
-        // is its fence) and closes at a run of exactly that length; link text holds balanced `[...]`
-        // pairs but no stray `[`, and a link target stops at its first `)` or at a following `](`;
-        // bracket labels hold no `[`; an HTML-style span ends before another opening tag of its kind;
-        // and each is capped (link text 1000 characters, a target 4096, labels 1000, spans 20000, a
-        // code span 65536; a `data:` image target, which can be far longer, has its own linear
-        // branch). Without this, a line of backticks or of `[x](` took minutes.
-        //
-        // Escape must be listed first since only a literal backslash can start that alternative, so it
-        // never shadows another branch; but a code span's match consumes its whole span atomically (the
-        // exec loop's lastIndex jumps past the entire matched span), so a backslash *inside* a code span
-        // is never independently offered to the escape branch regardless of listing order - CommonMark's
-        // "backslashes are not special inside code spans" rule holds by construction, not extra logic.
-        //
-        // Underscore emphasis has no CommonMark flanking-delimiter-run detection, so an intraword
-        // underscore (e.g. "foo_bar_baz") will incorrectly italicize - an accepted, documented
-        // simplification, not something this pass attempts to fix.
-        //
-        // Inline math requires no whitespace right after the opening $ or right before the
-        // closing $, the common heuristic (matching Pandoc/KaTeX) for avoiding false
-        // positives on currency like "$5 and $10".
-        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>(?:[^\[\]\n]|\[[^\[\]\n]{0,1000}\]){0,1000})\]\((?<imgUrl>data:[^()\[\]\s]*(?:\s+(?:"(?:[^"\\\n]|\\.){0,1000}"|'(?:[^'\\\n]|\\.){0,1000}'))?\s*|(?:[^)\n\]]|\](?!\()){0,4096})\)(?:\{(?<imgAttrs>[^}\n]{0,1000})\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|==(?<highlight>.+?)==|(?<!(?:^|[^\\])`)(?<codeFence>`+)(?!`)(?<codeContent>[\s\S]{1,65536}?)(?<!`)\k<codeFence>(?!`)|<u>(?<underline>(?:(?!<u>).){1,20000}?)<\/u>|<sub>(?<subscript>(?:(?!<sub>).){1,20000}?)<\/sub>|<sup>(?<superscript>(?:(?!<sup>).){1,20000}?)<\/sup>|(?<lineBreak><br\s*\/?>)|(?<htmlComment><!--)|<span\s+style="(?<spanStyle>[^"\n]{0,1000})">(?<spanContent>(?:(?!<span[\s>]).){1,20000}?)<\/span>|\[\^(?<footnoteId>[^\[\]\n]{1,200})\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\[\]|\n]{1,1000})(?:\|(?<wikiAlias>[^\[\]\n]{1,1000}))?\]\]|(?<refBang>!?)\[(?<refText>[^\[\]\n]{0,1000})\]\[(?<refId>[^\[\]\n]{0,1000})\]|(?<shortBang>!?)\[(?<shortText>[^\[\]\n]{1,1000})\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$\$(?!\$)(?<mathDisplay>(?:\\[\s\S]|[^$\\])+?)\$\$|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
-        let lastIndex = 0;
-        let match;
+        // The tokenizer (see INLINE_TOKENS) finds the next inline construct; text between constructs
+        // is plain text. A backtick run, a run of underscores and a comment's `<!--` are matched as
+        // openers only: where each closes is looked up (codeSpanCloser, underscoreCloser, commentAt),
+        // in time linear in the text however many never close. An opener with no closer is ordinary
+        // text, left in its run. The tokenizer is shared by every call (compiling it for each piece of
+        // text doubled the time of a document of short paragraphs); each search sets where it starts,
+        // so the nested calls made while handling a match cannot disturb this one.
+        const closeCodeSpan = codeSpanCloser(text);
+        const closeUnderscores = underscoreCloser(text);
+        let lastIndex = 0; // end of the text already emitted
+        let next = 0; // where the next search starts
         const closes: CommentCloseCache = { at: -1, from: Number.MAX_SAFE_INTEGER };
 
-        while ((match = regex.exec(text)) !== null) {
+        for (;;) {
+            INLINE_TOKEN_REGEX.lastIndex = next;
+            const match = INLINE_TOKEN_REGEX.exec(text);
+            if (!match) break;
+            next = INLINE_TOKEN_REGEX.lastIndex;
             const g = match.groups!;
-            // The tokenizer matches only a comment's opener; where it closes is looked up (linearly,
-            // see commentAt). An opener that never closes is ordinary text, left in its run.
             let comment: { body: string; end: number } | null = null;
             if (g.htmlComment !== undefined) {
                 comment = commentAt(text, match.index, closes);
-                if (!comment) { regex.lastIndex = match.index + 4; continue; }
-                regex.lastIndex = comment.end;
+                if (!comment) { next = match.index + 4; continue; }
+                next = comment.end;
+            }
+            let closeAt = -1;
+            if (g.codeFence !== undefined || g.underscores !== undefined) {
+                const run = g.codeFence ?? g.underscores;
+                closeAt = g.codeFence !== undefined ? closeCodeSpan(next, run.length) : closeUnderscores(next, run.length);
+                if (closeAt === -1) continue;
+                next = closeAt + run.length;
             }
             if (match.index > lastIndex) {
                 nodes.push(plainText(text.substring(lastIndex, match.index)));
@@ -567,21 +864,24 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             if (g.esc !== undefined) { // Backslash-escaped punctuation
                 nodes.push(plainText(g.esc));
             } else if (g.imgAlt !== undefined) { // Image or Link
-                nodes.push(...buildLinkOrImageNodes(g.imgBang === '!', g.imgAlt, g.imgUrl, g.imgAttrs));
+                appendAll(nodes, buildLinkOrImageNodes(g.imgBang === '!', g.imgAlt, g.imgUrl, g.imgAttrs));
+            } else if (g.boldItalicStar !== undefined) { // Bold and italic (***)
+                appendAll(nodes, parseInline(g.boldItalicStar, { ...currentFormatting, bold: true, italic: true }));
             } else if (g.boldStar !== undefined) { // Bold (**)
                 appendAll(nodes, parseInline(g.boldStar, { ...currentFormatting, bold: true }));
-            } else if (g.boldUnderscore !== undefined) { // Bold (__)
-                appendAll(nodes, parseInline(g.boldUnderscore, { ...currentFormatting, bold: true }));
+            } else if (g.underscores !== undefined) { // Italic (_), bold (__), or both (___)
+                const formatting: TextFormatting = { ...currentFormatting };
+                if (g.underscores.length !== 2) formatting.italic = true;
+                if (g.underscores.length >= 2) formatting.bold = true;
+                appendAll(nodes, parseInline(text.slice(match.index + g.underscores.length, closeAt), formatting));
             } else if (g.italicStar !== undefined) { // Italic (*)
                 appendAll(nodes, parseInline(g.italicStar, { ...currentFormatting, italic: true }));
-            } else if (g.italicUnderscore !== undefined) { // Italic (_)
-                appendAll(nodes, parseInline(g.italicUnderscore, { ...currentFormatting, italic: true }));
             } else if (g.strike !== undefined) { // Strikethrough
                 appendAll(nodes, parseInline(g.strike, { ...currentFormatting, strikethrough: true }));
             } else if (g.highlight !== undefined) { // ==highlight== (Obsidian/extended); additive on import
                 appendAll(nodes, parseInline(g.highlight, { ...currentFormatting, backgroundColor: '#ffff00' }));
-            } else if (g.codeContent !== undefined) { // Inline code (any matching backtick-run length)
-                nodes.push({ type: 'text', text: g.codeContent, formatting: { ...currentFormatting, font: 'monospace' } });
+            } else if (g.codeFence !== undefined) { // Inline code, closed by a run of as many backticks
+                nodes.push({ type: 'text', text: codeSpanContent(text.slice(match.index + g.codeFence.length, closeAt)), formatting: { ...currentFormatting, font: 'monospace' } });
             } else if (g.underline !== undefined) { // Underline
                 appendAll(nodes, parseInline(g.underline, { ...currentFormatting, underline: true }));
             } else if (g.subscript !== undefined) { // Subscript
@@ -615,7 +915,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 // ignoreNotes drops footnotes at parse time (as in DOCX/ODT/PDF): swallow the marker and
                 // attach nothing. Advance lastIndex past the marker (so the gap text is not re-emitted)
                 // before skipping. The orphan sweep below is likewise skipped.
-                if (config.ignoreNotes) { lastIndex = regex.lastIndex; continue; }
+                if (config.ignoreNotes) { lastIndex = next; continue; }
                 // Reuse the same note object across every reference to this id (see the map's
                 // declaration): the first reference builds the body, the rest share it, so the
                 // generators assign one key and emit one definition.
@@ -680,7 +980,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 nodes.push({ type: 'comment', text: comment.body, metadata: { sourceSyntax: 'html' } as CommentMetadata });
             }
 
-            lastIndex = regex.lastIndex;
+            lastIndex = next;
         }
 
         if (lastIndex < text.length) {
@@ -961,10 +1261,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // a validated id via a fixed template, so it is unconditional; `::embed` carries an arbitrary
         // src, so it is gated behind `preserveIframes` (the trust input) exactly like a raw <iframe>,
         // and stays literal text otherwise. New input only; nothing that parsed before changes.
-        const embedDirectiveMatch = block.match(/^::(youtube|embed)(?:\[([^\]]*)\])?\{([^}]*)\}$/);
+        const embedDirectiveMatch = block.match(/^::(youtube|embed)(?:\[((?:[^\]\\\n]|\\.)*)\])?\{([^}]*)\}$/);
         if (embedDirectiveMatch) {
             const kind = embedDirectiveMatch[1];
-            const label = (embedDirectiveMatch[2] || '').trim() || undefined;
+            // The label is Markdown text, decoded as the generator escapes it.
+            const label = decodeMarkdownText((embedDirectiveMatch[2] || '').trim()) || undefined;
             const attrs = parseEmbedDirectiveAttrs(embedDirectiveMatch[3]);
             if (kind === 'youtube' && attrs.id) {
                 const embedUrl = `https://www.youtube.com/watch?v=${attrs.id}`;
@@ -993,22 +1294,22 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // only; anything not matching falls through to ordinary image/link parsing.
         if (config.htmlParserConfig?.embedFolkForms) {
             // Clickable thumbnail: [![alt](thumb)](watch), youtube when either URL is a youtube link.
-            const thumbMatch = block.match(/^\[!\[([^\]]*)\]\(([^)\s]+)\)\]\(([^)\s]+)\)$/);
+            const thumbMatch = block.match(/^\[!\[((?:[^\]\\\n]|\\.)*)\]\(([^)\s]+)\)\]\(([^)\s]+)\)$/);
             if (thumbMatch) {
                 const fid = extractYoutubeId(thumbMatch[2]) || extractYoutubeId(thumbMatch[3]);
                 if (fid) {
                     const embedUrl = `https://www.youtube.com/watch?v=${fid}`;
-                    content.push({ type: 'embed', text: embedUrl, metadata: { embedType: 'youtube', videoId: fid, url: embedUrl, label: thumbMatch[1].trim() || undefined } as EmbedMetadata });
+                    content.push({ type: 'embed', text: embedUrl, metadata: { embedType: 'youtube', videoId: fid, url: embedUrl, label: decodeMarkdownText(thumbMatch[1].trim()) || undefined } as EmbedMetadata });
                     continue;
                 }
             }
             // Obsidian-style: a standalone image whose URL is a youtube link.
-            const obsMatch = block.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/);
+            const obsMatch = block.match(/^!\[((?:[^\]\\\n]|\\.)*)\]\(([^)\s]+)\)$/);
             if (obsMatch) {
                 const fid = extractYoutubeId(obsMatch[2]);
                 if (fid) {
                     const embedUrl = `https://www.youtube.com/watch?v=${fid}`;
-                    content.push({ type: 'embed', text: embedUrl, metadata: { embedType: 'youtube', videoId: fid, url: embedUrl, label: obsMatch[1].trim() || undefined } as EmbedMetadata });
+                    content.push({ type: 'embed', text: embedUrl, metadata: { embedType: 'youtube', videoId: fid, url: embedUrl, label: decodeMarkdownText(obsMatch[1].trim()) || undefined } as EmbedMetadata });
                     continue;
                 }
             }
@@ -1035,9 +1336,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     embedType: 'youtube',
                     videoId,
                     url: embedUrl,
-                    width: widthMatch?.[1],
+                    // Attribute values, HTML-escaped by the generator.
+                    width: widthMatch ? decodeCharacterReferences(widthMatch[1]) : undefined,
                     align: embedAlign,
-                    label: youtubeLabelMatch?.[1]
+                    label: youtubeLabelMatch ? decodeCharacterReferences(youtubeLabelMatch[1]) : undefined
                 } as EmbedMetadata
             });
             continue;
@@ -1135,11 +1437,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
 
         // Heading (allowing for leading HTML anchors and trailing {#anchor})
-        const headingMatch = block.match(/^((?:<a[^>]*><\/a>)*)\s*(#{1,6})\s+(.*?)(?:\s+\{#([^}]+)\})?\s*$/s);
+        const headingMatch = block.match(/^((?:<a[^>]*><\/a>)*)\s*(#{1,6})\s+([\s\S]*)$/);
         if (headingMatch) {
             const leadingAnchorsRaw = headingMatch[1];
-            const rawText = headingMatch[3];
-            const explicitAnchor = headingMatch[4];
+            const { text: rawText, anchor: explicitAnchor } = splitHeadingAnchor(headingMatch[3]);
 
             const anchorIds: string[] = [];
             if (leadingAnchorsRaw) {
@@ -1359,15 +1660,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 const tableAlignMatch = tableTagMatch?.[1]?.match(/data-align=["']?(left|center|right)["']?/i);
 
                 const rows: OfficeContentNode[] = [];
-                const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-                let trMatch;
-                while ((trMatch = trRegex.exec(block)) !== null) {
-                    const tdRegex = /<(?:td|th)([^>]*)>([\s\S]*?)<\/(?:td|th)>/gi;
-                    let tdMatch;
+                for (const row of htmlElements(block, ['tr'])) {
                     const cells: OfficeContentNode[] = [];
-                    while ((tdMatch = tdRegex.exec(trMatch[1])) !== null) {
-                        const attrs = tdMatch[1];
-                        const contentStr = tdMatch[2].trim();
+                    for (const cell of htmlElements(row.content, ['td', 'th'])) {
+                        const attrs = cell.attrs;
+                        const contentStr = cell.content.trim();
                         const colSpanMatch = attrs.match(/colspan=["']?(\d+)["']?/i);
                         const rowSpanMatch = attrs.match(/rowspan=["']?(\d+)["']?/i);
 
@@ -1409,7 +1706,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 for (let i = 0; i < lines.length; i++) {
                     if (lines[i].match(/^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/)) continue; // Separator row (per-cell `:?-+:?`, GFM-style; accepts short cells like `|-|-|`)
 
-                    const cellsStr = lines[i].replace(/^\||\|$/g, '').split('|');
+                    const cellsStr = tableRowCells(lines[i]);
                     const cells: OfficeContentNode[] = cellsStr.map((c, colIdx) => {
                         // Recognize the MarkdownGenerator's own cell-alignment fallback,
                         // `<div style="text-align: X">…</div>`, and lift it into an aligned

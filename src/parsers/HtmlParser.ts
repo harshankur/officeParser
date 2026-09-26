@@ -40,6 +40,61 @@ const decodeEntities = decodeCharacterReferences;
 const rawChildText = (node: HtmlNode): string => node.children.map(c => (c.type === 'comment' ? '' : c.text || '')).join('');
 
 /** Plain text of parsed content nodes, leaving out source comments: a hidden note is not text. */
+/**
+ * Elements laid out inline: whitespace between two of them, or between one and text, is a visible
+ * space, where whitespace between blocks is only layout.
+ */
+const INLINE_ELEMENTS = new Set(['a', 'abbr', 'b', 'bdi', 'bdo', 'big', 'cite', 'code', 'data', 'del', 'dfn', 'em', 'font', 'i', 'img', 'ins', 'kbd', 'label', 'mark', 'q', 's', 'samp', 'small', 'span', 'strike', 'strong', 'sub', 'sup', 'time', 'tt', 'u', 'var']);
+
+/**
+ * Collapses a text node's whitespace as HTML renders it: each run of ASCII whitespace becomes one
+ * space. A no-break space (`&nbsp;`) is content, not layout, and stays.
+ */
+const collapseWhitespace = (text: string): string => text.replace(/[ \t\n\f\r]+/g, ' ');
+
+/**
+ * Inline content with each space that follows another space (in the text node before it) removed,
+ * as HTML collapses whitespace across element boundaries: `<b>a </b> b` shows one space, not
+ * three. A text node left empty is dropped unless it carries something (a note, a comment).
+ */
+const collapseSpacesAcrossNodes = (nodes: OfficeContentNode[]): OfficeContentNode[] => {
+    const out: OfficeContentNode[] = [];
+    let previous: OfficeContentNode | undefined;
+    for (const node of nodes) {
+        let current = node;
+        if (current.type === 'text' && current.text?.startsWith(' ') && previous?.type === 'text' && previous.text?.endsWith(' ')) {
+            current = { ...current, text: current.text.slice(1) };
+            if (!current.text && !current.notes?.length && !current.comments?.length) continue;
+        }
+        out.push(current);
+        previous = current;
+    }
+    return out;
+};
+
+/**
+ * A block's inline content without the space at its start and at its end, which HTML does not show
+ * (a line starts and ends where its text does). Only the text at either edge is touched: an empty
+ * text node that carries a note or comment is passed over, and one left empty is dropped.
+ */
+const trimBlockEdges = (nodes: OfficeContentNode[]): OfficeContentNode[] => {
+    const out = nodes.slice();
+    const trimmed = new Set<number>();
+    for (const [start, step, edge] of [[0, 1, /^ /], [out.length - 1, -1, / $/]] as const) {
+        for (let i = start; i >= 0 && i < out.length; i += step) {
+            const node = out[i];
+            if (node.type !== 'text') break;
+            if (!node.text) continue;
+            if (edge.test(node.text)) {
+                out[i] = { ...node, text: node.text.replace(edge, '') };
+                trimmed.add(i);
+            }
+            break;
+        }
+    }
+    return out.filter((node, i) => !trimmed.has(i) || node.text || node.notes?.length || node.comments?.length);
+};
+
 const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
 
 /**
@@ -476,7 +531,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             let decodedText = decodeEntities(node.text || '');
 
             if (!config.preserveXmlWhitespace) {
-                decodedText = decodedText.replace(/\s+/g, ' ');
+                decodedText = collapseWhitespace(decodedText);
             }
             if (!decodedText.trim() && !config.preserveXmlWhitespace) return null;
 
@@ -566,7 +621,36 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
 
             const parseChildren = (n: HtmlNode, fmt: TextFormatting, lCtx?: any): OfficeContentNode[] => {
                 const kids: OfficeContentNode[] = [];
-                for (const child of n.children) {
+                // The sibling next to children[i] in direction `step`, passing over comments.
+                const sibling = (i: number, step: number): HtmlNode | undefined => {
+                    let j = i + step;
+                    while (n.children[j]?.type === 'comment') j += step;
+                    return n.children[j];
+                };
+                const isBreak = (sib: HtmlNode | undefined) => sib?.type === 'element' && sib.tagName === 'br';
+                // Inline content: text, an inline element, or (at the edge of an inline element such
+                // as `<b> </b>`) whatever lies beyond it.
+                const isInline = (sib: HtmlNode | undefined) => sib === undefined
+                    ? INLINE_ELEMENTS.has(n.tagName ?? '')
+                    : sib.type === 'text' || (sib.type === 'element' && INLINE_ELEMENTS.has(sib.tagName ?? ''));
+                for (let i = 0; i < n.children.length; i++) {
+                    const child = n.children[i];
+                    if (child.type === 'text' && !config.preserveXmlWhitespace) {
+                        // Whitespace as HTML shows it: spaces at a line's end or start around a
+                        // <br> are not shown, and whitespace alone is one space between two pieces
+                        // of inline content (`<code>a</code> <code>b</code>` is two spans, not one)
+                        // and layout anywhere else.
+                        let text = collapseWhitespace(decodeEntities(child.text || ''));
+                        if (isBreak(sibling(i, -1))) text = text.replace(/^ /, '');
+                        if (isBreak(sibling(i, 1))) text = text.replace(/ $/, '');
+                        // (A text of only no-break spaces, a spacer paragraph's `&nbsp;`, is layout
+                        // too where it stands alone; between inline content it is kept as it is.)
+                        if (!text || (!text.trim() && !(isInline(sibling(i, -1)) && isInline(sibling(i, 1))))) continue;
+                        const textNode: OfficeContentNode = { type: 'text', text, formatting: Object.keys(fmt).length > 0 ? { ...fmt } : undefined };
+                        if (config.includeRawContent && child.text) textNode.rawContent = child.text;
+                        kids.push(textNode);
+                        continue;
+                    }
                     // Footnote/endnote reference: attach as .notes on the preceding node
                     // instead of inserting a visible node, matching WordParser's convention.
                     if (child.type === 'element' && child.tagName === 'sup' && child.attributes?.['data-footnote-ref'] !== undefined) {
@@ -598,7 +682,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                         else kids.push(parsed);
                     }
                 }
-                return kids;
+                if (config.preserveXmlWhitespace) return kids;
+                const collapsed = collapseSpacesAcrossNodes(kids);
+                return INLINE_ELEMENTS.has(n.tagName ?? '') ? collapsed : trimBlockEdges(collapsed);
             };
 
             // Source-comment element (HtmlGenerator's `sourceAttributes` shape, emitted for editors whose DOM

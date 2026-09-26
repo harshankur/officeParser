@@ -21,7 +21,7 @@
     }
   },
   {
-    "text": "To see the DOCX conversion in action, simply add this file to calibre using the “Add Books”  button and then click “ Convert”.  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click “OK” .",
+    "text": "To see the DOCX conversion in action, simply add this file to calibre using the “Add Books” button and then click “ Convert”. Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click “OK” .",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Demonstration of DOCX support in calibre"
@@ -49,14 +49,14 @@
     }
   },
   {
-    "text": "Here is some bold, italic, bold-italic, underlined  and struck out  text. Then, we have a super script and a sub script . Now we see some red , green and blue text. Some text with a yellow highlight . Some text in a box . Some text in inverse video .",
+    "text": "Here is some bold, italic, bold-italic, underlined and struck out text. Then, we have a super script and a sub script . Now we see some red , green and blue text. Some text with a yellow highlight . Some text in a box . Some text in inverse video .",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Inline formatting"
     }
   },
   {
-    "text": "A paragraph with styled text: subtle emphasis f ollowed by strong text  a nd intense emphasis . This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.",
+    "text": "A paragraph with styled text: subtle emphasis f ollowed by strong text a nd intense emphasis . This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Inline formatting"
@@ -70,7 +70,7 @@
     }
   },
   {
-    "text": "This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m . Every embedded font will automatically be embedded in the output ebook during conversion.",
+    "text": "This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface , notice how every letter has the same width, even i and m . Every embedded font will automatically be embedded in the output ebook during conversion.",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Fun with fonts"
@@ -200,7 +200,7 @@
     }
   },
   {
-    "text": "Footnotes  In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre. and endnotes  Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note. are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.",
+    "text": "Footnotes In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre. and endnotes Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note. are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Footnotes & Endnotes"
@@ -256,119 +256,119 @@
     }
   },
   {
-    "text": "Demonstration of DOCX support in calibre1",
+    "text": "Demonstration of DOCX support in calibre 1",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Text Formatting1",
+    "text": "Text Formatting 1",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Inline formatting2",
+    "text": "Inline formatting 2",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Fun with fonts2",
+    "text": "Fun with fonts 2",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Paragraph level formatting2",
+    "text": "Paragraph level formatting 2",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Tables2",
+    "text": "Tables 2",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Structural Elements4",
+    "text": "Structural Elements 4",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Footnotes & Endnotes5",
+    "text": "Footnotes & Endnotes 5",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Dropcaps5",
+    "text": "Dropcaps 5",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Links5",
+    "text": "Links 5",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Table of Contents5",
+    "text": "Table of Contents 5",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Images6",
+    "text": "Images 6",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Lists7",
+    "text": "Lists 7",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Bulleted List8",
+    "text": "Bulleted List 8",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Numbered List8",
+    "text": "Numbered List 8",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Multi-level Lists8",
+    "text": "Multi-level Lists 8",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Continued Lists8",
+    "text": "Continued Lists 8",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Table of Contents"
@@ -396,7 +396,7 @@
     }
   },
   {
-    "text": "There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was inserted, not necessarily where it appears on the page in Word.",
+    "text": "There is no analogous technology in ebooks , so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was inserted , not necessarily where it appears on the page in Word.",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Images"
@@ -459,94 +459,94 @@
     }
   },
   {
-    "text": "Multi-level Lists",
+    "text": "Multi-level List s",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "One",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "Two",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "Three",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly.",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "Five",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "Six",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "A Multi-level list with bullets:",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "One",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "Two",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "This bullet uses an image as the bullet item",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "Four",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {
     "text": "Five",
     "metadata": {
       "sourceType": "html",
-      "closestHeading": "Multi-level Lists"
+      "closestHeading": "Multi-level List s"
     }
   },
   {

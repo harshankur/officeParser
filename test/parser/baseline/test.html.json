@@ -118,7 +118,7 @@
       "children": [
         {
           "type": "text",
-          "text": "This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action. ",
+          "text": "This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action.",
           "rawContent": "This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action.\n\n"
         }
       ]
@@ -129,7 +129,7 @@
       "children": [
         {
           "type": "text",
-          "text": "There is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting. ",
+          "text": "There is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting.",
           "rawContent": "There is support for images, tables, lists, footnotes, endnotes, \n\nlinks, dropcaps and \n\nvarious\n\n types of text and paragraph level formatting.\n\n"
         }
       ]
@@ -153,7 +153,7 @@
         },
         {
           "type": "text",
-          "text": " button and then click “ ",
+          "text": "button and then click “ ",
           "rawContent": "\n\nbutton and then click “\n\n"
         },
         {
@@ -166,7 +166,7 @@
         },
         {
           "type": "text",
-          "text": " Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click ",
+          "text": "Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click ",
           "rawContent": "\n\n Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click \n\n"
         },
         {
@@ -179,7 +179,7 @@
         },
         {
           "type": "text",
-          "text": " . ",
+          "text": " .",
           "rawContent": "\n\n.\n\n"
         }
       ]
@@ -239,7 +239,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Here, we demonstrate various types of inline text formatting and the use of embedded fonts. ",
+          "text": "Here, we demonstrate various types of inline text formatting and the use of embedded fonts.",
           "rawContent": "Here, we demonstrate various types of inline text formatting and the use of embedded fonts.\n\n"
         }
       ]
@@ -288,7 +288,7 @@
         },
         {
           "type": "text",
-          "text": " and ",
+          "text": "and ",
           "rawContent": "\n\nand \n\n"
         },
         {
@@ -301,7 +301,7 @@
         },
         {
           "type": "text",
-          "text": " text. Then, we have a super ",
+          "text": "text. Then, we have a super ",
           "rawContent": "\n\n text. Then, we have a super\n\n"
         },
         {
@@ -393,7 +393,7 @@
         },
         {
           "type": "text",
-          "text": " . ",
+          "text": " .",
           "rawContent": "\n\n.\n\n"
         }
       ]
@@ -418,7 +418,12 @@
         },
         {
           "type": "text",
-          "text": " f ollowed by ",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
+          "text": "f ollowed by ",
           "rawContent": "\n\nf\n\nollowed by \n\n"
         },
         {
@@ -431,7 +436,7 @@
         },
         {
           "type": "text",
-          "text": " a nd ",
+          "text": "a nd ",
           "rawContent": "\n\na\n\nnd \n\n"
         },
         {
@@ -446,7 +451,7 @@
         },
         {
           "type": "text",
-          "text": " . This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease. ",
+          "text": " . This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.",
           "rawContent": "\n\n.\n\n This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph\n\n — \n\ncalibre can handle both with equal ease.\n\n"
         }
       ]
@@ -491,6 +496,11 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
           "text": ", notice how every letter has the same width, even i and m",
           "formatting": {
             "font": "Ubuntu Mono"
@@ -499,7 +509,7 @@
         },
         {
           "type": "text",
-          "text": " . Every embedded font will automatically be embedded in the output ebook during conversion. ",
+          "text": " . Every embedded font will automatically be embedded in the output ebook during conversion.",
           "rawContent": "\n\n. Every embedded font will automatically be embedded in the output ebook during conversion.\n\n \n\n"
         }
       ]
@@ -548,7 +558,7 @@
       "children": [
         {
           "type": "text",
-          "text": "For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph. ",
+          "text": "For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.",
           "rawContent": "For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.\n\n"
         }
       ]
@@ -593,7 +603,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "ITEM ",
+                      "text": "ITEM",
                       "rawContent": "ITEM\n\n"
                     }
                   ]
@@ -611,7 +621,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "NEEDED ",
+                      "text": "NEEDED",
                       "rawContent": "NEEDED\n\n"
                     }
                   ]
@@ -635,7 +645,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Books ",
+                      "text": "Books",
                       "rawContent": "Books\n\n"
                     }
                   ]
@@ -653,7 +663,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "1 ",
+                      "text": "1",
                       "rawContent": "1\n\n"
                     }
                   ]
@@ -677,7 +687,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Pens ",
+                      "text": "Pens",
                       "rawContent": "Pens\n\n"
                     }
                   ]
@@ -695,7 +705,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "3 ",
+                      "text": "3",
                       "rawContent": "3\n\n"
                     }
                   ]
@@ -719,7 +729,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Pencils ",
+                      "text": "Pencils",
                       "rawContent": "Pencils\n\n"
                     }
                   ]
@@ -737,7 +747,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "2 ",
+                      "text": "2",
                       "rawContent": "2\n\n"
                     }
                   ]
@@ -761,7 +771,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Highlighter ",
+                      "text": "Highlighter",
                       "rawContent": "Highlighter\n\n"
                     }
                   ]
@@ -779,7 +789,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "2 colors ",
+                      "text": "2 colors",
                       "rawContent": "2 colors\n\n"
                     }
                   ]
@@ -803,7 +813,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Scissors ",
+                      "text": "Scissors",
                       "rawContent": "Scissors\n\n"
                     }
                   ]
@@ -821,7 +831,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "1 pair ",
+                      "text": "1 pair",
                       "rawContent": "1 pair\n\n"
                     }
                   ]
@@ -841,7 +851,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Tables in Word can vary from the extremely simple to the extremely complex. calibre tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section. Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units. To the left of this paragraph is a floating two column table with a nice green border and header row. ",
+          "text": "Tables in Word can vary from the extremely simple to the extremely complex. calibre tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section. Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units. To the left of this paragraph is a floating two column table with a nice green border and header row.",
           "rawContent": "Tables in Word can vary from the extremely simple to the extremely complex. \n\ncalibre\n\n tries to do its best when converting tables. While you may run into trouble with the occasional table, the vast majority of common cases should be converted very well, as demonstrated in this section.\n\n Note that for optimum results, when creating tables in Word, you should set their widths using percentages, rather than absolute units. \n\n To the left of this paragraph is a floating two column table with a nice green border and header row.\n\n"
         }
       ]
@@ -852,7 +862,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width. ",
+          "text": "Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.",
           "rawContent": "Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.\n\n"
         }
       ]
@@ -1021,7 +1031,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Point A ",
+                      "text": "Point A",
                       "rawContent": "Point A\n\n"
                     }
                   ]
@@ -1041,7 +1051,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "— ",
+                      "text": "—",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1124,7 +1134,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Point B ",
+                      "text": "Point B",
                       "rawContent": "Point B\n\n"
                     }
                   ]
@@ -1144,7 +1154,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "87 ",
+                      "text": "87",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1167,7 +1177,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "— ",
+                      "text": "—",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1236,7 +1246,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Point C ",
+                      "text": "Point C",
                       "rawContent": "Point C\n\n"
                     }
                   ]
@@ -1256,7 +1266,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "64 ",
+                      "text": "64",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1279,7 +1289,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "56 ",
+                      "text": "56",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1302,7 +1312,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "— ",
+                      "text": "—",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1357,7 +1367,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Point D ",
+                      "text": "Point D",
                       "rawContent": "Point D\n\n"
                     }
                   ]
@@ -1377,7 +1387,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "37 ",
+                      "text": "37",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1400,7 +1410,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "32 ",
+                      "text": "32",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1423,7 +1433,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "91 ",
+                      "text": "91",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1446,7 +1456,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "— ",
+                      "text": "—",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1487,7 +1497,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Point E ",
+                      "text": "Point E",
                       "rawContent": "Point E\n\n"
                     }
                   ]
@@ -1507,7 +1517,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "93 ",
+                      "text": "93",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1530,7 +1540,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "35 ",
+                      "text": "35",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1553,7 +1563,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "54 ",
+                      "text": "54",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1576,7 +1586,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "43 ",
+                      "text": "43",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1599,7 +1609,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "— ",
+                      "text": "—",
                       "formatting": {
                         "alignment": "center"
                       },
@@ -1627,7 +1637,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Next, we see a table with special formatting in various locations. Notice how the f ormatting for the h eader row and sub header rows is preserved. ",
+          "text": "Next, we see a table with special formatting in various locations. Notice how the f ormatting for the h eader row and sub header rows is preserved.",
           "rawContent": "Next, we see a table with special formatting in various locations. Notice how the f\n\normatting for the h\n\neader row and sub header rows is preserved.\n\n"
         }
       ]
@@ -1649,7 +1659,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "College ",
+                      "text": "College",
                       "rawContent": "College\n\n"
                     }
                   ]
@@ -1667,7 +1677,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "New students ",
+                      "text": "New students",
                       "rawContent": "New students\n\n"
                     }
                   ]
@@ -1685,7 +1695,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Graduating students ",
+                      "text": "Graduating students",
                       "rawContent": "Graduating students\n\n"
                     }
                   ]
@@ -1703,7 +1713,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Change ",
+                      "text": "Change",
                       "rawContent": "Change\n\n"
                     }
                   ]
@@ -1791,7 +1801,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Cedar University ",
+                      "text": "Cedar University",
                       "rawContent": "Cedar University\n\n"
                     }
                   ]
@@ -1878,7 +1888,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Oak Institute ",
+                      "text": "Oak Institute",
                       "rawContent": "Oak Institute\n\n"
                     }
                   ]
@@ -2029,7 +2039,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Cedar University ",
+                      "text": "Cedar University",
                       "rawContent": "Cedar University\n\n"
                     }
                   ]
@@ -2116,7 +2126,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Elm College ",
+                      "text": "Elm College",
                       "rawContent": "Elm College\n\n"
                     }
                   ]
@@ -2203,7 +2213,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Total ",
+                      "text": "Total",
                       "rawContent": "Total\n\n"
                     }
                   ]
@@ -2296,7 +2306,12 @@
         },
         {
           "type": "text",
-          "text": " Fictitious data, for illustration purposes only",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
+          "text": "Fictitious data, for illustration purposes only",
           "formatting": {
             "size": "10pt"
           },
@@ -2310,7 +2325,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Next , we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered. ",
+          "text": "Next , we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.",
           "rawContent": "Next\n\n, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged.\n\n The table is displayed horizontally centered.\n\n"
         }
       ]
@@ -2345,7 +2360,7 @@
                               "children": [
                                 {
                                   "type": "text",
-                                  "text": "One ",
+                                  "text": "One",
                                   "rawContent": "One\n\n"
                                 }
                               ]
@@ -2356,7 +2371,7 @@
                               "children": [
                                 {
                                   "type": "text",
-                                  "text": "Three ",
+                                  "text": "Three",
                                   "rawContent": "Three\n\n"
                                 }
                               ]
@@ -2379,7 +2394,7 @@
                               "children": [
                                 {
                                   "type": "text",
-                                  "text": "Two ",
+                                  "text": "Two",
                                   "rawContent": "Two\n\n"
                                 }
                               ]
@@ -2403,7 +2418,7 @@
                               "children": [
                                 {
                                   "type": "text",
-                                  "text": "Four ",
+                                  "text": "Four",
                                   "rawContent": "Four\n\n"
                                 }
                               ]
@@ -2435,7 +2450,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "To the left is a table inside a table, with some cells merged. ",
+                      "text": "To the left is a table inside a table, with some cells merged.",
                       "rawContent": "To the left is a table inside a table, with some cells merged.\n\n"
                     }
                   ]
@@ -2460,7 +2475,7 @@
       "children": [
         {
           "type": "text",
-          "text": "W e end with a fancy calendar, note how much of the original formatting is preserved . Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks. ",
+          "text": "W e end with a fancy calendar, note how much of the original formatting is preserved . Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.",
           "rawContent": "W\n\ne end with a \n\nfancy\n\n calendar, note how \n\nmuch of the original formatting is preserved\n\n.\n\n Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.\n\n"
         }
       ]
@@ -2484,7 +2499,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "December 2007 ",
+                      "text": "December 2007",
                       "rawContent": "December 2007\n\n"
                     }
                   ]
@@ -2508,7 +2523,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Sun ",
+                      "text": "Sun",
                       "rawContent": "Sun\n\n"
                     }
                   ]
@@ -2538,7 +2553,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Mon ",
+                      "text": "Mon",
                       "rawContent": "Mon\n\n"
                     }
                   ]
@@ -2568,7 +2583,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Tue ",
+                      "text": "Tue",
                       "rawContent": "Tue\n\n"
                     }
                   ]
@@ -2598,7 +2613,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Wed ",
+                      "text": "Wed",
                       "rawContent": "Wed\n\n"
                     }
                   ]
@@ -2628,7 +2643,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Thu ",
+                      "text": "Thu",
                       "rawContent": "Thu\n\n"
                     }
                   ]
@@ -2658,7 +2673,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Fri ",
+                      "text": "Fri",
                       "rawContent": "Fri\n\n"
                     }
                   ]
@@ -2690,7 +2705,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "Sat ",
+                      "text": "Sat",
                       "rawContent": "Sat\n\n"
                     }
                   ]
@@ -2860,7 +2875,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "1 ",
+                      "text": "1",
                       "rawContent": "1\n\n"
                     }
                   ]
@@ -3048,7 +3063,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "2 ",
+                      "text": "2",
                       "rawContent": "2\n\n"
                     }
                   ]
@@ -3078,7 +3093,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "3 ",
+                      "text": "3",
                       "rawContent": "3\n\n"
                     }
                   ]
@@ -3108,7 +3123,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "4 ",
+                      "text": "4",
                       "rawContent": "4\n\n"
                     }
                   ]
@@ -3138,7 +3153,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "5 ",
+                      "text": "5",
                       "rawContent": "5\n\n"
                     }
                   ]
@@ -3168,7 +3183,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "6 ",
+                      "text": "6",
                       "rawContent": "6\n\n"
                     }
                   ]
@@ -3198,7 +3213,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "7 ",
+                      "text": "7",
                       "rawContent": "7\n\n"
                     }
                   ]
@@ -3230,7 +3245,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "8 ",
+                      "text": "8",
                       "rawContent": "8\n\n"
                     }
                   ]
@@ -3418,7 +3433,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "9 ",
+                      "text": "9",
                       "rawContent": "9\n\n"
                     }
                   ]
@@ -3448,7 +3463,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "10 ",
+                      "text": "10",
                       "rawContent": "10\n\n"
                     }
                   ]
@@ -3478,7 +3493,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "11 ",
+                      "text": "11",
                       "rawContent": "11\n\n"
                     }
                   ]
@@ -3508,7 +3523,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "12 ",
+                      "text": "12",
                       "rawContent": "12\n\n"
                     }
                   ]
@@ -3538,7 +3553,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "13 ",
+                      "text": "13",
                       "rawContent": "13\n\n"
                     }
                   ]
@@ -3568,7 +3583,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "14 ",
+                      "text": "14",
                       "rawContent": "14\n\n"
                     }
                   ]
@@ -3600,7 +3615,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "15 ",
+                      "text": "15",
                       "rawContent": "15\n\n"
                     }
                   ]
@@ -3788,7 +3803,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "16 ",
+                      "text": "16",
                       "rawContent": "16\n\n"
                     }
                   ]
@@ -3818,7 +3833,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "17 ",
+                      "text": "17",
                       "rawContent": "17\n\n"
                     }
                   ]
@@ -3848,7 +3863,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "18 ",
+                      "text": "18",
                       "rawContent": "18\n\n"
                     }
                   ]
@@ -3878,7 +3893,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "19 ",
+                      "text": "19",
                       "rawContent": "19\n\n"
                     }
                   ]
@@ -3908,7 +3923,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "20 ",
+                      "text": "20",
                       "rawContent": "20\n\n"
                     }
                   ]
@@ -3938,7 +3953,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "21 ",
+                      "text": "21",
                       "rawContent": "21\n\n"
                     }
                   ]
@@ -3970,7 +3985,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "22 ",
+                      "text": "22",
                       "rawContent": "22\n\n"
                     }
                   ]
@@ -4158,7 +4173,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "23 ",
+                      "text": "23",
                       "rawContent": "23\n\n"
                     }
                   ]
@@ -4188,7 +4203,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "24 ",
+                      "text": "24",
                       "rawContent": "24\n\n"
                     }
                   ]
@@ -4218,7 +4233,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "25 ",
+                      "text": "25",
                       "rawContent": "25\n\n"
                     }
                   ]
@@ -4248,7 +4263,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "26 ",
+                      "text": "26",
                       "rawContent": "26\n\n"
                     }
                   ]
@@ -4278,7 +4293,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "27 ",
+                      "text": "27",
                       "rawContent": "27\n\n"
                     }
                   ]
@@ -4308,7 +4323,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "28 ",
+                      "text": "28",
                       "rawContent": "28\n\n"
                     }
                   ]
@@ -4340,7 +4355,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "29 ",
+                      "text": "29",
                       "rawContent": "29\n\n"
                     }
                   ]
@@ -4528,7 +4543,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "30 ",
+                      "text": "30",
                       "rawContent": "30\n\n"
                     }
                   ]
@@ -4558,7 +4573,7 @@
                   "children": [
                     {
                       "type": "text",
-                      "text": "31 ",
+                      "text": "31",
                       "rawContent": "31\n\n"
                     }
                   ]
@@ -4723,7 +4738,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like. ",
+          "text": "Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.",
           "rawContent": "Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like. \n\n"
         }
       ]
@@ -4760,7 +4775,7 @@
         },
         {
           "type": "text",
-          "text": " In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
+          "text": "In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.",
           "formatting": {
             "size": "10pt"
           },
@@ -4773,7 +4788,7 @@
         },
         {
           "type": "text",
-          "text": " Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
+          "text": "Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.",
           "formatting": {
             "size": "10pt"
           },
@@ -4781,7 +4796,7 @@
         },
         {
           "type": "text",
-          "text": " are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices. ",
+          "text": " are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.",
           "rawContent": "\n\n are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.\n\n"
         }
       ]
@@ -4827,7 +4842,7 @@
       "children": [
         {
           "type": "text",
-          "text": "rop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to s p ecify how many lines of text a drop-cap should use. ",
+          "text": "rop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to s p ecify how many lines of text a drop-cap should use.",
           "rawContent": "rop\n\n caps are used to emphasize the leading paragraph at the start of a section. In \n\nWord\n\n it is possible to s\n\np\n\necify how many lines of text a drop-cap should use.\n\n"
         }
       ]
@@ -4895,7 +4910,7 @@
         },
         {
           "type": "text",
-          "text": " in this document. ",
+          "text": " in this document.",
           "rawContent": "\n\n in this document.\n\n"
         }
       ]
@@ -4927,7 +4942,7 @@
       "children": [
         {
           "type": "text",
-          "text": " You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook. ",
+          "text": "You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook.",
           "rawContent": " You can see the\n\n Table of Contents\n\n created by calibre\n\n by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook.\n\n \n\n"
         }
       ]
@@ -4949,6 +4964,11 @@
             "link": "#_Toc581531977",
             "linkType": "internal"
           }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
         },
         {
           "type": "text",
@@ -4986,6 +5006,11 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
           "text": "1",
           "formatting": {
             "color": "#0000FF",
@@ -5017,6 +5042,11 @@
             "link": "#_Toc2137712100",
             "linkType": "internal"
           }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
         },
         {
           "type": "text",
@@ -5054,6 +5084,11 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
           "text": "2",
           "formatting": {
             "color": "#0000FF",
@@ -5085,6 +5120,11 @@
             "link": "#_Toc2022725662",
             "linkType": "internal"
           }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
         },
         {
           "type": "text",
@@ -5122,6 +5162,11 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
           "text": "2",
           "formatting": {
             "color": "#0000FF",
@@ -5153,6 +5198,11 @@
             "link": "#_Toc54889875",
             "linkType": "internal"
           }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
         },
         {
           "type": "text",
@@ -5190,6 +5240,11 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
           "text": "5",
           "formatting": {
             "color": "#0000FF",
@@ -5221,6 +5276,11 @@
             "link": "#_Toc1977424358",
             "linkType": "internal"
           }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
         },
         {
           "type": "text",
@@ -5258,6 +5318,11 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
           "text": "5",
           "formatting": {
             "color": "#0000FF",
@@ -5289,6 +5354,11 @@
             "link": "#_Toc64145348",
             "linkType": "internal"
           }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
         },
         {
           "type": "text",
@@ -5326,6 +5396,11 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
           "text": "6",
           "formatting": {
             "color": "#0000FF",
@@ -5357,6 +5432,11 @@
             "link": "#_Toc1359965655",
             "linkType": "internal"
           }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
         },
         {
           "type": "text",
@@ -5394,6 +5474,11 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
           "text": "8",
           "formatting": {
             "color": "#0000FF",
@@ -5425,6 +5510,11 @@
             "link": "#_Toc415190676",
             "linkType": "internal"
           }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
         },
         {
           "type": "text",
@@ -5462,6 +5552,11 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
           "text": "8",
           "formatting": {
             "color": "#0000FF",
@@ -5493,6 +5588,11 @@
             "link": "#_Toc1471533984",
             "linkType": "internal"
           }
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
         },
         {
           "type": "text",
@@ -5549,7 +5649,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Centered images like this are useful for large pictures that should be a focus of attention. ",
+          "text": "Centered images like this are useful for large pictures that should be a focus of attention.",
           "rawContent": "Centered images like this are useful for large pictures that should be a focus of attention.\n\n \n\n"
         }
       ]
@@ -5602,6 +5702,11 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
           "text": ", so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was ",
           "formatting": {
             "size": "12pt",
@@ -5619,6 +5724,11 @@
             "italic": true
           },
           "rawContent": "inserted"
+        },
+        {
+          "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
         },
         {
           "type": "text",
@@ -5660,7 +5770,7 @@
       "children": [
         {
           "type": "text",
-          "text": "All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets. ",
+          "text": "All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.",
           "rawContent": "All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.\n\n"
         }
       ]
@@ -5688,7 +5798,7 @@
     },
     {
       "type": "list",
-      "text": "One ",
+      "text": "One",
       "metadata": {
         "listType": "unordered",
         "indentation": 0,
@@ -5699,7 +5809,7 @@
       "children": [
         {
           "type": "text",
-          "text": "One ",
+          "text": "One",
           "formatting": {
             "alignment": "left"
           },
@@ -5709,7 +5819,7 @@
     },
     {
       "type": "list",
-      "text": "Two ",
+      "text": "Two",
       "metadata": {
         "listType": "unordered",
         "indentation": 0,
@@ -5720,7 +5830,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Two ",
+          "text": "Two",
           "formatting": {
             "alignment": "left"
           },
@@ -5751,7 +5861,7 @@
     },
     {
       "type": "list",
-      "text": "One, with a very long line to demonstrate that the hanging indent for the list is working correctly ",
+      "text": "One, with a very long line to demonstrate that the hanging indent for the list is working correctly",
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
@@ -5762,7 +5872,7 @@
       "children": [
         {
           "type": "text",
-          "text": "One, with a very long line to demonstrate that the hanging indent for the list is working correctly ",
+          "text": "One, with a very long line to demonstrate that the hanging indent for the list is working correctly",
           "formatting": {
             "alignment": "left"
           },
@@ -5772,7 +5882,7 @@
     },
     {
       "type": "list",
-      "text": "Two ",
+      "text": "Two",
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
@@ -5783,7 +5893,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Two ",
+          "text": "Two",
           "formatting": {
             "alignment": "left"
           },
@@ -5812,6 +5922,11 @@
         },
         {
           "type": "text",
+          "text": " ",
+          "rawContent": "\n\n"
+        },
+        {
+          "type": "text",
           "text": "s",
           "formatting": {
             "color": "#4F81BD",
@@ -5824,7 +5939,7 @@
     },
     {
       "type": "list",
-      "text": "One ",
+      "text": "One",
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
@@ -5835,7 +5950,7 @@
       "children": [
         {
           "type": "text",
-          "text": "One ",
+          "text": "One",
           "formatting": {
             "alignment": "left"
           },
@@ -5845,7 +5960,7 @@
     },
     {
       "type": "list",
-      "text": "Two ",
+      "text": "Two",
       "metadata": {
         "listType": "ordered",
         "indentation": 1,
@@ -5856,7 +5971,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Two ",
+          "text": "Two",
           "formatting": {
             "alignment": "left"
           },
@@ -5866,7 +5981,7 @@
     },
     {
       "type": "list",
-      "text": "Three ",
+      "text": "Three",
       "metadata": {
         "listType": "ordered",
         "indentation": 2,
@@ -5877,7 +5992,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Three ",
+          "text": "Three",
           "formatting": {
             "alignment": "left"
           },
@@ -5887,7 +6002,7 @@
     },
     {
       "type": "list",
-      "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly. ",
+      "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly.",
       "metadata": {
         "listType": "ordered",
         "indentation": 2,
@@ -5898,7 +6013,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly. ",
+          "text": "Four with a very long line to demonstrate that the hanging indent for the list is working correctly.",
           "formatting": {
             "alignment": "left"
           },
@@ -5908,7 +6023,7 @@
     },
     {
       "type": "list",
-      "text": "Five ",
+      "text": "Five",
       "metadata": {
         "listType": "ordered",
         "indentation": 2,
@@ -5919,7 +6034,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Five ",
+          "text": "Five",
           "formatting": {
             "alignment": "left"
           },
@@ -5929,7 +6044,7 @@
     },
     {
       "type": "list",
-      "text": "Six ",
+      "text": "Six",
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
@@ -5940,7 +6055,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Six ",
+          "text": "Six",
           "formatting": {
             "alignment": "left"
           },
@@ -5954,14 +6069,14 @@
       "children": [
         {
           "type": "text",
-          "text": "A Multi-level list with bullets: ",
+          "text": "A Multi-level list with bullets:",
           "rawContent": "A Multi-level list with bullets:\n\n"
         }
       ]
     },
     {
       "type": "list",
-      "text": "One ",
+      "text": "One",
       "metadata": {
         "listType": "unordered",
         "indentation": 0,
@@ -5972,7 +6087,7 @@
       "children": [
         {
           "type": "text",
-          "text": "One ",
+          "text": "One",
           "formatting": {
             "alignment": "left"
           },
@@ -5982,7 +6097,7 @@
     },
     {
       "type": "list",
-      "text": "Two ",
+      "text": "Two",
       "metadata": {
         "listType": "unordered",
         "indentation": 1,
@@ -5993,7 +6108,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Two ",
+          "text": "Two",
           "formatting": {
             "alignment": "left"
           },
@@ -6003,7 +6118,7 @@
     },
     {
       "type": "list",
-      "text": "This bullet uses an image as the bullet item ",
+      "text": "This bullet uses an image as the bullet item",
       "metadata": {
         "listType": "unordered",
         "indentation": 2,
@@ -6014,7 +6129,7 @@
       "children": [
         {
           "type": "text",
-          "text": "This bullet uses an image as the bullet item ",
+          "text": "This bullet uses an image as the bullet item",
           "formatting": {
             "alignment": "left"
           },
@@ -6024,7 +6139,7 @@
     },
     {
       "type": "list",
-      "text": "Four ",
+      "text": "Four",
       "metadata": {
         "listType": "unordered",
         "indentation": 3,
@@ -6035,7 +6150,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Four ",
+          "text": "Four",
           "formatting": {
             "alignment": "left"
           },
@@ -6045,7 +6160,7 @@
     },
     {
       "type": "list",
-      "text": "Five ",
+      "text": "Five",
       "metadata": {
         "listType": "unordered",
         "indentation": 0,
@@ -6056,7 +6171,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Five ",
+          "text": "Five",
           "formatting": {
             "alignment": "left"
           },
@@ -6087,7 +6202,7 @@
     },
     {
       "type": "list",
-      "text": "One ",
+      "text": "One",
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
@@ -6098,7 +6213,7 @@
       "children": [
         {
           "type": "text",
-          "text": "One ",
+          "text": "One",
           "formatting": {
             "alignment": "left"
           },
@@ -6108,7 +6223,7 @@
     },
     {
       "type": "list",
-      "text": "Two ",
+      "text": "Two",
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
@@ -6119,7 +6234,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Two ",
+          "text": "Two",
           "formatting": {
             "alignment": "left"
           },
@@ -6133,14 +6248,14 @@
       "children": [
         {
           "type": "text",
-          "text": "An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement. ",
+          "text": "An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.",
           "rawContent": "An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.\n\n"
         }
       ]
     },
     {
       "type": "list",
-      "text": "We now resume our normal programming ",
+      "text": "We now resume our normal programming",
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
@@ -6151,7 +6266,7 @@
       "children": [
         {
           "type": "text",
-          "text": "We now resume our normal programming ",
+          "text": "We now resume our normal programming",
           "formatting": {
             "alignment": "left"
           },
@@ -6161,7 +6276,7 @@
     },
     {
       "type": "list",
-      "text": "Four ",
+      "text": "Four",
       "metadata": {
         "listType": "ordered",
         "indentation": 0,
@@ -6172,7 +6287,7 @@
       "children": [
         {
           "type": "text",
-          "text": "Four ",
+          "text": "Four",
           "formatting": {
             "alignment": "left"
           },

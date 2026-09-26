@@ -5,6 +5,9 @@ import { base64ByteLength, documentLanguage, isHeaderRow } from '../utils/office
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 
+/** A child that is a block of its own (a code block or display equation), which a <p> cannot hold. */
+const isBlockInParagraph = (child: OfficeContentNode): boolean => child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math !== 'inline';
+
 type ResolvedStandalone = Required<StandaloneConfig>;
 
 /**
@@ -767,8 +770,36 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const isTable = node.type === 'table' || node.type === 'sheet';
         if (isTable) this.tableNestingLevel++;
 
+        // A paragraph holding a block (a code block's <pre>, a display equation's <div>) is written as
+        // its parts, since HTML cannot nest a block in a <p>: a DOM parser closes the paragraph at it,
+        // and XHTML (EPUB's) rejects it. Each run of inline content is a paragraph, each block stands
+        // on its own, and the paragraph's id and anchors go on its first part.
+        const splitsAroundBlocks = node.type === 'paragraph' && processor === this.boundNodeProcessor && !!node.children?.some(isBlockInParagraph);
+        let splitResult: string | undefined;
+        if (splitsAroundBlocks) {
+            splitResult = '';
+            let run: OfficeContentNode[] = [];
+            let part: OfficeContentNode = node;
+            const flush = async () => {
+                if (run.some(child => child.type !== 'text' || (child.text ?? '').trim() || child.notes?.length)) {
+                    splitResult += await processor({ ...part, children: run }, await this.processNodeArray(run));
+                    part = { ...node, metadata: { ...(node.metadata as object), anchorIds: undefined } as any };
+                }
+                run = [];
+            };
+            for (const child of node.children!) {
+                if (isBlockInParagraph(child)) {
+                    await flush();
+                    splitResult += await this.processNodeArray([child]);
+                } else {
+                    run.push(child);
+                }
+            }
+            await flush();
+        }
+
         let childrenOutput = '';
-        if (node.children && node.children.length > 0) {
+        if (!splitsAroundBlocks && node.children && node.children.length > 0) {
             // A node whose own branch lays its children out throws this output away, so skip producing
             // it: the subtree would otherwise be walked twice, firing `onNode` twice for every node in
             // it. Only when the DEFAULT processor is rendering this node, though - a caller that passes
@@ -787,7 +818,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             }
         }
 
-        let result = await processor(node, childrenOutput);
+        let result = splitResult ?? await processor(node, childrenOutput);
 
         if (isTable) this.tableNestingLevel--;
 

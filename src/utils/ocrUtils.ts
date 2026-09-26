@@ -50,9 +50,10 @@ interface ManagedWorker {
 /**
  * Test-only observation points (not part of the package's API): `afterRecognizeCall` runs right
  * after a worker's `recognize` is called, before Tesseract has sent it the job, which is the moment
- * a cancellation must not terminate the worker.
+ * a cancellation must not terminate the worker; `createWorker` stands in for Tesseract's, so a test
+ * can supply a worker whose steps it controls (one whose re-initialization never finishes).
  */
-export const ocrTestHooks: { afterRecognizeCall?: () => void } = {};
+export const ocrTestHooks: { afterRecognizeCall?: () => void; createWorker?: (language: string) => Promise<any> } = {};
 
 /**
  * The image as bytes in memory. Tesseract loads its input before sending the job to its worker;
@@ -418,7 +419,7 @@ class OcrSchedulerManager {
             if (job.config.corePath) options.corePath = job.config.corePath;
             if (job.config.langPath) options.langPath = job.config.langPath;
 
-            const workerPromise = createWorker(requestedLanguage, 1, options);
+            const workerPromise = ocrTestHooks.createWorker ? ocrTestHooks.createWorker(requestedLanguage) : createWorker(requestedLanguage, 1, options);
 
             // To prevent dangling worker threads on timeout or abort, we register a post-resolution hook
             // that terminates the worker if the promise finishes after the timeout has fired or the job is finished.
@@ -478,12 +479,13 @@ class OcrSchedulerManager {
 
         try {
             const reinitPromise = managed.worker.reinitialize(requestedLanguage);
-            managed.reinitializing = reinitPromise.then(() => { }, () => { });
-            if (loadTimeout > 0) {
-                await withTimeout(reinitPromise, loadTimeout, `OCR worker re-initialization timed out after ${loadTimeout}ms`);
-            } else {
-                await reinitPromise;
-            }
+            const reinitialized = loadTimeout > 0
+                ? withTimeout(reinitPromise, loadTimeout, `OCR worker re-initialization timed out after ${loadTimeout}ms`)
+                : reinitPromise;
+            // What terminate() waits for before ending the worker: bounded by the load timeout, so a
+            // language download that never finishes cannot hold terminateOcr() forever.
+            managed.reinitializing = reinitialized.then(() => { }, () => { });
+            await reinitialized;
             managed.reinitializing = undefined;
             managed.language = requestedLanguage;
 

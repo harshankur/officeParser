@@ -14,7 +14,7 @@ This document demonstrates the ability of the calibre DOCX Input plugin to c
 
 There is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting.
 
-To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books” **button and then click “**Convert”. ** Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**.
+To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books”** button and then click “**Convert”.**  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**.
 
 > **Note:** Slide Note 1.
 
@@ -28,9 +28,9 @@ To see the DOCX conversion in action, simply add this file to calibre using th
 
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
 
-Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~struck out ~~ text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a ==yellow highlight.== Some text in a box. Some text in ==inverse video==.
+Here is some **bold,** *italic,* ***bold-italic,*** <u>underlined </u>and ~~struck out~~  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a ==yellow highlight.== Some text in a box. Some text in ==inverse video==.
 
-A paragraph with styled text: *subtle emphasis  *followed by **strong text **and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
+A paragraph with styled text: *subtle emphasis*  followed by **strong text** and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
 
 **Fun with fonts**
 
@@ -300,7 +300,7 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 
 1. Sun
 2. Mon
-7. Sat
+7\. Sat
 
 <div style="text-align: right">5</div>
 

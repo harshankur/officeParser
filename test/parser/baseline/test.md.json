@@ -238,14 +238,11 @@
         },
         {
           "type": "text",
-          "text": "*bold-italic, ",
+          "text": "bold-italic, ",
           "formatting": {
-            "bold": true
+            "bold": true,
+            "italic": true
           }
-        },
-        {
-          "type": "text",
-          "text": "*"
         },
         {
           "type": "text",
@@ -325,14 +322,15 @@
         },
         {
           "type": "text",
-          "text": "*intense emphasis",
+          "text": "intense emphasis",
           "formatting": {
-            "bold": true
+            "bold": true,
+            "italic": true
           }
         },
         {
           "type": "text",
-          "text": "*. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease."
+          "text": ". This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease."
         }
       ]
     },

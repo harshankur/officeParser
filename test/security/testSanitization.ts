@@ -450,15 +450,39 @@ async function markdownTests() {
     check('md: legitimate LaTeX comparison survives', latex.includes('$a < b$'),
         `real math was corrupted: ${JSON.stringify(latex.slice(0, 160))}`);
 
+    // An embed's label is link text or a directive label, from whatever source: escaped in every
+    // embed form, so it cannot write a tag.
+    for (const [embeds, embed] of [
+        ['link', { embedType: 'youtube', videoId: 'abc', label: PAYLOAD }], ['thumbnail', { embedType: 'youtube', videoId: 'abc', label: PAYLOAD }],
+        ['directive', { embedType: 'youtube', videoId: 'abc', label: PAYLOAD }], ['link', { embedType: 'iframe', url: 'https://example.com/e', label: PAYLOAD }],
+    ] as const) {
+        const out = (await OfficeGenerator.generate(astWith([{ type: 'embed', metadata: embed } as any]), 'md', { mdConfig: { dialect: { extends: 'extended', embeds } } } as any)).value as string;
+        check(`md: an embed label cannot carry a raw tag (${embeds}, ${embed.embedType})`, !out.includes(PAYLOAD), out);
+    }
+
     // Inline syntax that never closes costs time in proportion to its length: a line of backticks or
-    // of `[x](` took minutes, rescanned from every opening character.
-    for (const unit of ['`', 'a`', '``a', '[x](', '[x](y', '[', '![', '[^', '[[', '[a][', '<span style="x">', '<u>', '<sub>', '<sup>', '**a', '*a']) {
+    // of `[x](` took minutes, rescanned from every opening character. So did an opener right after an
+    // escaped backtick, a run of comments, and underscores that cannot close.
+    for (const unit of ['`', 'a`', '``a', '[x](', '[x](y', '[', '![', '[^', '[[', '[a][', '<span style="x">', '<u>', '<sub>', '<sup>', '**a', '*a',
+        '`\\`', '\\``x', '<!-- a -->', ' _x', '_a_b ', '***a', '[a](b "(', '[a \\]', '[[[[a', '\\_']) {
         const text = unit.repeat(Math.ceil(200_000 / unit.length));
         const started = Date.now();
         let error = '';
         await OfficeParser.parseOffice(Buffer.from('p ' + text + ' q'), { fileType: 'md' } as any).catch((e: any) => { error = e.message; });
         const ms = Date.now() - started;
         check(`md: 200 KB of ${JSON.stringify(unit)} parses in linear time`, !error && ms < 5000, `${ms}ms ${error}`);
+    }
+    // Blocks that never close (fences, in a list item or not, MDX components, `:::` admonitions, an
+    // HTML table) are not rescanned for each opener, nor is a heading holding many unclosed `{#`.
+    const decreasing = (indent: string) => { let s = '', k = 600; while (s.length < 200_000 && k >= 3) s += `${indent}${'`'.repeat(k--)}\n`; return s; };
+    for (const [label, text] of [
+        ['top-level fences', decreasing('')], ['fences in a list item', `- item\n\n${decreasing('    ')}`], ['table rows with escaped pipes', `| a | b |\n| - | - |\n${'| x\\|y | `p\\|q` |\n'.repeat(8000)}`],
+        ['unclosed MDX components', '<A>x'.repeat(50_000)], ['MDX tags without a >', '<A '.repeat(66_667)], ['unclosed ::: admonitions', ':::note\n'.repeat(25_000)],
+        ['an unclosed HTML table', `<table>${'<tr><td>x'.repeat(22_000)}`], ['a heading of unclosed {#', `# a${' {#x'.repeat(50_000)}`],
+    ] as const) {
+        const started = Date.now();
+        await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'md' } as any);
+        check(`md: 200 KB of ${label} parses in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
     }
     // A line of hundreds of thousands of inline nodes is appended, not spread into one call.
     let manyNodes = '';

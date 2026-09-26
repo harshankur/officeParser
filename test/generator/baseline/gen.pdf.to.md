@@ -16,7 +16,7 @@ This document demonstrates the ability of the calibre DOCX Input plugin to conve
 
 There is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting.
 
-To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books” **button and then click “**Convert”. **Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**.
+To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books”** button and then click “**Convert”.** Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**.
 
 ---
 
@@ -26,9 +26,9 @@ To see the DOCX conversion in action, simply add this file to calibre using the 
 
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
 
-Here is some **bold, ***italic, ****bold-italic, ***underlined and struck out text. Then, we have a super<sup>script </sup>and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
+Here is some **bold,** *italic,* ***bold-italic,*** underlined and struck out text. Then, we have a super<sup>script </sup>and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
 
-A paragraph with styled text: *subtle emphasis *followed by **strong text **and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
+A paragraph with styled text: *subtle emphasis* followed by **strong text** and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
 
 ## Fun with fonts {#fun-with-fonts}
 
@@ -76,7 +76,7 @@ Next, we see a table with special formatting in various locations. Notice how th
 | Elm College | 43 | 53 | -10 |
 | Total | 998 | 908 | 90 |
 
-*Source: *Fictitious data, for illustration purposes only
+*Source:* Fictitious data, for illustration purposes only
 
 Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.
 

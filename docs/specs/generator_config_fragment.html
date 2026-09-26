@@ -381,7 +381,7 @@
             <tr><td><code>tables</code></td><td><code>'native' | 'html'</code></td><td>Pipe tables, or an HTML <code>&lt;table&gt;</code>. Forced to <code>'html'</code> under <code>commonmark</code>.</td></tr>
             <tr><td><code>bulletListMarker</code></td><td><code>'-' | '*' | '+'</code></td><td>Marker for unordered list items.</td></tr>
             <tr><td><code>orderedListMarker</code></td><td><code>'.' | ')'</code></td><td><code>1.</code> or <code>1)</code> for ordered list items.</td></tr>
-            <tr><td><code>emphasisMarker</code></td><td><code>'asterisk' | 'underscore'</code></td><td><code>*em*</code>/<code>**strong**</code> or <code>_em_</code>/<code>__strong__</code>.</td></tr>
+            <tr><td><code>emphasisMarker</code></td><td><code>'asterisk' | 'underscore'</code></td><td><code>*em*</code>/<code>**strong**</code> or <code>_em_</code>/<code>__strong__</code>. An underscore marks emphasis only at a word's edge, so with <code>'underscore'</code>, emphasis inside a word or right next to other emphasis is written with asterisks.</td></tr>
             <tr><td><code>definitionLists</code></td><td><code>'colon' | 'none'</code></td><td>Markdown&nbsp;Extra <code>Term\n: Definition</code> syntax. <code>'none'</code> degrades to plain paragraphs.</td></tr>
             <tr><td><code>footnotes</code></td><td><code>'caret' | 'none'</code></td><td><code>[^id]</code> references with a definition block. <code>'none'</code> inlines note content as a parenthetical at the reference point rather than dropping it.</td></tr>
             <tr><td><code>citations</code></td><td><code>'at' | 'none'</code></td><td>Pandoc <code>[@citekey]</code> syntax. <code>'none'</code> emits the key as plain <code>[key]</code>.</td></tr>

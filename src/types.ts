@@ -1694,7 +1694,11 @@ export interface MarkdownDialectConfig {
     bulletListMarker?: '-' | '*' | '+';
     /** Ordered list marker punctuation. */
     orderedListMarker?: '.' | ')';
-    /** Emphasis delimiter style for bold/italic. */
+    /**
+     * Emphasis delimiter style for bold/italic: `*em*`/`**strong**` or `_em_`/`__strong__`. An
+     * underscore can mark emphasis only at a word's edge, so with `'underscore'`, emphasis inside a
+     * word or right next to other emphasis is written with asterisks.
+     */
     emphasisMarker?: 'asterisk' | 'underscore';
     /** Table syntax: native GFM pipe tables, or forced HTML `<table>` (required for strict
      *  CommonMark, which has no table syntax of its own). */

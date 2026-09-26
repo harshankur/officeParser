@@ -364,6 +364,106 @@ export function markdownEscapeText(text: string): string {
     return markdownEscapeTags(text.replace(/&(?=#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/g, '&amp;'));
 }
 
+/** ASCII punctuation: the characters a Markdown backslash escapes. */
+const MARKDOWN_PUNCTUATION = /[!-/:-@[-`{-~]/;
+
+/** A character that is neither whitespace nor ASCII punctuation: part of a word, for `_` emphasis. */
+const isMarkdownWordCharacter = (char: string | undefined): boolean => char !== undefined && !/\s/.test(char) && !MARKDOWN_PUNCTUATION.test(char);
+
+/**
+ * Escapes document text for a Markdown position that decodes backslash escapes and character
+ * references but no inline markup (a link or image title, an abbreviation definition): as
+ * {@link markdownEscapeText}, and a backslash that would escape what follows it (ASCII punctuation,
+ * a line end, or the end of the text, where the writer's own punctuation follows) is doubled, so it
+ * reads back as itself.
+ */
+export function markdownEscapePlain(text: string): string {
+    if (typeof text !== 'string') return '';
+    return markdownEscapeText(text.replace(/\\(?=[!-/:-@[-`{-~\n]|$)/g, '\\\\'));
+}
+
+/**
+ * Escapes document text for a Markdown text position, so that it reads back as the same text in
+ * CommonMark renderers and in MarkdownParser alike: {@link markdownEscapeText}'s references and
+ * tags, and a backslash before each character that would otherwise start or end inline markup.
+ * That is every `` ` ``, `*`, `[`, `]`, `~` and `$`; a `_` run unless it sits inside a word
+ * (snake_case stays as it is, since an underscore there cannot start emphasis); a run of `=`
+ * (highlight); a `{` that could begin an attribute list or heading id; and a backslash that would
+ * escape what follows it. At the start of a line (the text's own start when `atLineStart`, and after
+ * each line break in it), the markers that would begin a block are escaped too: a heading's `#`,
+ * `>`, a list item's `-`, `+` or `1.`, a line of only `-` or `=` (a rule or setext underline), and
+ * the `:` of a definition or fenced div. When the text itself starts a line with four columns of indentation, which would
+ * make it a code block, its first space or tab is written as a character reference. An escape is
+ * harmless where it was not needed; it always reads back as the character.
+ */
+export function markdownEscapeInline(text: string, atLineStart = false): string {
+    if (typeof text !== 'string') return '';
+    // At a line start, after any indentation: what would begin a block (a heading's `#`s, a quote's
+    // `>`, a list item's `-` or `+`, a line of only `-` or `=` that would be a rule or a setext
+    // underline, a definition's `: ` or a fenced div's `:::`), or the number of an ordered-list item
+    // (whose `.` or `)` is then escaped rather than the number). `-8` or `+7` begins nothing.
+    const blockMarker = /[ \t]*(?:(#{1,6}(?=[ \t\n]|$)|>|[-+](?=[ \t\n]|$)|-(?=[- \t]*(?:\n|$))|=(?=[= \t]*(?:\n|$))|:(?=[ \t:]))|(\d{1,9})(?=[.)](?:[ \t\n]|$)))/y;
+    const reference = /&(?:#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/y;
+    let out = '';
+    let i = 0;
+    if (atLineStart && /^(?: {4}| {0,3}\t)/.test(text)) {
+        out += text[0] === '\t' ? '&#9;' : '&#32;';
+        i = 1;
+    }
+    for (; i < text.length; i++) {
+        if ((i === 0 && atLineStart) || text[i - 1] === '\n') {
+            blockMarker.lastIndex = i;
+            const marker = blockMarker.exec(text);
+            if (marker) {
+                const at = blockMarker.lastIndex - (marker[1] ?? marker[2]).length;
+                out += text.slice(i, at) + (marker[2] !== undefined ? `${marker[2]}\\${text[blockMarker.lastIndex]}` : `\\${marker[1][0]}${marker[1].slice(1)}`);
+                i = blockMarker.lastIndex - (marker[2] !== undefined ? 0 : 1);
+                continue;
+            }
+        }
+        const char = text[i];
+        switch (char) {
+            case '\\':
+                out += i + 1 === text.length || MARKDOWN_PUNCTUATION.test(text[i + 1]) || text[i + 1] === '\n' ? '\\\\' : '\\';
+                break;
+            case '`': case '*': case '[': case ']': case '~': case '$':
+                out += `\\${char}`;
+                break;
+            case '_': {
+                let end = i;
+                while (text[end] === '_') end++;
+                const run = text.slice(i, end);
+                out += isMarkdownWordCharacter(text[i - 1]) && isMarkdownWordCharacter(text[end]) ? run : run.replace(/_/g, '\\_');
+                i = end - 1;
+                break;
+            }
+            case '=': {
+                let end = i;
+                while (text[end] === '=') end++;
+                const run = text.slice(i, end);
+                out += run.length > 1 ? run.replace(/=/g, '\\=') : run;
+                i = end - 1;
+                break;
+            }
+            case '{':
+                out += i === 0 || text[i + 1] === '#' ? '\\{' : '{';
+                break;
+            case '&':
+                // As markdownEscapeText: only an `&` that starts a character reference.
+                reference.lastIndex = i;
+                out += reference.test(text) ? '&amp;' : '&';
+                break;
+            case '<':
+                // As markdownEscapeTags: only a `<` that would open a tag, comment or instruction.
+                out += /[a-zA-Z/!?]/.test(text[i + 1] ?? '') ? '&lt;' : '<';
+                break;
+            default:
+                out += char;
+        }
+    }
+    return out;
+}
+
 /**
  * Sanitizes a document-supplied URL for a Markdown `[text](url)` / `![alt](url)`
  * target. Rejects script-executing schemes (returning '' → a dead link) and

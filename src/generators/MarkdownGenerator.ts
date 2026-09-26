@@ -1,5 +1,5 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextMetadata, WikilinkSyntax } from '../types.js';
-import { escapeHtml, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
+import { escapeHtml, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
 import { clampRepeat } from '../utils/numberUtils.js';
@@ -51,11 +51,11 @@ const MD_ADMONITION_TYPES = new Set(['note', 'tip', 'important', 'warning', 'cau
 const foldLines = (value: unknown): string => String(value ?? '').replace(/[\r\n]+/g, ' ');
 
 /**
- * A link or image title as the `"..."` of `[text](url "title")`: on one line, escaped like text,
- * with its double quotes as `&quot;` (the parser decodes titles, as CommonMark does), so a quote
+ * A link or image title as the `"..."` of `[text](url "title")`: on one line, with its double quotes
+ * as `&quot;` and its backslashes kept (the parser decodes titles, as CommonMark does), so a quote
  * cannot end the title early and spill the rest into the URL.
  */
-const markdownTitle = (title: unknown): string => ` "${markdownEscapeText(foldLines(title)).replace(/"/g, '&quot;')}"`;
+const markdownTitle = (title: unknown): string => ` "${markdownEscapePlain(foldLines(title)).replace(/"/g, '&quot;')}"`;
 
 /**
  * Blocks whose Markdown starts with a separator newline, so they stand apart even when they follow
@@ -83,12 +83,14 @@ function collapseBlankLines(markdown: string): string {
         }
         if (inMath) {
             out.push(line);
-            if (line.trim() === '$$') inMath = false;
+            if (line === '$$') inMath = false;
             continue;
         }
         const open = /^[ \t]*(`{3,}|~{3,})/.exec(line);
         if (open) fence = { char: open[1][0], length: open[1].length };
-        else if (line.trim() === '$$') inMath = true;
+        // Only a bare `$$` line opens or closes a math block, as the parser reads it (the math
+        // writer indents a content line that is itself `$$`).
+        else if (line === '$$') inMath = true;
         else if (line.trim() === '') {
             if (out.length > 0 && out[out.length - 1] !== '') out.push('');
             continue;
@@ -97,6 +99,14 @@ function collapseBlankLines(markdown: string): string {
     }
     return out.join('\n');
 }
+
+/**
+ * Markdown lines joined into one with `br`, for a list item or table cell, which is a single line: a
+ * hard break in either form (trailing spaces, or a backslash that is not itself escaped) becomes
+ * `br` like any other line end.
+ */
+const joinLines = (markdown: string, br: string): string =>
+    markdown.replace(/(?<!\\)((?:\\\\)*)\\\n/g, (_break, escapes: string) => escapes + br).replace(/[ \t]*\n+/g, br);
 
 /** Appends a node's Markdown, leaving exactly one blank line before a separated block. */
 const joinBlock = (output: string, node: { type: string }, next: string): string =>
@@ -238,6 +248,16 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private inImplicitBold = false;
     /** Rendering a pipe-table cell, where a fenced block cannot go: code there stays an inline span. */
     private inPipeTableCell = false;
+    /**
+     * The node being rendered starts a line of a paragraph (or of the document): text written there
+     * must not read as a block marker, and a hard break there takes the backslash form. Set before
+     * each child is rendered.
+     */
+    private atLineStart = false;
+    /** The last character written before the node being rendered, within its parent ('' for none). */
+    private previousOutputChar = '';
+    /** The sibling after the node being rendered, if any. */
+    private nextSibling: OfficeContentNode | undefined;
     private hoistedContent: string[] = [];
     private collectedAbbreviations = new Map<string, string>();
     private resolvedDialect: ResolvedMarkdownDialect;
@@ -312,6 +332,22 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         return `{${parts.join(' ')}}`;
     }
 
+    /**
+     * Whether `_` emphasis can close where the node being rendered ends: after its own trailing
+     * whitespace, or before a next sibling that starts with whitespace or punctuation (a leading `_`
+     * of its text is escaped) and has no emphasis of its own, whose delimiter would join the closing
+     * run. A sibling written as a code span, link or tag starts with punctuation.
+     */
+    private nextSiblingStartsCleanly(trail: string): boolean {
+        const next = this.nextSibling;
+        if (trail || !next || next.type !== 'text') return true;
+        const formatting = next.formatting;
+        if (formatting?.bold || formatting?.italic) return false;
+        if (formatting?.font === 'monospace' || (next.metadata as TextMetadata | undefined)?.link) return true;
+        const first = (next.text || '')[0];
+        return first === undefined || /[\s!-/:-@[-`{-~]/.test(first);
+    }
+
     /** Converts a document-supplied date to an ISO string, or '' if invalid
      *  (a malformed date would otherwise throw a RangeError and abort generation). */
     private toIsoDate(value: unknown): string {
@@ -380,9 +416,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
             switch (node.type) {
                 case 'text': {
-                    // Entity-encode angle brackets so document text can't inject a raw
-                    // HTML tag (e.g. <script>) when the Markdown is rendered to HTML.
-                    let text = markdownEscapeText(node.text || '');
+                    // Escaped so the text reads back as itself: its Markdown characters get a
+                    // backslash (a block marker too, where it starts a line), and a tag-opening `<`
+                    // is entity-encoded, so document text can't inject a raw HTML tag (e.g.
+                    // <script>) when the Markdown is rendered to HTML.
+                    let text = markdownEscapeInline(node.text || '', this.atLineStart);
                     if (this.config.includeFormatting && node.formatting) {
                         // Inline code: re-wrap the RAW text in backticks. The content is literal
                         // inside a code span, so the entity-escaped form above must not show through.
@@ -394,13 +432,27 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             const raw = node.text || '';
                             const longestRun = Math.max(0, ...(raw.match(/`+/g) || []).map(s => s.length));
                             const fence = '`'.repeat(longestRun + 1);
-                            const pad = (raw.startsWith('`') || raw.endsWith('`')) ? ' ' : '';
+                            // A reader strips one space from each end of a span that has one at both
+                            // (and is not all spaces), so such content is padded too, to keep its spaces.
+                            const pad = (raw.startsWith('`') || raw.endsWith('`') || (/^ [\s\S]* $/.test(raw) && /[^ ]/.test(raw))) ? ' ' : '';
                             text = `${fence}${pad}${raw}${pad}${fence}`;
                         }
-                        const emphasisAsterisk = this.resolvedDialect.emphasisMarker === 'asterisk';
-                        if (node.formatting.bold && !this.inImplicitBold) text = emphasisAsterisk ? `**${text}**` : `__${text}__`;
-                        if (node.formatting.italic) text = emphasisAsterisk ? `*${text}*` : `_${text}_`;
-                        if (node.formatting.strikethrough && this.resolvedDialect.strikethrough !== 'none') text = `~~${text}~~`;
+                        // Delimiters go around the text without its surrounding whitespace, which
+                        // stays outside: a delimiter next to a space cannot open or close emphasis
+                        // (CommonMark's flanking rule), so `**Note: **` would not be bold at all.
+                        // Whitespace alone takes no delimiters.
+                        const [, lead, core, trail] = node.formatting.font === 'monospace' ? ['', '', text, ''] : /^(\s*)([\s\S]*?)(\s*)$/.exec(text)!;
+                        text = core;
+                        // `_` emphasis must start and end at a word boundary, and must not touch
+                        // another underscore run (the two would read as one run): intraword emphasis,
+                        // or emphasis next to other emphasis, takes the `*` form instead.
+                        const underscoresFit = !!core
+                            && !/[^\s!-/:-@[-^`{-~]/.test(lead ? ' ' : this.previousOutputChar || ' ')
+                            && this.nextSiblingStartsCleanly(trail);
+                        const emphasisAsterisk = this.resolvedDialect.emphasisMarker === 'asterisk' || !underscoresFit;
+                        if (core && node.formatting.bold && !this.inImplicitBold) text = emphasisAsterisk ? `**${text}**` : `__${text}__`;
+                        if (core && node.formatting.italic) text = emphasisAsterisk ? `*${text}*` : `_${text}_`;
+                        if (core && node.formatting.strikethrough && this.resolvedDialect.strikethrough !== 'none') text = `~~${text}~~`;
                         // `==text==` highlight, in dialects that define it (Obsidian/extended). A plain
                         // highlight (the default yellow) always becomes `==text==`; a highlight carrying
                         // a SPECIFIC colour stays a background-color <span> when `inlineFormatting` is on,
@@ -410,7 +462,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         const isDefaultHighlight = node.formatting.backgroundColor === '#ffff00';
                         const emitHighlightMark = !!node.formatting.backgroundColor && this.resolvedDialect.highlight !== 'none'
                             && (isDefaultHighlight || !this.resolvedFallbackToHtml.inlineFormatting);
-                        if (emitHighlightMark) text = `==${text}==`;
+                        if (emitHighlightMark && core) text = `==${text}==`;
+                        text = lead + text + trail;
 
                         // Use HTML tags for formatting not natively supported by standard Markdown
                         if (this.resolvedFallbackToHtml.textFormatting) {
@@ -554,7 +607,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // fallback is on, a space when off. Block children (code fences, tables) inside
                     // an item degrade under this join, exactly as they do inside a cell.
                     const br = this.resolvedFallbackToHtml.itemLineBreaks ? '<br>' : ' ';
-                    const content = childrenOutput.trim().replace(/[ \t]*\n+/g, br);
+                    const content = joinLines(childrenOutput.trim(), br);
                     return `${indent}${marker}${anchors}${content}\n`;
                 }
 
@@ -578,7 +631,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             const fence = '`'.repeat(Math.max(3, longestRun + 1));
                             ocrMd = `${fence}\n${ocr}\n${fence}`;
                         } else {
-                            ocrMd = markdownEscapeText(ocr);
+                            ocrMd = markdownEscapeInline(ocr, true);
                         }
                     }
 
@@ -608,8 +661,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             }
                         }
                     }
-                    // Strip `[]` from alt (would close the `![...]`) and neutralize the URL scheme.
-                    const safeAlt = markdownEscapeText(meta?.altText || 'image').replace(/[[\]]/g, '');
+                    // Alt text on one line, escaped as text (a `]` would close the `![...]`, and a
+                    // renderer reads markup in alt text), and the URL scheme neutralized.
+                    const safeAlt = markdownEscapeInline(foldLines(meta?.altText || 'image'));
                     const safeSrc = sanitizeMarkdownUrl(src, { allowDataImage: true });
                     const imgTitle = meta?.title ? markdownTitle(meta.title) : '';
                     const imageMd = `${anchorPrefix}![${safeAlt}](${safeSrc}${imgTitle})${this.renderAttributeList(meta)}`;
@@ -650,7 +704,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // collapsing to whitespace. Every other breakType - notably 'page', which
                     // Markdown has no syntax for - keeps emitting a bare newline, unchanged.
                     const meta = node.metadata as BreakMetadata | undefined;
-                    if (meta?.breakType === 'carriageReturn') return '  \n';
+                    // Where the break starts a line (after another break), two trailing spaces would
+                    // make a whitespace-only line, which ends the paragraph: a backslash does not.
+                    if (meta?.breakType === 'carriageReturn') return this.atLineStart ? '\\\n' : '  \n';
                     if (meta?.breakType === 'thematic') return '---';
                     return '\n';
                 }
@@ -671,9 +727,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // MarkdownParser.decodeHtmlEntities to cover math `code` nodes; that is a
                     // parser behaviour change with its own baseline consequences.)
                     if (meta?.math === 'block') {
-                        // A content line of exactly `$$` would close the block early.
+                        // A content line of exactly `$$` would close the block early, so it is
+                        // indented by one space, as is one already indented (the parser removes one
+                        // space from each, so every such line reads back as written).
                         const mathBlock = markdownEscapeTags(node.text || '')
-                            .split('\n').map(l => (l.trim() === '$$' ? ` ${l}` : l)).join('\n');
+                            .split('\n').map(l => (/^ *\$\$$/.test(l) ? ` ${l}` : l)).join('\n');
                         return this.resolvedDialect.math === 'dollar' ? `\n$$\n${mathBlock}\n$$\n\n` : `\n${mathBlock}\n\n`;
                     }
                     if (meta?.math === 'inline') {
@@ -745,11 +803,13 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // (a plain link), 'thumbnail' (YouTube-only clickable preview).
                     const meta = node.metadata as EmbedMetadata;
                     const mode = this.resolvedEmbeds;
-                    // A directive label sits inside `::name[...]`; strip the `[]`/newline chars that
-                    // would break out of it. An attribute value sits inside `{...}`; percent-encode
-                    // the space/brace chars that would break out (widths/aligns/ids never contain
-                    // them, but a src can).
-                    const dirLabel = (meta?.label || '').replace(/[[\]\r\n]+/g, ' ').trim();
+                    // A directive label sits inside `::name[...]`: on one line, escaped (its brackets
+                    // too, which would end it), as the parser decodes it. A link label is link text,
+                    // escaped as text. An attribute value sits inside `{...}`; percent-encode the
+                    // space/brace chars that would break out (widths/aligns/ids never contain them,
+                    // but a src can).
+                    const dirLabel = markdownEscapePlain(foldLines(meta?.label || '').trim()).replace(/[[\]]/g, '\\$&');
+                    const linkLabel = (fallback: string) => markdownEscapeInline(foldLines(meta?.label || fallback));
                     const dirUrl = (u: string) => sanitizeMarkdownUrl(u).replace(/[{}\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
                     const attrList = (pairs: Array<[string, string | undefined]>) => {
                         const kv = pairs.filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}=${v}`);
@@ -777,7 +837,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         // 'link' and 'thumbnail' (thumbnail is YouTube-only, so a generic iframe
                         // degrades to a link) both emit a plain link.
                         const safe = sanitizeMarkdownUrl(rawUrl);
-                        return safe ? `[${meta?.label || 'Embed'}](${safe})\n\n` : '';
+                        return safe ? `[${linkLabel('Embed')}](${safe})\n\n` : '';
                     }
 
                     const id = meta?.videoId || '';
@@ -794,11 +854,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (mode === 'thumbnail' && id) {
                         const watch = sanitizeMarkdownUrl(`https://www.youtube.com/watch?v=${id}`);
                         const thumb = sanitizeMarkdownUrl(`https://img.youtube.com/vi/${id}/hqdefault.jpg`);
-                        return `[![${meta?.label || 'YouTube'}](${thumb})](${watch})\n\n`;
+                        return `[![${linkLabel('YouTube')}](${thumb})](${watch})\n\n`;
                     }
                     // 'link' (and 'thumbnail' with no id): a plain link.
                     const url = meta?.url || (id ? `https://youtu.be/${id}` : '');
-                    return url ? `[${meta?.label || 'YouTube'}](${sanitizeMarkdownUrl(url)})\n\n` : '';
+                    return url ? `[${linkLabel('YouTube')}](${sanitizeMarkdownUrl(url)})\n\n` : '';
                 }
 
                 case 'admonition': {
@@ -813,7 +873,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // A newline in the title would close the `**...**` and, in the fenced-div
                     // branches, could emit a stray `:::` line. `title` is never parser-set, so
                     // there is no round-trip to preserve and escaping is free.
-                    const title = meta?.title ? markdownEscapeText(foldLines(meta.title)) : '';
+                    const title = meta?.title ? markdownEscapeInline(foldLines(meta.title)) : '';
                     const body = childrenOutput.trim();
 
                     switch (this.resolvedDialect.admonitions) {
@@ -882,6 +942,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 continue;
             }
 
+            this.atLineStart = output === '' || output.endsWith('\n');
+            this.previousOutputChar = '';
+            this.nextSibling = undefined;
             let result = await this.processNodeRecursive(node, processor);
 
             // Ensure lists and other block elements are separated from non-similar content by a blank line
@@ -923,7 +986,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             // One blank line before the definitions, as before the notes above.
             output = output.replace(/\n+$/, '') + '\n\n';
             for (const [abbr, title] of this.collectedAbbreviations) {
-                output += `*[${markdownEscapeText(String(abbr).replace(/[[\]\r\n]+/g, ''))}]: ${markdownEscapeText(foldLines(title))}\n`;
+                output += `*[${markdownEscapePlain(String(abbr).replace(/[[\]\r\n]+/g, ''))}]: ${markdownEscapePlain(foldLines(title))}\n`;
             }
         }
 
@@ -971,7 +1034,14 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         if (!walkedByProcessor && node.children && node.children.length > 0) {
             // Optimization: Merge adjacent text nodes with identical formatting
             const optimizedChildren = this.optimizeNodes(node.children);
-            for (const child of optimizedChildren) {
+            for (let i = 0; i < optimizedChildren.length; i++) {
+                const child = optimizedChildren[i];
+                // A paragraph's lines stay lines; every other container puts its content after a
+                // marker on one line (a heading, list item or cell), so nothing in it starts one. A
+                // pipe-table cell holds inline content only, so nothing in it begins a block either.
+                this.atLineStart = node.type === 'paragraph' && !this.inPipeTableCell && (childrenOutput === '' || childrenOutput.endsWith('\n'));
+                this.previousOutputChar = childrenOutput.slice(-1);
+                this.nextSibling = optimizedChildren[i + 1];
                 childrenOutput = joinBlock(childrenOutput, child, await this.processNodeRecursive(child, processor));
             }
         }
@@ -1157,7 +1227,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         const br = this.resolvedFallbackToHtml.cellLineBreaks ? '<br>' : ' ';
                         // Consume any trailing spaces before the newline(s) too, so a hard-break's
                         // `  \n` collapses to a single `<br>` instead of leaving `  <br>` in the cell.
-                        cellContent = cellContent.trim().replace(/[ \t]*\n+/g, br).replace(/\|/g, '\\|');
+                        cellContent = joinLines(cellContent.trim(), br).replace(/\|/g, '\\|');
                         rowCells.push(cellContent);
 
                         // Handle colspan by adding empty cells
