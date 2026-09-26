@@ -3,7 +3,7 @@ import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
-import { imageFromPdf } from '../utils/textPdf.js';
+import { imageFromPdf, newDecodeBudget } from '../utils/textPdf.js';
 import { LATEX_SYMBOL_CHARACTERS, LISTINGS_LANGUAGE_NAMES } from '../utils/latexUtils.js';
 import { ADMONITION_COLOR } from '../utils/officeGenUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
@@ -821,6 +821,8 @@ class LatexReader {
     inputEncoding: string | undefined;
     attachments: OfficeAttachment[] = [];
     private attachmentByPath = new Map<string, string>();
+    /** What decoding PDF pictures into images may cost this document, across all of them. */
+    private readonly decodeBudget = newDecodeBudget();
     private headerFields = new Map<string, string>();
     private footerFields = new Map<string, string>();
     private graphicsPaths: string[] = [];
@@ -2652,9 +2654,14 @@ class LatexReader {
                 const bytes = this.project!.files.get(resolved)!;
                 // A PDF that is only a picture (as the LaTeX generator carries images, or an image saved
                 // as PDF) is taken as that picture, which every output format can show.
-                const picture = /\.pdf$/i.test(resolved) ? imageFromPdf(bytes) : null;
-                const renamed = picture && resolved.replace(/\.pdf$/i, picture.mimeType === 'image/png' ? '.png' : '.jpg');
-                name = renamed && !this.attachments.some(a => a.name === renamed) ? renamed : resolved;
+                const picture = /\.pdf$/i.test(resolved) ? imageFromPdf(bytes, this.decodeBudget) : null;
+                name = resolved;
+                if (picture) {
+                    // Named for what it now is, and apart from any attachment already holding that name.
+                    const stem = resolved.replace(/\.pdf$/i, ''), ext = picture.mimeType === 'image/png' ? '.png' : '.jpg';
+                    name = stem + ext;
+                    for (let n = 2; this.attachments.some(a => a.name === name); n++) name = `${stem}-${n}${ext}`;
+                }
                 this.attachments.push(createAttachment(name, picture ? Buffer.from(picture.data) : bytes));
                 this.attachmentByPath.set(resolved, name);
             }

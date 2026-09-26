@@ -60,7 +60,9 @@ export enum OfficeErrorType {
     /** Document element/structure nesting exceeded the safe recursion depth */
     MAX_NESTING_DEPTH_EXCEEDED = 'MAX_NESTING_DEPTH_EXCEEDED',
     /** Embedding call timed out */
-    EMBEDDING_TIMEOUT = 'EMBEDDING_TIMEOUT'
+    EMBEDDING_TIMEOUT = 'EMBEDDING_TIMEOUT',
+    /** OCR workers were terminated (`terminateOcr()`) before an image was recognized; the parse reports it as OCR_FAILED */
+    OCR_TERMINATED = 'OCR_TERMINATED'
 }
 
 /**
@@ -139,9 +141,10 @@ export enum OfficeWarningType {
     MATH_WRITTEN_AS_TEXT = 'MATH_WRITTEN_AS_TEXT',
     /**
      * LaTeX output references image files that are not part of it: without `texConfig.bundle`, the
-     * images the `.tex` does not carry inside it (with `texConfig.embedImages` off, or an image other
-     * than a readable PNG or JPEG; their bytes are in `ast.attachments`), and, in either mode, images
-     * the source referred to only by a relative path, with no data to package. The message names each.
+     * images the `.tex` does not carry inside it (with `texConfig.embedImages` off, an image other than
+     * a readable PNG or JPEG, or one past the decoding limits; their bytes are in `ast.attachments`),
+     * and, in either mode, images the source referred to only by a relative path, with no data to
+     * package. The message names each.
      */
     IMAGES_NOT_BUNDLED = 'IMAGES_NOT_BUNDLED',
     /** LaTeX input used commands or environments the parser does not interpret; their text content was kept where it had any */
@@ -1505,7 +1508,9 @@ export interface TexGeneratorConfig {
      * file beside the `.tex` (keeping a file of that name already there) and `\includegraphics` reads
      * it. Every engine reads it; with `--output-directory`, pdfLaTeX and LuaLaTeX still find the
      * files, but XeLaTeX and dvipdfmx look beside the `.tex`, so use `bundle` there. The data adds
-     * about a quarter to each image's size. When false, images are referenced as `images/<name>`
+     * about a quarter to each image's size. A PNG that must be decoded to be carried (transparency,
+     * interlacing) is carried up to 16 megapixels, and a document's decoded images up to 256 in all;
+     * past that it is referenced as a file. When false, images are referenced as `images/<name>`
      * files and reported with `IMAGES_NOT_BUNDLED`. Defaults to true. Ignored with `bundle`.
      */
     embedImages?: boolean;

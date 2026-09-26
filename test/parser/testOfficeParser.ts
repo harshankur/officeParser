@@ -2245,8 +2245,9 @@ async function testAbortSignal(): Promise<FeatureTest[]> {
     }
 
     // ── Test 2: Signal aborted while OCR runs ────────────────────────────────
-    // The abort lands the moment OCR starts listening to the signal, so it always arrives while an
-    // image is being recognized (a timer could lose the race to a fast parse and test nothing).
+    // The abort lands the moment OCR starts listening to the signal, so it always arrives while the
+    // image's OCR job is queued or its worker is starting (a timer could lose the race to a fast
+    // parse and test nothing; aborts later in recognition are covered by the exhaustive suite).
     // Once the signal has fired the parse must reject with AbortError: resolving is a failure.
     {
         const startTime = Date.now();

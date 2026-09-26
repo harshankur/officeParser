@@ -676,8 +676,10 @@ await ast.to('md', {
                     already there, so a picture can be replaced) and <code>\includegraphics</code> reads it with every
                     engine, with no shell escape or Ghostscript. Compile in the <code>.tex</code>'s folder: with
                     <code>--output-directory</code>, pdfLaTeX and LuaLaTeX still find the files, but XeLaTeX and dvipdfmx
-                    look beside the <code>.tex</code>, so use <code>bundle</code> there. Other image formats cannot be
-                    drawn by LaTeX and appear as a labelled box. <code>false</code> refers to
+                    look beside the <code>.tex</code>, so use <code>bundle</code> there. A PNG that must be decoded to
+                    be carried (transparency, interlacing) is carried up to 16 megapixels, and a document's decoded
+                    images up to 256 megapixels in all; past that it is referenced as a file. Other image formats
+                    cannot be drawn by LaTeX and appear as a labelled box. <code>false</code> refers to
                     <code>images/&lt;name&gt;</code> files instead, and the <code>IMAGES_NOT_BUNDLED</code> warning names
                     the files to place there. Ignored with <code>bundle</code>.</td>
             </tr>

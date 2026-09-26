@@ -358,7 +358,9 @@ export class OfficeParser {
 
             // A parse whose signal fired while it ran is cancelled, whatever the parser was doing
             // then: it rejects, never resolving with a document that stopped short of the request.
+            // The OCR-only signal is the same cancellation, delivered to OCR.
             checkAbortSignal(internalConfig.abortSignal);
+            checkAbortSignal(internalConfig.ocrConfig?.abortSignal);
 
             result.warnings = parsingWarnings;
 

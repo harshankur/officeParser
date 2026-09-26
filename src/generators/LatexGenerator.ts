@@ -5,7 +5,7 @@ import { ADMONITION_COLOR, decodeBase64, fillSheetRowGaps, hexColor, isHeaderRow
 import { LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, planLatexUnicode } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
-import { contentHash, imageToTextPdf } from '../utils/textPdf.js';
+import { contentHash, imageToTextPdf, newDecodeBudget } from '../utils/textPdf.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -230,8 +230,10 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private readonly media: { path: string; bytes: Uint8Array; includable: boolean }[] = [];
     /** Images carried inside the .tex, in order of first use: each becomes a `filecontents*` block. */
     private readonly carried: { name: string; pdf: string }[] = [];
-    /** Carried images by content hash, so an image used twice is carried once. */
-    private readonly carriedByHash = new Map<string, MediaRef>();
+    /** Carried images by content hash, so an image used twice is carried once (the text compared, not only the hash). */
+    private readonly carriedByHash = new Map<string, { pdf: string; ref: MediaRef }[]>();
+    /** What decoding images to carry them may cost this document, across all of them. */
+    private readonly decodeBudget = newDecodeBudget();
     /** Images the document references by a relative path, with no image data: the caller supplies them. */
     private readonly externalImages = new Set<string>();
     private readonly mediaByAttachment = new Map<string, MediaRef | null>();
@@ -1323,24 +1325,28 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      * hash of the data, so a changed image never meets a stale file, and without `overwrite` LaTeX
      * keeps a file of that name already there, which lets a reader replace the picture. Null for a
      * bundle (which holds the image files themselves), with `embedImages` off, or for an image that
-     * cannot be carried (another format, or damaged).
+     * cannot be carried (another format, damaged, or past the document's decoding budget).
      */
     private carriedImage(bytes: Uint8Array, mime: string, attachmentName: string): MediaRef | null {
         const { bundle, embedImages } = this.config.texConfig;
         if (bundle === true || embedImages === false || !['png', 'jpg'].includes(INCLUDABLE_IMAGE_EXT[mime])) return null;
-        const made = imageToTextPdf(bytes, PT_PER_INCH / IMAGE_DPI);
+        const made = imageToTextPdf(bytes, PT_PER_INCH / IMAGE_DPI, this.decodeBudget);
         if (!made) return null;
         // Hashing the carried PDF, not the image file, gives an image the same name after a round
         // trip through the parser (which drops PNG chunks the picture does not need), and a name
-        // already ending in that hash does not gain it twice.
+        // already ending in that hash does not gain it twice. The hash is short, so a match is
+        // confirmed on the text itself: two pictures sharing a hash are both carried, apart.
         const hash = contentHash(new TextEncoder().encode(made.pdf));
-        const known = this.carriedByHash.get(hash);
-        if (known) return known;
-        const name = `${this.fileStem(attachmentName).replace(new RegExp(`-${hash}$`), '')}-${hash}.pdf`;
+        const sameHash = this.carriedByHash.get(hash) ?? [];
+        const known = sameHash.find(entry => entry.pdf === made.pdf);
+        if (known) return known.ref;
+        const stem = `${this.fileStem(attachmentName).replace(new RegExp(`-${hash}$`), '')}-${hash}`;
+        let name = `${stem}.pdf`;
+        for (let n = 2; this.usedFileNames.has(name.toLowerCase()); n++) name = `${stem}-${n}.pdf`;
         this.usedFileNames.add(name.toLowerCase());
         const ref: MediaRef = { path: name, includable: true, mime, intrinsic: sniffImageSize(bytes), bb: made.bbox };
         this.carried.push({ name, pdf: made.pdf });
-        this.carriedByHash.set(hash, ref);
+        this.carriedByHash.set(hash, [...sameHash, { pdf: made.pdf, ref }]);
         return ref;
     }
 

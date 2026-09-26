@@ -50,7 +50,8 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
     [OfficeErrorType.ZIP_TRUNCATED]: `Malformed ZIP data: no End of Central Directory record was found at the end of the input. Either the file was cut off during download or transfer, or extra data follows the archive; in both cases the entries recovered from it cannot be trusted to be the whole document.`,
     [OfficeErrorType.REQUIRED_PART_MISSING]: (info: { fileType: string, part: string }) => `Your ${info.fileType} file is a readable ZIP archive but is missing its required '${info.part}' part, so it cannot be a valid ${info.fileType} document. The file is corrupt, incomplete, or mislabeled. If you are sure it is fine, please create a ticket in Issues on github with the file to reproduce the error.`,
     [OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED]: `Document nesting depth exceeded the safe limit (possible denial-of-service input)`,
-    [OfficeErrorType.EMBEDDING_TIMEOUT]: (timeout: number) => `Embedding call timed out after ${timeout}ms`
+    [OfficeErrorType.EMBEDDING_TIMEOUT]: (timeout: number) => `Embedding call timed out after ${timeout}ms`,
+    [OfficeErrorType.OCR_TERMINATED]: `The OCR workers were terminated (terminateOcr()) before this image was recognized.`
 };
 
 /**
@@ -112,7 +113,7 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
         const external = info.external ?? [];
         const parts: string[] = [];
         if (info.files.length) {
-            const why = info.embedImages === false ? 'texConfig.embedImages is off' : 'a .tex carries only PNG and JPEG images it can read';
+            const why = info.embedImages === false ? 'texConfig.embedImages is off' : 'a .tex carries only PNG and JPEG images it can read, up to a limit per document';
             parts.push(`The LaTeX output references ${count(info.files)} (${list(info.files)}) that ${info.files.length === 1 ? 'is' : 'are'} not part of the .tex source (${why}). Place ${info.files.length === 1 ? 'it at that path' : 'them at those paths'}, relative to the .tex (the bytes are in ast.attachments${info.fromDataUris ? ', or in the data: URIs the source embedded images as' : ''}), or set texConfig.bundle: true to get a zip containing the .tex and its images.`);
         }
         if (external.length) {

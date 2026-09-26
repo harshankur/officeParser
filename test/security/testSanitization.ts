@@ -449,6 +449,21 @@ async function markdownTests() {
     const latex = await viaDocument('Given $a < b$ and $E = mc^2$ here.');
     check('md: legitimate LaTeX comparison survives', latex.includes('$a < b$'),
         `real math was corrupted: ${JSON.stringify(latex.slice(0, 160))}`);
+
+    // Inline syntax that never closes costs time in proportion to its length: a line of backticks or
+    // of `[x](` took minutes, rescanned from every opening character.
+    for (const unit of ['`', 'a`', '``a', '[x](', '[x](y', '[', '![', '[^', '[[', '[a][', '<span style="x">', '<u>', '<sub>', '<sup>', '**a', '*a']) {
+        const text = unit.repeat(Math.ceil(200_000 / unit.length));
+        const started = Date.now();
+        let error = '';
+        await OfficeParser.parseOffice(Buffer.from('p ' + text + ' q'), { fileType: 'md' } as any).catch((e: any) => { error = e.message; });
+        const ms = Date.now() - started;
+        check(`md: 200 KB of ${JSON.stringify(unit)} parses in linear time`, !error && ms < 5000, `${ms}ms ${error}`);
+    }
+    // A line of hundreds of thousands of inline nodes is appended, not spread into one call.
+    let manyNodes = '';
+    await OfficeParser.parseOffice(Buffer.from('*a'.repeat(500_000)), { fileType: 'md' } as any).catch((e: any) => { manyNodes = e.message; });
+    check('md: a line of 500,000 emphasis runs parses', !manyNodes, manyNodes);
 }
 
 async function csvTests() {
@@ -2077,6 +2092,30 @@ async function latexParserTests() {
         check(`latex parser: ${label} in a carried PDF stays a PDF, within bounds`, r.ms < TIME_BUDGET_MS && grew < 100_000_000 && r.ast.attachments.length === 1 && r.ast.attachments[0].mimeType === 'application/pdf',
             `${r.ms}ms, heap +${Math.round(grew / 1e6)}MB, ${r.ast.attachments.map(a => a.mimeType).join(',')}`);
     }
+    // The object scan is linear: text an unclosed string or dictionary swallowed is read once, not
+    // again from every `obj` inside it (300 KB took minutes).
+    for (const [label, unit] of [['unclosed strings', '1 0 obj\n('], ['unclosed dictionaries', '1 0 obj\n<</K('], ['unclosed arrays', '1 0 obj\n[']] as const) {
+        const r = await parse(carried('%PDF-1.5\n' + unit.repeat(Math.ceil(300_000 / unit.length)) + '\n'));
+        check(`latex parser: a carried PDF of ${label} is scanned in linear time`, r.ms < TIME_BUDGET_MS && r.ast.attachments[0]?.mimeType === 'application/pdf', `${r.ms}ms`);
+    }
+    // Decoding is bounded by what it produces, typed arrays included: an image past the per-image
+    // budget is refused before a buffer is allocated, and one at it decodes in bounded time and memory.
+    // Binary image data travels in a project zip (a .tex is text, so filecontents cannot carry it).
+    const decodeCase = async (width: number, bpc: number, data: Uint8Array) => {
+        const stream = Buffer.from(data).toString('latin1');
+        const pdf = pdfWith(`<< /Type /XObject /Subtype /Image /Width ${width} /Height ${width} /ColorSpace /DeviceRGB /BitsPerComponent ${bpc} /Filter /FlateDecode /DecodeParms << /Predictor 12 /Colors 3 /BitsPerComponent ${bpc} /Columns ${width} >> /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+        const project = Buffer.from(zipSync({
+            'main.tex': new TextEncoder().encode('\\documentclass{article}\\begin{document}\\includegraphics{x.pdf}\\end{document}'),
+            'x.pdf': new Uint8Array(Buffer.from(pdf, 'latin1')),
+        }));
+        const before = process.memoryUsage().arrayBuffers;
+        const r = await parse(project);
+        return { r, grew: process.memoryUsage().arrayBuffers - before };
+    };
+    const refused = await decodeCase(4000, 16, zlibSync(new Uint8Array(4096)));
+    check('latex parser: a carried image past the decoding budget stays a PDF, nothing allocated', refused.r.ms < TIME_BUDGET_MS && refused.grew < 50_000_000 && refused.r.ast.attachments[0]?.mimeType === 'application/pdf', `${refused.r.ms}ms, +${Math.round(refused.grew / 1e6)}MB`);
+    const atCap = await decodeCase(3999, 8, zlibSync(new Uint8Array((3999 * 3 + 1) * 3999), { level: 9 }));
+    check('latex parser: a carried image at the decoding budget decodes in bounded time and memory', atCap.r.ms < TIME_BUDGET_MS && atCap.grew < 300_000_000 && atCap.r.ast.attachments[0]?.mimeType === 'image/png', `${atCap.r.ms}ms, +${Math.round(atCap.grew / 1e6)}MB`);
     const escaping = await parse('\\begin{filecontents*}{../../outside.tex}\nEscaped\n\\end{filecontents*}\\begin{document}\\input{../../outside}\\end{document}');
     check('latex parser: a filecontents file cannot be written outside the project', !escaping.json.includes('Escaped') && escaping.codes.includes('LATEX_FILE_NOT_FOUND'));
 }

@@ -16,8 +16,33 @@
 import { unzlibSync, zlibSync } from 'fflate';
 import { crc32 } from './imageUtils.js';
 
-/** Largest image, in pixels, decoded to be re-encoded; a larger one is left as it is. */
-const MAX_DECODED_PIXELS = 40_000_000;
+/**
+ * Largest image decoded to be re-encoded, in pixels and in bytes of decoded rows (the soft mask
+ * counted on its own): a larger one is left as it is (not carried, or kept as the PDF). Images that
+ * need no decoding (JPEG, and PNG PDF can read as it is) are not bound by it.
+ */
+const MAX_DECODED_PIXELS = 16_000_000;
+const MAX_DECODED_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Pixels one document may have decoded, across all its images (see {@link newDecodeBudget}): far
+ * more than real documents need (thirty screenshots are some 60 million), and a bound on the work
+ * a hostile one can demand, since each image is only limited on its own.
+ */
+const DOCUMENT_DECODED_PIXELS = 256_000_000;
+
+/** Pixels a document may still have decoded; each decode draws from it, and none happens past it. */
+export interface DecodeBudget { pixels: number }
+
+/** A fresh budget for one document (one parse, or one LaTeX generation). */
+export const newDecodeBudget = (): DecodeBudget => ({ pixels: DOCUMENT_DECODED_PIXELS });
+
+/** Takes `pixels` from the budget, or reports that it cannot. */
+const spend = (budget: DecodeBudget, pixels: number): boolean => {
+    if (pixels > budget.pixels) return false;
+    budget.pixels -= pixels;
+    return true;
+};
 /** Largest page content stream read when recognizing an image-only page. */
 const MAX_CONTENT_STREAM_BYTES = 64 * 1024;
 /**
@@ -171,13 +196,31 @@ function unfilterRows(raw: Uint8Array, offset: number, rows: number, stride: num
     const out = new Uint8Array(rows * stride);
     for (let y = 0; y < rows; y++) {
         const f = raw[offset + y * (stride + 1)];
-        if (f > 4) return null;
         const src = offset + y * (stride + 1) + 1, dst = y * stride, prev = dst - stride;
-        for (let x = 0; x < stride; x++) {
-            const a = x >= bpp ? out[dst + x - bpp] : 0;
-            const up = y > 0 ? out[prev + x] : 0;
-            const c = x >= bpp && y > 0 ? out[prev + x - bpp] : 0;
-            out[dst + x] = (raw[src + x] + predict(f, a, up, c)) & 0xFF;
+        // One loop per filter, so the byte loop carries no call or branch per byte.
+        switch (f) {
+            case 0: out.set(raw.subarray(src, src + stride), dst); break;
+            case 1:
+                for (let x = 0; x < stride; x++) out[dst + x] = (raw[src + x] + (x >= bpp ? out[dst + x - bpp] : 0)) & 0xFF;
+                break;
+            case 2:
+                if (y === 0) out.set(raw.subarray(src, src + stride), dst);
+                else for (let x = 0; x < stride; x++) out[dst + x] = (raw[src + x] + out[prev + x]) & 0xFF;
+                break;
+            case 3:
+                for (let x = 0; x < stride; x++) {
+                    const a = x >= bpp ? out[dst + x - bpp] : 0, up = y > 0 ? out[prev + x] : 0;
+                    out[dst + x] = (raw[src + x] + ((a + up) >> 1)) & 0xFF;
+                }
+                break;
+            case 4:
+                for (let x = 0; x < stride; x++) {
+                    const a = x >= bpp ? out[dst + x - bpp] : 0, up = y > 0 ? out[prev + x] : 0, c = x >= bpp && y > 0 ? out[prev + x - bpp] : 0;
+                    const q = a + up - c, pa = q > a ? q - a : a - q, pb = q > up ? q - up : up - q, pc = q > c ? q - c : c - q;
+                    out[dst + x] = (raw[src + x] + (pa <= pb && pa <= pc ? a : pb <= pc ? up : c)) & 0xFF;
+                }
+                break;
+            default: return null;
         }
     }
     return out;
@@ -204,7 +247,7 @@ function decodePng(p: PngInfo): Pixels | null {
         return { pw, ph, stride: Math.ceil(pw * bitsPerPixel / 8) };
     });
     const expected = sizes.reduce((n, s) => n + (s.pw && s.ph ? s.ph * (s.stride + 1) : 0), 0);
-    if (expected > p.idat.length * MAX_INFLATE_RATIO + 1024) return null;
+    if (expected > MAX_DECODED_BYTES || expected > p.idat.length * MAX_INFLATE_RATIO + 1024) return null;
     let raw: Uint8Array;
     try { raw = unzlibSync(p.idat, { out: new Uint8Array(expected) }); } catch { return null; }
     if (raw.length < expected) return null;
@@ -212,11 +255,11 @@ function decodePng(p: PngInfo): Pixels | null {
     const channels: 1 | 3 = colorType === 0 || colorType === 4 ? 1 : 3;
     const color = new Uint8Array(width * height * channels);
     const alpha = new Uint8Array(width * height).fill(255);
-    let hasAlpha = false;
     const maxSample = (1 << depth) - 1;
     const to8 = (v: number) => depth === 16 ? v >> 8 : depth === 8 ? v : Math.round(v * 255 / maxSample);
     const key = p.trns && colorType === 0 && p.trns.length >= 2 ? [u16(p.trns, 0)]
         : p.trns && colorType === 2 && p.trns.length >= 6 ? [u16(p.trns, 0), u16(p.trns, 2), u16(p.trns, 4)] : null;
+    const palette = p.palette, trns = p.trns;
 
     let offset = 0;
     for (let pass = 0; pass < passes.length; pass++) {
@@ -227,28 +270,46 @@ function decodePng(p: PngInfo): Pixels | null {
         if (!rows) return null;
         offset += ph * (stride + 1);
         for (let py = 0; py < ph; py++) {
+            const rowStart = py * stride, lineStart = (y0 + py * dy) * width;
             for (let px = 0; px < pw; px++) {
-                const i = (y0 + py * dy) * width + (x0 + px * dx);
-                const s = (k: number) => sampleAt(rows, py * stride, px * spp + k, depth);
+                const i = lineStart + x0 + px * dx;
+                if (depth === 8) {
+                    // The common case, read straight from the row.
+                    const o = rowStart + px * spp;
+                    if (colorType === 6) { color[i * 3] = rows[o]; color[i * 3 + 1] = rows[o + 1]; color[i * 3 + 2] = rows[o + 2]; alpha[i] = rows[o + 3]; }
+                    else if (colorType === 2) {
+                        color[i * 3] = rows[o]; color[i * 3 + 1] = rows[o + 1]; color[i * 3 + 2] = rows[o + 2];
+                        if (key && rows[o] === key[0] && rows[o + 1] === key[1] && rows[o + 2] === key[2]) alpha[i] = 0;
+                    } else if (colorType === 4) { color[i] = rows[o]; alpha[i] = rows[o + 1]; }
+                    else if (colorType === 0) { color[i] = rows[o]; if (key && rows[o] === key[0]) alpha[i] = 0; }
+                    else {
+                        const idx = rows[o];
+                        if (idx * 3 + 2 < palette!.length) { color[i * 3] = palette![idx * 3]; color[i * 3 + 1] = palette![idx * 3 + 1]; color[i * 3 + 2] = palette![idx * 3 + 2]; }
+                        if (trns && idx < trns.length) alpha[i] = trns[idx];
+                    }
+                    continue;
+                }
+                const k0 = px * spp;
                 if (colorType === 3) {
-                    const idx = s(0), pal = p.palette!;
-                    if (idx * 3 + 2 < pal.length) color.set(pal.subarray(idx * 3, idx * 3 + 3), i * 3);
-                    if (p.trns && idx < p.trns.length) alpha[i] = p.trns[idx];
+                    const idx = sampleAt(rows, rowStart, k0, depth);
+                    if (idx * 3 + 2 < palette!.length) { color[i * 3] = palette![idx * 3]; color[i * 3 + 1] = palette![idx * 3 + 1]; color[i * 3 + 2] = palette![idx * 3 + 2]; }
+                    if (trns && idx < trns.length) alpha[i] = trns[idx];
                 } else if (channels === 1) {
-                    const g = s(0);
+                    const g = sampleAt(rows, rowStart, k0, depth);
                     color[i] = to8(g);
-                    if (colorType === 4) alpha[i] = to8(s(1));
+                    if (colorType === 4) alpha[i] = to8(sampleAt(rows, rowStart, k0 + 1, depth));
                     else if (key && g === key[0]) alpha[i] = 0;
                 } else {
-                    const r = s(0), g = s(1), b = s(2);
+                    const r = sampleAt(rows, rowStart, k0, depth), g = sampleAt(rows, rowStart, k0 + 1, depth), b = sampleAt(rows, rowStart, k0 + 2, depth);
                     color[i * 3] = to8(r); color[i * 3 + 1] = to8(g); color[i * 3 + 2] = to8(b);
-                    if (colorType === 6) alpha[i] = to8(s(3));
+                    if (colorType === 6) alpha[i] = to8(sampleAt(rows, rowStart, k0 + 3, depth));
                     else if (key && r === key[0] && g === key[1] && b === key[2]) alpha[i] = 0;
                 }
-                if (alpha[i] !== 255) hasAlpha = true;
             }
         }
     }
+    let hasAlpha = false;
+    for (let i = 0; i < alpha.length && !hasAlpha; i++) hasAlpha = alpha[i] !== 255;
     return { width, height, channels, color, alpha: hasAlpha ? alpha : null };
 }
 
@@ -258,29 +319,39 @@ function decodePng(p: PngInfo): Pixels | null {
  */
 function filterRows(data: Uint8Array, width: number, height: number, channels: number): Uint8Array {
     const stride = width * channels, out = new Uint8Array(height * (stride + 1));
-    const trial = new Uint8Array(stride);
+    const cost = (v: number) => { v &= 0xFF; return v < 128 ? v : 256 - v; };
     for (let y = 0; y < height; y++) {
         const row = y * stride, prev = row - stride;
-        let best = 0, bestScore = Infinity;
-        for (let f = 0; f <= 4; f++) {
-            let score = 0;
-            for (let x = 0; x < stride; x++) {
-                const a = x >= channels ? data[row + x - channels] : 0;
-                const up = y > 0 ? data[prev + x] : 0;
-                const c = x >= channels && y > 0 ? data[prev + x - channels] : 0;
-                const v = (data[row + x] - predict(f, a, up, c)) & 0xFF;
-                score += v < 128 ? v : 256 - v;
-            }
-            if (score < bestScore) { bestScore = score; best = f; }
-        }
-        for (let x = 0; x < stride; x++) {
+        // Every filter's score in one pass, over at most about 512 bytes spread across the row:
+        // enough to choose well, and the choice costs little however wide the image is.
+        let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+        const step = Math.max(1, Math.floor(stride / 512));
+        for (let x = 0; x < stride; x += step) {
+            const v = data[row + x];
             const a = x >= channels ? data[row + x - channels] : 0;
             const up = y > 0 ? data[prev + x] : 0;
             const c = x >= channels && y > 0 ? data[prev + x - channels] : 0;
-            trial[x] = (data[row + x] - predict(best, a, up, c)) & 0xFF;
+            s0 += cost(v); s1 += cost(v - a); s2 += cost(v - up); s3 += cost(v - ((a + up) >> 1)); s4 += cost(v - predict(4, a, up, c));
         }
-        out[y * (stride + 1)] = best;
-        out.set(trial, y * (stride + 1) + 1);
+        let best = 0, bestScore = s0;
+        if (s1 < bestScore) { best = 1; bestScore = s1; }
+        if (s2 < bestScore) { best = 2; bestScore = s2; }
+        if (s3 < bestScore) { best = 3; bestScore = s3; }
+        if (s4 < bestScore) best = 4;
+        const o = y * (stride + 1) + 1;
+        out[o - 1] = best;
+        if (best === 0) out.set(data.subarray(row, row + stride), o);
+        else if (best === 1) for (let x = 0; x < stride; x++) out[o + x] = (data[row + x] - (x >= channels ? data[row + x - channels] : 0)) & 0xFF;
+        else if (best === 2) for (let x = 0; x < stride; x++) out[o + x] = (data[row + x] - (y > 0 ? data[prev + x] : 0)) & 0xFF;
+        else if (best === 3) {
+            for (let x = 0; x < stride; x++) out[o + x] = (data[row + x] - (((x >= channels ? data[row + x - channels] : 0) + (y > 0 ? data[prev + x] : 0)) >> 1)) & 0xFF;
+        } else {
+            for (let x = 0; x < stride; x++) {
+                const a = x >= channels ? data[row + x - channels] : 0, up = y > 0 ? data[prev + x] : 0, c = x >= channels && y > 0 ? data[prev + x - channels] : 0;
+                const q = a + up - c, pa = q > a ? q - a : a - q, pb = q > up ? q - up : up - q, pc = q > c ? q - c : c - q;
+                out[o + x] = (data[row + x] - (pa <= pb && pa <= pc ? a : pb <= pc ? up : c)) & 0xFF;
+            }
+        }
     }
     return out;
 }
@@ -293,7 +364,7 @@ function flateImage(width: number, height: number, cs: string, data: Uint8Array,
     };
 }
 
-function pngXObjects(bytes: Uint8Array): XObject[] | null {
+function pngXObjects(bytes: Uint8Array, budget: DecodeBudget): XObject[] | null {
     const p = readPng(bytes);
     if (!p) return null;
     const { width, height, depth, colorType } = p;
@@ -312,6 +383,7 @@ function pngXObjects(bytes: Uint8Array): XObject[] | null {
         }];
     }
     // Transparency, a masked palette or interlacing: decode, and give the alpha its own soft mask.
+    if (!spend(budget, p.width * p.height)) return null;
     const px = decodePng(p);
     if (!px) return null;
     const cs = px.channels === 1 ? '/DeviceGray' : '/DeviceRGB';
@@ -323,11 +395,12 @@ function pngXObjects(bytes: Uint8Array): XObject[] | null {
  * A PNG or JPEG as a one-page PDF of printable ASCII lines (none ending in a space): what a
  * `filecontents*` block can write for `\includegraphics` to read. The page is the image at
  * `pointsPerPixel` (0.75 draws it at 96 pixels per inch), and `bbox` is that page as a graphicx
- * `bb` value. Null for any other data, or an image too damaged or too large to carry.
+ * `bb` value. Null for any other data, or an image too damaged or too large to carry, or one that
+ * would need decoding past the document's `budget`.
  */
-export function imageToTextPdf(bytes: Uint8Array, pointsPerPixel: number): { pdf: string; bbox: string } | null {
+export function imageToTextPdf(bytes: Uint8Array, pointsPerPixel: number, budget: DecodeBudget): { pdf: string; bbox: string } | null {
     let images: XObject[] | null;
-    try { images = jpegXObjects(bytes) ?? pngXObjects(bytes); } catch { return null; }
+    try { images = jpegXObjects(bytes) ?? pngXObjects(bytes, budget); } catch { return null; }
     if (!images || !(pointsPerPixel > 0)) return null;
     const w = num(images[0].width * pointsPerPixel), h = num(images[0].height * pointsPerPixel);
     const imageNum = 4 + images.length;
@@ -368,16 +441,21 @@ const isDict = (v: PdfValue | undefined): v is PdfDict => !!v && typeof v === 'o
 const isStr = (v: PdfValue | undefined): v is PdfString => !!v && typeof v === 'object' && 'str' in v;
 
 const WHITESPACE = new Set([0, 9, 10, 12, 13, 32]);
+/** A literal string's backslash escapes: `\n`, `\r`, `\t`, `\b`, `\f`. */
+const STRING_ESCAPES: Record<number, number> = { 0x6E: 10, 0x72: 13, 0x74: 9, 0x62: 8, 0x66: 12 };
 const DELIMITERS = new Set('()<>[]{}/%'.split('').map(c => c.charCodeAt(0)));
 
 /** A minimal reader of PDF objects: enough to find a page, its content and the image it draws. */
 class PdfReader {
     private objects = new Map<number, { value: PdfValue; stream: Uint8Array | null }>();
+    /** The furthest byte the current object's parse has read. */
+    private far = 0;
 
     constructor(private b: Uint8Array) {
         const text = latin1(b);
         const re = /(\d+)\s+(\d+)\s+obj\b/g;
         for (let m: RegExpExecArray | null; (m = re.exec(text));) {
+            this.far = re.lastIndex;
             try {
                 const parsed = this.value(m.index + m[0].length, 0);
                 if (!parsed) continue;
@@ -395,7 +473,12 @@ class PdfReader {
                     re.lastIndex = end;
                 }
                 this.objects.set(Number(m[1]), { value: parsed.value, stream });
-            } catch { /* an unreadable object is skipped */ }
+            } catch { /* an unreadable object is skipped */ } finally {
+                // The next object is looked for past everything this one read, so text an unclosed
+                // string or dictionary swallowed is scanned once, not again from every `obj` inside
+                // it: the scan stays linear in the file's size.
+                if (this.far > re.lastIndex) re.lastIndex = this.far;
+            }
         }
     }
 
@@ -419,12 +502,14 @@ class PdfReader {
             else if (b[i] === 37) { while (i < b.length && b[i] !== 10 && b[i] !== 13) i++; }
             else break;
         }
+        if (i > this.far) this.far = i;
         return i;
     }
 
     private word(i: number): string {
         let j = i;
         while (j < this.b.length && !WHITESPACE.has(this.b[j]) && !DELIMITERS.has(this.b[j])) j++;
+        if (j > this.far) this.far = j;
         return latin1(this.b.subarray(i, j));
     }
 
@@ -463,6 +548,7 @@ class PdfReader {
         if (c === 0x2F) { const w = this.word(i + 1); return { value: { name: w }, end: i + 1 + w.length }; }
         if (c === 0x3C) {
             const close = b.indexOf(0x3E, i);
+            this.far = Math.max(this.far, close < 0 ? b.length : close + 1);
             if (close < 0) return null;
             return { value: { str: decodeAsciiHex(b.subarray(i + 1, close + 1)) }, end: close + 1 };
         }
@@ -473,19 +559,20 @@ class PdfReader {
                 const ch = b[i];
                 if (ch === 0x5C) {
                     const n = b[++i];
-                    const esc: Record<number, number> = { 0x6E: 10, 0x72: 13, 0x74: 9, 0x62: 8, 0x66: 12 };
                     if (n >= 0x30 && n <= 0x37) {
                         let v = 0, k = 0;
                         while (k < 3 && b[i] >= 0x30 && b[i] <= 0x37) { v = v * 8 + b[i] - 0x30; i++; k++; }
                         i--;
                         out.push(v & 0xFF);
-                    } else if (n !== 10 && n !== 13) out.push(esc[n] ?? n);
+                    } else if (n !== 10 && n !== 13) out.push(STRING_ESCAPES[n] ?? n);
                     continue;
                 }
                 if (ch === 0x28) level++;
                 if (ch === 0x29 && --level === 0) break;
                 out.push(ch);
             }
+            this.far = Math.max(this.far, i + 1);
+            if (level > 0) return null;
             return { value: { str: Uint8Array.from(out) }, end: i + 1 };
         }
         const w = this.word(i);
@@ -600,11 +687,13 @@ function png(width: number, height: number, depth: number, colorType: number, id
 interface ImageSpec { width: number; height: number; bpc: number; colors: number; palette: Uint8Array | null }
 
 /** Width, height, bits per component and colour model of an image XObject PNG can hold, or null. */
-function imageSpec(reader: PdfReader, dict: Map<string, PdfValue>): ImageSpec | null {
+function imageSpec(reader: PdfReader, dict: Map<string, PdfValue>, decoding: boolean): ImageSpec | null {
     const width = reader.get(dict.get('Width')), height = reader.get(dict.get('Height'));
     const bpc = reader.get(dict.get('BitsPerComponent')) ?? 8;
     if (typeof width !== 'number' || typeof height !== 'number' || typeof bpc !== 'number') return null;
-    if (!(width > 0 && height > 0) || width * height > MAX_DECODED_PIXELS || ![1, 2, 4, 8, 16].includes(bpc)) return null;
+    if (!(Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0) || ![1, 2, 4, 8, 16].includes(bpc)) return null;
+    // Only pixels that are decoded cost memory and time: an image passed through as it is has no cap.
+    if (decoding && width * height > MAX_DECODED_PIXELS) return null;
     if (reader.get(dict.get('ImageMask')) === true || dict.has('Decode')) return null;
     const cs = reader.get(dict.get('ColorSpace'));
     const family = (v: PdfValue | undefined): number | null => {
@@ -624,15 +713,20 @@ function imageSpec(reader: PdfReader, dict: Map<string, PdfValue>): ImageSpec | 
             table = d?.remaining === 'FlateDecode' ? inflate(d.data, 768) : d?.remaining === null ? d.data : null;
         }
         if (typeof hival !== 'number' || family(base) !== 3 || !table || bpc > 8 || table.length < (hival + 1) * 3) return null;
-        return { width, height, bpc, colors: 1, palette: table.subarray(0, (hival + 1) * 3) };
+        return withinBudget({ width, height, bpc, colors: 1, palette: table.subarray(0, (hival + 1) * 3) }, decoding);
     }
     if (Array.isArray(cs) && isName(cs[0]) && cs[0].name === 'ICCBased') {
         const icc = reader.stream(cs[1]);
         const n = icc ? reader.get(icc.dict.get('N')) : undefined;
-        return n === 1 || n === 3 ? { width, height, bpc, colors: n, palette: null } : null;
+        return n === 1 || n === 3 ? withinBudget({ width, height, bpc, colors: n, palette: null }, decoding) : null;
     }
     const colors = family(cs);
-    return colors ? { width, height, bpc, colors, palette: null } : null;
+    return colors ? withinBudget({ width, height, bpc, colors, palette: null }, decoding) : null;
+}
+
+/** The spec, or null when its decoded rows would exceed {@link MAX_DECODED_BYTES}. */
+function withinBudget(spec: ImageSpec, decoding: boolean): ImageSpec | null {
+    return decoding && Math.ceil(spec.width * spec.colors * spec.bpc / 8) * spec.height > MAX_DECODED_BYTES ? null : spec;
 }
 
 /** An image XObject's samples as packed rows (predictors undone), or null. */
@@ -680,6 +774,18 @@ function pageImage(reader: PdfReader): { dict: Map<string, PdfValue>; data: Uint
     const tokens = content.split(/[\s]+/).filter(Boolean);
     const draws = tokens.filter(t => t === 'Do').length;
     if (draws !== 1 || tokens.some(t => !/^(?:q|Q|cm|Do|-?[\d.]+|\/[^\s/]+)$/.test(t))) return null;
+    // Drawn upright: a rotated or mirrored placement, or a rotated page, shows the picture turned,
+    // which the image alone would not; such a page stays a PDF.
+    for (let k = tokens.indexOf('cm'); k >= 0; k = tokens.indexOf('cm', k + 1)) {
+        const [a, b, c, d] = tokens.slice(k - 6, k - 2).map(Number);
+        if (!(a > 0 && d > 0 && b === 0 && c === 0)) return null;
+    }
+    let rotate = reader.get(page.get('Rotate'));
+    for (let up = reader.get(page.get('Parent')), i = 0; rotate === undefined && isDict(up) && i < 16; i++) {
+        rotate = reader.get(up.dict.get('Rotate'));
+        up = reader.get(up.dict.get('Parent'));
+    }
+    if (typeof rotate === 'number' && rotate % 360 !== 0) return null;
     const name = tokens[tokens.indexOf('Do') - 1];
     if (!name?.startsWith('/')) return null;
     const ref = xobjects.dict.get(name.slice(1));
@@ -692,34 +798,38 @@ function pageImage(reader: PdfReader): { dict: Map<string, PdfValue>; data: Uint
  * The picture a single-page PDF shows, as PNG or JPEG bytes: the page must draw one image and
  * nothing else (as {@link imageToTextPdf} writes, and as an image saved as PDF usually is). A JPEG
  * comes back byte for byte; other images become a PNG with the same pixels, transparency included.
- * Null for any other PDF (a vector figure, several pages, an unsupported encoding), which stays a PDF.
+ * Null for any other PDF (a vector figure, several pages, an unsupported encoding, a rotated page),
+ * or one needing decoding past the document's `budget`, which stays a PDF.
  */
-export function imageFromPdf(bytes: Uint8Array): { data: Uint8Array; mimeType: 'image/png' | 'image/jpeg' } | null {
+export function imageFromPdf(bytes: Uint8Array, budget: DecodeBudget): { data: Uint8Array; mimeType: 'image/png' | 'image/jpeg' } | null {
     try {
         if (latin1(bytes.subarray(0, 1024)).indexOf('%PDF-') < 0) return null;
         const reader = new PdfReader(bytes);
         const img = pageImage(reader);
         if (!img) return null;
-        const d = decodeStream(reader, img.dict, img.data, MAX_DECODED_PIXELS * 4);
+        const d = decodeStream(reader, img.dict, img.data, MAX_DECODED_BYTES);
         if (!d) return null;
         if (d.remaining === 'DCTDecode') return jpegInfo(d.data) ? { data: d.data, mimeType: 'image/jpeg' } : null;
 
-        const spec = imageSpec(reader, img.dict);
-        if (!spec) return null;
         const smask = reader.stream(img.dict.get('SMask'));
         const colorKey = reader.get(img.dict.get('Mask'));
         const predictor = d.parms ? reader.get(d.parms.dict.get('Predictor')) : undefined;
-        const colorType = spec.palette ? 3 : spec.colors === 1 ? 0 : 2;
-        const plte = spec.palette ? [pngChunk('PLTE', spec.palette)] : [];
 
         // PNG's own compressed rows, as the generator passes them through: they become the PNG as they are.
         const PARM_DEFAULTS: Record<string, number> = { Colors: 1, BitsPerComponent: 8, Columns: 1 };
         const parmsMatch = (key: string, expected: number) => (d.parms ? reader.get(d.parms.dict.get(key)) ?? PARM_DEFAULTS[key] : PARM_DEFAULTS[key]) === expected;
-        if (!smask && colorKey === undefined && d.remaining === 'FlateDecode' && predictor === 15
-            && parmsMatch('Colors', spec.colors) && parmsMatch('BitsPerComponent', spec.bpc) && parmsMatch('Columns', spec.width)) {
+        const passThrough = !smask && colorKey === undefined && d.remaining === 'FlateDecode' && predictor === 15;
+        const spec = imageSpec(reader, img.dict, !passThrough);
+        if (!spec) return null;
+        const colorType = spec.palette ? 3 : spec.colors === 1 ? 0 : 2;
+        const plte = spec.palette ? [pngChunk('PLTE', spec.palette)] : [];
+        if (passThrough && parmsMatch('Colors', spec.colors) && parmsMatch('BitsPerComponent', spec.bpc) && parmsMatch('Columns', spec.width)) {
             return { data: png(spec.width, spec.height, spec.bpc, colorType, d.data, plte), mimeType: 'image/png' };
         }
+        if (passThrough && !imageSpec(reader, img.dict, true)) return null;
 
+        const smaskPixels = smask ? spec.width * spec.height : 0;
+        if (!spend(budget, spec.width * spec.height + smaskPixels)) return null;
         const rows = imageRows(reader, img.dict, img.data, spec);
         if (!rows) return null;
         const stride = Math.ceil(spec.width * spec.colors * spec.bpc / 8);
@@ -728,19 +838,33 @@ export function imageFromPdf(bytes: Uint8Array): { data: Uint8Array; mimeType: '
         const color = new Uint8Array(n * channels);
         const alpha = new Uint8Array(n).fill(255);
         const max = (1 << spec.bpc) - 1;
+        const scale = (v: number) => spec.bpc === 16 ? v >> 8 : spec.bpc === 8 ? v : Math.round(v * 255 / max);
         const keys = Array.isArray(colorKey) && colorKey.every(k => typeof k === 'number') ? colorKey as number[] : null;
+        const palette = spec.palette, colors = spec.colors;
         let hasAlpha = false;
         for (let y = 0; y < spec.height; y++) {
+            const rowStart = y * stride;
             for (let x = 0; x < spec.width; x++) {
                 const i = y * spec.width + x;
-                const raw = Array.from({ length: spec.colors }, (_, k) => sampleAt(rows, y * stride, x * spec.colors + k, spec.bpc));
-                if (spec.palette) color.set(spec.palette.subarray(raw[0] * 3, raw[0] * 3 + 3), i * 3);
-                else raw.forEach((v, k) => { color[i * channels + k] = spec.bpc === 16 ? v >> 8 : spec.bpc === 8 ? v : Math.round(v * 255 / max); });
-                if (keys && raw.every((v, k) => v >= keys[k * 2] && v <= keys[k * 2 + 1])) { alpha[i] = 0; hasAlpha = true; }
+                let keyed = keys !== null;
+                if (palette) {
+                    const idx = sampleAt(rows, rowStart, x, spec.bpc);
+                    color[i * 3] = palette[idx * 3]; color[i * 3 + 1] = palette[idx * 3 + 1]; color[i * 3 + 2] = palette[idx * 3 + 2];
+                    if (keyed) keyed = idx >= keys![0] && idx <= keys![1];
+                } else if (spec.bpc === 8 && !keyed) {
+                    for (let k = 0; k < colors; k++) color[i * channels + k] = rows[rowStart + x * colors + k];
+                } else {
+                    for (let k = 0; k < colors; k++) {
+                        const v = sampleAt(rows, rowStart, x * colors + k, spec.bpc);
+                        color[i * channels + k] = scale(v);
+                        if (keyed) keyed = v >= keys![k * 2] && v <= keys![k * 2 + 1];
+                    }
+                }
+                if (keyed) { alpha[i] = 0; hasAlpha = true; }
             }
         }
         if (smask) {
-            const maskSpec = imageSpec(reader, smask.dict);
+            const maskSpec = imageSpec(reader, smask.dict, true);
             if (!maskSpec || maskSpec.colors !== 1 || maskSpec.width !== spec.width || maskSpec.height !== spec.height) return null;
             const maskRows = imageRows(reader, smask.dict, smask.data, maskSpec);
             if (!maskRows) return null;
@@ -759,8 +883,9 @@ export function imageFromPdf(bytes: Uint8Array): { data: Uint8Array; mimeType: '
         }
         const withAlpha = new Uint8Array(n * (channels + 1));
         for (let i = 0; i < n; i++) {
-            withAlpha.set(color.subarray(i * channels, (i + 1) * channels), i * (channels + 1));
-            withAlpha[i * (channels + 1) + channels] = alpha[i];
+            const o = i * (channels + 1);
+            for (let k = 0; k < channels; k++) withAlpha[o + k] = color[i * channels + k];
+            withAlpha[o + channels] = alpha[i];
         }
         return { data: png(spec.width, spec.height, 8, channels === 1 ? 4 : 6, zlibSync(filterRows(withAlpha, spec.width, spec.height, channels + 1))), mimeType: 'image/png' };
     } catch {

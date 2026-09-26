@@ -10,9 +10,9 @@
  * @module ocrUtils
  */
 
-import { FullOfficeParserConfig, OcrConfig, OfficeWarningType } from '../types.js';
+import { FullOfficeParserConfig, OcrConfig, OfficeErrorType, OfficeWarningType } from '../types.js';
 import { isBrowser } from './envUtils.js';
-import { getAbortError, logWarning } from './errorUtils.js';
+import { getAbortError, getOfficeError, logWarning } from './errorUtils.js';
 import { median } from './numberUtils.js';
 
 /**
@@ -26,8 +26,10 @@ interface OcrJob {
     startTime: number;
     timeoutMs: number;
     isFinished?: boolean;
-    /** Rejects with the AbortError when the job is cancelled, so an abandoned recognition is not awaited forever. */
+    /** Rejects when the job is cancelled or the pool terminated, so an abandoned recognition is not awaited forever. */
     cancelled: Promise<never>;
+    /** Rejects `cancelled` with the given error. */
+    cancel: (err: any) => void;
 }
 
 /**
@@ -41,7 +43,16 @@ interface ManagedWorker {
     activeJob?: OcrJob;
     /** Set once `recognize` has been called for the active job (see `runWorker`). */
     recognizing?: boolean;
+    /** A re-initialization in flight, which the worker must not be terminated during (see `terminate`). */
+    reinitializing?: Promise<unknown>;
 }
+
+/**
+ * Test-only observation points (not part of the package's API): `afterRecognizeCall` runs right
+ * after a worker's `recognize` is called, before Tesseract has sent it the job, which is the moment
+ * a cancellation must not terminate the worker.
+ */
+export const ocrTestHooks: { afterRecognizeCall?: () => void } = {};
 
 /**
  * The image as bytes in memory. Tesseract loads its input before sending the job to its worker;
@@ -184,6 +195,8 @@ class OcrSchedulerManager {
     private readonly MAX_WORKERS: number = 4;
     private idleTimeout: number = 10000; // 10s default
     private timeoutId: NodeJS.Timeout | null = null;
+    /** Jobs not yet resolved or rejected: queued, waiting for a worker, or being recognized. */
+    private readonly unfinished = new Set<OcrJob>();
     private isProcessing: boolean = false;
 
     private constructor() { }
@@ -215,8 +228,12 @@ class OcrSchedulerManager {
         }
 
         if (this.idleTimeout > 0) {
-            this.timeoutId = setTimeout(async () => {
-                await this.terminate();
+            this.timeoutId = setTimeout(() => {
+                this.timeoutId = null;
+                // A recognition (or a worker's first start) can outlast the idle period: the pool is
+                // idle only when no job is waiting or running, and until then the timer starts over.
+                if (this.unfinished.size > 0) this.resetIdleTimer();
+                else void this.terminate();
             }, this.idleTimeout);
         }
     }
@@ -254,7 +271,7 @@ class OcrSchedulerManager {
             const cleanResolve = (val: string) => {
                 if (finished) return;
                 finished = true;
-                if (job) job.isFinished = true;
+                if (job) { job.isFinished = true; this.unfinished.delete(job); }
                 if (abortListener && signal) {
                     signal.removeEventListener('abort', abortListener);
                 }
@@ -264,7 +281,7 @@ class OcrSchedulerManager {
             const cleanReject = (err: any) => {
                 if (finished) return;
                 finished = true;
-                if (job) job.isFinished = true;
+                if (job) { job.isFinished = true; this.unfinished.delete(job); }
                 if (abortListener && signal) {
                     signal.removeEventListener('abort', abortListener);
                 }
@@ -282,8 +299,10 @@ class OcrSchedulerManager {
                 reject: cleanReject,
                 startTime: Date.now(),
                 timeoutMs: recogTimeout,
-                cancelled
+                cancelled,
+                cancel
             };
+            this.unfinished.add(job);
 
             if (signal) {
                 abortListener = () => {
@@ -459,11 +478,13 @@ class OcrSchedulerManager {
 
         try {
             const reinitPromise = managed.worker.reinitialize(requestedLanguage);
+            managed.reinitializing = reinitPromise.then(() => { }, () => { });
             if (loadTimeout > 0) {
                 await withTimeout(reinitPromise, loadTimeout, `OCR worker re-initialization timed out after ${loadTimeout}ms`);
             } else {
                 await reinitPromise;
             }
+            managed.reinitializing = undefined;
             managed.language = requestedLanguage;
 
             // If the job finished/aborted while reinitializing, clean up and skip execution.
@@ -516,13 +537,14 @@ class OcrSchedulerManager {
                 ? managed.worker.recognize(image, {}, { text: true, blocks: true })
                 : managed.worker.recognize(image);
             managed.recognizing = true;
+            ocrTestHooks.afterRecognizeCall?.();
             // A cancelled job's worker is terminated, so its recognition never settles: stop waiting.
-            const { data } = await Promise.race([
-                recogTimeout > 0
-                    ? withTimeout(recognizePromise, recogTimeout, `OCR recognition timed out after ${recogTimeout}ms`)
-                    : recognizePromise,
-                job.cancelled,
-            ]);
+            // Raced inside the timeout, so cancelling also clears the timeout's timer, which would
+            // otherwise keep the process alive for the rest of it.
+            const recognition = Promise.race([recognizePromise, job.cancelled]);
+            const { data } = recogTimeout > 0
+                ? await withTimeout(recognition, recogTimeout, `OCR recognition timed out after ${recogTimeout}ms`)
+                : await recognition;
 
             job.resolve(wantLayout ? layoutOcrText(data) : (data.text || ''));
         } catch (err: any) {
@@ -549,7 +571,11 @@ class OcrSchedulerManager {
     }
 
     /**
-     * Terminates all workers in the pool and resets the state.
+     * Terminates all workers in the pool and resets the state. Jobs still waiting or running fail at
+     * once (their parses report OCR_FAILED) rather than hang on workers that are going away. A worker
+     * is never terminated while Tesseract may still be sending it a job, which would end a Node
+     * process (see the abort listener in `recognize`): a recognizing worker is terminated on the next
+     * macrotask, and a re-initializing one once that settles.
      */
     public async terminate(): Promise<void> {
         if (this.timeoutId) {
@@ -557,9 +583,20 @@ class OcrSchedulerManager {
             this.timeoutId = null;
         }
 
-        const workersToTerminate = this.pool.map(mw => mw.worker.terminate());
-        await Promise.all(workersToTerminate);
+        const err = getOfficeError(OfficeErrorType.OCR_TERMINATED);
+        this.queue = [];
+        for (const job of [...this.unfinished]) {
+            job.cancel(err);
+            job.reject(err);
+        }
+
+        const workers = this.pool;
         this.pool = [];
+        await Promise.all(workers.map(async managed => {
+            if (managed.recognizing) await new Promise(resolve => setTimeout(resolve, 0));
+            if (managed.reinitializing) await managed.reinitializing;
+            try { await managed.worker.terminate(); } catch { /* already gone */ }
+        }));
     }
 }
 

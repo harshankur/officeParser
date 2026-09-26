@@ -126,6 +126,15 @@ const decodeMarkdownText = (text: string): string =>
         (full: string, escaped: string | undefined, ref: string | undefined) => (escaped !== undefined ? escaped : decodeCharacterReference(ref!) ?? full));
 
 /**
+ * Appends `items` to `target` one by one. `target.push(...items)` passes every item as an argument,
+ * which throws once there are more than the engine allows (some hundred thousand nodes, from one
+ * long line); a document is only as long as its author made it.
+ */
+function appendAll<T>(target: T[], items: readonly T[]): void {
+    for (const item of items) target.push(item);
+}
+
+/**
  * Replaces each fenced code block in `text` with what `replace` returns for it, read as CommonMark
  * reads a fence: three or more backticks or tildes, indented up to three spaces, whose info
  * string's first word is the language (`c++`, `objective-c`, `js title="a.js"`; a backtick fence's
@@ -514,6 +523,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Named groups (rather than positional match[N] indices) mean adding a new alternative never
         // requires renumbering every existing dispatch arm.
         //
+        // Every alternative stops scanning early, so a paragraph costs time in proportion to its length
+        // however it is written: a code span opens only at the start of a backtick run (the whole run
+        // is its fence) and closes at a run of exactly that length; link text holds balanced `[...]`
+        // pairs but no stray `[`, and a link target stops at its first `)` or at a following `](`;
+        // bracket labels hold no `[`; an HTML-style span ends before another opening tag of its kind;
+        // and each is capped (link text 1000 characters, a target 4096, labels 1000, spans 20000, a
+        // code span 65536; a `data:` image target, which can be far longer, has its own linear
+        // branch). Without this, a line of backticks or of `[x](` took minutes.
+        //
         // Escape must be listed first since only a literal backslash can start that alternative, so it
         // never shadows another branch; but a code span's match consumes its whole span atomically (the
         // exec loop's lastIndex jumps past the entire matched span), so a backslash *inside* a code span
@@ -527,7 +545,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Inline math requires no whitespace right after the opening $ or right before the
         // closing $, the common heuristic (matching Pandoc/KaTeX) for avoiding false
         // positives on currency like "$5 and $10".
-        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>.*?)\]\((?<imgUrl>.*?)\)(?:\{(?<imgAttrs>[^}]*)\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|==(?<highlight>.+?)==|(?<codeFence>`+)(?<codeContent>(?:(?!\k<codeFence>)[\s\S])+?)\k<codeFence>(?!`)|<u>(?<underline>.+?)<\/u>|<sub>(?<subscript>.+?)<\/sub>|<sup>(?<superscript>.+?)<\/sup>|(?<lineBreak><br\s*\/?>)|(?<htmlComment><!--)|<span\s+style="(?<spanStyle>[^"]*)">(?<spanContent>.+?)<\/span>|\[\^(?<footnoteId>[^\]]+)\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\]|]+)(?:\|(?<wikiAlias>[^\]]+))?\]\]|(?<refBang>!?)\[(?<refText>[^\]]*)\]\[(?<refId>[^\]]*)\]|(?<shortBang>!?)\[(?<shortText>[^\]]+)\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$\$(?!\$)(?<mathDisplay>(?:\\[\s\S]|[^$\\])+?)\$\$|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
+        const regex = /\\(?<esc>[!-\/:-@\[-`{-~])|(?<imgBang>!?)\[(?<imgAlt>(?:[^\[\]\n]|\[[^\[\]\n]{0,1000}\]){0,1000})\]\((?<imgUrl>data:[^()\[\]\s]*(?:\s+(?:"(?:[^"\\\n]|\\.){0,1000}"|'(?:[^'\\\n]|\\.){0,1000}'))?\s*|(?:[^)\n\]]|\](?!\()){0,4096})\)(?:\{(?<imgAttrs>[^}\n]{0,1000})\})?|\*\*(?<boldStar>.+?)\*\*|__(?<boldUnderscore>.+?)__|\*(?<italicStar>.+?)\*|_(?<italicUnderscore>.+?)_|~~(?<strike>.+?)~~|==(?<highlight>.+?)==|(?<!(?:^|[^\\])`)(?<codeFence>`+)(?!`)(?<codeContent>[\s\S]{1,65536}?)(?<!`)\k<codeFence>(?!`)|<u>(?<underline>(?:(?!<u>).){1,20000}?)<\/u>|<sub>(?<subscript>(?:(?!<sub>).){1,20000}?)<\/sub>|<sup>(?<superscript>(?:(?!<sup>).){1,20000}?)<\/sup>|(?<lineBreak><br\s*\/?>)|(?<htmlComment><!--)|<span\s+style="(?<spanStyle>[^"\n]{0,1000})">(?<spanContent>(?:(?!<span[\s>]).){1,20000}?)<\/span>|\[\^(?<footnoteId>[^\[\]\n]{1,200})\]|\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]|\[\[(?<wikiPage>[^\[\]|\n]{1,1000})(?:\|(?<wikiAlias>[^\[\]\n]{1,1000}))?\]\]|(?<refBang>!?)\[(?<refText>[^\[\]\n]{0,1000})\]\[(?<refId>[^\[\]\n]{0,1000})\]|(?<shortBang>!?)\[(?<shortText>[^\[\]\n]{1,1000})\]|<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>|\$\$(?!\$)(?<mathDisplay>(?:\\[\s\S]|[^$\\])+?)\$\$|\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$/g;
         let lastIndex = 0;
         let match;
         const closes: CommentCloseCache = { at: -1, from: Number.MAX_SAFE_INTEGER };
@@ -551,25 +569,25 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             } else if (g.imgAlt !== undefined) { // Image or Link
                 nodes.push(...buildLinkOrImageNodes(g.imgBang === '!', g.imgAlt, g.imgUrl, g.imgAttrs));
             } else if (g.boldStar !== undefined) { // Bold (**)
-                nodes.push(...parseInline(g.boldStar, { ...currentFormatting, bold: true }));
+                appendAll(nodes, parseInline(g.boldStar, { ...currentFormatting, bold: true }));
             } else if (g.boldUnderscore !== undefined) { // Bold (__)
-                nodes.push(...parseInline(g.boldUnderscore, { ...currentFormatting, bold: true }));
+                appendAll(nodes, parseInline(g.boldUnderscore, { ...currentFormatting, bold: true }));
             } else if (g.italicStar !== undefined) { // Italic (*)
-                nodes.push(...parseInline(g.italicStar, { ...currentFormatting, italic: true }));
+                appendAll(nodes, parseInline(g.italicStar, { ...currentFormatting, italic: true }));
             } else if (g.italicUnderscore !== undefined) { // Italic (_)
-                nodes.push(...parseInline(g.italicUnderscore, { ...currentFormatting, italic: true }));
+                appendAll(nodes, parseInline(g.italicUnderscore, { ...currentFormatting, italic: true }));
             } else if (g.strike !== undefined) { // Strikethrough
-                nodes.push(...parseInline(g.strike, { ...currentFormatting, strikethrough: true }));
+                appendAll(nodes, parseInline(g.strike, { ...currentFormatting, strikethrough: true }));
             } else if (g.highlight !== undefined) { // ==highlight== (Obsidian/extended); additive on import
-                nodes.push(...parseInline(g.highlight, { ...currentFormatting, backgroundColor: '#ffff00' }));
+                appendAll(nodes, parseInline(g.highlight, { ...currentFormatting, backgroundColor: '#ffff00' }));
             } else if (g.codeContent !== undefined) { // Inline code (any matching backtick-run length)
                 nodes.push({ type: 'text', text: g.codeContent, formatting: { ...currentFormatting, font: 'monospace' } });
             } else if (g.underline !== undefined) { // Underline
-                nodes.push(...parseInline(g.underline, { ...currentFormatting, underline: true }));
+                appendAll(nodes, parseInline(g.underline, { ...currentFormatting, underline: true }));
             } else if (g.subscript !== undefined) { // Subscript
-                nodes.push(...parseInline(g.subscript, { ...currentFormatting, subscript: true }));
+                appendAll(nodes, parseInline(g.subscript, { ...currentFormatting, subscript: true }));
             } else if (g.superscript !== undefined) { // Superscript
-                nodes.push(...parseInline(g.superscript, { ...currentFormatting, superscript: true }));
+                appendAll(nodes, parseInline(g.superscript, { ...currentFormatting, superscript: true }));
             } else if (g.lineBreak !== undefined) { // Raw inline <br>/<br/>/<br /> - a hard line break.
                 // MarkdownGenerator emits a raw <br> for a line break inside a table cell (a GFM pipe
                 // cell can't hold a newline), so the parser must read it back symmetrically as a break
@@ -590,7 +608,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 if (background) styled.backgroundColor = background;
                 const size = prop('font-size');
                 if (size) styled.size = size;
-                nodes.push(...parseInline(g.spanContent, styled));
+                appendAll(nodes, parseInline(g.spanContent, styled));
             } else if (g.footnoteId !== undefined) { // Footnote reference
                 const noteId = g.footnoteId;
                 referencedFootnoteIds.add(noteId);
@@ -741,7 +759,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         const children: OfficeContentNode[] = [];
         lines.forEach((line, i) => {
             const hardBreak = /(?: {2,}|\\)$/.test(line);
-            children.push(...parseInline(line.replace(/(?: {2,}|\\)$/, ''), {}, true));
+            appendAll(children, parseInline(line.replace(/(?: {2,}|\\)$/, ''), {}, true));
             if (i < lines.length - 1) {
                 if (hardBreak) {
                     children.push({ type: 'break', metadata: { breakType: 'carriageReturn' } as BreakMetadata });
@@ -890,7 +908,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
     }
     blocks.length = 0;
-    blocks.push(...mergedBlocks);
+    appendAll(blocks, mergedBlocks);
 
     let listIdCounter = 1;
     let currentAlignment: 'left' | 'center' | 'right' | 'justify' | undefined = undefined;
@@ -1160,11 +1178,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const headingLine = lines[lines.length - 1];
             const earlierLines = lines.slice(0, -1).join('\n').trim();
             if (earlierLines) {
-                content.push({
-                    type: 'paragraph',
-                    metadata: { alignment } as any,
-                    children: splitParagraphLines(earlierLines)
-                });
+                // Split around display math as every other paragraph is, so no block equation sits in one.
+                appendAll(content, splitAtDisplayMath(splitParagraphLines(earlierLines),
+                    parts => ({ type: 'paragraph', metadata: { alignment } as any, children: parts })));
             }
             const children = parseInline(headingLine);
             content.push({
@@ -1454,7 +1470,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
 
         // Paragraph (with any display math written in it lifted out between its parts)
-        content.push(...splitAtDisplayMath(splitParagraphLines(block), parts => ({
+        appendAll(content, splitAtDisplayMath(splitParagraphLines(block), parts => ({
             type: 'paragraph',
             metadata: { alignment } as any,
             children: parts
@@ -1485,7 +1501,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             last.anchorIds = [...((last.anchorIds as string[]) || []), ...carried];
         }
         content.length = 0;
-        content.push(...merged);
+        appendAll(content, merged);
     }
 
     // Orphan footnote definitions (defined but never referenced) would otherwise vanish entirely -

@@ -14,7 +14,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type { OfficeContentNode, OfficeParserAST } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
-import { terminateOcr } from '../src/utils/ocrUtils';
+import { ocrTestHooks, terminateOcr } from '../src/utils/ocrUtils';
+import { imageFromPdf, imageToTextPdf, newDecodeBudget } from '../src/utils/textPdf';
 import { decodeBase64, hexColor, isHeaderRow, lengthToPt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw } from '../src/utils/officeGenUtils';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -2107,7 +2108,7 @@ async function testLatexGeneration(): Promise<void> {
     assert.ok(stex.includes('\\href{https://example.com/a.png}{remote}'), 'TEX synthetic: remote image becomes a link');
     assert.ok(sWarn.some(w => w.code === 'CONTENT_NOT_REPRESENTABLE' && w.details?.feature === 'image/gif image'), 'TEX synthetic: GIF warns');
     const sNotBundled = sWarn.find(w => w.code === 'IMAGES_NOT_BUNDLED');
-    assert.strictEqual(sNotBundled?.message.split(' Place')[0], `The LaTeX output references 1 image file ('images/passwd.png') that is not part of the .tex source (a .tex carries only PNG and JPEG images it can read).`, 'TEX synthetic: IMAGES_NOT_BUNDLED names only the file the .tex reads (the GIF is a labelled box)');
+    assert.strictEqual(sNotBundled?.message.split(' Place')[0], `The LaTeX output references 1 image file ('images/passwd.png') that is not part of the .tex source (a .tex carries only PNG and JPEG images it can read, up to a limit per document).`, 'TEX synthetic: IMAGES_NOT_BUNDLED names only the file the .tex reads (the GIF is a labelled box)');
     // Images referenced by path, with no image data: a plain relative path stays an \includegraphics of
     // that path (the caller supplies the file), a web image is a link, and any other path is refused.
     const refAst = await OfficeParser.parseOffice(Buffer.from('<p><img src="pics/a.png"> <img src="https://example.com/b.png"> <img src="../up/c.png"> <img src="/etc/d.png"></p>'), { fileType: 'html' });
@@ -2612,6 +2613,38 @@ code here
     const count = (a: any, t: string) => collectAllNodes(a).filter(n => n.type === t).length;
     for (const t of ['heading', 'table', 'list', 'image']) assert.strictEqual(count(back, t), count(docx, t), `TEX round trip: ${t} count preserved`);
     assert.deepStrictEqual([back.metadata.title, back.metadata.author], [docx.metadata.title, docx.metadata.author], 'TEX round trip: pdftitle/pdfauthor keep the metadata, whatever the title block prints');
+
+    // ── Carried images and PDF pictures ────────────────────────────────────────
+    // Two different pictures whose carried PDFs share the short content hash are both carried, apart.
+    const COLLIDING_A = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgMHMDAAC2AH3s+igHAAAAAElFTkSuQmCC';
+    const COLLIDING_B = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgWNcGAAHmATW5wUTxAAAAAElFTkSuQmCC';
+    const pair: any = {
+        type: 'docx', metadata: {},
+        attachments: [{ name: 'dot.png', mimeType: 'image/png', data: COLLIDING_A }, { name: 'dot.png', mimeType: 'image/png', data: COLLIDING_B }].map((a, i) => ({ ...a, name: `${i}/dot.png`, type: 'image' })),
+        content: [0, 1].map(i => ({ type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: `${i}/dot.png` } }] })),
+    };
+    const pairTex = (await OfficeGenerator.generate(pair, 'tex', { onWarning: () => {} } as any)).value as string;
+    const pairBlocks = [...pairTex.matchAll(/\\begin\{filecontents\*\}\{([^}]+)\}/g)].map(m => m[1]);
+    const pairIncludes = [...pairTex.matchAll(/\\includegraphics\[[^\]]*\]\{([^}]+)\}/g)].map(m => m[1]);
+    assert.ok(pairBlocks.length === 2 && pairBlocks[0] !== pairBlocks[1] && pairIncludes.join() === pairBlocks.join(), `TEX: two pictures sharing a hash are carried apart (${pairBlocks}; ${pairIncludes})`);
+    // Decoding draws from the document's budget; an image PDF can read as it is does not.
+    const rgbaPng = fs.readFileSync(path.join(__dirname, '..', 'docs', 'favicon.png'));
+    assert.ok(imageToTextPdf(rgbaPng, 0.75, newDecodeBudget()) && !imageToTextPdf(rgbaPng, 0.75, { pixels: 10 }), 'TEX: a decoded image draws from the budget and is refused past it');
+    assert.ok(imageToTextPdf(Buffer.from(COLLIDING_A, 'base64'), 0.75, { pixels: 0 }), 'TEX: a PNG passed through as it is costs no budget');
+    // A PDF picture takes a free name beside an attachment already called what it would be.
+    const pictureA = imageToTextPdf(Buffer.from(COLLIDING_A, 'base64'), 0.75, newDecodeBudget())!.pdf;
+    const named = await OfficeParser.parseOffice(Buffer.from(zipSync({
+        'main.tex': strToU8('\\documentclass{article}\\begin{document}\\includegraphics{fig.png}\\includegraphics{fig.pdf}\\end{document}'),
+        'fig.png': new Uint8Array(rgbaPng), 'fig.pdf': strToU8(pictureA),
+    })), { extractAttachments: true } as any);
+    assert.deepStrictEqual(named.attachments.map(a => [a.name, a.mimeType]), [['fig.png', 'image/png'], ['fig-2.png', 'image/png']], 'TEX project: a PDF picture named like an existing attachment gets a free name');
+    // A picture drawn turned (a rotated placement, or a rotated page) stays the PDF it is.
+    const upright = imageToTextPdf(Buffer.from(COLLIDING_A, 'base64'), 0.75, newDecodeBudget())!.pdf;
+    const turned = upright.replace(/q ([\d.]+) 0 0 ([\d.]+) 0 0 cm/, (_m, w, h) => `q 0 ${w} -${h} 0 ${h} 0 cm`);
+    const rotatedPage = upright.replace('/Type /Page ', '/Type /Page /Rotate 90 ');
+    assert.ok(turned !== upright && rotatedPage !== upright, 'TEX: the rotated fixtures differ from the upright one');
+    assert.deepStrictEqual([upright, turned, rotatedPage].map(pdf => imageFromPdf(new TextEncoder().encode(pdf), newDecodeBudget())?.mimeType ?? 'kept as PDF'),
+        ['image/png', 'kept as PDF', 'kept as PDF'], 'TEX: only an upright, unrotated single-image page is taken as its picture');
 }
 
 /**
@@ -2915,8 +2948,9 @@ async function testConfigConsistency(): Promise<void> {
 }
 
 /**
- * A controller whose signal aborts the moment OCR starts listening to it, so the abort always lands
- * while an image is being recognized: a timer could lose the race to a fast parse.
+ * A controller whose signal aborts the moment OCR starts listening to it: the abort lands while the
+ * image's OCR job is queued or its worker is starting, whatever the timing (a timer could lose the
+ * race to a fast parse). Aborts that land after a worker was handed the job use `ocrTestHooks`.
  */
 function abortWhenOcrListens(): { signal: AbortSignal; listened: () => boolean } {
     const controller = new AbortController();
@@ -2948,7 +2982,7 @@ async function testCancellation(): Promise<void> {
             let outcome = 'resolved';
             await OfficeParser.parseOffice(file(ext), { abortSignal: probe.signal, ocr: true, extractAttachments: true, onWarning: () => {} } as any)
                 .catch((e: any) => { outcome = e.name; });
-            assert.ok(probe.listened(), `Cancellation ${ext}: OCR started, so the abort landed during recognition`);
+            assert.ok(probe.listened(), `Cancellation ${ext}: OCR started, so the abort landed during OCR`);
             assert.strictEqual(outcome, 'AbortError', `Cancellation ${ext}: an abort during OCR rejects with AbortError`);
         }
         // ocrConfig.abortSignal is the same cancellation, delivered to OCR.
@@ -2971,7 +3005,61 @@ async function testCancellation(): Promise<void> {
         const timedOut = await OfficeParser.parseOffice(file('docx'), { ocr: true, extractAttachments: true, ocrConfig: { timeout: { recognition: 1 } }, onWarning: (w: any) => codes.push(w.code) } as any);
         assert.ok(codes.includes('OCR_FAILED') && timedOut.attachments.length > 0 && !timedOut.attachments.some(a => a.ocrText),
             `Cancellation: an OCR timeout is OCR_FAILED and the parse resolves (${codes.join(', ')})`);
+
+        // The worker has been handed the job, but Tesseract has not yet sent it: terminating the
+        // worker now would leave Tesseract's send() rejecting with nothing to catch it, which ends a
+        // Node process. An abort at exactly that moment must reject the parse and nothing else.
+        const unhandled: unknown[] = [];
+        const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+        process.on('unhandledRejection', onUnhandled);
+        const timersBefore = process.getActiveResourcesInfo().filter(r => r === 'Timeout').length;
+        try {
+            for (const [label, abortWhen] of [
+                ['before Tesseract sends the job', (abort: () => void) => abort()],
+                ['while the job is recognized', (abort: () => void) => { setTimeout(abort, 0); }],
+            ] as const) {
+                const controller = new AbortController();
+                let hooked = false;
+                ocrTestHooks.afterRecognizeCall = () => { if (!hooked) { hooked = true; abortWhen(() => controller.abort()); } };
+                let outcome = 'resolved';
+                await OfficeParser.parseOffice(file('docx'), { abortSignal: controller.signal, ocr: true, extractAttachments: true, onWarning: () => {} } as any)
+                    .catch((e: any) => { outcome = e.name; });
+                ocrTestHooks.afterRecognizeCall = undefined;
+                assert.ok(hooked && outcome === 'AbortError', `Cancellation: an abort ${label} rejects with AbortError (${hooked}, ${outcome})`);
+            }
+            // terminateOcr() while an image is being recognized fails that recognition (OCR_FAILED, the
+            // parse goes on) without ending the process.
+            const terminateCodes: string[] = [];
+            let terminated = false;
+            ocrTestHooks.afterRecognizeCall = () => { if (!terminated) { terminated = true; void terminateOcr(); } };
+            const survived = await OfficeParser.parseOffice(file('docx'), { ocr: true, extractAttachments: true, onWarning: (w: any) => terminateCodes.push(w.code) } as any);
+            ocrTestHooks.afterRecognizeCall = undefined;
+            assert.ok(terminated && survived.content.length > 0 && terminateCodes.includes('OCR_FAILED'), `Cancellation: terminateOcr() during recognition fails that image's OCR, not the parse (${terminateCodes.join(', ')})`);
+            await new Promise(resolve => setTimeout(resolve, 50));
+            assert.deepStrictEqual(unhandled, [], 'Cancellation: no rejection escapes when a worker is stopped mid-job');
+        } finally {
+            ocrTestHooks.afterRecognizeCall = undefined;
+            process.off('unhandledRejection', onUnhandled);
+        }
+        // A cancelled recognition leaves no timer running: its timeout is cleared, so the process can exit.
+        await terminateOcr();
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const timersAfter = process.getActiveResourcesInfo().filter(r => r === 'Timeout').length;
+        assert.ok(timersAfter <= timersBefore, `Cancellation: no timer outlives a cancelled recognition (${timersBefore} before, ${timersAfter} after)`);
+
+        // A recognition outlasting the idle period is not cut short: the pool is idle only when no job is left.
+        const idleCodes: string[] = [];
+        const idle = await OfficeParser.parseOffice(file('docx'), { ocr: true, extractAttachments: true, ocrConfig: { timeout: { autoTerminate: 1 } }, onWarning: (w: any) => idleCodes.push(w.code) } as any);
+        assert.ok(idle.attachments.some(a => a.ocrText) && !idleCodes.includes('OCR_FAILED'), `Cancellation: a recognition longer than autoTerminate completes (${idleCodes.join(', ')})`);
+
+        // The OCR-only signal cancels the parse too, even with nothing left to recognize.
+        const preAborted = new AbortController();
+        preAborted.abort();
+        let ocrSignalOutcome = 'resolved';
+        await OfficeParser.parseOffice(file('docx'), { ocrConfig: { abortSignal: preAborted.signal }, onWarning: () => {} } as any).catch((e: any) => { ocrSignalOutcome = e.name; });
+        assert.strictEqual(ocrSignalOutcome, 'AbortError', 'Cancellation: a fired ocrConfig.abortSignal rejects the parse');
     } finally {
+        ocrTestHooks.afterRecognizeCall = undefined;
         await terminateOcr();
     }
     console.log('  Cancellation: All assertions passed ✓');
@@ -3040,6 +3128,7 @@ async function testMarkdownRoundTrips(): Promise<void> {
 
     // One blank line around every block, and before the abbreviation definitions.
     await stable(md, 'Energy is $$E=mc^2$$ here.', 'Energy is\n\n$$\nE=mc^2\n$$\n\nhere.', 'display math split out of a paragraph');
+    await stable(md, 'Text $$a+b$$ more\nHeading\n===', 'Text\n\n$$\na+b\n$$\n\nmore\n\n# Heading', 'display math in the text before a setext heading');
     for (const [label, src] of [
         ['math', 'P.\n\n$$\nx\n$$\n\nQ.'], ['fenced code', 'P.\n\n```js\nx\n```\n\nQ.'], ['table', 'P.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\nQ.'],
         ['abbreviations', 'R&D.\n\n*[R&D]: Research'],
