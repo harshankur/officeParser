@@ -244,6 +244,15 @@
     }
   },
   {
+    "text": "|  | To the left is a table inside a table, with some cells merged. |",
+    "metadata": {
+      "sourceType": "pptx",
+      "closestHeading": "Tables",
+      "slideNumber": 4,
+      "isTableChunk": true
+    }
+  },
+  {
     "text": "Now calendars",
     "metadata": {
       "sourceType": "pptx",

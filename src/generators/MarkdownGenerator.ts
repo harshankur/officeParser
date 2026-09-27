@@ -1,7 +1,7 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
 import { escapeHtml, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
-import { base64ByteLength } from '../utils/officeGenUtils.js';
+import { base64ByteLength, resolveEmbed } from '../utils/officeGenUtils.js';
 import { clampRepeat } from '../utils/numberUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -1015,8 +1015,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         return kv.length ? `{${kv.join(' ')}}` : '';
                     };
 
-                    if (meta?.embedType === 'iframe') {
-                        const rawUrl = meta?.url || '';
+                    // An embed naming no type (built by hand), or a YouTube one by its URL alone, is
+                    // what it carries: its URL was lost in an empty YouTube block.
+                    const embed = resolveEmbed(meta);
+                    if (embed?.kind === 'iframe') {
+                        const rawUrl = embed.url;
                         if (mode === 'directive') {
                             const src = dirUrl(rawUrl);
                             if (!src) return '';
@@ -1039,7 +1042,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         return safe ? `[${linkLabel('Embed')}](${safe})\n\n` : '';
                     }
 
-                    const id = meta?.videoId || '';
+                    const id = embed?.kind === 'youtube' ? embed.videoId : '';
                     if (mode === 'directive') {
                         const lbl = dirLabel ? `[${dirLabel}]` : '';
                         return `::youtube${lbl}${attrList([['id', id], ['width', meta?.width], ['align', meta?.align]])}\n\n`;

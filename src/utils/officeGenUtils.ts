@@ -9,7 +9,7 @@
  * @module officeGenUtils
  */
 
-import { ImageMode, OfficeContentNode } from '../types.js';
+import { EmbedMetadata, ImageMode, OfficeContentNode } from '../types.js';
 
 /**
  * Resolves `config.includeImages` - a boolean, a CLI-provided `'true'`/`'false'` string, or an
@@ -321,4 +321,39 @@ export function resolveZipInstant(raw: unknown): { iso: string; mtime: Date } {
     const year = Math.min(2099, Math.max(1980, resolved.getUTCFullYear()));
     const mtime = new Date(year, resolved.getUTCMonth(), resolved.getUTCDate(), resolved.getUTCHours(), resolved.getUTCMinutes(), resolved.getUTCSeconds());
     return { iso: resolved.toISOString().replace(/\.\d+Z$/, 'Z'), mtime };
+}
+
+/** The id of a YouTube video `url` links to (a watch, embed, shorts or youtu.be link); '' for any other URL. */
+function youtubeVideoIdOf(url: string): string {
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return '';
+    }
+    const host = parsed.hostname.replace(/^(?:www\.|m\.)/, '');
+    const id = host === 'youtu.be' ? parsed.pathname.split('/')[1]
+        : /^youtube(?:-nocookie)?\.com$/.test(host) ? (parsed.searchParams.get('v') ?? /^\/(?:embed|shorts)\/([^/]+)/.exec(parsed.pathname)?.[1]) : '';
+    return id && /^[\w-]+$/.test(id) ? id : '';
+}
+
+/**
+ * What an embed shows: a YouTube video (by its id), or a page in a frame (by its URL). An embed built
+ * by hand may name no type, or a YouTube video by its URL alone, so it is read from what it carries: a
+ * video id, else a YouTube URL, else any URL. Null when it carries none of them.
+ */
+export function resolveEmbed(meta: EmbedMetadata | undefined): { kind: 'youtube'; videoId: string } | { kind: 'iframe'; url: string } | null {
+    if (!meta) return null;
+    if (meta.embedType !== 'iframe') {
+        const videoId = meta.videoId || youtubeVideoIdOf(meta.url || '');
+        if (videoId) return { kind: 'youtube', videoId };
+    }
+    return meta.url ? { kind: 'iframe', url: meta.url } : null;
+}
+
+/** The URL an embed shows: its own, else its YouTube video's watch page; '' when it has neither. */
+export function embedUrl(meta: EmbedMetadata | undefined): string {
+    if (meta?.url) return meta.url;
+    const embed = resolveEmbed(meta);
+    return embed?.kind === 'youtube' ? `https://www.youtube.com/watch?v=${embed.videoId}` : '';
 }

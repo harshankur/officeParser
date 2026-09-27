@@ -1,7 +1,7 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { base64ByteLength, documentLanguage, isHeaderRow } from '../utils/officeGenUtils.js';
+import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed } from '../utils/officeGenUtils.js';
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 
@@ -1515,12 +1515,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
             case 'embed': {
                 const meta = node.metadata as EmbedMetadata;
-                if (meta?.embedType === 'iframe') {
+                // An embed naming no type (built by hand), or a YouTube one by its URL alone, is what
+                // it carries: its URL was lost in an empty YouTube wrapper.
+                const embed = resolveEmbed(meta);
+                if (embed?.kind === 'iframe') {
                     // Generic preserved iframe. sanitizeUrl scheme-checks the src (only http/https
                     // and the other non-executing schemes survive), so a javascript:/data: src is
                     // dropped even with preservation on. The node only exists via opt-in parsing or
                     // a programmatic AST, so this guard is unconditional.
-                    const src = sanitizeUrl(meta?.url || '');
+                    const src = sanitizeUrl(embed.url);
                     if (!src) return '';
                     const w = meta?.width ? ` width="${this.escape(meta.width)}"` : '';
                     const h = meta?.height ? ` height="${this.escape(meta.height)}"` : '';
@@ -1537,7 +1540,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 }
                 // Match the attribute-driven Youtube wrapper shape so a loaded embed re-hydrates
                 // an editor's Youtube node.
-                const id = meta?.videoId || '';
+                const id = embed?.kind === 'youtube' ? embed.videoId : '';
                 const width = meta?.width || '100%';
                 const align = meta?.align || 'center';
                 const ml = align === 'left' ? '0' : 'auto';

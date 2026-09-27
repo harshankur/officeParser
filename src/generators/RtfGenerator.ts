@@ -3,6 +3,7 @@ import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
+import { embedUrl } from '../utils/officeGenUtils.js';
 
 /**
  * Generates high-fidelity RTF (Rich Text Format) from an AST.
@@ -277,6 +278,16 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                             if (safeLink) pict = `{\\field{\\*\\fldinst{HYPERLINK "${safeLink}"}}{\\fldrslt ${pict}}}`;
                         }
                     }
+                    if (!pict) {
+                        // A picture RTF cannot carry (one by URL, or whose attachment is missing) was
+                        // dropped. As in DOCX: a link on its alt text, to where the picture links or to
+                        // the picture (never fetched); else its alt text, or its recognized text.
+                        const target = meta?.link && (!this.config.ignoreInternalLinks || meta.linkType === 'external') ? meta.link : meta?.url;
+                        const safe = target ? sanitizeRtfUrl(target) : '';
+                        if (safe) pict = `{\\field{\\*\\fldinst{HYPERLINK "${safe}"}}{\\fldrslt ${this.escapeRtf(meta?.altText || safe)}}}`;
+                        else if (meta?.altText) pict = this.escapeRtf(meta.altText);
+                        else if (mode === 'image-only') return ocrRtf;
+                    }
                     // image+ocr-text: the image, then its recognized text.
                     return mode === 'image+ocr-text' ? pict + ocrRtf : pict;
                 }
@@ -325,10 +336,11 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // RTF has no embed concept - degrade to the URL as plain text rather than
                     // silently dropping the node (it has no children to fall back to).
                     const meta = node.metadata as any;
-                    if (!meta?.url) return '';
+                    const rawUrl = embedUrl(meta);
+                    if (!rawUrl) return '';
                     // Rendered as visible text rather than a field, but still a URL a reader may
                     // copy, so it gets the same scheme policy.
-                    const safeUrl = sanitizeRtfUrl(meta.url);
+                    const safeUrl = sanitizeRtfUrl(rawUrl);
                     if (!safeUrl) return '';
                     const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
                     return `${pPr}\\sa120 ${safeUrl}\\par\n`;

@@ -2,7 +2,7 @@ import { zipSync, Zippable } from 'fflate';
 import { ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
-import { ADMONITION_COLOR, decodeBase64, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
 /**
@@ -828,7 +828,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private async embed(node: OfficeContentNode): Promise<string> {
         const meta = node.metadata as any;
-        const url = meta?.url ? sanitizeOfficePackageUrl(meta.url) : '';
+        const rawUrl = embedUrl(meta);
+        const url = rawUrl ? sanitizeOfficePackageUrl(rawUrl) : '';
         if (!url) {
             this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'odt', feature: 'embed' });
             const fb = meta?.label || node.text || this.getNodeText(node);

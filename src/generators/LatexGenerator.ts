@@ -2,7 +2,7 @@ import { zipSync, Zippable } from 'fflate';
 import { trimEndChars } from '../utils/textUtils.js';
 import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { ADMONITION_COLOR, decodeBase64, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, planLatexUnicode } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -1638,7 +1638,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     private embed(node: OfficeContentNode): string {
         const meta = node.metadata as any;
-        const rawUrl = meta?.url || (meta?.embedType === 'youtube' && meta?.videoId ? `https://www.youtube.com/watch?v=${meta.videoId}` : '');
+        const rawUrl = embedUrl(meta);
         const url = rawUrl ? sanitizeLatexUrl(String(rawUrl)) : '';
         const label = escapeLatex(String(meta?.label || node.text || rawUrl || ''), ' ');
         if (!url) {

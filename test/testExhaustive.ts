@@ -3529,6 +3529,25 @@ async function testMarkdownRoundTrips(): Promise<void> {
         { type: 'definitionList', children: [{ type: 'definitionTerm', children: [T('Term')] }, { type: 'definitionDescription', children: [T('Description')] }] },
         { type: 'comment', text: '# a comment line' }, { type: 'comment', text: 'hidden', metadata: { sourceSyntax: 'html' } },
     ]), ['let x = 1;\nx++;', 'x^2', 'math |y_1| inline', 'Term', 'Description', '# a comment line'], 'RTF: code, equations, definitions and a comment line are written');
+    // Content a writer dropped: an embed naming no type (built by hand) or a YouTube one by its URL alone
+    // lost its URL in HTML and Markdown; a table of one row reached no chunk; a picture by URL was left
+    // out of RTF; the native PDF engine drew no picture that sits in a paragraph.
+    const handBuilt = (content: any[]) => ({ type: 'docx', metadata: {}, attachments: [], content } as any);
+    const embeds = handBuilt([{ type: 'embed', metadata: { url: 'https://example.com/page' } }, { type: 'embed', metadata: { embedType: 'youtube', url: 'https://youtu.be/abcdefghijk' } }]);
+    for (const format of ['html', 'md'] as const) {
+        const written = (await OfficeGenerator.generate(embeds, format, { htmlConfig: { standalone: false } } as any)).value as string;
+        assert.ok(written.includes('https://example.com/page') && written.includes('abcdefghijk'), `${format}: embeds keep their URL (${written})`);
+    }
+    const oneRow = (await OfficeGenerator.generate(handBuilt([{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [T('only row')] }] }] }]), 'chunks')).value as any[];
+    assert.ok(oneRow.some(chunk => chunk.text.includes('only row')), 'chunks: a table of one row is chunked');
+    const urlPicture = (await OfficeGenerator.generate(handBuilt([{ type: 'paragraph', children: [{ type: 'image', metadata: { url: 'https://example.com/p.png', altText: 'the picture' } }] }]), 'rtf', { onWarning: () => {} } as any)).value as string;
+    assert.ok(urlPicture.includes('HYPERLINK "https://example.com/p.png"') && urlPicture.includes('the picture'), `RTF: a picture by URL is a link on its alt text (${urlPicture.slice(-200)})`);
+    for (const file of ['test.docx', 'test.md']) {
+        const ast = await OfficeParser.parseOffice(path.join(__dirname, 'files', file), { extractAttachments: true } as any);
+        const pdf = (await OfficeGenerator.generate(ast, 'pdf', { pdfConfig: { engine: 'native' }, onWarning: () => {} } as any)).value as Buffer;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { extractAttachments: true } as any);
+        assert.ok(back.attachments.length > 0, `PDF (native): the picture in a paragraph of ${file} is drawn`);
+    }
     // A heading's generated id comes from its text, whether the node or only its runs carry it, and a
     // heading whose text slugifies to nothing gets none rather than id="".
     assert.ok((await htmlOnce('<h2>My Title</h2>')).includes('<h2 id="my-title">'), 'HTML: a heading read from HTML gets its generated id');

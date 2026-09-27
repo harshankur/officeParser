@@ -479,12 +479,16 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         // Group data rows into chunks
         let currentRows: OfficeContentNode[] = [];
         let currentSize = headerText ? measure(headerText) : 0;
+        // Whether a chunk holds the header: a table of one row (its header alone) made none, and its
+        // text reached no chunk.
+        let emitted = false;
 
         const flushCurrentRows = async () => {
             if (currentRows.length === 0) return;
             const rowText = await this.renderRowsAsText(currentRows);
             const chunkText = headerText ? `${headerText}\n${rowText}` : rowText;
             if (chunkText.trim()) {
+                emitted = true;
                 if (measure(chunkText) > maxChunkSize) {
                     // Fallback to recursive splitting for oversized table chunks
                     const subChunks = this.splitTextRecursively(chunkText, maxChunkSize, 0, ['\n', ' ', ''], measure);
@@ -513,12 +517,20 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 await flushCurrentRows();
                 const chunkText = headerText ? `${headerText}\n${override}` : override;
                 chunks.push({ text: chunkText, metadata: { ...baseMetadata } });
+                emitted = true;
                 continue;
             }
             currentRows.push(row);
             currentSize += rowSize;
         }
         await flushCurrentRows();
+        if (!emitted && headerText.trim()) {
+            if (measure(headerText) > maxChunkSize) {
+                for (const sub of this.splitTextRecursively(headerText, maxChunkSize, 0, ['\n', ' ', ''], measure)) chunks.push({ text: sub.text, metadata: { ...baseMetadata } });
+            } else {
+                chunks.push({ text: headerText, metadata: { ...baseMetadata } });
+            }
+        }
     }
 
     /**
