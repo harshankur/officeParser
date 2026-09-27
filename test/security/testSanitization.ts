@@ -1123,12 +1123,11 @@ async function rtfUrlTests() {
             `legitimate URL was dropped: ${rtf.slice(0, 140)}`);
     }
 
-    // UNC is rejected for RTF specifically and must NOT become a global policy: in a browser
-    // `//host/share` is an ordinary protocol-relative URL and blocking it there would break
-    // legitimate links from older HTML sources.
-    check('rtf: UNC rejection is RTF-only, HTML still allows protocol-relative',
-        sanitizeUrl('//example.com/x') === '//example.com/x',
-        `sanitizeUrl unexpectedly rejected a protocol-relative URL: ${JSON.stringify(sanitizeUrl('//example.com/x'))}`);
+    // A protocol-relative URL keeps working on the web as https (older HTML sources use it), and cannot
+    // resolve to file://host from a page opened from disk; RTF refuses it outright.
+    check('html: a protocol-relative URL is written as https',
+        sanitizeUrl('//example.com/x') === 'https://example.com/x',
+        `sanitizeUrl gave ${JSON.stringify(sanitizeUrl('//example.com/x'))}`);
 
     // Field metacharacters must still be neutralized on an otherwise-allowed URL.
     const quoted = await rtfFor('https://example.com/a"}{\\b evil');
@@ -2517,6 +2516,71 @@ async function parserHardeningTests() {
     }
     await timed('md: 160k unclosed inline tags parse', () => parseQuiet(Buffer.from('x <b><kbd class="a"><a href="u">'.repeat(40000)), 'md'));
     await timed('md: 80k HTML block paragraphs parse', () => parseQuiet(Buffer.from('<p>x</p>\n\n'.repeat(80000)), 'md'));
+
+    // One note, comment or string referred to many times is built once and written once: built per
+    // reference, a few kilobytes of DOCX, EPUB or XLSX filled the heap, and writers copied the note
+    // into their output at every reference.
+    const bigText = 'word '.repeat(40000); // 200 KB
+    const heapBudget = async (label: string, run: () => Promise<unknown>) => {
+        global.gc?.();
+        const before = process.memoryUsage().heapUsed;
+        const result = await run();
+        const grown = process.memoryUsage().heapUsed - before;
+        check(`${label} without copying it per reference`, grown < 300_000_000, `${Math.round(grown / 1e6)}MB`);
+        return result;
+    };
+    const docxRefs = (tag: 'footnote' | 'endnote' | 'comment') => repack('test.docx', z => {
+        const doc = new TextDecoder().decode(z['word/document.xml']);
+        const ref = tag === 'comment' ? '<w:r><w:commentReference w:id="7"/></w:r>' : `<w:r><w:${tag}Reference w:id="7"/></w:r>`;
+        z['word/document.xml'] = enc(doc.replace(/<w:body>/, `<w:body><w:p>${ref.repeat(2000)}</w:p>`));
+        const part = tag === 'comment' ? 'comments' : `${tag}s`;
+        const el = tag === 'comment' ? 'w:comment' : `w:${tag}`;
+        z[`word/${part}.xml`] = enc(`<?xml version="1.0"?><w:${part} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><${el} w:id="7"><w:p><w:r><w:t>${bigText}</w:t></w:r></w:p></${el}></w:${part}>`);
+    });
+    for (const tag of ['footnote', 'endnote', 'comment'] as const) {
+        const r: any = await heapBudget(`docx: a ${tag} referred to 2000 times parses`, () => parseQuiet(docxRefs(tag), 'docx'));
+        const shared: any[] = [];
+        const collect = (nodes: any[] | undefined) => nodes?.forEach((n: any) => { shared.push(...(n.notes ?? []), ...(n.comments ?? [])); collect(n.children); });
+        collect(r.ast?.content);
+        const counts = new Map<any, number>();
+        for (const n of shared) counts.set(n, (counts.get(n) ?? 0) + 1);
+        const [top, topCount] = [...counts].sort((x, y) => y[1] - x[1])[0] ?? [undefined, 0];
+        check(`docx: a ${tag} referred to 2000 times keeps its text, in one shared node`, !r.error && topCount === 2000 && top.text.length > 190_000, `${r.error} ${topCount}`);
+    }
+    const htmlNote = `<p>x${'<sup data-footnote-ref="a"></sup>'.repeat(2000)}</p><section data-footnotes><div data-footnote-id="a">${bigText}<b>${bigText}</b></div></section>`;
+    await heapBudget('html: a footnote referred to 2000 times parses', () => parseQuiet(Buffer.from(htmlNote), 'html'));
+    await heapBudget('md: an HTML block referring to one footnote 2000 times parses', () => parseQuiet(Buffer.from('# T\n\n' + htmlNote + '\n'), 'md'));
+    await heapBudget('epub: a chapter referring to one footnote 2000 times parses', () => parseQuiet(Buffer.from(zipSync({
+        'mimetype': enc('application/epub+zip'),
+        'META-INF/container.xml': enc('<?xml version="1.0"?><container><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>'),
+        'content.opf': enc('<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title></metadata><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>'),
+        'c.xhtml': enc(`<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body>${htmlNote}</body></html>`),
+    })), 'epub'));
+    await heapBudget('xlsx: a rich shared string shown in 2000 cells parses', () => parseQuiet(repack('test.xlsx', z => {
+        z['xl/sharedStrings.xml'] = enc(`<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><r><t>${bigText}</t></r><r><rPr><b/></rPr><t>${bigText}</t></r></si></sst>`);
+        z['xl/worksheets/sheet1.xml'] = enc(sheetXml.replace(/<sheetData>[\s\S]*<\/sheetData>|<sheetData\/>/, `<sheetData>${Array.from({ length: 2000 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}" t="s"><v>0</v></c></row>`).join('')}</sheetData>`));
+    }), 'xlsx'));
+    const sharedNote = await parseQuiet(Buffer.from('[^a] '.repeat(2000) + '\n\n[^a]: ' + 'word '.repeat(2000) + '\n'), 'md');
+    for (const format of ['text', 'rtf', 'tex', 'odt', 'chunks', 'html', 'md', 'docx', 'epub'] as const) {
+        const out = (await OfficeGenerator.generate(sharedNote.ast!, format, { onWarning: () => {} } as any)).value as any;
+        const size = typeof out === 'string' ? out.length : Array.isArray(out) ? JSON.stringify(out).length : Object.values(unzipSync(new Uint8Array(out))).reduce((n: number, f: any) => n + f.length, 0);
+        check(`${format}: a note referred to 2000 times is written once`, size < 400_000, `${size} chars`);
+    }
+
+    // A network path cannot reach a page opened from disk as file://host (SMB, with the user's
+    // credentials on Windows): `//host` is written as https://host, a backslash form is refused.
+    const unc = astWith([{ type: 'paragraph', children: [
+        { type: 'text', text: 'l1', metadata: { link: '\\\\evil\\share\\doc', linkType: 'external' } },
+        { type: 'text', text: 'l2', metadata: { link: '//evil/share', linkType: 'external' } },
+        { type: 'image', metadata: { url: '\\\\evil\\share\\x.png', altText: 'a' } },
+        { type: 'image', metadata: { url: '//evil/y.png', altText: 'b' } },
+        { type: 'image', metadata: { url: '\\/evil/z.png', altText: 'c' } },
+    ] }]);
+    for (const format of ['html', 'md', 'epub'] as const) {
+        const value = (await OfficeGenerator.generate(unc, format, { onWarning: () => {} } as any)).value as any;
+        const out = typeof value === 'string' ? value : Object.values(unzipSync(new Uint8Array(value))).map((u: any) => new TextDecoder().decode(u)).join('\n');
+        check(`${format}: no network path is written, and //host is https`, !/\\\\evil|["(]\/\/evil|\\\/evil/.test(out) && out.includes('https://evil/share'), out.match(/[^\n]*evil[^\n]*/g)?.slice(0, 3).join(' | '));
+    }
 
     // Spans are held to what a browser allows, and never below 1.
     const gridSpan = await parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/<w:body>/, '<w:body><w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2147483647"/></w:tcPr><w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:gridSpan w:val="-5"/></w:tcPr><w:p><w:r><w:t>neg</w:t></w:r></w:p></w:tc></w:tr></w:tbl>')); }), 'docx');

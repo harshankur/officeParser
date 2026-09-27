@@ -41,27 +41,39 @@ const BLOCK_NODE_TYPES = new Set<string>([
  * absent from the RAG index. Fold them in here (joined as block content) so a footnote's body is
  * searchable alongside the paragraph that references it.
  */
-function collectNodeText(node: OfficeContentNode, imageText: (image: OfficeContentNode) => string): string {
+/** What collectNodeText reads a picture as, and the notes whose text a chunk already holds. */
+interface ChunkTextContext {
+    imageText: (image: OfficeContentNode) => string;
+    /**
+     * Each note's text is in the chunk of its first reference only: a note one parser node shares
+     * among thousands of references was copied into every chunk holding one.
+     */
+    notesIncluded: Set<OfficeContentNode>;
+}
+
+function collectNodeText(node: OfficeContentNode, context: ChunkTextContext): string {
     // A picture is its alt text and recognized text (see ChunkingGenerator.imageText): its alt text,
     // kept in its metadata, was in no chunk.
-    if (node.type === 'image') return imageText(node);
+    if (node.type === 'image') return context.imageText(node);
     let out = '';
     if (typeof node.text === 'string' && node.text.length > 0) {
         out = node.text;
         // The `.text` fast-path above skips the children walk, but DOCX/ODT/RTF set `.text` on the
         // paragraph while the footnote hangs off a nested text child - so its body would be missed.
         // Fold in descendant note bodies (visible text already covered by `.text`, not re-added).
-        const descendantNotes = collectDescendantNoteText(node, imageText);
+        const descendantNotes = collectDescendantNoteText(node, context);
         if (descendantNotes) out += '\n' + descendantNotes;
     } else if (node.children && node.children.length > 0) {
         for (const child of node.children) {
             if (out && BLOCK_NODE_TYPES.has(child.type)) out += '\n';
-            out += collectNodeText(child, imageText);
+            out += collectNodeText(child, context);
         }
     }
     if (node.notes && node.notes.length > 0) {
         for (const note of node.notes) {
-            const noteText = collectNodeText(note, imageText);
+            if (context.notesIncluded.has(note)) continue;
+            context.notesIncluded.add(note);
+            const noteText = collectNodeText(note, context);
             if (noteText) out += (out ? '\n' : '') + noteText;
         }
     }
@@ -73,17 +85,19 @@ function collectNodeText(node: OfficeContentNode, imageText: (image: OfficeConte
  * text (the caller already has that via `.text`). Only reached from the `.text` fast-path above, to
  * recover notes that office-origin parsers attach to a nested text child of a `.text`-bearing node.
  */
-function collectDescendantNoteText(node: OfficeContentNode, imageText: (image: OfficeContentNode) => string): string {
+function collectDescendantNoteText(node: OfficeContentNode, context: ChunkTextContext): string {
     if (!node.children || node.children.length === 0) return '';
     let out = '';
     for (const child of node.children) {
         if (child.notes) {
             for (const note of child.notes) {
-                const t = collectNodeText(note, imageText);
+                if (context.notesIncluded.has(note)) continue;
+                context.notesIncluded.add(note);
+                const t = collectNodeText(note, context);
                 if (t) out += (out ? '\n' : '') + t;
             }
         }
-        const deeper = collectDescendantNoteText(child, imageText);
+        const deeper = collectDescendantNoteText(child, context);
         if (deeper) out += (out ? '\n' : '') + deeper;
     }
     return out;
@@ -118,6 +132,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         const recognized = typeof image.text === 'string' ? image.text : '';
         return label && recognized ? `${label}\n${recognized}` : label || recognized;
     };
+    private readonly textContext: ChunkTextContext = { imageText: this.imageText, notesIncluded: new Set() };
 
     /**
      * Merges the user's chunking config with the appropriate defaults for the chosen strategy.
@@ -375,7 +390,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0));
 
         if (isStructuralBoundary || isContentNode) {
-            const text = typeof override === 'string' ? override : collectNodeText(node, this.imageText);
+            const text = typeof override === 'string' ? override : collectNodeText(node, this.textContext);
             const isWhitespaceOnly = !text.trim() && !text.includes('\u00A0');
 
             if (isWhitespaceOnly && text.length > 0) {
@@ -448,7 +463,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
 
         if (strategy === 'flatten' || !node.children || node.children.length === 0) {
             // Flatten: treat as plain text (collect from children for HTML/MD-origin tables).
-            const text = collectNodeText(node, this.imageText);
+            const text = collectNodeText(node, this.textContext);
             if (!text.trim()) return;
             chunks.push({
                 text,
@@ -570,7 +585,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
 
             // A cell's text as any content's (its runs joined as written, its pictures' alt text and
             // its notes included), on one line.
-            const cells = row.children.map(cell => collectNodeText(cell, this.imageText).replace(/\n/g, ' ').trim());
+            const cells = row.children.map(cell => collectNodeText(cell, this.textContext).replace(/\n/g, ' ').trim());
             renderedRows.push(`| ${cells.join(' | ')} |`);
         }
         return renderedRows.join('\n');
@@ -697,7 +712,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0));
 
             if (isContentNode) {
-                const text = (typeof override === 'string' ? override : collectNodeText(node, this.imageText)).trim();
+                const text = (typeof override === 'string' ? override : collectNodeText(node, this.textContext)).trim();
                 if (!text) return;
                 // Split paragraph text into individual sentences for finer-grained similarity
                 const sentences = this.splitIntoSentences(text);
@@ -758,7 +773,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0));
 
             if (isContentNode) {
-                const nodeText = typeof override === 'string' ? override : collectNodeText(node, this.imageText);
+                const nodeText = typeof override === 'string' ? override : collectNodeText(node, this.textContext);
                 const txt = nodeText + '\n';
                 nodeMap.push({ offset, heading: currentHeading, slideNumber: currentSlide, pageNumber: currentPage, sheetName: currentSheet });
                 parts.push(txt);

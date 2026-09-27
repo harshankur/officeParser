@@ -293,6 +293,15 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     }
 
     const footnoteMap = new Map<string, OfficeContentNode[]>();
+    // The note or comment node of each id, built at its first reference and shared by the rest: built
+    // per reference (its text joined each time), a small file referring to one large note thousands
+    // of times filled the heap.
+    const referencedNodes = new Map<string, OfficeContentNode>();
+    const referencedNode = (kind: 'footnote' | 'endnote' | 'comment', id: string, build: () => OfficeContentNode): OfficeContentNode => {
+        let node = referencedNodes.get(`${kind}:${id}`);
+        if (!node) referencedNodes.set(`${kind}:${id}`, node = build());
+        return node;
+    };
     const endnoteMap = new Map<string, OfficeContentNode[]>();
     const commentMap = new Map<string, OfficeContentNode[]>();
     const commentMetadataMap = new Map<string, CommentMetadata>();
@@ -711,12 +720,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                         const id = footnoteRef.getAttribute("w:id");
                         if (id && footnoteMap.has(id)) {
                             const noteNodes = footnoteMap.get(id)!;
-                            const noteNode: OfficeContentNode = {
+                            const noteNode = referencedNode('footnote', id, () => ({
                                 type: 'note',
                                 text: noteNodes.map((n: OfficeContentNode) => n.text).join(' '),
                                 children: noteNodes,
                                 metadata: { noteType: 'footnote', noteId: id }
-                            } as any;
+                            } as OfficeContentNode));
                             if (children.length > 0) {
                                 const target = children[children.length - 1];
                                 if (!target.notes) target.notes = [];
@@ -732,12 +741,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                         const id = endnoteRef.getAttribute("w:id");
                         if (id && endnoteMap.has(id)) {
                             const noteNodes = endnoteMap.get(id)!;
-                            const noteNode: OfficeContentNode = {
+                            const noteNode = referencedNode('endnote', id, () => ({
                                 type: 'note',
                                 text: noteNodes.map((n: OfficeContentNode) => n.text).join(' '),
                                 children: noteNodes,
                                 metadata: { noteType: 'endnote', noteId: id }
-                            } as any;
+                            } as OfficeContentNode));
                             if (children.length > 0) {
                                 const target = children[children.length - 1];
                                 if (!target.notes) target.notes = [];
@@ -757,12 +766,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                         if (id && commentMap.has(id)) {
                             const commentNodes = commentMap.get(id)!;
                             const commentInfo = commentMetadataMap.get(id);
-                            const commentNode: OfficeContentNode = {
+                            const commentNode = referencedNode('comment', id, () => ({
                                 type: 'comment',
                                 text: commentNodes.map((n: OfficeContentNode) => n.text).join(' '),
                                 children: commentNodes,
                                 metadata: commentInfo || { commentId: id }
-                            } as any;
+                            } as OfficeContentNode));
                             if (children.length > 0) {
                                 const target = children[children.length - 1];
                                 if (!target.comments) target.comments = [];

@@ -35,6 +35,13 @@ const IMAGE_PROBE_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.eps', '.PDF',
  */
 const INCLUDABLE_IMAGE_EXT: Record<string, string> = lookupTable({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'application/pdf': 'pdf' });
 
+/** `index` written in letters (0 is `a`, 26 is `ba`), for a macro name, which cannot hold digits. */
+function letterIndex(index: number): string {
+    let out = '';
+    do { out = String.fromCharCode(97 + (index % 26)) + out; index = Math.floor(index / 26); } while (index > 0);
+    return out;
+}
+
 /** LaTeX's own nesting limit for `itemize`/`enumerate` ("Too deeply nested" past it); beamer allows one level fewer. */
 const MAX_LIST_DEPTH = 4;
 const MAX_LIST_DEPTH_BEAMER = 3;
@@ -260,6 +267,10 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private readonly emittedLabels = new Set<string>();
 
     private deferredFootnotes: string[] = [];
+    /** The macro holding the number of each note referred to more than once, set at its first reference (see noteMark). */
+    private readonly noteNumbers = new Map<OfficeContentNode, string>();
+    /** Notes referred to more than once whose first reference wrote them in parentheses. */
+    private readonly parentheticalNotes = new Set<OfficeContentNode>();
     /** Texts of the notes a note's own text refers to, written as `\\footnotetext` after it (see noteMark). */
     private nestedFootnotes: string[] = [];
     /** Colors the body uses, as validated `RRGGBB` hex, each defined once by name. */
@@ -948,14 +959,32 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private async noteMark(note: OfficeContentNode): Promise<string> {
         if (this.ctx.notes === 'omit') return '';
         const meta = note.metadata as NoteMetadata | undefined;
+        // A note referred to again: a mark with the number its first reference got (kept in a macro
+        // there), its text written once. Written at every reference, one note a small document
+        // refers to thousands of times made output of gigabytes. Where its first reference had no
+        // number (in parentheses), the text is not repeated.
+        const endnote = meta?.noteType === 'endnote';
+        const numbered = this.noteNumbers.get(note);
+        if (numbered !== undefined) {
+            if (this.ctx.notes === 'parenthetical') return '';
+            return endnote ? `\\endnotemark[${numbered}]` : `\\footnotemark[${numbered}]`;
+        }
+        if (this.parentheticalNotes.has(note)) return '';
+        // The macro that will hold its number, when it is referred to more than once.
+        const shared = this.noteReferences(note) > 1 ? `\\opNote${letterIndex(this.noteNumbers.size)}` : undefined;
+        const keep = (counter: string) => shared ? `\\xdef${shared}{\\the\\value{${counter}}}` : '';
+        if (shared && this.ctx.notes !== 'parenthetical') this.noteNumbers.set(note, shared);
         // A note a note's text refers to was left out. In a footnote written in place it is a mark,
         // its text after that footnote; where no mark can be numbered with its text (in an endnote,
         // printed at the end, or a footnote whose text follows a table) it is in parentheses.
         if (this.ctx.notes === 'nested') {
             this.nestedFootnotes.push(await this.noteBody(note, 'parenthetical'));
-            return '\\footnotemark{}';
+            return `\\footnotemark{}${keep('footnote')}`;
         }
-        if (this.ctx.notes === 'parenthetical') return ` (${await this.noteBody(note, 'parenthetical')})`;
+        if (this.ctx.notes === 'parenthetical') {
+            if (shared) this.parentheticalNotes.add(note);
+            return ` (${await this.noteBody(note, 'parenthetical')})`;
+        }
         const direct = meta?.noteType !== 'endnote' && this.ctx.notes === 'direct';
         const outerNested = this.nestedFootnotes;
         this.nestedFootnotes = [];
@@ -973,13 +1002,15 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             : '';
         if (meta?.noteType === 'endnote') {
             this.uses.endnotes = true;
-            return `${this.cmd('endnote')}{${body}}${nestedTexts}`;
+            // (Its number is the counter's after `\endnote`, whose text is printed later.)
+            return `${this.cmd('endnote')}{${body}}${keep('endnote')}${nestedTexts}`;
         }
         if (this.ctx.notes === 'deferred') {
             this.deferredFootnotes.push(body);
-            return '\\footnotemark{}';
+            return `\\footnotemark{}${keep('footnote')}`;
         }
-        return `${this.cmd('footnote')}{${body}}${nestedTexts}`;
+        // (Its number is kept at the start of its text, before the marks of the notes it refers to.)
+        return `${this.cmd('footnote')}{${keep('footnote')}${body}}${nestedTexts}`;
     }
 
     /** A note with no reference point (an orphan definition): its mark on a line of its own. */

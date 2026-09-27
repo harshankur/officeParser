@@ -138,6 +138,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private frameCounter = 0;
     private commentCounter = 0;
     private footnoteOrd = 0;
+    private readonly writtenNotes = new Map<OfficeContentNode, { id: string; ord: number; cls: 'footnote' | 'endnote' }>();
     private endnoteOrd = 0;
 
     private usedBookmarkNames = new Set<string>();
@@ -456,8 +457,13 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     }
 
     private async note(node: OfficeContentNode, cls: 'footnote' | 'endnote'): Promise<string> {
+        // A note referred to again is a reference to it (its number), its text written once: written at
+        // every reference, one note a small document refers to thousands of times was copied that often.
+        const written = this.writtenNotes.get(node);
+        if (written) return `<text:note-ref text:note-class="${written.cls}" text:reference-format="text" text:ref-name="${written.id}">${written.ord}</text:note-ref>`;
         const ord = cls === 'footnote' ? ++this.footnoteOrd : ++this.endnoteOrd;
         const id = `${cls === 'footnote' ? 'ftn' : 'edn'}${ord}`;
+        this.writtenNotes.set(node, { id, ord, cls });
         const body = this.styleNoteBody((await this.renderBlocks(this.bodyBlocks(node))) || '<text:p/>');
         return `<text:note text:id="${id}" text:note-class="${cls}"><text:note-citation>${ord}</text:note-citation><text:note-body>${body}</text:note-body></text:note>`;
     }

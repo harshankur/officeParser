@@ -139,6 +139,19 @@ export function sanitizeCssValue(value: string): string {
 }
 
 /**
+ * A network-path reference for a web page's `href` or `src` (see sanitizeUrl): `//host/path` as
+ * `https://host/path`, which is what it means on the web; undefined for a backslash form (`\\host\share`,
+ * `\/host`, or `///path`), which has no use on the web and is refused; `url` itself when it is none.
+ * Resolved against a page opened from disk, as an EPUB reader and a saved HTML file are, either form
+ * is `file://host/...`, which Windows fetches over SMB with the user's credentials, for a picture with
+ * no click.
+ */
+function webNetworkPath(url: string): string | undefined {
+    if (!/^[\\/]{2}/.test(url)) return url;
+    return /^\/\/[^\\/]/.test(url) ? `https:${url}` : undefined;
+}
+
+/**
  * Escapes a document-supplied URL for use in an href/src attribute. Beyond the
  * usual attribute escaping, this rejects script-executing schemes (javascript:,
  * vbscript:, data:, etc.) so a hyperlink extracted from an untrusted document
@@ -150,7 +163,8 @@ export function sanitizeUrl(url: string): string {
     const trimmed = url.trim();
     // Browsers ignore control characters when parsing a URL scheme, so strip them
     // first to catch obfuscated payloads like "java\tscript:alert(1)".
-    const stripped = trimmed.replace(/[\x00-\x1F\x7F]+/g, '');
+    const stripped = webNetworkPath(trimmed.replace(/[\x00-\x1F\x7F]+/g, ''));
+    if (stripped === undefined) return '';
     const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(stripped);
     if (schemeMatch && !/^(https?|mailto|tel)$/i.test(schemeMatch[1])) {
         return '';
@@ -190,7 +204,8 @@ export function iframeAllowed(src: string, preserve: boolean | string[] | undefi
 export function sanitizeImageUrl(url: string): string {
     if (typeof url !== 'string') return '';
     const trimmed = url.trim();
-    const stripped = trimmed.replace(/[\x00-\x1F\x7F]+/g, '');
+    const stripped = webNetworkPath(trimmed.replace(/[\x00-\x1F\x7F]+/g, ''));
+    if (stripped === undefined) return '';
     const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(stripped);
     if (schemeMatch) {
         const scheme = schemeMatch[1].toLowerCase();
@@ -263,12 +278,10 @@ export function csvSafeCell(value: string, delimiter: string): string {
  * `&amp;` into an RTF field. The scheme allowlist is deliberately identical to `sanitizeUrl`'s
  * and `sanitizeMarkdownUrl`'s, so all three text generators agree on what a hyperlink may point at.
  *
- * **Additionally rejects UNC paths (`\\host\share`), which the HTML allowlist does not.** In a
- * browser `\\evil.com\share` is an inert relative path; in Word it is a live UNC reference that
- * triggers an SMB fetch and an NTLM handshake on click, which is a credential-leak vector rather
- * than a rendering quirk. That asymmetry is why this is a separate function and not a flag on
- * `sanitizeUrl` - the HTML helper must NOT gain this behaviour, since there the path is harmless
- * and rejecting it would break legitimate relative links.
+ * **Additionally rejects UNC paths (`\\host\share`) and network paths (`//host`).** In Word such
+ * a target is a live UNC reference that triggers an SMB fetch and an NTLM handshake on click, a
+ * credential-leak vector. (The web helpers refuse the backslash forms too, and write `//host` as
+ * `https://host`: see webNetworkPath.)
  *
  * Returns `''` for a rejected URL; callers emit the link text without the field wrapper, matching
  * how HTML degrades to `href=""` and Markdown to `[text]()`.
@@ -482,7 +495,9 @@ export function markdownEscapeInline(text: string, atLineStart = false): string 
  */
 export function sanitizeMarkdownUrl(url: string, opts?: { allowDataImage?: boolean }): string {
     if (typeof url !== 'string') return '';
-    const stripped = url.trim().replace(/[\x00-\x1F\x7F]+/g, '');
+    // (A network path as for a web page: see webNetworkPath.)
+    const stripped = webNetworkPath(url.trim().replace(/[\x00-\x1F\x7F]+/g, ''));
+    if (stripped === undefined) return '';
     const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(stripped);
     if (schemeMatch) {
         const scheme = schemeMatch[1].toLowerCase();

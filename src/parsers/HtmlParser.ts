@@ -622,6 +622,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
     // Keys a `<sup data-footnote-ref>` actually consumed, so definitions in the section that no
     // reference points at (orphans) can be recovered at the end instead of silently dropped.
     const referencedFootnoteKeys = new Set<string>();
+    // One note node per key, shared by every reference to it: a node (and its text) built per reference
+    // let a small file refer to one large note thousands of times and fill the heap.
+    const noteNodesByKey = new Map<string, OfficeContentNode>();
 
     // --- Generic attribute pass-through (htmlParserConfig.preserveAttributes) ---------------
     // Captures attributes no typed metadata field consumed, so they can be replayed on
@@ -798,13 +801,17 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         // ignoreNotes drops footnotes at parse time (as in DOCX/ODT/PDF): skip the marker
                         // and attach nothing. The orphan sweep below is likewise skipped.
                         if (config.ignoreNotes) continue;
-                        const definition = footnoteDefinitions.get(key);
-                        const noteNode: OfficeContentNode = {
-                            type: 'note',
-                            text: plainTextOf(definition || []),
-                            children: definition || [],
-                            metadata: { noteType: 'footnote', noteId: key }
-                        };
+                        let noteNode = noteNodesByKey.get(key);
+                        if (!noteNode) {
+                            const definition = footnoteDefinitions.get(key);
+                            noteNode = {
+                                type: 'note',
+                                text: plainTextOf(definition || []),
+                                children: definition || [],
+                                metadata: { noteType: 'footnote', noteId: key }
+                            };
+                            noteNodesByKey.set(key, noteNode);
+                        }
                         if (kids.length > 0) {
                             const target = kids[kids.length - 1];
                             if (!target.notes) target.notes = [];

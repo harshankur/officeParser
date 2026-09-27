@@ -15,6 +15,32 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     protected messages: OfficeIssue[] = [];
     protected styleMapper: StyleMapper;
     protected collectedNotes: OfficeContentNode[] = [];
+    private readonly collectedNoteSet = new Set<OfficeContentNode>();
+    private noteReferenceCounts: Map<OfficeContentNode, number> | undefined;
+
+    /**
+     * How many references the AST makes to `note` (a parser shares one note node among all the
+     * references to it). A writer that writes a note at its reference writes it in full once and
+     * refers back to it from the others, so a note referred to thousands of times is not written
+     * thousands of times.
+     */
+    protected noteReferences(note: OfficeContentNode): number {
+        if (!this.noteReferenceCounts) {
+            const counts = new Map<OfficeContentNode, number>();
+            const seen = new Set<OfficeContentNode>();
+            const stack: OfficeContentNode[] = [...(this.ast?.content ?? [])];
+            while (stack.length) {
+                const node = stack.pop()!;
+                if (!node || typeof node !== 'object') continue;
+                for (const n of node.notes ?? []) counts.set(n, (counts.get(n) ?? 0) + 1);
+                if (seen.has(node)) continue;
+                seen.add(node);
+                for (const list of [node.children, node.notes, node.comments]) if (list) for (const child of list) stack.push(child);
+            }
+            this.noteReferenceCounts = counts;
+        }
+        return this.noteReferenceCounts.get(note) ?? 0;
+    }
     /** Lazily-built `name -> attachment` index for {@link getAttachment}. */
     private attachmentIndex?: Map<string, OfficeAttachment>;
 
@@ -182,7 +208,13 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
 
         if (node.notes && node.notes.length > 0) {
             if (node.type !== 'slide') {
-                this.collectedNotes.push(...node.notes);
+                // Each note once, however many references share it: listed per reference, one note a
+                // small document refers to thousands of times was written out that many times.
+                for (const note of node.notes) {
+                    if (this.collectedNoteSet.has(note)) continue;
+                    this.collectedNoteSet.add(note);
+                    this.collectedNotes.push(note);
+                }
             }
         }
 

@@ -364,7 +364,9 @@
             <code>image</code> nodes.</li>
         <li><strong>Traverse <code>node.notes</code> and <code>node.comments</code></strong>: These arrays are
             <em>separate</em> from <code>children</code> and will not appear during a standard DFS of
-            <code>children</code>. Iterate them explicitly if you need footnotes, endnotes, or comments.</li>
+            <code>children</code>. Iterate them explicitly if you need footnotes, endnotes, or comments. A note or
+            comment referred to from several places is one node each reference holds: skip one you have
+            already handled, by identity, and do not mutate it expecting one reference to change.</li>
         <li><strong>Access Auxiliary Content via <code>ast.auxiliary</code></strong>: Headers, footers, and slide
             masters are not in <code>ast.content</code>. Access them via <code>ast.auxiliary?.headers</code>,
             <code>ast.auxiliary?.footers</code>, or <code>ast.auxiliary?.slideMasters</code>.</li>

@@ -138,6 +138,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const sharedStringsFile = files.find(f => f.path === stringsFilePath);
     // Updated to store structured content (rich text runs) or simple string
     const sharedStrings: (string | OfficeContentNode[])[] = [];
+    // The text of each rich shared string, joined once: joined per cell, a large string many cells
+    // show was copied for each, and a small file filled the heap.
+    const richStringText = new Map<number, string>();
 
     if (sharedStringsFile) {
         const xml = parseXmlString(sharedStringsFile.content.toString());
@@ -610,7 +613,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             // shared string referenced by many cells would otherwise amplify to N x its
                             // size in the AST. The run nodes are never mutated in place downstream.
                             cellNodes = content.slice();
-                            text = cellNodes.map(n => n.text).join('');
+                            let joined = richStringText.get(idx);
+                            if (joined === undefined) richStringText.set(idx, joined = cellNodes.map(n => n.text).join(''));
+                            text = joined;
                         } else {
                             text = content || '';
                         }

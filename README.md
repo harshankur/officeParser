@@ -642,7 +642,7 @@ OfficeParserAST
 │   ├── type: 'paragraph' | 'heading' | 'table' | 'list' | 'image' | 'chart' | 'comment' | 'admonition' | 'embed' | 'definitionList' | ...
 │   ├── text: string  (concatenated text of node + all descendants)
 │   ├── children: [ OfficeContentNode ]  (recursive structural children)
-│   ├── notes: [ OfficeContentNode ]     (footnotes/endnotes/slide notes attached to this node)
+│   ├── notes: [ OfficeContentNode ]     (footnotes/endnotes/slide notes attached to this node; see below)
 │   ├── comments: [ OfficeContentNode ] (inline comments attached to this node)
 │   ├── formatting: { bold, italic, underline, color, size, font, alignment, ... }
 │   └── metadata: { level, listId, row, col, rowSpan, colSpan, backgroundColor, style, ... }
@@ -662,6 +662,8 @@ OfficeParserAST
 ├── config: OfficeParserConfig  (the resolved parse config; `.to()` inherits newlineDelimiter/onWarning from it)
 └── to(format, config?)  (format: 'html'|'md'|'text'|'csv'|'rtf'|'pdf'|'docx'|'odt'|'tex'|'epub'|'chunks', returns { value, messages })
 ```
+
+A note or comment referred to from several places is one node that each reference's `notes` (or `comments`) array holds. Test for a note you have already seen by identity before handling it again, and do not mutate it expecting only one reference to change. (`JSON.stringify` writes it at every reference.)
 
 ### `OfficeIssue`: Warning / Error Object
 
