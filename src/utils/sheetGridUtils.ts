@@ -107,17 +107,24 @@ function boundGrid(node: OfficeContentNode, budget: { left: number }): OfficeCon
 }
 
 /** `nodes` with every table and sheet among them, or in them, bounded (see boundGrid); `nodes` when none changed. */
-function boundGrids(nodes: OfficeContentNode[], budget: { left: number }): OfficeContentNode[] {
+function boundGrids(nodes: OfficeContentNode[], budget: { left: number }, done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode[] {
     let changed = false;
     const out = nodes.map(node => {
-        let next = node;
-        for (const key of ['children', 'notes', 'comments'] as const) {
-            const list = next[key];
-            if (!list?.length) continue;
-            const bounded = boundGrids(list, budget);
-            if (bounded !== list) next = { ...next, [key]: bounded };
+        // Each node once, its result shared: a node the AST shares (a note every reference holds) was
+        // walked once per path to it, doubling per level of notes nested in notes.
+        let next: OfficeContentNode | undefined = done.get(node);
+        if (!next) {
+            done.set(node, node);
+            next = node;
+            for (const key of ['children', 'notes', 'comments'] as const) {
+                const list: OfficeContentNode[] | undefined = next[key];
+                if (!list?.length) continue;
+                const bounded = boundGrids(list, budget, done);
+                if (bounded !== list) next = { ...next, [key]: bounded };
+            }
+            if (next.type === 'table' || next.type === 'sheet') next = boundGrid(next, budget);
+            done.set(node, next);
         }
-        if (next.type === 'table' || next.type === 'sheet') next = boundGrid(next, budget);
         if (next !== node) changed = true;
         return next;
     });
@@ -132,6 +139,6 @@ function boundGrids(nodes: OfficeContentNode[], budget: { left: number }): Offic
  * the input is never mutated.
  */
 export function withBoundedSheetGrids<T extends OfficeParserAST>(ast: T): T {
-    const content = boundGrids(ast.content, { left: MAX_SHEET_GRID_GAPS });
+    const content = boundGrids(ast.content, { left: MAX_SHEET_GRID_GAPS }, new Map());
     return content === ast.content ? ast : { ...ast, content };
 }

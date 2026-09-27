@@ -1,4 +1,4 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed } from '../utils/officeGenUtils.js';
@@ -31,6 +31,32 @@ const URL_BEARING_ATTRS = new Set([
 ]);
 
 /**
+ * A `srcset` with each candidate's URL checked as a picture's (sanitizeImageUrl), read as HTML reads
+ * one: a URL is a run of non-whitespace (so a `data:` URL keeps its commas), then its descriptors up to
+ * a comma. A candidate whose URL is refused is left out; the result is escaped for an attribute.
+ */
+function sanitizeSrcset(value: string): string {
+    const out: string[] = [];
+    let i = 0;
+    while (i < value.length) {
+        while (i < value.length && /[\s,]/.test(value[i])) i++;
+        const urlStart = i;
+        while (i < value.length && !/\s/.test(value[i])) i++;
+        let url = value.slice(urlStart, i);
+        let descriptors = '';
+        if (url.endsWith(',')) url = url.replace(/,+$/, '');
+        else {
+            const comma = value.indexOf(',', i);
+            descriptors = value.slice(i, comma === -1 ? value.length : comma).trim();
+            i = comma === -1 ? value.length : comma + 1;
+        }
+        const safe = url ? sanitizeImageUrl(url) : '';
+        if (safe) out.push(descriptors ? `${safe} ${escapeHtml(descriptors)}` : safe);
+    }
+    return out.join(', ');
+}
+
+/**
  * Renders `node.htmlAttributes` (see `BaseContentNode.htmlAttributes`) as an attribute string.
  *
  * This re-applies the parser's filtering rather than trusting it, because an AST can be built
@@ -60,6 +86,13 @@ function renderHtmlAttributeBag(
 
         if (key === 'class') {
             className = String(rawValue);
+            continue;
+        }
+        if (key === 'srcset' || key === 'ping') {
+            // Lists of URLs, each checked: checked as one URL, only the first was (a later
+            // `//host/x 2x` candidate reached a page opened from disk as file://host).
+            const safe = key === 'srcset' ? sanitizeSrcset(String(rawValue)) : String(rawValue).split(/\s+/).map(u => u && sanitizeUrl(u)).filter(Boolean).join(' ');
+            if (safe) attrs += ` ${key}="${safe}"`;
             continue;
         }
         if (URL_BEARING_ATTRS.has(key)) {
@@ -122,6 +155,11 @@ function isNearDefaultColor(color: string): boolean {
  * Generates semantic, high-fidelity HTML from an AST.
  */
 export class HtmlGenerator extends BaseGenerator<'html'> {
+    /**
+     * Where a packager keeps an attachment's picture (EPUB: a file in the package), so an `<img>` points
+     * at it rather than carrying its data; undefined leaves the picture inlined as usual.
+     */
+    imageSourceFor?: (attachment: OfficeAttachment) => string | undefined;
     private chartCounter = 0;
     private isSpreadsheetMode = false;
     /**
@@ -972,7 +1010,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 let src = meta?.url || attachmentName || '';
                 if (!meta?.url && attachmentName && this.ast) {
                     const attachment = this.getAttachment(attachmentName);
-                    if (attachment) {
+                    const packaged = attachment && this.imageSourceFor?.(attachment);
+                    if (packaged) {
+                        src = packaged;
+                    } else if (attachment) {
                         const bytes = base64ByteLength(attachment.data);
                         // A self-contained (standalone) HTML document must embed its images: a name
                         // reference there is a broken image with no packager to resolve it. So the size
@@ -980,7 +1021,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                         // fragment a consumer post-processes) is lifted for a standalone document.
                         const cap = this.emitsStandaloneDocument ? Infinity : this.config.maxInlineImageBytes;
                         if (bytes <= cap) {
-                            src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
+                            if (this.inlineWithinBudget(bytes, attachmentName)) src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
                         } else {
                             // Fragment over the cap: keep the name reference the consumer resolves, but
                             // surface it so a large image degrading to a bare src is never silent.

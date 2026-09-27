@@ -3,7 +3,10 @@ import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
-import { embedUrl } from '../utils/officeGenUtils.js';
+import { base64ByteLength, decodeBase64, embedUrl } from '../utils/officeGenUtils.js';
+
+/** Each byte's two hex digits. */
+const HEX_BYTES = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
 import { clampInt } from '../utils/numberUtils.js';
 
 /** Nodes whose children are a line of text: a picture in one sits in its line. */
@@ -274,16 +277,22 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
 
                     let pict = '';
                     const attachment = this.getAttachment(meta?.attachmentName);
-                    if (attachment && attachment.data) {
+                    // (Within the document's budget of picture data: see inlineWithinBudget. Past it, the
+                    // picture is its alt text or name, as one RTF cannot carry.)
+                    const withinBudget = !!attachment?.data && this.inlineWithinBudget(base64ByteLength(attachment.data), meta?.attachmentName);
+                    if (attachment && attachment.data && !withinBudget) pict = this.escapeRtf(meta?.altText || `[Image: ${meta?.attachmentName}]`);
+                    if (attachment && attachment.data && withinBudget) {
                         const type = attachment.extension === 'png' ? 'pngblip' : 'jpegblip';
-                        // Convert base64 to hex
-                        const binary = atob(attachment.data);
-                        let hex = '';
-                        for (let i = 0; i < binary.length; i++) {
-                            const h = binary.charCodeAt(i).toString(16);
-                            hex += h.length === 1 ? '0' + h : h;
-                            if (i % 64 === 63) hex += '\n'; // Add newlines for better RTF readability
+                        // The picture as hex, 64 bytes a line, each line built and then joined: added a
+                        // character at a time to one string, a large picture ran out of memory.
+                        const bytes = decodeBase64(attachment.data);
+                        const lines: string[] = [];
+                        for (let i = 0; i < bytes.length; i += 64) {
+                            let line = '';
+                            for (let j = i; j < Math.min(i + 64, bytes.length); j++) line += HEX_BYTES[bytes[j]];
+                            lines.push(line);
                         }
+                        const hex = lines.join('\n') + (bytes.length > 0 && bytes.length % 64 === 0 ? '\n' : '');
                         // Default goals (approx 3 inches wide at 1440 twips per inch)
                         pict = `{\\pict\\${type}\\picwgoal4320\\pichgoal3240\n${hex}\n}\n`;
                         // A picture that is a link is the result of a HYPERLINK field, as linked text is.

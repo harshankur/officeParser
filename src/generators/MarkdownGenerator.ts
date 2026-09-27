@@ -541,8 +541,32 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
      * 
      * @returns A Markdown string
      */
+    /**
+     * Source comments in a paragraph's or heading's line: a line break in one ends the line's block
+     * when what follows could start a block of its own (a blank line, `<div>`, `>`, `#`), and the rest
+     * of the comment was then Markdown, or live HTML, in a renderer. See inlineCommentText.
+     */
+    private readonly inlineComments = new Set<OfficeContentNode>();
+
+    private inlineCommentText(node: OfficeContentNode): string {
+        const text = node.text || '';
+        // (Parsers never give an inline comment such a line: only a hand-built AST can.)
+        return this.inlineComments.has(node) && /\n[ \t]*(?:\n|$)|\n {0,3}(?:[<>#=+*_~`|:-]|\d{1,9}[.)])/.test(text) ? text.replace(/\r?\n/g, ' ') : text;
+    }
+
     async generate(): Promise<ConversionResult<'md'>> {
         let output = '';
+        {
+            const seen = new Set<OfficeContentNode>();
+            const stack: OfficeContentNode[] = [...this.ast.content];
+            while (stack.length) {
+                const node = stack.pop()!;
+                if (!node || seen.has(node)) continue;
+                seen.add(node);
+                if (node.type === 'paragraph' || node.type === 'heading') for (const child of node.children ?? []) if (isSourceComment(child)) this.inlineComments.add(child);
+                for (const list of [node.children, node.notes, node.comments]) if (list) stack.push(...list);
+            }
+        }
 
         // Add Metadata (YAML Front Matter)
         const meta = this.effectiveMetadata;
@@ -864,7 +888,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         if (attachment) {
                             const bytes = base64ByteLength(attachment.data);
                             if (bytes <= this.config.maxInlineImageBytes) {
-                                src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
+                                if (this.inlineWithinBudget(bytes, meta.attachmentName)) src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
                             } else {
                                 // Over the cap, so the picture itself cannot travel in the output
                                 // (inlining a multi-MB image would overflow downstream Markdown
@@ -1165,7 +1189,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // A source comment (`<!-- ... -->`) is re-emitted verbatim - inline it sits in its run,
                     // at top level the block loop below separates it like any other block. A review
                     // comment keeps its existing rendering (its children).
-                    if (isSourceComment(node)) return `<!--${sanitizeCommentText(node.text || '')}-->`;
+                    if (isSourceComment(node)) return `<!--${sanitizeCommentText(this.inlineCommentText(node))}-->`;
                     // A comment of text alone (a CSV comment line) is that text: it was dropped.
                     if (!node.children?.length && node.text) return `${markdownEscapeInline(node.text, this.atLineStart)}\n\n`;
                     return childrenOutput;
@@ -1720,7 +1744,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 const attachment = !meta?.url && meta?.attachmentName ? this.getAttachment(meta.attachmentName) : undefined;
                 if (attachment) {
                     const bytes = base64ByteLength(attachment.data);
-                    if (bytes <= this.config.maxInlineImageBytes) src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
+                    if (bytes <= this.config.maxInlineImageBytes) { if (this.inlineWithinBudget(bytes, meta!.attachmentName)) src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`; }
                     else this.warn(OfficeWarningType.IMAGE_NOT_INLINED, { name: meta!.attachmentName, bytes, limit: this.config.maxInlineImageBytes });
                 }
                 const { attr, extra } = this.htmlIds(meta);

@@ -9,6 +9,9 @@ import { isSourceComment } from '../utils/commentUtils.js';
  * Base class for all document generators.
  * Provides common traversal logic and configuration handling.
  */
+/** The most picture bytes one document writes inline in all (see BaseGenerator.inlineWithinBudget). */
+export const MAX_INLINED_IMAGE_BYTES = 128 * 1024 * 1024;
+
 export abstract class BaseGenerator<D extends UniversalGeneratorFormat = UniversalGeneratorFormat> {
     protected config: FullGeneratorConfig;
     protected ast: OfficeParserAST;
@@ -16,6 +19,36 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     protected styleMapper: StyleMapper;
     protected collectedNotes: OfficeContentNode[] = [];
     private readonly collectedNoteSet = new Set<OfficeContentNode>();
+    private readonly writtenComments = new Set<OfficeContentNode>();
+    private inlinedImageBytes = 0;
+
+    /**
+     * Whether a picture of `bytes` may still be written inline (a `data:` URI, RTF picture data), taking
+     * it from the document's budget of MAX_INLINED_IMAGE_BYTES; when not, an IMAGE_NOT_INLINED warning.
+     * A format that cannot point one picture at another's data writes it at every place showing it, so
+     * a small document showing one large picture many times made output past what a string can hold.
+     */
+    protected inlineWithinBudget(bytes: number, name: string | undefined): boolean {
+        if (this.inlinedImageBytes + bytes > MAX_INLINED_IMAGE_BYTES) {
+            this.warn(OfficeWarningType.IMAGE_NOT_INLINED, { name, bytes, limit: MAX_INLINED_IMAGE_BYTES, inDocument: true });
+            return false;
+        }
+        this.inlinedImageBytes += bytes;
+        return true;
+    }
+
+    /**
+     * Whether `comment` is being written for the first time (and marks it written). A comment the AST
+     * shares among several references is written once, at the first: written at each, one comment a
+     * small document referred to thousands of times (or comments referring to each other twice each)
+     * made output of gigabytes. Marked before its body is written, so a comment inside itself cannot
+     * recurse.
+     */
+    protected firstWriteOfComment(comment: OfficeContentNode): boolean {
+        if (this.writtenComments.has(comment)) return false;
+        this.writtenComments.add(comment);
+        return true;
+    }
     private noteReferenceCounts: Map<OfficeContentNode, number> | undefined;
 
     /**

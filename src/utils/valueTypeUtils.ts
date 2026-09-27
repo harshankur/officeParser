@@ -81,8 +81,22 @@ function normalizeRecord(record: Record<string, unknown>): Record<string, unknow
     return out ?? record;
 }
 
-/** `node` with well-typed text, metadata, formatting and attributes, and its descendants the same; `node` itself when nothing changes. */
-function normalizeNode(node: OfficeContentNode): OfficeContentNode {
+/**
+ * `node` with well-typed text, metadata, formatting and attributes, and its descendants the same; `node`
+ * itself when nothing changes. Each node once, its result shared (`done`): a node the AST shares (one
+ * note every reference holds) was read once per path to it, which doubled per level of notes nested in
+ * notes, and came out as a copy per reference.
+ */
+function normalizeNode(node: OfficeContentNode, done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode {
+    const known = done.get(node);
+    if (known) return known;
+    done.set(node, node);
+    const result = normalizeNodeOnce(node, done);
+    done.set(node, result);
+    return result;
+}
+
+function normalizeNodeOnce(node: OfficeContentNode, done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode {
     let next: any = node;
     const change = (key: string, value: unknown) => {
         if (next === node) next = { ...node };
@@ -108,16 +122,16 @@ function normalizeNode(node: OfficeContentNode): OfficeContentNode {
         const list = (node as any)[key];
         if (list === undefined || list === null) continue;
         if (!Array.isArray(list)) { change(key, undefined); continue; }
-        const fixed = normalizeNodes(list);
+        const fixed = normalizeNodes(list, done);
         if (fixed !== list) change(key, fixed);
     }
     return next;
 }
 
-function normalizeNodes(nodes: OfficeContentNode[]): OfficeContentNode[] {
+function normalizeNodes(nodes: OfficeContentNode[], done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode[] {
     let changed = false;
     const out = nodes.filter(node => node && typeof node === 'object' && !Array.isArray(node)).map(node => {
-        const fixed = normalizeNode(node);
+        const fixed = normalizeNode(node, done);
         if (fixed !== node) changed = true;
         return fixed;
     });
@@ -134,7 +148,7 @@ function normalizeNodes(nodes: OfficeContentNode[]): OfficeContentNode[] {
  * mutated.
  */
 export function withWellTypedValues<T extends OfficeParserAST>(ast: T): T {
-    const content = Array.isArray(ast.content) ? normalizeNodes(ast.content) : [];
+    const content = Array.isArray(ast.content) ? normalizeNodes(ast.content, new Map()) : [];
     const metadata = normalizeDocumentMetadata(ast.metadata);
     return content === ast.content && metadata === ast.metadata ? ast : { ...ast, content, metadata };
 }

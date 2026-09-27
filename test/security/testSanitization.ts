@@ -2582,6 +2582,54 @@ async function parserHardeningTests() {
         check(`${format}: no network path is written, and //host is https`, !/\\\\evil|["(]\/\/evil|\\\/evil/.test(out) && out.includes('https://evil/share'), out.match(/[^\n]*evil[^\n]*/g)?.slice(0, 3).join(' | '));
     }
 
+    // Notes and comments referring to each other (each holds two references to the one before): every
+    // pass over the AST and every writer takes each shared node once, so depth 40 is instant (it
+    // doubled per level), and a comment is written once.
+    for (const kind of ['footnote', 'comment'] as const) {
+        const el = kind === 'comment' ? 'w:comment' : 'w:footnote';
+        const part = kind === 'comment' ? 'comments' : 'footnotes';
+        const ref = (id: number) => kind === 'comment' ? `<w:r><w:commentReference w:id="${id}"/></w:r>` : `<w:r><w:footnoteReference w:id="${id}"/></w:r>`;
+        let items = '';
+        for (let k = 1; k <= 40; k++) items += `<${el} w:id="${k}"><w:p><w:r><w:t>item${k} </w:t></w:r>${k > 1 ? ref(k - 1) + ref(k - 1) : ''}</w:p></${el}>`;
+        const chain = await parseQuiet(repack('test.docx', z => {
+            z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/<w:body>/, `<w:body><w:p><w:r><w:t>x</w:t></w:r>${ref(40)}</w:p>`));
+            z[`word/${part}.xml`] = enc(`<?xml version="1.0"?><w:${part} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${items}</w:${part}>`);
+        }), 'docx');
+        for (const format of ['text', 'md', 'html', 'rtf', 'tex', 'docx', 'odt', 'epub', 'chunks'] as const) {
+            const started = Date.now();
+            const value = (await OfficeGenerator.generate(chain.ast!, format, { onWarning: () => {} } as any)).value as any;
+            const size = typeof value === 'string' ? value.length : Array.isArray(value) ? JSON.stringify(value).length : value.length;
+            check(`${format}: ${kind}s referring to each other 40 deep are written in linear time and size`, Date.now() - started < 3000 && size < 2_000_000, `${Date.now() - started}ms ${size}`);
+        }
+    }
+    // A source comment in a shared note keeps it shared (pruned per path, it was copied per reference).
+    const commentedNote = await parseQuiet(Buffer.from('[^a] '.repeat(2000) + '\n\n[^a]: <!-- c --> ' + 'word '.repeat(2000) + '\n'), 'md');
+    for (const format of ['text', 'rtf', 'docx', 'odt', 'chunks', 'epub'] as const) {
+        const value = (await OfficeGenerator.generate(commentedNote.ast!, format, { onWarning: () => {} } as any)).value as any;
+        const size = typeof value === 'string' ? value.length : Array.isArray(value) ? JSON.stringify(value).length : Object.values(unzipSync(new Uint8Array(value))).reduce((n: number, f: any) => n + f.length, 0);
+        check(`${format}: a shared note holding a source comment is written once`, size < 400_000, `${size}`);
+    }
+    // One picture shown many times: HTML inlines up to a document budget, EPUB packages it once, RTF
+    // encodes it without running out of memory.
+    const bigPicture = { type: 'image', mimeType: 'image/png', name: 'big.png', extension: 'png', data: Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(30_000_000)]).toString('base64') };
+    const manyPictures: any = { ...astWith(Array.from({ length: 12 }, () => ({ type: 'paragraph', children: [{ type: 'image', metadata: { attachmentName: 'big.png' } }] }))), attachments: [bigPicture] };
+    for (const format of ['html', 'epub', 'rtf', 'md'] as const) {
+        const warnings: any[] = [];
+        let outcome = 'ok';
+        try { await OfficeGenerator.generate(manyPictures, format, { onWarning: (w: any) => warnings.push(w) } as any); } catch (e: any) { outcome = String(e?.message).slice(0, 80); }
+        check(`${format}: one 30 MB picture shown 12 times is written within the inline budget`, outcome === 'ok', outcome);
+    }
+    // Markdown: an inline source comment cannot end its line's block; srcset and ping are checked per URL;
+    // a reference definition repeats within a budget.
+    const inlineComment = (await OfficeGenerator.generate(astWith([{ type: 'heading', metadata: { level: 2 }, children: [{ type: 'text', text: 'h' }, { type: 'comment', text: 'x\n\n<img src=x onerror=alert(1)>\n\n', metadata: { sourceSyntax: 'html' } }] }]), 'md', { onWarning: () => {} } as any)).value as string;
+    const reread = await parseQuiet(Buffer.from(inlineComment), 'md');
+    check('md: an inline source comment with a blank line stays in its line', !JSON.stringify(reread.ast?.content).includes('"image"') && !/\n\n<img/.test(inlineComment), inlineComment);
+    const srcsetHtml = (await OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'image', metadata: { url: 'https://ok/a.png' }, htmlAttributes: { srcset: 'https://ok/a.png 1x, //evil/b.png 2x, \\\\evil\\c.png 3x, data:image/png;base64,iVBOR= 4x', ping: 'https://ok/p //evil/q javascript:x' } }] }]), 'html', { onWarning: () => {} } as any)).value as string;
+    check('html: srcset and ping are checked per URL', !/"\/\/evil|\\\\evil|javascript/.test(srcsetHtml) && srcsetHtml.includes('https://evil/b.png 2x') && srcsetHtml.includes('data:image/png;base64,iVBOR= 4x'), srcsetHtml.match(/srcset="[^"]*"|ping="[^"]*"/g)?.join(' '));
+    const references = await parseQuiet(Buffer.from('[a][r] '.repeat(2000) + '\n\n[r]: https://e.com/' + 'x'.repeat(100_000) + '\n'), 'md');
+    const referencesHtml = (await OfficeGenerator.generate(references.ast!, 'html', { onWarning: () => {} } as any)).value as string;
+    check('md: a long reference target used 2000 times repeats within a budget', referencesHtml.length < 40_000_000, `${referencesHtml.length}`);
+
     // Spans are held to what a browser allows, and never below 1.
     const gridSpan = await parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/<w:body>/, '<w:body><w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2147483647"/></w:tcPr><w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:gridSpan w:val="-5"/></w:tcPr><w:p><w:r><w:t>neg</w:t></w:r></w:p></w:tc></w:tr></w:tbl>')); }), 'docx');
     const spans = (ast: any) => { const out: any[] = []; const walk = (ns: any[]) => ns?.forEach((n: any) => { if (n.type === 'cell') out.push([n.metadata?.colSpan, n.metadata?.rowSpan, n.metadata?.col]); walk(n.children); }); walk(ast?.content); return out; };

@@ -367,8 +367,12 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private prescan(): void {
         const sizeWeights = new Map<number, number>();
         const all: OfficeContentNode[] = [];
+        // Each node once: a node the AST shares (a note every reference holds) was visited once per
+        // path to it, which doubled per level of notes nested in notes.
+        const seen = new Set<OfficeContentNode>();
         const visit = (n: OfficeContentNode | undefined) => {
-            if (!n) return;
+            if (!n || seen.has(n)) return;
+            seen.add(n);
             all.push(n);
             const meta = n.metadata as TextMetadata | undefined;
             // An image that is a link points at a target as a linked run does.
@@ -1043,6 +1047,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      * without changing the typeset page, and it is safe in every context, even inside an argument.
      */
     private commentLines(comment: OfficeContentNode): string {
+        // Written once, at its first reference (see firstWriteOfComment).
+        if (!this.firstWriteOfComment(comment)) return '';
         const meta = comment.metadata as CommentMetadata | undefined;
         const who = [meta?.author, meta?.date].filter(Boolean).join(', ');
         return latexComment(`Comment${who ? ` (${who})` : ''}: ${this.plainText(comment)}`);

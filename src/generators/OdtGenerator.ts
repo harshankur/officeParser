@@ -485,10 +485,13 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     }
 
     private async standaloneComment(node: OfficeContentNode): Promise<string> {
-        return `<text:p>${await this.annotation(node)}</text:p>`;
+        const annotation = await this.annotation(node);
+        return annotation ? `<text:p>${annotation}</text:p>` : '';
     }
 
     private async annotation(node: OfficeContentNode): Promise<string> {
+        // Written once, at its first reference (see firstWriteOfComment).
+        if (!this.firstWriteOfComment(node)) return '';
         const meta = node.metadata as any;
         const name = `cmt${++this.commentCounter}`;
         const creator = meta?.author ? `<dc:creator>${xmlText(meta.author)}</dc:creator>` : '';

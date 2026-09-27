@@ -486,6 +486,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     /** Registers a comment into comments.xml (body rels routed there) and returns its reference run. */
     private async registerComment(node: OfficeContentNode, ownParagraph: boolean): Promise<string> {
+        // Written once, at its first reference (see firstWriteOfComment).
+        if (!this.firstWriteOfComment(node)) return '';
         const id = this.commentCounter++;
         this.comments.push({ id, node });
         const body = (await this.withRelOwner('word/comments.xml', () => this.renderBlocks(this.bodyBlocks(node)))) || '<w:p/>';

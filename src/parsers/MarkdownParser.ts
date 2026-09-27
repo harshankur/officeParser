@@ -1055,6 +1055,18 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // label `Step \[2\` and the paragraph lost), and a definition does not interrupt a paragraph: one
     // on the line after text (`- item` then `[x]: y`) is that text's continuation.
     const linkDefinitions = new Map<string, { url: string; title?: string }>();
+    // The characters reference definitions (a link's or picture's target, an abbreviation's title) may
+    // repeat into the document beyond their first use: each use is written out in full by every
+    // writer, so a long target used many times (100 KB, 200 times) made output growing with the
+    // square of the input. Past this, a reference stays its text, as an unknown one does.
+    let referenceBudget = 16 * 1024 * 1024;
+    const usedDefinitions = new Set<string>();
+    const expandReference = (key: string, size: number): boolean => {
+        if (!usedDefinitions.has(key)) { usedDefinitions.add(key); return true; }
+        if (size > referenceBudget) return false;
+        referenceBudget -= size;
+        return true;
+    };
     let lastDefinitionEnd = -1;
     textStr = textStr.replace(/^\[((?:[^\]\\]|\\[\s\S]){1,999})\]:[ \t]*(\S+)(?:[ \t]+"((?:[^"\\]|\\.)*)")?[ \t]*$/gm, (match: string, label: string, url: string, title: string | undefined, offset: number, whole: string) => {
         if (offset > 0 && lastDefinitionEnd !== offset - 1) {
@@ -1393,7 +1405,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 const label = g.refText;
                 const refId = (g.refId || label).trim().toLowerCase();
                 const def = linkDefinitions.get(refId);
-                if (def) {
+                if (def && expandReference(`link:${refId}`, def.url.length + (def.title?.length ?? 0))) {
                     nodes.push(...buildLinkOrImageNodes(isImage, label, def.url));
                 } else {
                     // Not a known reference - preserve the literal bracketed text unchanged.
@@ -1403,7 +1415,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 const isImage = g.shortBang === '!';
                 const label = g.shortText;
                 const def = linkDefinitions.get(label.trim().toLowerCase());
-                if (def) {
+                if (def && expandReference(`link:${label.trim().toLowerCase()}`, def.url.length + (def.title?.length ?? 0))) {
                     nodes.push(...buildLinkOrImageNodes(isImage, label, def.url));
                 } else {
                     // Not a known reference - ordinary bracketed prose, preserve unchanged.
@@ -1460,11 +1472,12 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 if (match.index > lastIndex) {
                     result.push({ type: 'text', text: node.text.substring(lastIndex, match.index), formatting: node.formatting });
                 }
+                const title = abbreviationDefinitions.get(match[0]) ?? '';
                 result.push({
                     type: 'text',
                     text: match[0],
                     formatting: node.formatting,
-                    metadata: { abbreviationTitle: abbreviationDefinitions.get(match[0]) } as TextMetadata
+                    ...(expandReference(`abbr:${match[0]}`, title.length) && { metadata: { abbreviationTitle: title } as TextMetadata }),
                 });
                 lastIndex = pattern.lastIndex;
             }

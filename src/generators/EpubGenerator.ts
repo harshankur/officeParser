@@ -166,17 +166,36 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
             // which belongs in a packaged EPUB.
             htmlConfig: { ...this.config.htmlConfig, standalone: false, sourceAttributes: false },
         } as GeneratorConfig<'html'>);
-        const htmlResult = await htmlGenerator.generate();
-        let bodyHtml = typeof htmlResult.value === 'string' ? htmlResult.value : '';
-
-        // Extract base64 data-URI images into packaged files (EPUB readers don't render
-        // `data:` URIs). Each distinct image becomes one OEBPS/images/imageN.ext resource,
-        // a manifest <item>, and a rewritten relative `src`. Deduped so a repeated image
-        // is packaged once.
+        // Each attachment's picture is a file in the package, which every <img> showing it points at: its
+        // data was inlined at every <img> and extracted again, so a small book showing one large
+        // picture many times was built as an HTML string past what memory holds.
         const imageResources: Record<string, Uint8Array> = {};
         const imageManifestItems: string[] = [];
         const dataUriToHref = new Map<string, string>();
+        const attachmentHref = new Map<string, string>();
         let imageCounter = 0;
+        htmlGenerator.imageSourceFor = (attachment) => {
+            const mime = (attachment.mimeType || 'image/png').toLowerCase();
+            if (!/^image\/[a-z0-9.+-]+$/.test(mime) || !attachment.name) return undefined;
+            let href = attachmentHref.get(attachment.name);
+            if (!href) {
+                let data: Uint8Array;
+                try { data = decodeBase64(attachment.data); } catch { return undefined; }
+                imageCounter++;
+                href = `images/image${imageCounter}.${MIME_EXT[mime] || 'img'}`;
+                imageResources[`OEBPS/${href}`] = data;
+                imageManifestItems.push(`<item id="img${imageCounter}" href="${href}" media-type="${mime}"/>`);
+                attachmentHref.set(attachment.name, href);
+            }
+            return href;
+        };
+        const htmlResult = await htmlGenerator.generate();
+        let bodyHtml = typeof htmlResult.value === 'string' ? htmlResult.value : '';
+
+        // Extract any other base64 data-URI images (a picture given by a data: URL) into packaged
+        // files (EPUB readers don't render `data:` URIs). Each distinct image becomes one
+        // OEBPS/images/imageN.ext resource, a manifest <item>, and a rewritten relative `src`.
+        // Deduped so a repeated image is packaged once.
         bodyHtml = bodyHtml.replace(/(<img\b[^>]*\bsrc=")(data:(image\/[a-zA-Z0-9.+-]+);base64,([^"]+))(")/gi,
             (_full, pre, dataUri, mime, b64, post) => {
                 let href = dataUriToHref.get(dataUri);

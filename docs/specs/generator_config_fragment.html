@@ -79,7 +79,9 @@
                     block in Markdown), otherwise a compact name reference; Markdown still emits the
                     <code>IMAGE_NOT_INLINED</code> warning. Plain text follows the same rule. <strong>Standalone HTML
                     always inlines</strong>, whatever the cap: a self-contained document has nowhere else to resolve the
-                    image from. <code>0</code> never inlines; <code>Infinity</code> always inlines.</td>
+                    image from. <code>0</code> never inlines; <code>Infinity</code> always inlines. In every mode, the
+                    pictures one document writes inline stop at 128 MB in all (a picture is inlined at every place showing
+                    it); the rest are name references, with <code>IMAGE_NOT_INLINED</code>.</td>
             </tr>
             <tr>
                 <td><code>includeCharts</code></td>

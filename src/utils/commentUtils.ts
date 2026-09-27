@@ -9,7 +9,7 @@ export function isSourceComment(node: OfficeContentNode): boolean {
 }
 
 /** Recursively drop source comments from a node list. Lists and nodes that don't change are returned as-is. */
-function pruneSourceComments(nodes: OfficeContentNode[]): OfficeContentNode[] {
+function pruneSourceComments(nodes: OfficeContentNode[], done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode[] {
     let changed = false;
     const out: OfficeContentNode[] = [];
     for (const node of nodes) {
@@ -17,14 +17,21 @@ function pruneSourceComments(nodes: OfficeContentNode[]): OfficeContentNode[] {
             changed = true;
             continue;
         }
-        let next = node;
-        if (node.children?.length) {
-            const children = pruneSourceComments(node.children);
-            if (children !== node.children) next = { ...next, children };
-        }
-        if (node.notes?.length) {
-            const notes = pruneSourceComments(node.notes);
-            if (notes !== node.notes) next = { ...next, notes };
+        // Each node once, its result shared: a note every reference holds stays one note (copied per
+        // reference, it was written out at each), and notes nested in notes take linear time.
+        let next = done.get(node);
+        if (!next) {
+            done.set(node, node);
+            next = node;
+            if (node.children?.length) {
+                const children = pruneSourceComments(node.children, done);
+                if (children !== node.children) next = { ...next, children };
+            }
+            if (node.notes?.length) {
+                const notes = pruneSourceComments(node.notes, done);
+                if (notes !== node.notes) next = { ...next, notes };
+            }
+            done.set(node, next);
         }
         if (next !== node) changed = true;
         out.push(next);
@@ -39,6 +46,6 @@ function pruneSourceComments(nodes: OfficeContentNode[]): OfficeContentNode[] {
  * `content`. The input is never mutated.
  */
 export function withoutSourceComments<T extends OfficeParserAST>(ast: T): T {
-    const content = pruneSourceComments(ast.content);
+    const content = pruneSourceComments(ast.content, new Map());
     return content === ast.content ? ast : { ...ast, content };
 }

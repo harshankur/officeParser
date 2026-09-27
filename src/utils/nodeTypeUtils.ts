@@ -28,25 +28,31 @@ const placeOfChildren = (type: string): Place =>
  * its text) in the form its place takes: among blocks a run of inline content is a paragraph, in a row
  * the content is a cell, and in a table a row. Returns `nodes` itself when nothing changes.
  */
-function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place): OfficeContentNode[] {
+function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place, done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode[] {
     let changed = false;
     const out: OfficeContentNode[] = [];
     for (const node of nodes) {
         if (isKnown(node.type)) {
-            let next = node;
-            for (const key of ['children', 'notes', 'comments'] as const) {
-                const list = node[key];
-                if (!list?.length) continue;
-                const replaced = replaceUnknownNodes(list, key === 'children' ? placeOfChildren(node.type) : 'block');
-                if (replaced !== list) next = { ...next, [key]: replaced };
+            // Each node once (see withKnownNodeTypes): a node the AST shares keeps one result.
+            let next = done.get(node);
+            if (!next) {
+                done.set(node, node);
+                next = node;
+                for (const key of ['children', 'notes', 'comments'] as const) {
+                    const list = node[key];
+                    if (!list?.length) continue;
+                    const replaced = replaceUnknownNodes(list, key === 'children' ? placeOfChildren(node.type) : 'block', done);
+                    if (replaced !== list) next = { ...next, [key]: replaced };
+                }
+                done.set(node, next);
             }
             if (next !== node) changed = true;
             out.push(next);
             continue;
         }
         changed = true;
-        const notes = node.notes?.length ? replaceUnknownNodes(node.notes, 'block') : undefined;
-        const comments = node.comments?.length ? replaceUnknownNodes(node.comments, 'block') : undefined;
+        const notes = node.notes?.length ? replaceUnknownNodes(node.notes, 'block', done) : undefined;
+        const comments = node.comments?.length ? replaceUnknownNodes(node.comments, 'block', done) : undefined;
         const content = (inner: Place): OfficeContentNode[] => {
             if (!node.children?.length) {
                 // Its text, with its formatting, link, notes and comments.
@@ -56,7 +62,7 @@ function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place): OfficeCo
                     ...(notes && { notes }), ...(comments && { comments }),
                 } as OfficeContentNode] : [];
             }
-            let replaced = replaceUnknownNodes(node.children, inner);
+            let replaced = replaceUnknownNodes(node.children, inner, done);
             // A wrapper's formatting and link reach the text directly in it (the text's own first).
             if (node.formatting || node.metadata) {
                 replaced = replaced.map(child => (child.type === 'text'
@@ -101,6 +107,8 @@ function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place): OfficeCo
  * types are known; otherwise a shallow copy with new `content`. The input is never mutated.
  */
 export function withKnownNodeTypes<T extends OfficeParserAST>(ast: T): T {
-    const content = replaceUnknownNodes(ast.content, 'block');
+    // A node the AST shares (one note every reference to it holds) is read once, not once per path to
+    // it: notes referring to each other twice each took time doubling per level.
+    const content = replaceUnknownNodes(ast.content, 'block', new Map());
     return content === ast.content ? ast : { ...ast, content };
 }
