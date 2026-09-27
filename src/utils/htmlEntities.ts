@@ -51,9 +51,22 @@ const NAMED_REFERENCES = new Map<string, number>(Object.entries({
 export const CHARACTER_REFERENCE = /&(#\d+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);/g;
 
 /**
+ * What HTML reads a numeric reference in 0x80-0x9F as: the Windows-1252 character of that byte (the
+ * C1 control codes are invisible, and Word's HTML writes `&#146;` for a right quote). Those left out
+ * (0x81, 0x8D, 0x8F, 0x90, 0x9D) stay as they are.
+ */
+const WINDOWS_1252_C1: Record<number, number> = {
+    0x80: 0x20AC, 0x82: 0x201A, 0x83: 0x0192, 0x84: 0x201E, 0x85: 0x2026, 0x86: 0x2020, 0x87: 0x2021, 0x88: 0x02C6,
+    0x89: 0x2030, 0x8A: 0x0160, 0x8B: 0x2039, 0x8C: 0x0152, 0x8E: 0x017D, 0x91: 0x2018, 0x92: 0x2019, 0x93: 0x201C,
+    0x94: 0x201D, 0x95: 0x2022, 0x96: 0x2013, 0x97: 0x2014, 0x98: 0x02DC, 0x99: 0x2122, 0x9A: 0x0161, 0x9B: 0x203A,
+    0x9C: 0x0153, 0x9E: 0x017E, 0x9F: 0x0178,
+};
+
+/**
  * One reference decoded, given its body (`amp`, `#39`, `#x27`): the character, or undefined when
  * the name is unknown or the number is not a code point. NUL and lone surrogates are not
- * characters, and read as U+FFFD, as HTML and CommonMark read them.
+ * characters, and read as U+FFFD, as HTML and CommonMark read them; 0x80-0x9F is the Windows-1252
+ * character HTML reads it as.
  */
 export function decodeCharacterReference(body: string): string | undefined {
     if (body[0] !== '#') {
@@ -62,7 +75,8 @@ export function decodeCharacterReference(body: string): string | undefined {
     }
     const codePoint = body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
     if (!Number.isFinite(codePoint) || codePoint > 0x10FFFF) return undefined;
-    return codePoint === 0 || (codePoint >= 0xD800 && codePoint <= 0xDFFF) ? '\uFFFD' : String.fromCodePoint(codePoint);
+    if (codePoint === 0 || (codePoint >= 0xD800 && codePoint <= 0xDFFF)) return '\uFFFD';
+    return String.fromCodePoint(WINDOWS_1252_C1[codePoint] ?? codePoint);
 }
 
 /**

@@ -10,6 +10,7 @@
  */
 
 import { EmbedMetadata, ImageMode, OfficeContentNode } from '../types.js';
+import { lookupTable } from './lookupUtils.js';
 
 /**
  * Resolves `config.includeImages` - a boolean, a CLI-provided `'true'`/`'false'` string, or an
@@ -149,7 +150,7 @@ const PT_PER_MM = 72 / 25.4;
  * Single source of truth for {@link paperSizePt}, so every generator lays out the same size the
  * same way.
  */
-const PAPER_SIZES_PT: Record<string, { w: number; h: number }> = {
+const PAPER_SIZES_PT: Record<string, { w: number; h: number }> = lookupTable({
     letter: { w: 8.5 * PT_PER_IN, h: 11 * PT_PER_IN },
     legal: { w: 8.5 * PT_PER_IN, h: 14 * PT_PER_IN },
     tabloid: { w: 11 * PT_PER_IN, h: 17 * PT_PER_IN },
@@ -166,7 +167,7 @@ const PAPER_SIZES_PT: Record<string, { w: number; h: number }> = {
     a4: { w: 210 * PT_PER_MM, h: 297 * PT_PER_MM },
     a5: { w: 148 * PT_PER_MM, h: 210 * PT_PER_MM },
     a6: { w: 105 * PT_PER_MM, h: 148 * PT_PER_MM },
-};
+});
 
 /**
  * The document's language as a BCP 47 tag for output: `metadata.language` (where parsers put it),
@@ -196,28 +197,30 @@ export function marginPt(v: number | string | undefined, fallback = 72): number 
     if (v == null) return fallback;
     if (typeof v === 'number') return Number.isFinite(v) ? v : fallback;
     const t = v.trim();
-    if (/^-?\d*\.?\d+$/.test(t)) return parseFloat(t); // bare numeric string = points
+    // A bare number is points (`\d*\.?\d+`, the same numbers, tried every split of a long run of digits).
+    if (/^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(t)) return parseFloat(t);
     const pt = lengthToPt(t);
     return pt == null ? fallback : pt;
 }
 
 /** Image MIME to file extension for a packaged media part. */
-export const MIME_EXT: Record<string, string> = {
+export const MIME_EXT: Record<string, string> = lookupTable({
     'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/gif': 'gif',
     'image/svg+xml': 'svg', 'image/webp': 'webp', 'image/bmp': 'bmp', 'image/tiff': 'tiff',
-};
+});
 
 /** Admonition type to accent color (matches the HTML generator's palette family). */
-export const ADMONITION_COLOR: Record<string, string> = {
+export const ADMONITION_COLOR: Record<string, string> = lookupTable({
     note: '0969DA', tip: '1A7F37', important: '8250DF', warning: '9A6700', caution: 'CF222E',
-};
+});
 
 /** Parses a CSS-ish length ('12pt', '1in', '2cm', '10mm', '96px', or a bare number = px) to points. */
 export function lengthToPt(value: string | number | undefined): number | null {
     if (value == null) return null;
     if (typeof value === 'number') return Number.isFinite(value) ? value * 0.75 : null; // px -> pt
     // Case-insensitive: CSS units are, and callers pass raw source values like "12PT"/"16PX".
-    const m = /^\s*(-?[\d.]+)\s*(pt|in|cm|mm|px|%)?\s*$/i.exec(value);
+    // The unit's trailing space is part of it: `\s*(unit)?\s*$` tried every split of a long run of spaces.
+    const m = /^\s*(-?[\d.]+)\s*(?:(pt|in|cm|mm|px|%)\s*)?$/i.exec(value);
     if (!m) return null;
     const n = parseFloat(m[1]);
     if (!Number.isFinite(n)) return null;
@@ -345,7 +348,8 @@ function youtubeVideoIdOf(url: string): string {
 export function resolveEmbed(meta: EmbedMetadata | undefined): { kind: 'youtube'; videoId: string } | { kind: 'iframe'; url: string } | null {
     if (!meta) return null;
     if (meta.embedType !== 'iframe') {
-        const videoId = meta.videoId || youtubeVideoIdOf(meta.url || '');
+        // A video id is letters, digits, `_` and `-`, however it was given.
+        const videoId = (typeof meta.videoId === 'string' && /^[\w-]+$/.test(meta.videoId) ? meta.videoId : '') || youtubeVideoIdOf(meta.url || '');
         if (videoId) return { kind: 'youtube', videoId };
     }
     return meta.url ? { kind: 'iframe', url: meta.url } : null;

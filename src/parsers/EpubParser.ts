@@ -6,6 +6,7 @@ import { createAttachment } from '../utils/imageUtils.js';
 import { getAttribute, getElementsByTagName, getFirstElementByTagName, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 import { parseHtml } from './HtmlParser.js';
+import { setOwn } from '../utils/lookupUtils.js';
 
 /**
  * Resolves a manifest-relative href against the OPF file's directory, collapsing
@@ -91,7 +92,7 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
         for (const metaTag of getElementsByTagName(metadataEl, 'meta')) {
             const name = getAttribute(metaTag, 'name');
             const content = getAttribute(metaTag, 'content');
-            if (name && content) nativeProps[name] = content;
+            if (name && content) setOwn(nativeProps, name, content);
         }
 
         if (Object.keys(nativeProps).length > 0) metadata.nativeProperties = nativeProps;
@@ -136,33 +137,59 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
             if (f) imageByPath.set(p, { content: f.content, mediaType: item.mediaType });
         }
     }
-    const referencedImagePaths = new Set<string>();
+    // Attachment names, each used once in the book: a file's own name, else that name numbered.
+    const usedNames = new Set<string>();
+    const uniqueName = (name: string): string => {
+        const dot = name.lastIndexOf('.');
+        const [stem, extension] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
+        let candidate = name;
+        for (let n = 2; usedNames.has(candidate); n++) candidate = `${stem}-${n}${extension}`;
+        usedNames.add(candidate);
+        return candidate;
+    };
+    // The attachment each of the book's images is, made the first time a chapter shows the image.
+    const imageAttachmentNames = new Map<string, string>();
 
+    // Each chapter once, in the order the spine first lists it: a spine listing one chapter many
+    // times (which EPUB does not allow) read it, and wrote its content, again for each.
+    const readChapters = new Set<string>();
     for (const href of spineHrefs) {
         checkAbortSignal(config.abortSignal);
         const xhtmlPath = resolveOpfPath(opfDir, href.split('#')[0]);
+        if (readChapters.has(xhtmlPath)) continue;
+        readChapters.add(xhtmlPath);
         const xhtmlFile = files.find(f => f.path === xhtmlPath);
         if (!xhtmlFile) continue;
 
-        let xhtml = xhtmlFile.content.toString('utf-8');
-        if (config.extractAttachments && imageByPath.size > 0) {
-            // Inline each referenced image as a data URI so HtmlParser extracts it as an
-            // attachment (with a real image node linked by name) - the same treatment
-            // DOCX images get, and what makes the image survive conversion to any format.
-            const xhtmlDir = xhtmlPath.includes('/') ? xhtmlPath.substring(0, xhtmlPath.lastIndexOf('/') + 1) : '';
-            xhtml = xhtml.replace(/(<img\b[^>]*\bsrc=")([^"]+)(")/gi, (full, pre, src, post) => {
-                if (/^(data:|https?:|\/\/)/i.test(src)) return full;
-                const resolved = resolveOpfPath(xhtmlDir, src.split('#')[0].split('?')[0]);
-                const img = imageByPath.get(resolved);
-                if (!img) return full;
-                referencedImagePaths.add(resolved);
-                return `${pre}data:${img.mediaType};base64,${img.content.toString('base64')}${post}`;
-            });
-        }
+        // A picture showing one of the book's images is linked to that image's attachment (made
+        // once), so the image survives conversion to any format, as a DOCX image does.
+        const xhtmlDir = xhtmlPath.includes('/') ? xhtmlPath.substring(0, xhtmlPath.lastIndexOf('/') + 1) : '';
+        const imageAttachment = (src: string): string | undefined => {
+            if (!config.extractAttachments || /^(data:|https?:|\/\/)/i.test(src)) return undefined;
+            const resolved = resolveOpfPath(xhtmlDir, src.split('#')[0].split('?')[0]);
+            const img = imageByPath.get(resolved);
+            if (!img) return undefined;
+            let name = imageAttachmentNames.get(resolved);
+            if (!name) {
+                const attachment = createAttachment(uniqueName(resolved.split('/').pop() || resolved), img.content);
+                attachments.push(attachment);
+                name = attachment.name;
+                imageAttachmentNames.set(resolved, name);
+            }
+            return name;
+        };
 
-        const chapterAst = await parseHtml(Buffer.from(xhtml, 'utf-8'), config);
+        const chapterAst = await parseHtml(xhtmlFile.content, config, { imageAttachment });
+        // A chapter's own inline pictures (data URIs) are numbered from 1 in each chapter: named
+        // again, so no two of the book's attachments share a name.
+        const renamed = new Map<string, string>();
+        for (const attachment of chapterAst.attachments) {
+            const name = uniqueName(attachment.name);
+            if (name !== attachment.name) renamed.set(attachment.name, name);
+            attachments.push({ ...attachment, name });
+        }
+        if (renamed.size) renameImageAttachments(chapterAst.content, renamed);
         content.push(...chapterAst.content);
-        attachments.push(...chapterAst.attachments);
     }
 
     // Keep manifest images that were NOT referenced inline (e.g. cover art, or images used
@@ -174,8 +201,13 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
             if (!item.mediaType.startsWith('image/')) continue;
             const p = resolveOpfPath(opfDir, item.href);
             const img = imageByPath.get(p);
-            if (!img || referencedImagePaths.has(p)) continue;
-            const attachment = createAttachment(item.href.split('/').pop() || item.href, img.content);
+            if (!img) continue;
+            const shown = imageAttachmentNames.get(p);
+            if (shown !== undefined) {
+                if (id === coverImageId) customProperties.coverImageName = shown;
+                continue;
+            }
+            const attachment = createAttachment(uniqueName(item.href.split('/').pop() || item.href), img.content);
             attachments.push(attachment);
             if (id === coverImageId) customProperties.coverImageName = attachment.name;
         }
@@ -186,3 +218,12 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
 
     return createAST('epub', metadata, content, attachments, config, undefined);
 };
+
+/** Points each picture in `nodes` (and in their notes and comments) that names a renamed attachment at its new name. */
+function renameImageAttachments(nodes: OfficeContentNode[], renamed: Map<string, string>): void {
+    for (const node of nodes) {
+        const meta = node.type === 'image' ? node.metadata as ImageMetadata | undefined : undefined;
+        if (meta?.attachmentName && renamed.has(meta.attachmentName)) meta.attachmentName = renamed.get(meta.attachmentName)!;
+        for (const list of [node.children, node.notes, node.comments]) if (list?.length) renameImageAttachments(list, renamed);
+    }
+}

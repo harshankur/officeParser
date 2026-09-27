@@ -17,6 +17,7 @@
 import { Unzip, UnzipInflate } from 'fflate';
 import { DecompressionLimits, OfficeErrorType, OfficeParserConfig, SupportedFileType } from '../types.js';
 import { getOfficeError } from './errorUtils.js';
+import { lookupTable } from './lookupUtils.js';
 
 /**
  * Signature of the End Of Central Directory record ("PK\x05\x06"), the trailer every ZIP
@@ -277,7 +278,7 @@ const OOXML_MAIN_CONTENT_TYPES: ReadonlyArray<readonly [string, SupportedFileTyp
 ];
 
 /** Exact `mimetype` entry contents for the packages that carry one. */
-const PACKAGE_MIMETYPES: Readonly<Record<string, SupportedFileType>> = {
+const PACKAGE_MIMETYPES: Readonly<Record<string, SupportedFileType>> = lookupTable({
     'application/vnd.oasis.opendocument.text': 'odt',
     'application/vnd.oasis.opendocument.spreadsheet': 'ods',
     'application/vnd.oasis.opendocument.presentation': 'odp',
@@ -289,7 +290,7 @@ const PACKAGE_MIMETYPES: Readonly<Record<string, SupportedFileType>> = {
     'application/vnd.oasis.opendocument.presentation-template': 'odp',
     'application/vnd.oasis.opendocument.graphics-template': 'odg',
     'application/epub+zip': 'epub',
-};
+});
 
 /** First two bytes of every ZIP local file header ("PK"). */
 const ZIP_MAGIC_BYTES = [0x50, 0x4b];

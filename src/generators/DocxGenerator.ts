@@ -4,6 +4,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { lookupTable } from '../utils/lookupUtils.js';
 
 const EMU_PER_PT = 12700;
 const EMU_PER_IN = 914400;
@@ -844,10 +845,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
 
     private styleForTag(tag: string | undefined): string | undefined {
         if (!tag || !isSafeStyleMapTag(tag)) return undefined;
-        const map: Record<string, string> = {
+        const map: Record<string, string> = lookupTable({
             h1: 'Heading1', h2: 'Heading2', h3: 'Heading3', h4: 'Heading4', h5: 'Heading5', h6: 'Heading6',
             blockquote: 'Quote', pre: 'Code',
-        };
+        });
         return map[tag.toLowerCase()];
     }
     private knownStyle(style: string | undefined): string | undefined {

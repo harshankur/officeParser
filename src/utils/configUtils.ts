@@ -2,6 +2,7 @@ import { DEFAULT_DOCUMENT_STRUCTURE_CHUNKING_CONFIG, DEFAULT_FIXED_SIZE_CHUNKING
 import { FullGeneratorConfig, FullOfficeParserConfig, GeneratorConfig, OfficeIssue, OfficeParserConfig, OfficeWarningType } from '../types.js';
 import { logWarning } from './errorUtils.js';
 import { PAPER_FORMAT_NAMES } from './officeGenUtils.js';
+import { lookupTable } from './lookupUtils.js';
 
 /**
  * Keys that must never be copied from a caller-supplied config onto one of our objects.
@@ -32,12 +33,12 @@ export const RECOGNIZED_PARSER_KEYS = new Set(Object.keys(DEFAULT_OFFICE_PARSER_
  * replacement, so the warning renders the sentence as-is (see `UNRECOGNIZED_CONFIG_OPTION`).
  * Nested keys are spelled with their full dotted path, matching how the check below reports them.
  */
-const RENAMED_PARSER_KEYS: Record<string, string> = {
+const RENAMED_PARSER_KEYS: Record<string, string> = lookupTable({
     ocrLanguage: 'ocrConfig.language',
     outputErrorToConsole: 'onWarning',
     putNotesAtLast: '(removed; notes are attached to the node they belong to, as node.notes)',
     'ocrConfig.autoTerminateTimeout': 'ocrConfig.timeout.autoTerminate',
-};
+});
 
 /**
  * Every recognized key of each nested parser-config container, keyed by the container's dotted path
@@ -48,14 +49,14 @@ const RENAMED_PARSER_KEYS: Record<string, string> = {
  * `ocrConfig.autoTerminateTimeout`, say) is copied in and then simply never read, so the caller's
  * setting is silently replaced by the default it meant to override.
  */
-const RECOGNIZED_NESTED_PARSER_KEYS: Record<string, Set<string>> = {
+const RECOGNIZED_NESTED_PARSER_KEYS: Record<string, Set<string>> = lookupTable({
     ocrConfig: new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.ocrConfig)),
     'ocrConfig.timeout': new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.ocrConfig.timeout)),
     pdfParserConfig: new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.pdfParserConfig)),
     htmlParserConfig: new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.htmlParserConfig)),
     texParserConfig: new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.texParserConfig)),
     decompressionLimits: new Set(Object.keys(DEFAULT_OFFICE_PARSER_CONFIG.decompressionLimits)),
-};
+});
 
 /**
  * Appends every key of `container` that the container at `path` does not recognize to `out`, as a
@@ -300,14 +301,14 @@ function copyGeneratorConfigContainers(source: FullGeneratorConfig): FullGenerat
  * which has no default); metadata overrides list their named fields, since their default is empty.
  */
 export const RECOGNIZED_GENERATOR_KEYS = new Set(Object.keys(DEFAULT_GENERATOR_CONFIG));
-const RECOGNIZED_NESTED_GENERATOR_KEYS: Record<string, Set<string>> = {
+const RECOGNIZED_NESTED_GENERATOR_KEYS: Record<string, Set<string>> = lookupTable({
     ...Object.fromEntries(GENERATOR_CONFIG_CONTAINERS.map(key => [key, new Set(Object.keys((DEFAULT_GENERATOR_CONFIG as any)[key] ?? {}))])),
     chunksConfig: new Set([
         ...Object.keys(DEFAULT_FIXED_SIZE_CHUNKING_CONFIG), ...Object.keys(DEFAULT_DOCUMENT_STRUCTURE_CHUNKING_CONFIG),
         ...Object.keys(DEFAULT_SEMANTIC_CHUNKING_CONFIG), 'embeddingFunction',
     ]),
     metadataOverrides: new Set(['title', 'author', 'description', 'subject', 'keywords', 'lastModifiedBy', 'created', 'modified', 'language', 'custom']),
-};
+});
 
 /**
  * The top-level keys and per-format container keys of a caller's generator config that this
@@ -488,7 +489,7 @@ const MARGIN_CONTAINERS = ['pdfConfig', 'docxConfig', 'odtConfig', 'texConfig'];
 function isValidMargin(value: unknown): boolean {
     if (typeof value === 'number') return Number.isFinite(value);
     if (typeof value !== 'string') return false;
-    return value.trim() === '' || /^\s*-?(\d+\.?\d*|\.\d+)\s*(pt|in|cm|mm|px)?\s*$/i.test(value);
+    return value.trim() === '' || /^\s*-?(\d+(?:\.\d*)?|\.\d+)\s*(?:(pt|in|cm|mm|px)\s*)?$/i.test(value);
 }
 
 /**

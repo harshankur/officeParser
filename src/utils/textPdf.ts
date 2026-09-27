@@ -453,7 +453,8 @@ class PdfReader {
 
     constructor(private b: Uint8Array) {
         const text = latin1(b);
-        const re = /(\d+)\s+(\d+)\s+obj\b/g;
+        // A match starts where a run of digits does (not at each digit of it, each read to its end).
+        const re = /(?<!\d)(\d+)\s+(\d+)\s+obj\b/g;
         for (let m: RegExpExecArray | null; (m = re.exec(text));) {
             this.far = re.lastIndex;
             try {

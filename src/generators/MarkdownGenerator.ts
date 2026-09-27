@@ -2,7 +2,7 @@ import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadat
 import { escapeHtml, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { base64ByteLength, resolveEmbed } from '../utils/officeGenUtils.js';
-import { clampRepeat } from '../utils/numberUtils.js';
+import { clampInt, clampRepeat } from '../utils/numberUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { TextBuilder, trimAsciiWhitespace, trimEndChars, trimStartChars } from '../utils/textUtils.js';
@@ -632,7 +632,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         const core = node.formatting.font === 'monospace' ? text : text.trim();
                         const lead = core === text ? '' : text.slice(0, text.length - text.trimStart().length);
                         const trail = core === text || !core ? '' : text.slice(text.trimEnd().length);
-                        text = core;
+                        // A backslash that ended in a space (so was left as it is) now stands before the
+                        // closing delimiter, which it would escape: it is escaped itself.
+                        text = core !== text && /(?:^|[^\\])(?:\\\\)*\\$/.test(core) ? `${core}\\` : core;
                         // `_` emphasis must start and end at a word boundary, and must not touch
                         // another underscore run (the two would read as one run): intraword emphasis,
                         // or emphasis next to other emphasis, takes the `*` form instead.
@@ -804,7 +806,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const bullet = `${this.resolvedDialect.bulletListMarker} `;
                     const marker = meta?.isTask
                         ? (meta.checked ? `${bullet}[x] ` : `${bullet}[ ] `)
-                        : (meta?.listType === 'ordered' ? `${(meta.itemIndex ?? 0) + 1}${this.resolvedDialect.orderedListMarker} ` : bullet);
+                        : (meta?.listType === 'ordered' ? `${clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1}${this.resolvedDialect.orderedListMarker} ` : bullet);
                     const anchors = this.renderAnchors(meta);
                     // A list item is a single Markdown line. HTML-origin items carry `paragraph`
                     // children (e.g. `<li><p>a</p><ul>...`), whose renderer appends `\n\n`; dumped
@@ -900,7 +902,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (attrList) {
                         // Must glue directly below the last row with no blank line, or
                         // MarkdownParser's block splitter won't see it as part of the same block.
-                        return `${anchors}${anchors ? '\n' : ''}${tableOutput.replace(/\n+$/, '\n')}${attrList}\n`;
+                        return `${anchors}${anchors ? '\n' : ''}${tableOutput.replace(/(?<!\n)\n+$/, '\n')}${attrList}\n`;
                     }
                     return `${anchors}${anchors ? '\n' : ''}${tableOutput}`;
                 }
@@ -953,7 +955,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const anchors = inLine || meta?.math === 'inline' ? this.deferAnchors(meta) : '';
                     const anchorsBefore = inLine || meta?.math === 'inline' ? '' : this.anchorsBefore(meta);
                     if (meta?.math === 'block' && inLine) {
-                        const mathInline = markdownEscapeTags(node.text || '').replace(/[$]+/g, '').replace(/\s*[\r\n]+\s*/g, ' ').trim();
+                        const mathInline = markdownEscapeTags(node.text || '').replace(/[$]+/g, '').replace(/(?<!\s)\s*[\r\n]+\s*/g, ' ').trim();
                         return anchors + (this.resolvedDialect.math === 'dollar' ? `$${mathInline}$` : mathInline);
                     }
                     if (meta?.math === 'block') {
@@ -1523,6 +1525,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             if (rowNode.type !== 'row') {
                 const wasInPipeTableCell = this.inPipeTableCell;
                 this.inPipeTableCell = true;
+                // A cell's text starts no line of Markdown: a `#` there is text as it is.
+                this.atLineStart = false;
                 let content: string;
                 try {
                     content = await this.processNodeRecursive(rowNode, processor);

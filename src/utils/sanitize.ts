@@ -58,7 +58,9 @@ export function isSafeStyleMapTag(tag: unknown): tag is string {
  * attributes.
  */
 export function escapeHtml(text: string): string {
-    if (typeof text !== 'string') return text as unknown as string;
+    // A value of another type (a number, or an array from a hand-built AST) is escaped as its text:
+    // passed through, an array's text went into the attribute unescaped.
+    if (typeof text !== 'string') text = text === undefined || text === null ? '' : String(text);
     return text
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -125,7 +127,10 @@ export function sanitizeCssValue(value: string): string {
     const cleaned = value
         .replace(/[\x00-\x1F\x7F]/g, '')          // control chars (incl. newlines/tabs)
         .replace(/\/\*[\s\S]*?\*\//g, '')         // CSS comments used to obfuscate
-        .replace(/\\/g, '');                      // CSS escapes; see above
+        .replace(/\\/g, '')                       // CSS escapes; see above
+        // A character reference, which the browser decodes in the style attribute before CSS reads
+        // it: `red&#59position:fixed` is a second declaration, `&#117rl(` a `url(`.
+        .replace(/&/g, '');
     if (/(?:url|expression|image-set|element|-moz-binding)\s*\(|@import|javascript:|[<>]/i.test(cleaned)) {
         return '';
     }
@@ -231,16 +236,20 @@ export function csvSafeCell(value: string, delimiter: string): string {
     // A plain signed number (e.g. "-8", "+7", "-5.3") can't be a formula, so exempt it;
     // otherwise numeric columns get quoted as text. Anything else starting with a formula
     // trigger (including "+1+1", "-1+cmd", "=", "@") is prefixed with a quote.
-    const isNumber = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(v.trim());
+    // (`\d+(?:\.\d*)?`: written `\d+\.?\d*`, a long run of digits was split every way before failing.)
+    const isNumber = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(v.trim());
     // Test the trimmed value: the numeric exemption above already trims, so testing the raw
     // string here meant a leading space slipped a trigger past the guard (" =1+1" was emitted
     // unprefixed). Most spreadsheet apps treat a leading-space cell as text and would not
     // evaluate it, so this is defence in depth rather than a demonstrated bypass - but the
     // asymmetry between the two tests was an accident, not a decision.
-    if (!isNumber && /^[=+\-@\t\r]/.test(v.trim())) {
+    // (Full-width `＝`, `＋`, `－` and `＠` too, which some spreadsheet apps take as the ASCII ones.)
+    if (!isNumber && /^[=+\-@\t\r\uFF1D\uFF0B\uFF0D\uFF20]/.test(v.trim())) {
         v = `'${v}`;
     }
-    if (v.includes(delimiter) || v.includes('"') || v.includes('\n') || v.includes('\r')) {
+    // Quoted when it holds any common delimiter, not only the one in use: opened where `;` or a tab
+    // separates cells, `a;=1+1` split into a second cell holding a formula.
+    if (v.includes(delimiter) || /[",;\t\n\r]/.test(v)) {
         return `"${v.replace(/"/g, '""')}"`;
     }
     return v;
@@ -275,7 +284,10 @@ export function sanitizeRtfUrl(url: string): string {
     if (schemeMatch && !/^(https?|mailto|tel)$/i.test(schemeMatch[1])) {
         return '';
     }
-    return escapeRtf(stripped);
+    // A quote is percent-encoded, not RTF-escaped: a reader decodes `\'22` back to `"` before it reads
+    // the field instruction, so a quote in the URL ended the HYPERLINK argument, and a quoted target
+    // after it (`file://host/share`, past the scheme check above) became the link.
+    return escapeRtf(stripped.replace(/"/g, '%22'));
 }
 
 /**
@@ -702,6 +714,14 @@ const LATEX_MATH_BLOCKED_COMMANDS = new Set([
     'catcode', 'lccode', 'uccode', 'sfcode', 'mathcode', 'delcode',
     'def', 'edef', 'gdef', 'xdef', 'let', 'futurelet', 'global', 'long', 'outer', 'protected',
     'csname', 'endcsname', 'scantokens', 'scantextokens', 'ExplSyntaxOn', 'ExplSyntaxOff',
+    // Commands that make a control word out of text, as `\csname` does, so a refused one could be
+    // spelled without its name: the kernel's `\UseName{input}` and `\ExpandArgs{c}`, LuaTeX's
+    // `\tokenized` and `\begincsname`, and etoolbox's `\cs...` family.
+    'UseName', 'ExpandArgs', 'tokenized', 'begincsname', 'lastnamedcs',
+    'csuse', 'csdef', 'csgdef', 'csedef', 'csxdef', 'cslet', 'csletcs', 'letcs', 'csundef', 'csshow',
+    'csappto', 'cspreto', 'csgappto', 'csgpreto', 'cseappto', 'csepreto', 'csxappto', 'csxpreto',
+    // What `\end{document}` runs, which ends the document where the formula stands.
+    'enddocument', 'document',
     'usepackage', 'RequirePackage', 'documentclass', 'LoadClass', 'makeatletter', 'makeatother',
     'verb', 'verbatiminput', 'lstinputlisting', 'inputminted', 'includegraphics', 'includepdf',
     'href', 'url', 'nolinkurl', 'hyperref', 'hyperlink', 'hypertarget', 'hyperimage', 'hyperbaseurl', 'hypersetup',

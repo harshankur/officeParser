@@ -35,7 +35,7 @@
                 <td><code>abortSignal</code></td>
                 <td><code>AbortSignal | null</code></td>
                 <td><code>null</code></td>
-                <td><strong>Cancellation</strong>: An optional signal to abort the parsing operation. Interrupts heavy loops, PDF page parsing, zip decompression, and active OCR processes cleanly. Rejects with an <code>AbortError</code>: once the signal fires the parse never resolves, even when it fires while OCR is recognizing an image.</td>
+                <td><strong>Cancellation</strong>: An optional signal to abort the parsing operation. Checked between steps: it stops PDF page parsing, zip decompression and active OCR cleanly. Rejects with an <code>AbortError</code>: once the signal fires the parse never resolves, even when it fires while OCR is recognizing an image. Reading a document's markup (XML, HTML, Markdown, LaTeX) is synchronous, so a timer cannot fire during it: to bound the time an untrusted document can take, parse it in a worker you can end.</td>
             </tr>
             <tr>
                 <td><code>newlineDelimiter</code></td>

@@ -37,7 +37,9 @@
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
                 <td><strong>Navigation</strong>: Automatically generates unique slug-based IDs for heading nodes,
-                    enabling internal anchor links.</td>
+                    enabling internal anchor links. The slugs are GitHub's in every format: lowercase, the letters and
+                    digits of every script kept, punctuation left out and spaces made hyphens (<code>version-20</code>
+                    for "Version 2.0").</td>
             </tr>
             <tr>
                 <td><code>renderMetadata</code></td>
@@ -62,7 +64,9 @@
                     (embed the image, no OCR text); <code>'image+ocr-text'</code> (image then its recognized/OCR text);
                     <code>'ocr-text-only'</code> (OCR text, no image); <code>false</code>=<code>'none'</code> (omit). In
                     plain-text output an image becomes an <code>[Image: name]</code> placeholder (plus OCR text for
-                    <code>'image+ocr-text'</code>), or just the OCR text for <code>'ocr-text-only'</code>.</td>
+                    <code>'image+ocr-text'</code>), or just the OCR text for <code>'ocr-text-only'</code>. In chunks a
+                    picture is <code>[Image: alt]</code> for its alt text, with its OCR text, except under
+                    <code>'none'</code> and <code>'ocr-text-only'</code> (OCR text only).</td>
             </tr>
             <tr>
                 <td><code>maxInlineImageBytes</code></td>

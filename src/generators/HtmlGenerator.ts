@@ -4,6 +4,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed } from '../utils/officeGenUtils.js';
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
+import { clampInt } from '../utils/numberUtils.js';
 
 /** A child that is a block of its own (a code block or display equation), which a <p> cannot hold. */
 const isBlockInParagraph = (child: OfficeContentNode): boolean =>
@@ -163,37 +164,34 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let bodyContent = await this.processNodeArray(this.ast.content);
 
         if (this.collectedNotes.length > 0) {
-            // De-duplicate by node identity first. A table row with sparse column metadata
-            // re-processes its cells in `case 'row'` after they were already processed for
-            // `childrenOutput`, so a footnote referenced inside a cell gets pushed here twice -
-            // the same object reference both times, which a Set collapses back to one. Genuinely
-            // distinct notes (even two references to the same id) are different objects and stay.
-            const collectedNotes = [...new Set(this.collectedNotes)];
-            // Footnotes/endnotes get their own <section data-footnotes> (the agreed
-            // contract with attribute-driven editors' footnote nodes); other note types (e.g.
-            // slide speaker notes) keep the existing generic notes wrapper.
-            const footnotes = collectedNotes.filter(n => {
-                const t = (n.metadata as any)?.noteType;
-                return t === 'footnote' || t === 'endnote';
-            });
-            const otherNotes = collectedNotes.filter(n => !footnotes.includes(n));
-
-            if (footnotes.length > 0) {
-                let footnotesHtml = '';
-                for (const note of footnotes) {
-                    footnotesHtml += await this.processNodeRecursive(note, this.boundNodeProcessor, this.collectedNoteOverrides.get(note));
-                }
+            // De-duplicate by node identity. A table row with sparse column metadata re-processes its
+            // cells in `case 'row'` after they were already processed for `childrenOutput`, so a
+            // footnote referenced inside a cell gets pushed here twice - the same object reference
+            // both times. Genuinely distinct notes (even two references to the same id) are
+            // different objects and stay. The notes a note refers to are collected while it is
+            // written, so the list is read as it grows: a note cited only from another note was
+            // left out. Footnotes/endnotes get their own <section data-footnotes> (the agreed
+            // contract with attribute-driven editors' footnote nodes); other note types (e.g. slide
+            // speaker notes) keep the existing generic notes wrapper.
+            const written = new Set<OfficeContentNode>();
+            let footnotesHtml = '';
+            let notesHtml = '';
+            for (let i = 0; i < this.collectedNotes.length; i++) {
+                const note = this.collectedNotes[i];
+                if (written.has(note)) continue;
+                written.add(note);
+                const noteType = (note.metadata as any)?.noteType;
+                const html = await this.processNodeRecursive(note, this.boundNodeProcessor, this.collectedNoteOverrides.get(note));
+                if (noteType === 'footnote' || noteType === 'endnote') footnotesHtml += html;
+                else notesHtml += html;
+            }
+            if (footnotesHtml) {
                 // data-footnotes carries an explicit empty value (not a bare attribute) so
                 // the markup is valid XHTML too - EpubGenerator embeds this verbatim, and
                 // XML rejects valueless attributes. HtmlParser only checks for presence.
                 bodyContent += `\n<section data-footnotes="">\n${footnotesHtml}\n</section>\n`;
             }
-
-            if (otherNotes.length > 0) {
-                let notesHtml = '';
-                for (const note of otherNotes) {
-                    notesHtml += await this.processNodeRecursive(note, this.boundNodeProcessor, this.collectedNoteOverrides.get(note));
-                }
+            if (notesHtml) {
                 bodyContent += `\n<div class="document-notes-section">\n<hr class="page-break">\n${notesHtml}\n</div>\n`;
             }
         }
@@ -923,8 +921,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         if (this.config.generateIds) {
             if (node.type === 'heading') {
                 // From the heading's text, whether the node carries it or only its runs do. A heading
-                // whose text slugifies to nothing (no Latin letters or digits) gets no generated id,
-                // rather than an empty one.
+                // whose text slugifies to nothing (punctuation and symbols alone) gets no generated
+                // id, rather than an empty one. The id is GitHub's, as the other writers' are, so a
+                // link written for a Markdown heading (`#version-20`) reaches it.
                 const slug = this.slugify(node.text || this.getNodeText(node));
                 if (slug && !anchorIds.includes(slug)) anchorIds.push(slug);
             } else if (node.type === 'sheet') {
@@ -1176,7 +1175,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     return `${extraAnchors}<li${checkedAttr}${idAttr}${className}${mappedAttrs}${styleAttr}><label><input type="checkbox"${checkedBool}><span></span></label><div>${childrenOutput}`;
                 }
                 const value = (meta?.listType === 'ordered' && typeof meta.itemIndex === 'number')
-                    ? ` value="${meta.itemIndex + 1}"`
+                    ? ` value="${clampInt(meta.itemIndex, 0, Number.MAX_SAFE_INTEGER - 1, 0) + 1}"`
                     : '';
                 return `${extraAnchors}<li${value}${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}`;
             }
@@ -1472,11 +1471,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             case 'heading': {
                 // The styleMap tag wins over the structural default; that is the whole point of
                 // mapping "Heading 1"/"Intense Quote" onto a semantic element.
-                const tag = mappedTag ?? (node.type === 'heading' ? `h${(node.metadata as HeadingMetadata)?.level || 1}` : 'p');
+                const tag = mappedTag ?? (node.type === 'heading' ? `h${clampInt((node.metadata as HeadingMetadata)?.level, 1, 6, 1)}` : 'p');
 
                 // Normalize empty paragraphs so DOCX and PPTX empty cells render with consistent height
                 // Strip tags to check if it's purely empty or just contains non-breaking spaces (like PPTX)
-                const textOnly = childrenOutput.replace(/<[^>]+>/g, '').trim();
+                const textOnly = childrenOutput.replace(/<[^<>]+>/g, '').trim();
                 if (!textOnly && !node.children?.some(c => c.type === 'image' || c.type === 'chart')) {
                     const extraClass = className ? ` class="${className.replace('class="', '').replace('"', '')} empty-paragraph"` : ' class="empty-paragraph"';
                     return `${extraAnchors}<${tag}${idAttr}${extraClass}${mappedAttrs}${styleAttr}><br></${tag}>`;
@@ -1606,8 +1605,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         switch (node.type) {
             case 'paragraph': return 'p';
             case 'heading': {
-                const level = (node.metadata as HeadingMetadata)?.level || 1;
-                return `h${Math.min(Math.max(level, 1), 6)}`;
+                return `h${clampInt((node.metadata as HeadingMetadata)?.level, 1, 6, 1)}`;
             }
             case 'list': return 'li';
             // Every other type is a generic block. No `default`, so a new node type must be placed.
@@ -2350,12 +2348,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     private getScopedPremiumStyles(isSpreadsheet: boolean = false, isPresentation: boolean = false, isPdf: boolean = false): string {
         const css = this.getPremiumStyles(isSpreadsheet, isPresentation, isPdf)
             .replace(/:root(\s*\{)/g, ':scope$1')
-            .replace(/(^|\n)(\s*)body(\s*\{)/g, '$1$2:scope$3');
+            .replace(/(^|\n)([ \t]*)body(\s*\{)/g, '$1$2:scope$3');
         return `@scope (.op-html-scope) {\n${css}\n}`;
-    }
-
-    protected override slugify(text: string): string {
-        return text.toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, '-').replace(/(^-|-$)/g, '');
     }
 
     private getColumnLetter(colIndex: number): string {

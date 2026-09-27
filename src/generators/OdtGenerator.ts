@@ -4,6 +4,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, encUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw, toW3CDTF } from '../utils/officeGenUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { lookupTable } from '../utils/lookupUtils.js';
 
 /**
  * The full ODF namespace set. Declared unconditionally on every part root (content.xml, styles.xml,
@@ -842,14 +843,14 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private styleForTag(tag: string | undefined): string | undefined {
         if (!tag || !isSafeStyleMapTag(tag)) return undefined;
-        const map: Record<string, string> = {
+        const map: Record<string, string> = lookupTable({
             h1: 'Heading_20_1', h2: 'Heading_20_2', h3: 'Heading_20_3', h4: 'Heading_20_4', h5: 'Heading_20_5', h6: 'Heading_20_6',
             blockquote: 'Quotations', pre: 'Preformatted_20_Text',
-        };
+        });
         return map[tag.toLowerCase()];
     }
     private knownParaStyle(style: string | undefined): string | undefined {
-        const map: Record<string, string> = { Quote: 'Quotations', IntenseQuote: 'Quotations', Title: 'Title', Code: 'Preformatted_20_Text' };
+        const map: Record<string, string> = lookupTable({ Quote: 'Quotations', IntenseQuote: 'Quotations', Title: 'Title', Code: 'Preformatted_20_Text' });
         return style ? map[style] : undefined;
     }
 

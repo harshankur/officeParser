@@ -68,6 +68,8 @@ import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
+import { lookupTable, plainRecord } from '../utils/lookupUtils.js';
+import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
 
 /**
  * Parses a Word document (.docx) and extracts content, formatting, and metadata.
@@ -180,12 +182,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         if (highlight) {
             const val = highlight.getAttribute('w:val');
             if (val && val !== 'none') {
-                const colorMap: { [key: string]: string } = {
+                const colorMap: { [key: string]: string } = lookupTable({
                     'yellow': '#FFFF00', 'green': '#00FF00', 'cyan': '#00FFFF', 'magenta': '#FF00FF',
                     'blue': '#0000FF', 'red': '#FF0000', 'darkBlue': '#00008B', 'darkCyan': '#008B8B',
                     'darkGreen': '#006400', 'darkMagenta': '#8B008B', 'darkRed': '#8B0000',
                     'darkYellow': '#808000', 'darkGray': '#A9A9A9', 'lightGray': '#D3D3D3', 'black': '#000000'
-                };
+                });
                 formatting.backgroundColor = colorMap[val] || val;
             }
         }
@@ -299,7 +301,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
 
     // Extract relationships
     const relsFile = files.find(f => f.path.match(relsFileRegex));
-    const relsMap: { [key: string]: string } = {};
+    // Null-prototype, as every map keyed by the document's own ids and names is here (see numberingMap).
+    const relsMap: { [key: string]: string } = Object.create(null);
     if (relsFile) {
         const relsXml = parseXmlString(relsFile.content.toString());
         const relationships = getElementsByTagName(relsXml, "Relationship");
@@ -324,7 +327,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         const nums = getElementsByTagName(numberingXml, "w:num");
         const abstractNums = getElementsByTagName(numberingXml, "w:abstractNum");
 
-        const abstractNumMap: { [key: string]: Element } = {};
+        // Null-prototype: a `w:abstractNumId` of `toString` found the prototype's function, and the
+        // parse failed on it.
+        const abstractNumMap: { [key: string]: Element } = Object.create(null);
         for (const abstractNum of abstractNums) {
             const abstractNumId = abstractNum.getAttribute("w:abstractNumId");
             if (abstractNumId) {
@@ -338,7 +343,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             const abstractNumId = abstractNumIdNode?.getAttribute("w:val");
 
             if (numId && abstractNumId && abstractNumMap[abstractNumId]) {
-                numberingMap[numId] = {};
+                // Null-prototype too: a `w:lvlOverride` of `w:ilvl="__proto__"` found Object.prototype
+                // here, and its start value was written onto every object in the process.
+                numberingMap[numId] = Object.create(null);
 
                 // Inherit from abstractNum
                 const lvls = getElementsByTagName(abstractNumMap[abstractNumId], "w:lvl");
@@ -373,7 +380,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
 
     // Parse Styles
     const stylesFile = files.find(f => f.path.match(stylesFileRegex));
-    const styleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify', backgroundColor?: string, paragraphIndentation?: IndentationMetadata } } = {};
+    const styleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify', backgroundColor?: string, paragraphIndentation?: IndentationMetadata } } = Object.create(null);
 
     if (stylesFile) {
         const stylesXml = parseXmlString(stylesFile.content.toString());
@@ -857,7 +864,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             let itemIndex = 0;
             if (numId && numberingMap[numId]) {
                 const ilvlStr = ilvl.toString();
-                if (!numberingState[numId]) numberingState[numId] = {};
+                if (!numberingState[numId]) numberingState[numId] = Object.create(null);
                 if (!numberingState[numId][ilvlStr]) numberingState[numId][ilvlStr] = 0;
                 numberingState[numId][ilvlStr]++;
                 for (let k = ilvl + 1; k < 10; k++) {
@@ -867,7 +874,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 listType = numFmt === 'bullet' ? 'unordered' : 'ordered';
 
                 // Track itemIndex (starts at override or default, continues across interruptions for same listId)
-                if (!listCounters[numId]) listCounters[numId] = {};
+                if (!listCounters[numId]) listCounters[numId] = Object.create(null);
                 if (listCounters[numId][ilvlStr] === undefined) {
                     listCounters[numId][ilvlStr] = (numberingMap[numId][ilvlStr]?.start ?? 1) - 1;
                 } else {
@@ -955,7 +962,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 if (tcPr) {
                     const gridSpan = getFirstElementByTagName(tcPr, "w:gridSpan");
                     if (gridSpan) {
-                        colSpan = parseInt(gridSpan.getAttribute("w:val") || "1", 10);
+                        // Held to 1 through MAX_COL_SPAN: a span of billions set the next cell's column there.
+                        colSpan = cellSpan(gridSpan.getAttribute("w:val"), MAX_COL_SPAN);
                     }
                 }
 
@@ -1240,7 +1248,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
 
     return createAST(
         'docx',
-        { ...metadata, formatting: docDefaults, styleMap: styleMap },
+        { ...metadata, formatting: docDefaults, styleMap: plainRecord(styleMap) },
         content,
         attachments,
         config,

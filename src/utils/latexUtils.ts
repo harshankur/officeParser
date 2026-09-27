@@ -1,3 +1,5 @@
+import { lookupTable } from './lookupUtils.js';
+
 /**
  * Character-coverage helpers for LaTeX output.
  *
@@ -210,7 +212,7 @@ export function planLatexUnicode(text: string): LatexUnicodePlan {
  * language `listings` does not know is an error ("Couldn't load requested language"), so anything
  * missing here is written as plain `verbatim`.
  */
-export const LISTINGS_LANGUAGES: Record<string, string> = {
+export const LISTINGS_LANGUAGES: Record<string, string> = lookupTable({
     python: 'Python', py: 'Python', java: 'Java', c: 'C', h: 'C', cpp: 'C++', 'c++': 'C++', cc: 'C++', cxx: 'C++', hpp: 'C++',
     csharp: '[Sharp]C', cs: '[Sharp]C', 'c#': '[Sharp]C', ruby: 'Ruby', rb: 'Ruby', php: 'PHP', perl: 'Perl', pl: 'Perl',
     sql: 'SQL', bash: 'bash', sh: 'sh', shell: 'bash', zsh: 'bash', ksh: 'ksh', csh: 'csh', html: 'HTML', xml: 'XML',
@@ -219,7 +221,7 @@ export const LISTINGS_LANGUAGES: Record<string, string> = {
     ocaml: '[Objective]Caml', ml: 'ML', make: 'make', makefile: 'make', awk: 'Awk', tcl: 'tcl', vbscript: 'VBScript',
     verilog: 'Verilog', vhdl: 'VHDL', gnuplot: 'Gnuplot', prolog: 'Prolog', cobol: 'Cobol', ada: 'Ada', mathematica: 'Mathematica',
     sparql: 'SPARQL', postscript: 'PostScript', ps: 'PostScript', lua: '[5.3]Lua', go: 'Go',
-};
+});
 
 /**
  * The name documents conventionally use for each `listings` language, for reading a `lstlisting`

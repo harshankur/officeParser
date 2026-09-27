@@ -44,6 +44,7 @@ import { computeRunBox, identityMatrix, mulMatrix, roundBounds, rotateBoundsToRe
 import { PageExtract, PdfImage, PdfLayoutConfig, RawRun, ResolvedFont } from './pdf/pdfTypes.js';
 import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, PageContext, recoverTaggedGrids, runsToParagraph, segmentIntoBlocks } from './pdf/textLayout.js';
 import { buildTaggedNodes } from './pdf/structTree.js';
+import { setOwn } from '../utils/lookupUtils.js';
 
 /** Type guard for a pdf.js TextItem (marked-content items lack `str`/`transform`). */
 function isTextItem(item: any): item is { str: string; transform: number[]; width: number; height: number; fontName: string; dir?: string; hasEOL?: boolean } {
@@ -1046,9 +1047,9 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         metadata.nativeProperties = {};
         for (const [key, val] of Object.entries(info)) {
             if (key === 'Custom' && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date) && val !== null) {
-                for (const [ck, cv] of Object.entries(val)) metadata.nativeProperties[ck] = cv;
+                for (const [ck, cv] of Object.entries(val)) setOwn(metadata.nativeProperties, ck, cv);
             } else {
-                metadata.nativeProperties[key] = val;
+                setOwn(metadata.nativeProperties, key, val);
             }
         }
         const customProperties: Record<string, string | number | boolean | Date> = {};
@@ -1059,11 +1060,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             if (key === 'Custom' && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
                 for (const [ck, cv] of Object.entries(val)) {
                     if (cv === null || cv === undefined) continue;
-                    if (typeof cv === 'string' || typeof cv === 'number' || typeof cv === 'boolean' || cv instanceof Date) customProperties[ck] = cv;
+                    if (typeof cv === 'string' || typeof cv === 'number' || typeof cv === 'boolean' || cv instanceof Date) setOwn(customProperties, ck, cv);
                 }
                 continue;
             }
-            if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val instanceof Date) customProperties[key] = val;
+            if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val instanceof Date) setOwn(customProperties, key, val);
         }
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
     }
@@ -1107,7 +1108,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
                 if (!f || typeof f !== 'object') continue;
                 const entry: Record<string, unknown> = { value: f.value, type: f.type };
                 if (f.defaultValue !== undefined && f.defaultValue !== null) entry.defaultValue = f.defaultValue;
-                fields[name] = entry;
+                setOwn(fields, name, entry);
             }
             if (Object.keys(fields).length) metadata.nativeProperties['formFields'] = fields;
         }

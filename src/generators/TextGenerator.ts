@@ -212,6 +212,15 @@ export class TextGenerator extends BaseGenerator<'text'> {
     }
 
     /**
+     * A block starts a line of its own: a list item's text followed by a nested definition list or
+     * table ran into the block's first line (`- itemT`).
+     */
+    protected override childSeparator(previous: string, child: OfficeContentNode): string {
+        const newline = this.config.textConfig.newlineDelimiter;
+        return TEXT_NODE_CLASS[child.type] === 'block' && previous && !previous.endsWith(newline) ? newline : '';
+    }
+
+    /**
      * True when the named attachment is larger than `maxInlineImageBytes`, the size past which an
      * image can no longer travel inside the output. Plain text never embeds a picture at all, so the
      * cap is what decides whether the image is still resolvable alongside the text (small: the

@@ -6,6 +6,8 @@ import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { decodeCharacterReferences } from '../utils/htmlEntities.js';
 import { isEmptyMath, MathNode, mathmlTreeToLatex } from '../utils/mathUtils.js';
 import { isSafeHtmlAttributeName, iframeAllowed } from '../utils/sanitize.js';
+import { setOwn } from '../utils/lookupUtils.js';
+import { cellSpan, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 
 /**
  * Maximum element nesting depth accepted from an HTML/XHTML source before the parser gives up
@@ -222,7 +224,8 @@ const toMathNode = (node: HtmlNode): MathNode => ({
 });
 
 const parseAttributes = (attrString: string): Record<string, string> => {
-    const attrs: Record<string, string> = {};
+    // Null-prototype: keyed by the document's attribute names, as every such map is.
+    const attrs: Record<string, string> = Object.create(null);
     // Attribute names follow the HTML5 rule - any character except whitespace and
     // " ' > / = - rather than a hand-picked allowlist. The previous class
     // ([a-zA-Z0-9\-:]) silently split a legal name on any character outside it, so
@@ -338,6 +341,8 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
     const root: HtmlNode = { type: 'element', tagName: 'root', children: [], attributes: {}, depth: 0 };
     let current = root;
     let cursor = 0;
+    // Where the next `</script>` and `</style>` start at or after the cursor (-1: nowhere).
+    const closeTagAt = new Map<string, number>();
 
     while (cursor < html.length) {
         const tagStart = html.indexOf('<', cursor);
@@ -461,18 +466,25 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
                 if (tagName === 'script' || tagName === 'style') {
                     // Case-insensitive search from `cursor` via a sticky-ish regex, instead of
                     // lower-casing the whole document on every <script>/<style> (was O(n^2)).
-                    // tagName is validated to /^[a-z0-9-]+$/ above, so it's safe to interpolate.
-                    const closeRe = new RegExp(`</${tagName}>`, 'gi');
-                    closeRe.lastIndex = cursor;
-                    const closeMatch = closeRe.exec(html);
-                    if (closeMatch) {
+                    // The closing tag found is kept while it lies ahead, and one never found is not
+                    // looked for again: each unclosed tag searched the rest of the document, which
+                    // took seconds for a few hundred kilobytes of them.
+                    const known = closeTagAt.get(tagName);
+                    let closeAt = known;
+                    if (known === undefined || (known !== -1 && known < cursor)) {
+                        const closeRe = new RegExp(`</${tagName}>`, 'gi');
+                        closeRe.lastIndex = cursor;
+                        closeAt = closeRe.exec(html)?.index ?? -1;
+                        closeTagAt.set(tagName, closeAt);
+                    }
+                    if (closeAt !== undefined && closeAt !== -1) {
                         node.children.push({
                             type: 'text',
-                            text: html.substring(cursor, closeMatch.index),
+                            text: html.substring(cursor, closeAt),
                             children: [],
                             parent: node
                         });
-                        cursor = closeMatch.index + closeMatch[0].length;
+                        cursor = closeAt + tagName.length + 3;
                         current = node.parent!;
                     }
                 }
@@ -483,7 +495,18 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
     return root;
 };
 
-export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
+/** What a container whose parts are HTML (an EPUB's chapters) tells the reading of each part. */
+export interface HtmlPartContext {
+    /**
+     * The name of the attachment a picture's `src` shows, when the container holds that picture as
+     * a file of its own; undefined for any other source. The container makes the attachment, once
+     * however many pictures show it: an EPUB's images were written into each chapter as data, a copy
+     * for every `<img>`, so a small book showing one large picture many times took gigabytes.
+     */
+    imageAttachment?: (src: string) => string | undefined;
+}
+
+export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, part: HtmlPartContext = {}): Promise<OfficeParserAST> => {
     // Honour cancellation requests before the HTML tree is built and traversed.
     // The custom recursive HTML parser can be expensive for large documents;
     // rejecting early here prevents both the parsing and the subsequent AST construction.
@@ -525,7 +548,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             if (child.tagName === 'meta') {
                 const name = child.attributes?.name || child.attributes?.property || child.attributes?.['http-equiv'];
                 if (name) {
-                    metadata.nativeProperties[name] = child.attributes?.content || '';
+                    setOwn(metadata.nativeProperties, name, child.attributes?.content || '');
                 }
             }
         }
@@ -558,11 +581,11 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const key = child.attributes.name.substring(7);
                 const val = child.attributes.content || '';
                 // Try to infer type
-                if (val === 'true') customProps[key] = true;
-                else if (val === 'false') customProps[key] = false;
-                else if (!isNaN(Number(val)) && val.trim() !== '') customProps[key] = Number(val);
-                else if (!isNaN(Date.parse(val)) && val.includes(':')) customProps[key] = new Date(val);
-                else customProps[key] = val;
+                if (val === 'true') setOwn(customProps, key, true);
+                else if (val === 'false') setOwn(customProps, key, false);
+                else if (!isNaN(Number(val)) && val.trim() !== '') setOwn(customProps, key, Number(val));
+                else if (!isNaN(Date.parse(val)) && val.includes(':')) setOwn(customProps, key, new Date(val));
+                else setOwn(customProps, key, val);
             }
         }
         if (Object.keys(customProps).length > 0) metadata.customProperties = customProps;
@@ -632,7 +655,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             // Reject anything that isn't a plain attribute name outright - a key containing a
             // quote or '=' is the shape an attribute-injection payload takes.
             if (!isSafeHtmlAttributeName(key)) continue;
-            bag[key] = value;
+            setOwn(bag, key, value);
         }
         return Object.keys(bag).length > 0 ? bag : undefined;
     };
@@ -1059,7 +1082,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const parts: OfficeContentNode[] = [];
                 let run: OfficeContentNode[] = [];
                 const flush = () => {
-                    if (run.some(c => c.type !== 'text' || c.text?.trim())) parts.push({ type: 'paragraph', children: run });
+                    // Each run's edges trimmed, as a block's are (a space before the block it stood by stayed).
+                    const children = config.preserveXmlWhitespace ? run : trimBlockEdges(collapseSpacesAcrossNodes(run));
+                    if (children.some(c => c.type !== 'text' || c.text?.trim())) parts.push({ type: 'paragraph', children });
                     run = [];
                 };
                 for (const child of caption) {
@@ -1283,12 +1308,10 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             }
             if (isSheetChrome(node)) return [];
             if (tagName === 'td' || tagName === 'th') {
-                // Merged cells: mirrors the colspan/rowspan reading already done in
-                // MarkdownParser's inline HTML-table handler.
-                const colSpanAttr = node.attributes?.colspan;
-                const rowSpanAttr = node.attributes?.rowspan;
-                const colSpan = colSpanAttr ? parseInt(colSpanAttr, 10) : undefined;
-                const rowSpan = rowSpanAttr ? parseInt(rowSpanAttr, 10) : undefined;
+                // Merged cells, their spans held as a browser holds them (colspan to 1000, rowspan to
+                // 65534, and both to at least 1: a `rowspan="-3"` came through as -3).
+                const colSpan = cellSpan(node.attributes?.colspan, MAX_COL_SPAN);
+                const rowSpan = cellSpan(node.attributes?.rowspan, MAX_ROW_SPAN);
 
                 // Per-column GFM alignment: read the cell's own `text-align` (or a legacy `align=`
                 // attribute) into `CellMetadata.align`, so the `:---`/`:---:`/`---:` markers survive
@@ -1303,8 +1326,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const cellNode: OfficeContentNode = {
                     type: 'cell',
                     metadata: {
-                        colSpan: colSpan && !isNaN(colSpan) ? colSpan : undefined,
-                        rowSpan: rowSpan && !isNaN(rowSpan) ? rowSpan : undefined,
+                        colSpan: colSpan > 1 ? colSpan : undefined,
+                        rowSpan: rowSpan > 1 ? rowSpan : undefined,
                         align: cellAlign,
                         anchorIds: anchorIds.length > 0 ? anchorIds : undefined
                     } as CellMetadata,
@@ -1348,7 +1371,20 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const align = (['left', 'center', 'right'] as const).includes(alignAttr as any) ? alignAttr as 'left' | 'center' | 'right' : undefined;
 
                 let imageNode: OfficeContentNode;
-                if (src?.startsWith('data:')) {
+                const heldAttachment = src && !src.startsWith('data:') ? part.imageAttachment?.(src) : undefined;
+                if (heldAttachment) {
+                    imageNode = {
+                        type: 'image',
+                        metadata: {
+                            attachmentName: heldAttachment,
+                            altText: alt,
+                            title: node.attributes?.title,
+                            anchorIds: anchorIds.length > 0 ? anchorIds : undefined,
+                            width,
+                            align
+                        } as ImageMetadata
+                    };
+                } else if (src?.startsWith('data:')) {
                     const match = src.match(/^data:([^;]+);base64,(.*)$/);
                     if (match && config.extractAttachments) {
                         const mimeType = match[1] as any;
@@ -1480,10 +1516,12 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     if (langMatch) language = langMatch.replace('language-', '');
                     // Decode entities: the code body is stored raw, so `&lt;`/`&gt;`/`&amp;` (e.g. a
                     // mermaid `-->` arrow, or `a < b` in a snippet) must be turned back into text.
-                    codeText = decodeEntities(preformattedText(codeNode));
-                } else {
-                    codeText = decodeEntities(preformattedText(node));
                 }
+                // All of the block's text, not the first <code>'s alone (a prompt in a <span> before it,
+                // a second <code> after it, were dropped), without the line break that HTML drops
+                // right after the <pre> start tag.
+                codeText = decodeEntities(preformattedText(node));
+                if (node.children[0]?.type === 'text' && /^\r?\n/.test(node.children[0].text || '')) codeText = codeText.replace(/^\r?\n/, '');
                 // A `mermaid` class token (on the <pre> or its <code>) names the language when no
                 // explicit language-* class is present - some producers emit <pre class="mermaid">.
                 if (!language && (
@@ -1533,9 +1571,15 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
 
             // Strip the generated back-reference link ("↩") - it's round-trip plumbing,
             // not part of the footnote's actual content.
-            const filteredChildren = item.children.filter(c =>
-                !(c.tagName === 'a' && (c.attributes?.href || '').startsWith('#footnote-ref-'))
-            );
+            const isBackLink = (c: HtmlNode) => c.tagName === 'a' && (c.attributes?.href || '').startsWith('#footnote-ref-');
+            const filteredChildren = item.children.filter(c => !isBackLink(c));
+            // With whitespace kept as written, the one space written before the back-link is the
+            // writer's, not the note's: left in, it grew by one each save.
+            const backLinkAt = item.children.findIndex(isBackLink);
+            const beforeBackLink = backLinkAt > 0 ? item.children[backLinkAt - 1] : undefined;
+            if (config.preserveXmlWhitespace && beforeBackLink?.type === 'text' && beforeBackLink.text?.endsWith(' ')) {
+                filteredChildren[filteredChildren.indexOf(beforeBackLink)] = { ...beforeBackLink, text: beforeBackLink.text.slice(0, -1) };
+            }
             const contentNodes: OfficeContentNode[] = [];
             for (const child of filteredChildren) {
                 const parsed = parseNode(child);
@@ -1566,7 +1610,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
         // (an anchor then marks the next block); beside text they are part of its paragraph.
         if (children.some(n => n.type === 'image' || isAnchorMark(n)) && children.every(n => n.type === 'image' || isAnchorMark(n) || isBlank(n))) {
             for (const n of children) if (!isBlank(n)) content.push(n);
-        } else if (children.some(n => n.type !== 'text' || n.text || n.notes?.length || n.comments?.length)) content.push({ type: 'paragraph', children });
+        } else if (children.some(n => !isBlank(n))) content.push({ type: 'paragraph', children });
+        // (A run of whitespace alone, between two blocks, lays out as nothing, whitespace kept as
+        // written or not: made a paragraph, each save added an empty one.)
         for (const mark of trailingMarks) content.push(mark);
         inlineRun = [];
     };

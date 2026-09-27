@@ -44,6 +44,7 @@ import { FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, Offi
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
+import { lookupTable } from '../utils/lookupUtils.js';
 
 /**
  * Represents an RTF group (content enclosed in braces).
@@ -134,7 +135,7 @@ type RtfImageFormat =
  * Lookup table mapping RTF control words to internal formats.
  * Fully typed: if a key maps to an unsupported format, TypeScript throws an error.
  */
-const RTF_BLIP_MAP: Record<string, RtfImageFormat> = {
+const RTF_BLIP_MAP: Record<string, RtfImageFormat> = lookupTable({
     // Raster formats
     pngblip: 'png',
     jpegblip: 'jpeg',
@@ -142,19 +143,19 @@ const RTF_BLIP_MAP: Record<string, RtfImageFormat> = {
     tiffblip: 'tiff',
     dibitmap: 'bmp',
     wbitmap: 'bmp',
-};
+});
 
 /**
  * Lookup table mapping internal formats to MIME types.
  * Again fully typed: if a format is missing from this map, TS errors.
  */
-const IMAGE_MIME_MAP: Record<RtfImageFormat, OfficeMimeType> = {
+const IMAGE_MIME_MAP: Record<RtfImageFormat, OfficeMimeType> = lookupTable({
     png: 'image/png',
     jpeg: 'image/jpeg',
     gif: 'image/gif',
     tiff: 'image/tiff',
     bmp: 'image/bmp',
-};
+});
 
 /**
  * Low-level RTF tokenizer that parses RTF syntax into a tree structure.

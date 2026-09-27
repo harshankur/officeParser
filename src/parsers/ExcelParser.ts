@@ -31,6 +31,52 @@ import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { decodeXmlEntities, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
+/** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
+const continuesName = (xml: string, at: number): boolean => /[\w:.-]/.test(xml[at] ?? '');
+
+/** Where the next `<tag` element starts in `xml`, from `from` on; -1 when none does. */
+function nextElement(xml: string, tag: string, from: number): number {
+    for (let at = xml.indexOf(`<${tag}`, from); at !== -1; at = xml.indexOf(`<${tag}`, at + tag.length + 1)) {
+        if (!continuesName(xml, at + tag.length + 1)) return at;
+    }
+    return -1;
+}
+
+/**
+ * Each `<tag>` element of `xml`, in order: its attributes, whether it closes itself, its content, and
+ * the whole of it. The content runs to its closing tag or, left unclosed, to where the next element of
+ * its kind starts (else the end), so an unclosed row keeps its cells. Linear in the length of `xml`:
+ * the closing tag last found is kept while it lies ahead, where a pattern looking for one from each
+ * start (`<row>([\s\S]*?)</row>`) read the rest of the sheet again for every unclosed row, which took
+ * a minute for a few megabytes of them.
+ */
+function* xmlElements(xml: string, tag: string): Generator<{ attrs: string; selfClosing: boolean; content: string; whole: string }> {
+    const close = `</${tag}>`;
+    let closeAt = -2;
+    let at = nextElement(xml, tag, 0);
+    while (at !== -1) {
+        const gt = xml.indexOf('>', at);
+        if (gt === -1) return;
+        const selfClosing = xml[gt - 1] === '/';
+        const next = nextElement(xml, tag, gt + 1);
+        if (selfClosing) {
+            yield { attrs: xml.slice(at + tag.length + 1, gt - 1), selfClosing, content: '', whole: xml.slice(at, gt + 1) };
+        } else {
+            if (closeAt !== -1 && closeAt <= gt) closeAt = xml.indexOf(close, gt + 1);
+            const closed = closeAt !== -1 && (next === -1 || closeAt < next);
+            const end = closed ? closeAt : next === -1 ? xml.length : next;
+            yield { attrs: xml.slice(at + tag.length + 1, gt), selfClosing, content: xml.slice(gt + 1, end), whole: xml.slice(at, closed ? end + close.length : end) };
+        }
+        at = next;
+    }
+}
+
+/** The content of the first `<tag>` element of `xml` (see xmlElements), or undefined when there is none. */
+function firstElementContent(xml: string, tag: string): string | undefined {
+    for (const element of xmlElements(xml, tag)) return element.content;
+    return undefined;
+}
+
 /**
  * Parses an Excel spreadsheet (.xlsx) and extracts sheets, rows, and cells.
  * 
@@ -309,7 +355,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const xml = parseXmlString(drawingFile.content.toString());
             const pics = getElementsByTagName(xml, "xdr:pic"); // SpreadsheetML drawing
 
-            const rels = drawingImageMap[drawingFile.path] || {};
+            // Null-prototype, as the map is: a plain `{}` answered an `r:embed` of `__proto__` with
+            // Object.prototype, and the alt text was written onto every object in the process.
+            const rels: Record<string, { path: string, altText?: string }> = drawingImageMap[drawingFile.path] || Object.create(null);
 
             for (const pic of pics) {
                 const blipFill = getElementsByTagName(pic, "xdr:blipFill")[0];
@@ -402,14 +450,15 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     }
 
     // Parse workbook.xml to get sheet names and map them to sheet files
-    const sheetNameMap: Record<string, string> = {};
+    // Null-prototype, as every map keyed by the document's own names and ids is here.
+    const sheetNameMap: Record<string, string> = Object.create(null);
     const workbookRelsFile = files.find(f => f.path === 'xl/_rels/workbook.xml.rels');
 
     if (workbookRelsFile) {
         // Parse rels to get rId -> file mapping
         const relsXml = parseXmlString(workbookRelsFile.content.toString());
         const relationships = getElementsByTagName(relsXml, "Relationship");
-        const rIdToFile: Record<string, string> = {};
+        const rIdToFile: Record<string, string> = Object.create(null);
 
         for (const rel of relationships) {
             const rId = rel.getAttribute("Id");
@@ -451,7 +500,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const relsFilename = `xl/worksheets/_rels/${sheetFilename}.rels`;
             const relsFile = files.find(f => f.path === relsFilename);
 
-            const drawingMap: Record<string, string> = {}; // rId -> drawingPath
+            const drawingMap: Record<string, string> = Object.create(null); // rId -> drawingPath
             // Null-prototype: keyed by the document-derived cell ref, so a crafted ref of `__proto__`
             // creates an own entry instead of throwing on `Object.prototype.push`.
             const sheetCommentsMap: Record<string, OfficeContentNode[]> = Object.create(null);
@@ -502,14 +551,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             const rows: OfficeContentNode[] = [];
             const sheetXml = file.content.toString();
-            // regex to match <row> elements, capturing:
-            // 1. attributes (e.g., r="1")
-            // 2. whether it's self-closing (/>)
-            // 3. inner content (for non-self-closing rows)
-            const rowRegex = /<row\b([^>]*?)(?:(\/>)|(>([\s\S]*?)<\/row>))/g;
-            // matchAll provides an iterator over all matches, which is much more efficient than 
-            // iterating over a massive sparse row range declared in spreadsheet dimensions.
-            const rowMatches = sheetXml.matchAll(rowRegex);
+            // The <row> elements as they stand, rather than a walk over the (possibly vast, sparse)
+            // row range the sheet's dimensions declare.
+            const rowElements = xmlElements(sheetXml, 'row');
 
             /** Helper to convert Excel column string (A, B, AA, etc.) to 0-based index */
             const colToNumber = (col: string): number => {
@@ -522,22 +566,18 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             let lastRowIndex = -1;
 
-            for (const rowMatch of rowMatches) {
+            for (const rowElement of rowElements) {
                 checkAbortSignal(config.abortSignal);
-                const rowXml = rowMatch[0];
-                const rowAttrs = rowMatch[1];
-                const isSelfClosing = !!rowMatch[2];
-                const rowContent = rowMatch[4] || "";
+                const rowXml = rowElement.whole;
+                const rowAttrs = rowElement.attrs;
+                const isSelfClosing = rowElement.selfClosing;
+                const rowContent = rowElement.content;
 
                 if (!isSelfClosing && !rowContent.includes('<c')) continue;
 
                 const cells: OfficeContentNode[] = [];
-                // regex to match <c> (cell) elements within a row, capturing:
-                // 1. cell attributes (e.g., r="A1", t="s")
-                // 2. whether it's self-closing (/>)
-                // 3. inner content (e.g., <v> value)
-                const cRegex = /<c\b([^>]*?)(?:(\/>)|(>([\s\S]*?)<\/c>))/g;
-                const cMatches = rowContent.matchAll(cRegex);
+                // The row's <c> (cell) elements: attributes (r="A1", t="s") and content (<v>, <is>).
+                const cellElements = xmlElements(rowContent, 'c');
 
                 const rMatch = rowAttrs.match(/r="(\d+)"/);
                 const rowIndex = rMatch ? parseInt(rMatch[1]) - 1 : lastRowIndex + 1;
@@ -545,23 +585,23 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
                 let lastColIndex = -1;
 
-                for (const cMatch of cMatches) {
-                    const cXml = cMatch[0];
-                    const cAttrs = cMatch[1];
-                    const cContent = cMatch[4] || "";
+                for (const cellElement of cellElements) {
+                    const cXml = cellElement.whole;
+                    const cAttrs = cellElement.attrs;
+                    const cContent = cellElement.content;
 
                     // Extract cell value
                     const typeMatch = cAttrs.match(/t="([a-zA-Z]+)"/);
                     const type = typeMatch ? typeMatch[1] : 'n'; // n = number (default)
 
-                    const vMatch = cContent.match(/<v>([\s\S]*?)<\/v>/);
-                    const tMatch = cContent.match(/<t\b[^>]*>([\s\S]*?)<\/t>/);
+                    const vContent = firstElementContent(cContent, 'v');
+                    const tContent = firstElementContent(cContent, 't');
 
                     let text = '';
                     let cellNodes: OfficeContentNode[] = [];
 
-                    if (type === 's' && vMatch) {
-                        const idx = parseInt(vMatch[1]);
+                    if (type === 's' && vContent !== undefined) {
+                        const idx = parseInt(vContent);
                         const content = sharedStrings[idx];
                         if (Array.isArray(content)) {
                             // Rich text runs. Share the (read-only) run nodes across every cell that
@@ -574,10 +614,10 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                         } else {
                             text = content || '';
                         }
-                    } else if (type === 'inlineStr' && tMatch) {
-                        text = decodeXmlEntities(tMatch[1].trim());
-                    } else if (vMatch) {
-                        text = vMatch[1].trim();
+                    } else if (type === 'inlineStr' && tContent !== undefined) {
+                        text = decodeXmlEntities(tContent.trim());
+                    } else if (vContent !== undefined) {
+                        text = vContent.trim();
                     }
 
                     // Parse cell coordinate
@@ -653,11 +693,11 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             // Handle Drawings in Sheet (images and charts)
             if (config.extractAttachments) {
-                const drawingMatches = file.content.toString().match(/<drawing r:id="(.*?)"/g);
-                if (drawingMatches) {
-                    for (const match of drawingMatches) {
-                        const rIdMatch = match.match(/r:id="(.*?)"/);
-                        const rId = rIdMatch ? rIdMatch[1] : null;
+                // Each <drawing r:id="..."> the sheet holds (scanned as its rows are: a pattern looking
+                // for the closing quote from each start read the rest of the line again for each).
+                {
+                    for (const drawing of xmlElements(sheetXml, 'drawing')) {
+                        const rId = /(?:^|\s)r:id="([^"]*)"/.exec(drawing.attrs)?.[1] ?? null;
 
                         if (rId && drawingMap[rId]) {
                             const drawingPath = drawingMap[rId];

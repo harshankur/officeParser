@@ -3615,7 +3615,8 @@ async function testMarkdownRoundTrips(): Promise<void> {
     assert.deepStrictEqual((await mdOf('1. Step one\n\n    <table><tr><td>A</td></tr></table>\n\n2. Step two')).content.map(n => n.type), ['list', 'table', 'list'], 'MD: a table under a list item');
     assert.deepStrictEqual((await mdOf('- item\n\n    more of the item\n\n      code under it')).content.map(n => n.type), ['list', 'paragraph', 'code'], 'MD: a paragraph and code under a list item');
     const mdCell = await mdOf('<table>\n<tr>\n<td>\n\n**bold** cell\n\n</td>\n</tr>\n</table>\n\nAfter');
-    assert.deepStrictEqual([mdCell.content.map(n => n.type), mdCell.content[0].children![0].children![0].children!.map(n => [n.text, n.formatting?.bold ?? false])], [['table', 'paragraph'], [['bold', true], [' cell', false]]], 'MD: Markdown in an HTML table cell');
+    // (A paragraph of the cell's, as Markdown between blank lines is.)
+    assert.deepStrictEqual([mdCell.content.map(n => n.type), mdCell.content[0].children![0].children![0].children!.map(n => n.type), mdCell.content[0].children![0].children![0].children![0].children!.map(n => [n.text, n.formatting?.bold ?? false])], [['table', 'paragraph'], ['paragraph'], [['bold', true], [' cell', false]]], 'MD: Markdown in an HTML table cell');
     // Preformatted text keeps the tokens a highlighter wraps and its line breaks.
     for (const [src, code] of [['<pre>line a<br>line b</pre>', 'line a\nline b'], ['<pre><code><span class="k">let</span> x = <span class="n">1</span>;</code></pre>', 'let x = 1;']] as const) {
         assert.strictEqual((await htmlOf(src)).content[0].text, code, `HTML: ${src}`);
@@ -3704,6 +3705,113 @@ async function testMarkdownRoundTrips(): Promise<void> {
 }
 
 /**
+ * Findings of the second pre-release review: Markdown's HTML tables, escapes, lists, link definitions,
+ * autolinks, tabs and front matter; HTML's numeric references, preformatted text, heading ids and
+ * whitespace; nested notes in every writer; plain text's blocks in list items; grids of far cells.
+ */
+async function testSecondReview(): Promise<void> {
+    const parse = (src: string, fileType: string, extra: object = {}) => OfficeParser.parseOffice(Buffer.from(src), { fileType, onWarning: () => {}, ...extra } as any);
+    const write = async (ast: any, format: string, extra: object = {}) => (await OfficeGenerator.generate(ast, format as any, { generateIds: false, htmlConfig: { standalone: false }, onWarning: () => {}, ...extra } as any)).value as string;
+    const plain = (nodes: any[]): string => nodes.map((n: any) => n.text ?? plain(n.children ?? [])).join('|');
+    const settles = async (format: string, ast: any, label: string, extra: object = {}) => {
+        const outs: string[] = [];
+        for (let save = 0; save < 3; save++) {
+            outs.push(await write(ast, format, extra));
+            ast = await parse(outs[save], format, extra);
+        }
+        assert.ok(outs[0] === outs[1] && outs[1] === outs[2], `${format}: ${label} saves the same output (${JSON.stringify(outs)})`);
+        return { out: outs[0], ast };
+    };
+    const T = (text: string, extra: object = {}) => ({ type: 'text', text, ...extra });
+    const doc = (content: any[], type = 'docx') => ({ type, metadata: {}, attachments: [], content } as any);
+
+    // Markdown in an HTML table: a cell's preformatted text or picture keeps its blank lines and leaves
+    // no placeholder behind; a cell's two paragraphs are two lines of it; inline code naming a tag is
+    // not a table.
+    for (const src of ['<table><tr><td><pre>\n\nline1\n\n</pre></td></tr></table>\n', '<table><tr><td><img alt="\n\nfoo bar\n\n" src="a.png"></td></tr></table>\n']) {
+        const ast = await parse(src, 'md');
+        assert.ok(!/[\uE000\uE001]/.test(JSON.stringify(ast.content)), `MD: no placeholder is left of ${JSON.stringify(src)}`);
+    }
+    const twoParagraphs = await settles('md', await parse('<table>\n<tr>\n<td>\n\nFirst paragraph.\n\nSecond paragraph.\n\n</td>\n</tr>\n</table>\n', 'md'), 'a cell of two paragraphs');
+    assert.strictEqual(twoParagraphs.out, '| First paragraph.<br>Second paragraph. |\n| --- |', 'MD: a cell of two paragraphs');
+    const codeTag = await parse('Use `<table>` for data.\n<p>Next</p>\n', 'md');
+    assert.ok(!codeTag.content.some(n => n.type === 'table') && plain(codeTag.content).includes('<table>'), 'MD: inline code naming <table> is not a table');
+
+    // Escapes: a bold run ending in a backslash, and a code span holding an escaped pipe in a cell.
+    const backslash = await settles('md', doc([{ type: 'paragraph', children: [T('Save to '), T('C:\\ ', { formatting: { bold: true } }), T('and continue.')] }]), 'a bold run ending in a backslash');
+    assert.strictEqual(backslash.out, 'Save to **C:\\\\** and continue.', 'MD: a bold run ending in a backslash');
+    const pipe = await settles('md', await parse('<table><tr><th>Pattern</th><th>Meaning</th></tr><tr><td><code>a\\|b</code></td><td>alternation</td></tr></table>', 'html'), 'an escaped pipe in a cell');
+    assert.ok(JSON.stringify(pipe.ast.content).includes('"a\\\\|b"'), `MD: the escaped pipe reads back (${pipe.out})`);
+    // A row of dashes after the delimiter row is a row.
+    const dashes = await parse('| Name | Value |\n| --- | --- |\n| - | - |\n| x | 1 |\n', 'md');
+    assert.deepStrictEqual(dashes.content[0].children!.map(r => plain(r.children!)), ['Name|Value', '-|-', 'x|1'], 'MD: a row of dashes is a row');
+
+    // Lists: a change of marker kind starts a new list, as HTML's two lists stay two.
+    assert.strictEqual(await write(await parse('- a\n- b\n1. one\n2. two\n', 'md'), 'md'), '- a\n- b\n1. one\n2. two', 'MD: bullets then numbers');
+    const twoLists = await settles('md', await parse('<ul><li>a</li><li>b</li></ul><ol><li>one</li><li>two</li></ol>', 'html'), 'two lists');
+    assert.strictEqual(new Set(twoLists.ast.content.map((n: any) => n.metadata?.listId)).size, 2, 'MD: two lists keep two list ids');
+
+    // Link definitions: brackets in link text are escaped; an escaped `]` ends no label; a definition
+    // does not interrupt a paragraph or an item.
+    const brackets = await settles('md', doc([{ type: 'paragraph', children: [T('Step [2]: configure', { metadata: { link: 'https://e.com/step2', linkType: 'external' } })] }]), 'brackets in link text');
+    assert.strictEqual(brackets.out, '[Step \\[2\\]: configure](https://e.com/step2)', 'MD: brackets in link text');
+    for (const src of ['[a\\]: b\n', '- item\n[x]: y\n', 'para\n[x]: y\n']) {
+        assert.ok(plain((await parse(src, 'md')).content).includes(': '), `MD: ${JSON.stringify(src)} is not a definition`);
+    }
+
+    // Autolinks: references decoded in text and target; an address is a mail link.
+    const autolink = await settles('md', await parse('<https://e.com/?a=1&amp;b=2>\n', 'md'), 'an autolink with a reference');
+    assert.strictEqual(autolink.out, '[https://e.com/?a=1&b=2](https://e.com/?a=1&b=2)', 'MD: an autolink with a reference');
+    const mail = await parse('mail <me@x.com> now', 'md');
+    assert.deepStrictEqual(mail.content[0].children!.map(n => [n.text, (n.metadata as any)?.link]), [['mail ', undefined], ['me@x.com', 'mailto:me@x.com'], [' now', undefined]], 'MD: an address in angle brackets is a mail link');
+    await settles('md', mail, 'a mail link');
+
+    // A tab after a list marker, and a tab-indented paragraph under the item, are the item's.
+    assert.deepStrictEqual((await parse('-\ttab item\n\n\tcontinued\n', 'md')).content.map(n => n.type), ['list', 'paragraph'], 'MD: a tab-indented paragraph under an item is not code');
+    // Indented code ends at its last line of code.
+    assert.deepStrictEqual((await parse('para\n\n    code\n', 'md')).content.map(n => n.text ?? n.type), ['paragraph', 'code'], 'MD: indented code');
+    assert.strictEqual((await parse('    a\n\n    b\n\n\n', 'md')).content[0].text, 'a\n\nb', 'MD: indented code keeps its inner blank lines only');
+    // Front matter is YAML: a `---` block of prose is a rule, a heading and text.
+    const notYaml = await parse('---\nfoo\n---\n\nbar\n', 'md');
+    assert.ok(plain(notYaml.content).includes('foo') && plain(notYaml.content).includes('bar') && !notYaml.metadata.customProperties, 'MD: a --- block of prose is not front matter');
+    assert.strictEqual((await parse('---\ntitle: "T"\ntags: [a, b]\nlist:\n  - x\n# comment\n---\n\nbody\n', 'md')).metadata.title, 'T', 'MD: YAML front matter is read');
+    // A CSV comment row survives a save to Markdown.
+    await settles('md', await parse('# note\na,b\n1,2\n', 'csv'), 'a CSV comment row');
+
+    // HTML: numeric references in 0x80-0x9F are Windows-1252's characters, as browsers read them.
+    assert.strictEqual(plain((await parse('<p>It&#146;s &#147;q&#148; &#150; x</p>', 'html')).content), 'It’s “q” – x', 'HTML: Windows-1252 references');
+    // Preformatted text is all of the block's text, less the line break after <pre>.
+    for (const [src, text] of [['<pre><code>line1</code>\n<code>line2</code></pre>', 'line1\nline2'], ['<pre><span>$ </span><code>npm i</code></pre>', '$ npm i'], ['<pre>\nx</pre>', 'x'], ['<pre><code>x\n</code></pre>', 'x\n']] as const) {
+        assert.strictEqual((await parse(src, 'html')).content[0].text, text, `HTML: ${src}`);
+    }
+    // A heading's id is GitHub's, so a link written for the Markdown heading reaches it.
+    assert.ok((await write(await parse('## Version 2.0\n\n[v](#version-20)', 'md'), 'html', { generateIds: true })).includes('<h2 id="version-20">'), 'HTML: a heading id matches GitHub\'s');
+    // Whitespace kept as written: whitespace between blocks is no paragraph, and the space before a
+    // footnote's back-link is not the note's.
+    const kept = await settles('html', await parse('Text[^1] and more.\n\n[^1]: Note body', 'md'), 'a footnote, whitespace kept', { preserveXmlWhitespace: true });
+    assert.deepStrictEqual([kept.ast.content.length, plain(kept.ast.content[0].children!.flatMap((c: any) => c.notes ?? []))], [1, 'Note body'], 'HTML: whitespace kept adds no paragraph and no space to a note');
+    // A figure caption holding a block keeps both.
+    await settles('html', await parse('<figure><img src="a.png" alt="A"><figcaption>Text <code>x</code> and <pre>block</pre> after</figcaption></figure>', 'html'), 'a caption holding a block');
+
+    // A note in a note's text is written by every writer (LaTeX as a mark with its text after the note).
+    const nested = await parse('Text[^1].\n\n[^1]: First, see[^2].\n\n[^2]: Second NESTEDMARK.\n', 'md');
+    for (const format of ['tex', 'html', 'md', 'text', 'rtf']) {
+        assert.ok((await write(nested, format)).includes('NESTEDMARK'), `${format}: a note in a note's text is written`);
+    }
+    assert.ok(/\\footnote\{First, see\\footnotemark\{\}\.\}\\addtocounter\{footnote\}\{-1\}\\stepcounter\{footnote\}\\footnotetext\{Second NESTEDMARK\.\}/.test(await write(nested, 'tex')), 'TEX: a nested note is a mark, its text after the note');
+
+    // Plain text: a block in a list item starts a line of its own.
+    assert.strictEqual(await write(await parse('<ul><li>item<dl><dt>T</dt><dd>D</dd></dl></li></ul>', 'html'), 'text'), '- item\nT\nD', 'Text: a definition list in an item');
+
+    // A cell two million rows from the others lays out close, in no time.
+    const far = doc([{ type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 1999999, col: 0 }, children: [T('far')] }] }, { type: 'row', children: Array.from({ length: 40 }, (_, i) => ({ type: 'cell', children: [T('c' + i)] })) }] }], 'xlsx');
+    const started = Date.now();
+    const farHtml = await write(far, 'html');
+    assert.ok(Date.now() - started < 3000 && farHtml.length < 100_000 && farHtml.includes('far') && farHtml.includes('c39'), `HTML: a far cell (${Date.now() - started}ms, ${farHtml.length} chars)`);
+    console.log('  Second review: All assertions passed ✓');
+}
+
+/**
  * An image that is a link (a badge, a clickable picture) keeps its target through every format that has
  * links: Markdown `[![alt](src)](target "title")`, HTML `<a href><img></a>`, and linked pictures in Word
  * (a hyperlink around the picture, or a link on the picture itself), PowerPoint, ODF, RTF and LaTeX.
@@ -3777,6 +3885,7 @@ async function runTests(): Promise<void> {
     const tests: Array<[string, () => Promise<void>]> = [
         ['Markdown', testMarkdown],
         ['Markdown round trips', testMarkdownRoundTrips],
+        ['Second review', testSecondReview],
         ['Image links', testImageLinks],
         ['HTML', testHtml],
         ['SourceComments', testSourceComments],

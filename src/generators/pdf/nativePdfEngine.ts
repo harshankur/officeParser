@@ -101,6 +101,7 @@ class NativeLayout {
     private readonly attachmentsByName = new Map<string, OfficeParserAST['attachments'][number]>();
     /** Footnote/endnote bodies gathered from `node.notes` during the walk, drawn at document end. */
     private readonly collectedNotes: OfficeContentNode[] = [];
+    private readonly collectedNoteSet = new Set<OfficeContentNode>();
 
     constructor(
         private readonly pdf: any,
@@ -648,7 +649,13 @@ class NativeLayout {
      */
     collectNotes(node: OfficeContentNode): void {
         if (!node) return;
-        if (node.notes?.length) this.collectedNotes.push(...node.notes);
+        // The notes a note's own text refers to follow it (they were left out); each note once.
+        for (const note of node.notes || []) {
+            if (this.collectedNoteSet.has(note)) continue;
+            this.collectedNoteSet.add(note);
+            this.collectedNotes.push(note);
+            this.collectNotes(note);
+        }
         for (const c of node.children || []) this.collectNotes(c);
     }
 

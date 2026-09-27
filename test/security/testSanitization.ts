@@ -118,6 +118,13 @@ function unitTests() {
     check('rtf url javascript blocked', sanitizeRtfUrl('javascript:alert(1)') === '');
     check('rtf url file blocked', sanitizeRtfUrl('file:///etc/passwd') === '');
     check('rtf url UNC blocked', sanitizeRtfUrl('\\\\host\\share') === '');
+    // A quote would end the HYPERLINK argument once a reader decodes `\'22`: it is percent-encoded.
+    const quoted = sanitizeRtfUrl('https://ok.example/" "file://evil.example/share/i');
+    check('rtf url quote cannot end the field argument', !quoted.includes('"') && !quoted.includes("\\'22") && quoted.includes('%22'), quoted);
+    // Full-width formula triggers, and a cell holding a delimiter of another locale, are guarded.
+    check('csv full-width = guarded', csvSafeCell('\uFF1D1+1', ',').includes(`'`));
+    check('csv ; quoted in a comma file', csvSafeCell('a;=1+1', ',') === '"a;=1+1"');
+    check('css: a character reference cannot add a declaration', !sanitizeCssValue('red&#59position:fixed').includes('&') && !sanitizeCssValue('&#117rl(http://x)').includes('&'));
     check('rtf url https allowed', sanitizeRtfUrl('https://example.com/a') === 'https://example.com/a');
     check('rtf url relative allowed', sanitizeRtfUrl('a/b.html') === 'a/b.html');
 
@@ -599,6 +606,44 @@ async function markdownTests() {
             const size = typeof out === 'string' ? out.length : out.length ?? out.byteLength;
             check(`${format}: ${label} is written bounded`, Date.now() - started < 5000 && size < 5_000_000, `${Date.now() - started}ms, ${size} bytes`);
         }
+    }
+    // Spans on cells without coordinates count too (an 80-byte HTML table spanning 16 million columns
+    // ran HTML and PDF out of memory), the budget is the document's (ten sheets each just within one
+    // budget of their own made a 4 KB workbook's HTML too large to write), and HTML spans are clamped
+    // as a browser clamps them.
+    const spanned = await OfficeParser.parseOffice(Buffer.from('<table><tr><td colspan="16000000" rowspan="2">x</td></tr><tr><td>y</td></tr></table>'), { fileType: 'html' } as any);
+    check('html: colspan and rowspan are clamped as a browser clamps them', (spanned.content[0].children![0].children![0].metadata as any).colSpan === 1000);
+    const handSpan = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', metadata: { colSpan: 1e8, rowSpan: 1e8 }, children: [T0('x')] }] }, { type: 'row', children: [{ type: 'cell', children: [T0('y')] }] }] }] } as any;
+    const manySheets = { type: 'xlsx', metadata: {}, attachments: [], content: Array.from({ length: 20 }, () => sheetOf([{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [T0('a')] }] }, { type: 'row', children: [{ type: 'cell', metadata: { row: 1999, col: 999 }, children: [T0('b')] }] }]).content[0]) } as any;
+    for (const [label, ast] of [['a span of 100 million on a cell without coordinates', handSpan], ['20 sheets each holding 2 million positions', manySheets]] as const) {
+        for (const format of ['html', 'md', 'csv', 'tex', 'docx', 'odt', 'epub', 'pdf'] as const) {
+            const started = Date.now();
+            const out: any = (await OfficeGenerator.generate(ast, format, { onWarning: () => {}, pdfConfig: { engine: 'native' } } as any)).value;
+            const size = typeof out === 'string' ? out.length : out.length ?? out.byteLength;
+            check(`${format}: ${label} is written bounded`, Date.now() - started < 5000 && size < 20_000_000, `${Date.now() - started}ms, ${size} bytes`);
+        }
+    }
+    // A value of another type than the AST defines (an array for a string, text for a number) cannot
+    // get past a writer's escaping: every one is coerced before the writers run.
+    const P0 = '1" onx="PWN\' <PWN>';
+    const confused = { type: 'docx', metadata: { title: [P0] }, attachments: [], content: [
+        { type: 'heading', metadata: { level: P0, anchorIds: [[P0]] }, children: [T0('h')] },
+        { type: 'list', metadata: { listType: 'ordered', listId: 'l', indentation: P0, itemIndex: P0 }, children: [T0('li')] },
+        { type: 'paragraph', children: [T0('i'), { type: 'image', metadata: { url: 'https://x/a.png', altText: [P0], title: [P0], width: [P0] } }] },
+        { type: 'code', text: 'x', metadata: { math: [P0], language: [P0] } },
+        { type: 'embed', metadata: { embedType: 'youtube', videoId: [P0], label: [P0] } },
+        { type: 'admonition', metadata: { admonitionType: [P0] }, children: [{ type: 'paragraph', children: [T0('a')] }] },
+        { type: 'paragraph', children: [{ type: 'text', text: 'c', formatting: { color: 'red&#59position:fixed' } }] },
+    ] } as any;
+    for (const format of ['html', 'epub', 'md', 'rtf'] as const) {
+        const out: any = (await OfficeGenerator.generate(confused, format, { onWarning: () => {}, includeFormatting: true, htmlConfig: { standalone: format === 'epub' } } as any)).value;
+        const text = typeof out === 'string' ? out : Object.values(unzipSync(new Uint8Array(out))).map((u: any) => new TextDecoder().decode(u)).join('\n');
+        // Live means: a control word taking the value in RTF; elsewhere the value as a tag or attribute of
+        // a tag, or a second CSS declaration. (Markdown syntax, such as alt text in `![...]` or a fence's
+        // info string, is escaped by the renderer, so a fenced block is left out of the Markdown checked.)
+        const html = format === 'md' ? text.replace(/^(`{3,})[^\n]*\n[\s\S]*?\n\1$/gm, '').replace(/^`{3,}[^\n]*$/gm, '') : text;
+        const live = format === 'rtf' ? /(^|[^\\])\\s1" onx|\\ilvl1"/.test(text) : /<[a-zA-Z][^<>]*onx="PWN|<PWN>|;\s*position:fixed|&#59/.test(html);
+        check(`${format}: values of the wrong type are escaped`, !live, text.slice(0, 300));
     }
     // Named anchors are ids of the node they stand at, each node's added once: many of them in a line,
     // or before a block, cost time in proportion to their number, read and written.
@@ -2113,7 +2158,10 @@ async function latexSanitizationTests() {
         '\\read1 to\\x', '\\directlua{os.execute("id")}', '\\catcode`\\@=11', '\\def\\x{y}', '\\let\\a\\b', '\\newcommand{\\x}{y}', '\\renewcommand{\\x}{y}',
         '\\NewDocumentCommand\\x{}{}', '\\csname input\\endcsname{x}', '\\scantokens{x}', '\\verb|x|', '\\includegraphics{/etc/passwd}', '\\pdffiledump{x}',
         '\\filedump{x}', '\\XeTeXinputencoding{x}', '\\everypar{x}', '\\usepackage{x}', '\\makeatletter', '\\href{javascript:x}{y}', '\\url{x}',
-        '\\setlength\\textwidth{0pt}', '\\endinput', '\\stop', '\\show\\x', '\\lstinputlisting{/etc/passwd}', '\\ExplSyntaxOn', '\\special{x}', '\\font\\x=cmr10'];
+        '\\setlength\\textwidth{0pt}', '\\endinput', '\\stop', '\\show\\x', '\\lstinputlisting{/etc/passwd}', '\\ExplSyntaxOn', '\\special{x}', '\\font\\x=cmr10',
+        // Commands that spell a refused command from text: each read /etc/os-release in a real compile.
+        '\\UseName{input}{/etc/passwd}', '\\ExpandArgs{c}\\relax{input}{/etc/passwd}', '\\tokenized{\\string\\in put}', '\\csuse{input}{x}', '\\begincsname input\\endcsname',
+        '\\csappto{maketitle}{x}', '\\enddocument'];
     for (const m of refused) {
         const r = sanitizeLatexMath(m, 'inline');
         check(`latex math: ${JSON.stringify(m)} refused`, !r.ok && r.commands.length > 0, JSON.stringify(r));
@@ -2358,6 +2406,148 @@ async function latexParserTests() {
     check('latex parser: a filecontents file cannot be written outside the project', !escaping.json.includes('Escaped') && escaping.codes.includes('LATEX_FILE_NOT_FOUND'));
 }
 
+/**
+ * Hardening a second parser review asked for: keys a document names cannot reach a shared prototype,
+ * no construct costs time in the square of its size (or doubles per nesting level), spans are
+ * bounded, the XML library writes nothing to the console, and an EPUB's pictures and chapters are
+ * read once however often they are referred to.
+ */
+async function parserHardeningTests() {
+    console.log('- Parser hardening (prototype keys, linear time, spans, console, EPUB)...');
+    const files = path.join(__dirname, '..', 'files');
+    const enc = (s: string) => new TextEncoder().encode(s);
+    const repack = (file: string, edit: (z: Record<string, Uint8Array>) => void) => {
+        const zip = unzipSync(new Uint8Array(fs.readFileSync(path.join(files, file))));
+        edit(zip);
+        return Buffer.from(zipSync(zip));
+    };
+    const builtIns = new Set(Object.getOwnPropertyNames(Object.prototype));
+    const polluted = () => Object.getOwnPropertyNames(Object.prototype).filter(k => !builtIns.has(k));
+    const parseQuiet = async (buffer: Buffer, fileType: string, extra: object = {}) => {
+        try { return { ast: await OfficeParser.parseOffice(buffer, { fileType, onWarning: () => {}, ...extra } as any), error: '' }; }
+        catch (e: any) { return { ast: undefined, error: String(e?.message ?? e) }; }
+    };
+    const hasFunctionValue = (value: any, seen = new Set<any>()): boolean => {
+        if (typeof value === 'function') return true;
+        if (!value || typeof value !== 'object' || seen.has(value)) return false;
+        seen.add(value);
+        return Object.keys(value).some(k => k !== 'to' && hasFunctionValue(value[k], seen));
+    };
+
+    // Prototype keys: a drawing with no relationships whose picture embeds `__proto__` (it wrote the
+    // picture's description onto every object), numbering overrides at levels `__proto__` and
+    // `constructor` (they wrote a start number onto every object) and an abstract numbering id of
+    // `toString` (the parse failed on the prototype's function).
+    const drawing = '<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:twoCellAnchor><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="n" descr="POLLUTED"/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="__proto__"/></xdr:blipFill></xdr:pic></xdr:twoCellAnchor></xdr:wsDr>';
+    const xlsxDrawing = await parseQuiet(repack('test.xlsx', z => { z['xl/drawings/drawing77.xml'] = enc(drawing); }), 'xlsx', { extractAttachments: true });
+    check('xlsx: a picture embedding __proto__ writes nothing onto Object.prototype', !xlsxDrawing.error && polluted().length === 0 && ({} as any).altText === undefined, `${xlsxDrawing.error} ${polluted()}`);
+    const numbering = '<?xml version="1.0"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="__proto__"><w:startOverride w:val="1337"/></w:lvlOverride><w:lvlOverride w:ilvl="constructor"><w:startOverride w:val="42"/></w:lvlOverride></w:num><w:num w:numId="2"><w:abstractNumId w:val="toString"/></w:num></w:numbering>';
+    const docxNumbering = await parseQuiet(repack('test.docx', z => { z['word/numbering.xml'] = enc(numbering); }), 'docx');
+    check('docx: numbering overrides at __proto__ and constructor write nothing onto a prototype', !docxNumbering.error && polluted().length === 0 && ({} as any).start === undefined && (Object as any).start === undefined, `${docxNumbering.error} ${polluted()}`);
+    for (const key of polluted()) delete (Object.prototype as any)[key];
+    // A value looked up in a table of names (a highlight colour, an alignment, a package's type) is
+    // never what a plain object inherits.
+    for (const key of ['constructor', 'toString', '__proto__']) {
+        const docx = await parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/(<w:rPr>)/, `$1<w:highlight w:val="${key}"/>`)); }), 'docx');
+        const odt = await parseQuiet(repack('test.odt', z => { z['content.xml'] = enc(new TextDecoder().decode(z['content.xml']).replace(/fo:text-align="[^"]*"/g, `fo:text-align="${key}"`)); }), 'odt');
+        const pptx = await parseQuiet(repack('test.pptx', z => { for (const k of Object.keys(z)) if (/^ppt\/slides\/slide\d+\.xml$/.test(k)) z[k] = enc(new TextDecoder().decode(z[k]).replace(/\balgn="[^"]*"/g, `algn="${key}"`)); }), 'pptx');
+        check(`docx, odt, pptx: a highlight or alignment named ${key} reads as no function or prototype`, [docx, odt, pptx].every(r => !r.error && !hasFunctionValue(r.ast?.content) && !hasFunctionValue(r.ast?.metadata)), [docx, odt, pptx].map(r => r.error).join(' '));
+        const odtMime = await parseQuiet(repack('test.odt', z => { z['mimetype'] = enc(key); }), undefined as any);
+        check(`zip: a mimetype of ${key} is an unsupported type, not a failure inside`, /supports/.test(odtMime.error) || !!odtMime.ast, odtMime.error);
+    }
+    // Names a document gives its own properties stay its own, whatever they are.
+    const frontMatter = await parseQuiet(Buffer.from('---\n__proto__: [a, b]\nconstructor: x\ntitle: T\n---\n\nText\n'), 'md');
+    const custom = frontMatter.ast?.metadata.customProperties as any;
+    check('md: front matter named __proto__ is a property, not a prototype', !!custom && Object.getPrototypeOf(custom) === Object.prototype && Object.prototype.hasOwnProperty.call(custom, '__proto__') && custom.constructor === 'x', JSON.stringify(custom));
+
+    // Linear time.
+    const timed = async (label: string, run: () => Promise<unknown>) => {
+        const started = Date.now();
+        await run();
+        check(`${label} in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+    };
+    const tex = (body: string) => `\\documentclass{article}\\begin{document}${body}\\end{document}`;
+    for (const [label, src] of [
+        ['keywords nested 120 deep', tex('\\keywords{'.repeat(120) + 'x' + '}'.repeat(120))],
+        ['pdfinfo nested 120 deep', tex('\\hypersetup{pdfinfo={A={'.repeat(120) + 'x' + '}}}'.repeat(120))],
+        ['keywords environments nested 120 deep', tex('\\begin{keywords}'.repeat(120) + 'x' + '\\end{keywords}'.repeat(120))],
+        ['a 200 KB % !TEX encoding line', '% !TEX encoding = a' + ' '.repeat(200000) + '!\n' + tex('x')],
+        ['40k unclosed \\usepackage[', '\\usepackage['.repeat(40000) + tex('x')],
+        ['40k unclosed \\inputencoding{', '\\inputencoding{'.repeat(40000)],
+        ['40k unclosed \\documentclass[', '\\documentclass['.repeat(40000) + '\\begin{document}x\\end{document}'],
+        ['40k unclosed \\documentclass{', '\\documentclass{'.repeat(40000)],
+        ['80k unclosed filecontents', '\\begin{filecontents}'.repeat(80000) + tex('x')],
+        ['a \\cmidrule before 200 KB of spaces', tex('\\begin{tabular}{l}\\cmidrule' + ' '.repeat(200000) + 'x\\end{tabular}')],
+        ['a \\rowcolor before 200 KB of spaces', tex('\\begin{tabular}{l}\\rowcolor' + ' '.repeat(200000) + 'x\\end{tabular}')],
+        ['a longtable \\caption before 200 KB of spaces', tex('\\begin{longtable}{l}\\caption' + ' '.repeat(200000) + 'x\\end{longtable}')],
+        ['a \\multirow before 200 KB of spaces', tex('\\begin{tabular}{l}\\multirow' + ' '.repeat(200000) + 'x\\end{tabular}')],
+        ['a \\cellcolor before 200 KB of spaces', tex('\\begin{tabular}{l}\\cellcolor' + ' '.repeat(200000) + 'x\\end{tabular}')],
+        ['40k \\begin{ past the nesting limit', tex('{'.repeat(130) + '\\begin{'.repeat(40000))],
+        ['a width of 200 KB of spaces', tex('\\includegraphics[width=1' + ' '.repeat(200000) + 'x]{a}')],
+        ['keywords with 200 KB of spaces before \\and', tex('\\keywords{a' + ' '.repeat(200000) + 'b \\and c}')],
+    ] as const) await timed(`latex parser: ${label} parses`, () => parseQuiet(Buffer.from(src), 'tex'));
+    await timed('latex parser: a \\subfile of 40k \\begin{document} parses', () => parseQuiet(Buffer.from(zipSync({ 'main.tex': enc(tex('\\subfile{a}')), 'a.tex': enc('\\begin{document}'.repeat(40000)) })), 'zip' as any));
+    const sheetXml = new TextDecoder().decode(unzipSync(new Uint8Array(fs.readFileSync(path.join(files, 'test.xlsx'))))['xl/worksheets/sheet1.xml']);
+    const withSheetData = (body: string) => repack('test.xlsx', z => { z['xl/worksheets/sheet1.xml'] = enc(sheetXml.replace(/<sheetData>[\s\S]*<\/sheetData>|<sheetData\/>/, `<sheetData>${body}</sheetData>`)); });
+    await timed('xlsx: 160k unclosed rows parse', () => parseQuiet(withSheetData('<row r="1"><c r="A1"><v>1</v></c>'.repeat(160000)), 'xlsx'));
+    await timed('xlsx: a row of 160k unclosed cells parses', () => parseQuiet(withSheetData('<row r="1">' + '<c r="A1"><v>1</v>'.repeat(160000) + '</row>'), 'xlsx'));
+    await timed('xlsx: a cell of 160k unclosed values parses', () => parseQuiet(withSheetData('<row r="1"><c r="A1" t="inlineStr"><is>' + '<t>1'.repeat(160000) + '</is></c></row>'), 'xlsx'));
+    const unclosedRows = await parseQuiet(withSheetData('<row r="1"><c r="A1"><v>1</v></c><row r="2"><c r="A2"><v>2</v></c>'), 'xlsx');
+    check('xlsx: unclosed rows keep their cells', JSON.stringify(unclosedRows.ast?.content).includes('"2"'), unclosedRows.error);
+    await timed('md: a block whose second line is 300 KB, then 150k lines, parses', () => parseQuiet(Buffer.from('a\n|' + ' '.repeat(300000) + '-x\n' + 'a\n'.repeat(150000)), 'md'));
+    await timed('md: 600 nested items holding unclosed fences, then 1M blank lines, parse', () => {
+        let src = '';
+        for (let j = 0; j < 600; j++) src += ' '.repeat(2 * j) + '- a\n' + ' '.repeat(2 * j + 2) + '```\n';
+        return parseQuiet(Buffer.from(src + '\n'.repeat(1_000_000)), 'md');
+    });
+    await timed('md: a line of 400 KB of spaces before a block parses', () => parseQuiet(Buffer.from('- a\n\n' + ' '.repeat(400000) + 'x\n'), 'md'));
+    await timed('md: indented code of 200k blank lines before its last line parses', () => parseQuiet(Buffer.from('    a' + '\n'.repeat(200000) + '    b\n'), 'md'));
+    await timed('html: 100k unclosed <style>s parse', () => parseQuiet(Buffer.from('<p><style>'.repeat(100000)), 'html'));
+    await timed('html: 80k cells of unclosed <script>s parse', () => parseQuiet(Buffer.from('<table><tr>' + '<td><script>'.repeat(80000)), 'html'));
+    await timed('csv: a 1 MB run of digits is checked as a formula', async () => csvSafeCell('1'.repeat(1_000_000) + 'x'));
+    await timed('xlsx: 1 MB of & in an inline string decodes', () => parseQuiet(withSheetData('<row r="1"><c r="A1" t="inlineStr"><is><t>' + '&amp;'.repeat(200000) + '</t></is></c></row>'), 'xlsx'));
+    await timed('docx: an image width of 200 KB of spaces is written', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'image', metadata: { url: 'a.png', width: '1' + ' '.repeat(200000) + 'x' } }] }]), 'docx' as any, { onWarning: () => {} } as any));
+    await timed('md: block math of 200 KB of spaces is written inline', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'a' }, { type: 'code', text: 'x' + ' '.repeat(200000) + 'y', metadata: { math: 'block' } }] }]), 'md' as any, { onWarning: () => {} } as any));
+
+    // Spans are held to what a browser allows, and never below 1.
+    const gridSpan = await parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/<w:body>/, '<w:body><w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2147483647"/></w:tcPr><w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:gridSpan w:val="-5"/></w:tcPr><w:p><w:r><w:t>neg</w:t></w:r></w:p></w:tc></w:tr></w:tbl>')); }), 'docx');
+    const spans = (ast: any) => { const out: any[] = []; const walk = (ns: any[]) => ns?.forEach((n: any) => { if (n.type === 'cell') out.push([n.metadata?.colSpan, n.metadata?.rowSpan, n.metadata?.col]); walk(n.children); }); walk(ast?.content); return out; };
+    check('docx: a gridSpan of 2^31 is held to 1000, a negative one to 1', JSON.stringify(spans(gridSpan.ast).slice(0, 2)) === JSON.stringify([[1000, null, 0], [null, null, 1000]].map(r => r.map(v => v ?? undefined))), JSON.stringify(spans(gridSpan.ast).slice(0, 2)));
+    const htmlSpans = await parseQuiet(Buffer.from('<table><tr><td rowspan="-3" colspan="0">a</td><td rowspan="99999999" colspan="5000">b</td></tr></table>'), 'html');
+    check('html: spans below 1 are 1, above the limits are the limits', JSON.stringify(spans(htmlSpans.ast)) === JSON.stringify([[undefined, undefined, undefined], [1000, 65534, undefined]]), JSON.stringify(spans(htmlSpans.ast)));
+    const odtSpans = await parseQuiet(repack('test.odt', z => { z['content.xml'] = enc(new TextDecoder().decode(z['content.xml']).replace(/<office:text\b[^>]*>/, m => m + '<table:table table:name="T"><table:table-row><table:table-cell table:number-columns-spanned="2147483647" table:number-rows-spanned="99999999"><text:p>x</text:p></table:table-cell></table:table-row></table:table>')); }), 'odt');
+    check('odt: spans of billions are held to the limits', spans(odtSpans.ast).some(([c, r]) => c === 1000 && r === 65534), JSON.stringify(spans(odtSpans.ast)));
+
+    // The XML library reports nothing to the console: an entity it cannot resolve is kept as written.
+    const errorLog = console.error;
+    let logged = 0;
+    console.error = () => { logged++; };
+    let entities: Awaited<ReturnType<typeof parseQuiet>>;
+    try {
+        entities = await parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace('<w:t>', '<w:t>' + '&nbsp;&foo;'.repeat(50))); }), 'docx');
+    } finally { console.error = errorLog; }
+    check('xml: unresolved entities write nothing to the console and are kept', logged === 0 && JSON.stringify(entities.ast?.content).includes('&foo;'), `${logged} ${entities.error}`);
+
+    // EPUB: a picture shown many times is one attachment, and a chapter the spine lists many times is read once.
+    const png = Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489', 'hex'), Buffer.alloc(1_000_000)]);
+    const epub = (images: number, spine: number) => Buffer.from(zipSync({
+        'mimetype': enc('application/epub+zip'),
+        'META-INF/container.xml': enc('<?xml version="1.0"?><container><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>'),
+        'content.opf': enc(`<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title></metadata><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/><item id="i" href="a.png" media-type="image/png"/></manifest><spine>${'<itemref idref="c"/>'.repeat(spine)}</spine></package>`),
+        'c.xhtml': enc(`<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><p>${'x'.repeat(100000)}</p>${'<img src="a.png" alt="a"/>'.repeat(images)}</body></html>`),
+        'a.png': new Uint8Array(png),
+    }));
+    const heapBefore = process.memoryUsage().heapUsed;
+    const shownOften = await parseQuiet(epub(3000, 1), 'epub', { extractAttachments: true });
+    const heapGrowth = process.memoryUsage().heapUsed - heapBefore;
+    const pictures: any[] = [];
+    const collect = (ns: any[] | undefined) => ns?.forEach((n: any) => { if (n.type === 'image') pictures.push(n.metadata?.attachmentName); collect(n.children); });
+    collect(shownOften.ast?.content);
+    check('epub: a picture shown 3000 times is one attachment every picture names', shownOften.ast?.attachments.length === 1 && pictures.length === 3000 && pictures.every(n => n === shownOften.ast!.attachments[0].name) && heapGrowth < 500_000_000, `${shownOften.ast?.attachments.length} ${pictures.length} ${heapGrowth}`);
+    const listedOften = await parseQuiet(epub(0, 5000), 'epub');
+    check('epub: a chapter the spine lists 5000 times is read once', listedOften.ast?.content.length === 1, `${listedOften.ast?.content.length} ${listedOften.error}`);
+}
+
 async function main() {
     console.log('Running sanitization security tests...\n');
     unitTests();
@@ -2387,6 +2577,7 @@ async function main() {
     await configOwnershipTests();
     errorReportingTests();
     await errorRoutingTests();
+    await parserHardeningTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

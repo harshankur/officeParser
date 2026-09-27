@@ -31,6 +31,7 @@ import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
+import { lookupTable } from '../utils/lookupUtils.js';
 
 /**
  * Parses a PowerPoint presentation (.pptx) and extracts slides and notes.
@@ -111,7 +112,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     const content: OfficeContentNode[] = [];
     const slideRelsMap: Record<number, Record<string, { type: string, target: string }>> = {};
 
-    const authorMap: Record<string, { author?: string, initials?: string }> = {};
+    // Null-prototype, as every map keyed by the document's own ids is here.
+    const authorMap: Record<string, { author?: string, initials?: string }> = Object.create(null);
     if (!config.ignoreComments) {
         const authorsFile = files.find(f => f.path === 'ppt/commentAuthors.xml');
         if (authorsFile) {
@@ -445,12 +447,12 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
                     const algn = pPr.getAttribute("algn");
                     if (algn) {
-                        const alignMap: Record<string, 'left' | 'center' | 'right' | 'justify'> = {
+                        const alignMap: Record<string, 'left' | 'center' | 'right' | 'justify'> = lookupTable({
                             'l': 'left',
                             'ctr': 'center',
                             'r': 'right',
                             'just': 'justify'
-                        };
+                        });
                         if (alignMap[algn]) {
                             (pNode.metadata as any).alignment = alignMap[algn];
                         }
@@ -744,7 +746,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                 // Convert matched number to integer
                 const slideNum = parseInt(match[1]);
                 // Prepare map for this slide
-                slideRelsMap[slideNum] = {};
+                slideRelsMap[slideNum] = Object.create(null);
                 // Parse the rels XML
                 const relsXml = parseXmlString(file.content.toString());
                 // Get all Relationship nodes

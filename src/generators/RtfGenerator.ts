@@ -4,6 +4,7 @@ import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { embedUrl } from '../utils/officeGenUtils.js';
+import { clampInt } from '../utils/numberUtils.js';
 
 /** Nodes whose children are a line of text: a picture in one sits in its line. */
 const LINE_HOLDERS = new Set(['paragraph', 'heading', 'list', 'cell', 'definitionTerm', 'definitionDescription']);
@@ -206,7 +207,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
 
                 case 'heading': {
                     const meta = node.metadata as HeadingMetadata;
-                    const level = meta?.level || 1;
+                    // Written into control words, so only ever a number.
+                    const level = clampInt(meta?.level, 1, 9, 1);
                     const fontSize = 24 + (6 - level) * 4;
                     const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
                     return `${pPr}\\s${level}\\sb240\\sa120{\\b\\fs${fontSize} ${childrenOutput}}\\par\n`;
@@ -228,10 +230,10 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
 
                 case 'list': {
                     const meta = node.metadata as ListMetadata;
-                    const level = meta?.indentation || 0;
+                    const level = clampInt(meta?.indentation, 0, 64, 0);
                     const indent = (level + 1) * 360;
                     const isOrdered = meta?.listType === 'ordered';
-                    const marker = isOrdered ? `${(meta.itemIndex ?? 0) + 1}. ` : '\\bullet ';
+                    const marker = isOrdered ? `${clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1}. ` : '\\bullet ';
                     const listControl = isOrdered ? '\\pndec' : '\\pnbullet';
                     const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
                     return `${pPr}\\li${indent}\\fi-360\\ilvl${level}${listControl} ${marker}${childrenOutput}\\par\n`;

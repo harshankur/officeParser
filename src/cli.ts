@@ -42,6 +42,7 @@ import { OfficeParser } from './OfficeParser.js';
 import { OfficeGenerator } from './OfficeGenerator.js';
 import { OfficeParserAST, OfficeParserConfig, OfficeWarningType, UniversalGeneratorFormat } from './types.js';
 import * as fs from 'fs';
+import { lookupTable } from './utils/lookupUtils.js';
 
 const args = process.argv.slice(2);
 let fileArg: string | undefined;
@@ -97,12 +98,12 @@ const knownEnumValues: Record<string, Set<string>> = {
  * `--putNotesAtLast` would produce a document whose notes are somewhere else entirely, with no
  * indication either flag did nothing.
  */
-const REMOVED_CLI_FLAGS: Record<string, string> = {
+const REMOVED_CLI_FLAGS: Record<string, string> = lookupTable({
     toText: '--toText was removed in v8. Use --to=text instead.',
     ocrLanguage: '--ocrLanguage was removed in v8. Use --ocrConfig.language instead.',
     putNotesAtLast: '--putNotesAtLast was removed in v8. Notes are attached to the node they belong to (node.notes) and rendered in place.',
     outputErrorToConsole: '--outputErrorToConsole was removed in v8. Use --verbose to print warnings and errors.',
-};
+});
 
 // Prefixes used to identify configurations targeted for the generator instead of the parser.
 const generatorPrefixes = [

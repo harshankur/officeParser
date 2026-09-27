@@ -13,6 +13,7 @@
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { OfficeMetadata } from '../types';
 import { parseOfficeDate } from './dateUtils.js';
+import { setOwn } from './lookupUtils.js';
 
 /**
  * Type guard for Element nodes.
@@ -31,7 +32,10 @@ export const isElement = (node: Node): node is Element => {
  * @returns A Document object that can be queried using standard DOM methods
  */
 export const parseXmlString = (xml: string, options: { locator?: boolean } = {}): Document => {
-    const parser = new DOMParser(options);
+    // Recoverable problems (an entity it cannot resolve, which it keeps as written) are not printed:
+    // xmldom writes each to the console by default, so a document could fill a host's logs at will.
+    // A fatal one still throws after this returns.
+    const parser = new DOMParser({ ...options, onError: () => {} });
     // @xmldom/xmldom 0.9.x is strict: a UTF-8 BOM (U+FEFF) prepended to the
     // XML string causes a fatalError because the XML declaration is no longer
     // at position 0. Strip it before parsing.
@@ -230,7 +234,7 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
         for (let i = 0; i < coreProperties.childNodes.length; i++) {
             const child = coreProperties.childNodes[i];
             if (isElement(child)) {
-                metadata.nativeProperties[child.tagName] = child.textContent;
+                setOwn(metadata.nativeProperties, child.tagName, child.textContent);
             }
         }
 
@@ -274,7 +278,7 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
         for (let i = 0; i < officeMeta.childNodes.length; i++) {
             const child = officeMeta.childNodes[i];
             if (isElement(child)) {
-                metadata.nativeProperties[child.tagName] = child.textContent;
+                setOwn(metadata.nativeProperties, child.tagName, child.textContent);
             }
         }
 
@@ -311,16 +315,16 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
                 const valueType = el.getAttribute("meta:value-type") || "string";
                 const raw = el.textContent;
                 if (valueType === "boolean") {
-                    customProperties[name] = raw.toLowerCase() === "true";
+                    setOwn(customProperties, name, raw.toLowerCase() === "true");
                 } else if (valueType === "float") {
                     const num = Number(raw);
-                    if (!isNaN(num)) customProperties[name] = num;
+                    if (!isNaN(num)) setOwn(customProperties, name, num);
                 } else if (valueType === "date" || valueType === "time") {
                     const date = parseOfficeDate(raw);
-                    if (date) customProperties[name] = date;
-                    else customProperties[name] = raw;
+                    if (date) setOwn(customProperties, name, date);
+                    else setOwn(customProperties, name, raw);
                 } else {
-                    customProperties[name] = raw;
+                    setOwn(customProperties, name, raw);
                 }
             }
             if (Object.keys(customProperties).length > 0) {
@@ -373,19 +377,19 @@ export const parseOOXMLCustomProperties = (xmlContent: string): Record<string, s
             const text = el.textContent || '';
 
             if (/vt:lpwstr|vt:lpstr|vt:bstr/.test(tag)) {
-                result[name] = text;
+                setOwn(result, name, text);
             } else if (/vt:bool/.test(tag)) {
-                result[name] = text.toLowerCase() === 'true';
+                setOwn(result, name, text.toLowerCase() === 'true');
             } else if (/vt:(i[1248]|ui[1248]|int|uint|r4|r8|decimal)/.test(tag)) {
                 const num = Number(text);
-                if (!isNaN(num)) result[name] = num;
+                if (!isNaN(num)) setOwn(result, name, num);
             } else if (/vt:filetime|vt:date/.test(tag)) {
                 const date = parseOfficeDate(text);
-                if (date) result[name] = date;
-                else result[name] = text;
+                if (date) setOwn(result, name, date);
+                else setOwn(result, name, text);
             } else if (text) {
                 // Fallback: store as string for any other vt: type
-                result[name] = text;
+                setOwn(result, name, text);
             }
             break; // only one value element per property
         }
@@ -430,7 +434,8 @@ export const parseOOXMLAppProperties = (xmlContent: string): Record<string, stri
  * @returns The decoded string
  */
 export const decodeXmlEntities = (text: string): string => {
-    return text.replace(/&([^;]+);/g, (match, entity) => {
+    // A reference holds no `&`: each `&` without a `;` read on to the end of the text.
+    return text.replace(/&([^;&]+);/g, (match, entity) => {
         if (entity.startsWith('#')) {
             if (entity[1] === 'x' || entity[1] === 'X') {
                 const hex = entity.slice(2);

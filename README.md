@@ -313,6 +313,12 @@ try {
 }
 ```
 
+The signal is checked between steps, and it stops work that waits: OCR, PDF pages, reading an
+archive. Reading a document's own markup (its XML, HTML, Markdown or LaTeX) is synchronous work, and
+a timer cannot fire while it runs, so an abort requested during it takes effect only once it ends.
+To bound the time an untrusted document can take, parse it in a worker thread or child process and
+end that when your time limit passes; the signal alone cannot.
+
 > [!IMPORTANT]
 > **AbortError Propagation**
 > When parsing is cancelled via `AbortSignal`, the parser rejects with a standard `AbortError` (a `DOMException` or an Error with `name: 'AbortError'`).
@@ -807,9 +813,10 @@ Table Node (type: 'table')
         └── children: [ Paragraph | List | Table | ... ]
 ```
 
-- `row` / `col`: zero-based grid position. Generators fill the grid between cells, so a table or sheet whose
-  positions would span more than 2,000,000 empty cells (one cell far from the rest) is laid out closer when written:
-  the rows and columns no cell starts or ends in are left out, and if that is not enough, each row's cells follow one another
+- `row` / `col`: zero-based grid position (a cell without them takes the next place in reading order). Generators fill
+  the grid between cells, so the grids of a document's tables and sheets may hold 1,000,000 empty positions in all (spans
+  count); one holding more than remain (a cell far from the rest) is laid out closer when written: the rows and columns
+  no cell starts or ends in are left out, and if that is not enough, each row's cells follow one another
 - `rowSpan` / `colSpan`: merged cells (DOCX, ODF, HTML, Markdown HTML-tables, and tagged PDF)
 - Cells can contain nested tables
 
@@ -1316,7 +1323,7 @@ Pass as the second argument to `parseOffice(file, config)`.
 | `pdfParserConfig` | `PdfParserConfig` | see below | PDF-specific options ([table below](#pdfparserconfig)) |
 | `texParserConfig` | `TexParserConfig` | `{ today: '' }` | LaTeX options. `today` (`string`): what `\today` prints. `''` (default) prints the date of the parse, as LaTeX prints the date of the compile, in the document's language ("September 25, 2026" in English); set a fixed date, so that the same file parses the same way every day, or a placeholder of your own to find and replace later |
 | `onWarning` | `(issue: OfficeIssue) => void` | (none) | Callback for non-fatal parsing issues |
-| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel parsing (rejects with AbortError). Once it fires the parse never resolves, even when it fires while OCR is recognizing an image |
+| `abortSignal` | `AbortSignal \| null` | `null` | Optional signal to cancel parsing (rejects with AbortError). Once it fires the parse never resolves, even when it fires while OCR is recognizing an image. It cannot interrupt the synchronous reading of a document's markup; see [Cancellation](#cancellation-with-abortsignal) |
 
 ---
 
@@ -1348,7 +1355,7 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 | `generateIds` | `boolean` | `true` | Slug-based heading anchors: `id` attributes on HTML headings, and a `{#slug}` suffix on Markdown headings (`# Title {#title}`, kramdown/Pandoc). Set `false` to omit both, useful when the Markdown is rendered by GFM/CommonMark, which show `{#slug}` as literal text. A top-level option (not under `mdConfig`/`htmlConfig`); it affects HTML, Markdown, DOCX, ODT and LaTeX (the formats that carry a heading anchor/bookmark id; in LaTeX a `\label`). |
 | `renderMetadata` | `boolean` | `false` | Render title/author as a visible header block. Rendered by CSV, DOCX, HTML (and the Puppeteer PDF engine), EPUB, text, ODT, LaTeX (`\maketitle`, or a beamer title frame, unless the content has its own title block) and RTF; the native PDF engine and Markdown do not |
 | `metadataOverrides` | `MetadataOverrides` | `{}` | Override the metadata embedded in the output, merged per field over `ast.metadata` |
-| `includeImages` | `boolean \| 'image-only' \| 'image+ocr-text' \| 'ocr-text-only' \| 'none'` | `true` | How to render an image node. `true`=`'image-only'` (embed the image, no OCR text); `'image+ocr-text'` (image then its recognized/OCR text); `'ocr-text-only'` (OCR text, no image); `false`=`'none'` (omit). In plain-text output an image becomes an `[Image: name]` placeholder (plus OCR text for `'image+ocr-text'`), or just the OCR text for `'ocr-text-only'` |
+| `includeImages` | `boolean \| 'image-only' \| 'image+ocr-text' \| 'ocr-text-only' \| 'none'` | `true` | How to render an image node. `true`=`'image-only'` (embed the image, no OCR text); `'image+ocr-text'` (image then its recognized/OCR text); `'ocr-text-only'` (OCR text, no image); `false`=`'none'` (omit). In plain-text output an image becomes an `[Image: name]` placeholder (plus OCR text for `'image+ocr-text'`), or just the OCR text for `'ocr-text-only'`. In chunks a picture is `[Image: alt]` for its alt text, with its OCR text, except under `'none'` and `'ocr-text-only'` (OCR text only) |
 | `maxInlineImageBytes` | `number` | `1500000` | Max decoded image size, in bytes, that is inlined as a `data:` URI (HTML/Markdown); the base64 URI itself is ~1/3 larger, so a scanned page cannot emit a multi-megabyte line that breaks downstream parsers. Under the default `image-only` mode an image over the cap renders its recognized/OCR text when it has any (multi-line OCR as a fenced block in Markdown), otherwise a compact name reference; Markdown still emits the `IMAGE_NOT_INLINED` warning. Plain text follows the same rule. **Standalone HTML always inlines**, whatever the cap: a self-contained document has nowhere else to resolve the image from. `0` never inlines, `Infinity` always inlines |
 | `includeCharts` | `boolean` | `true` | Include charts: HTML renders an interactive Chart.js canvas, DOCX/ODT/LaTeX render the chart's data as a table, plain text and the native PDF engine render the chart's data text; Markdown and RTF render nothing for a chart. `false` omits charts in every generator |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal anchors from output (HTML, Markdown, DOCX, ODT, LaTeX, RTF) |
@@ -1891,8 +1898,9 @@ internal hardening makes it safe to feed fully untrusted input without your own 
 responsibility for what you feed it, and for the effect a malicious file has on your system, rests
 with you. If you process files from untrusted sources, sanitize and validate them at your own
 boundary, and run the parsing in isolation appropriate to your threat model: sandboxing or
-containerization, memory and time limits, a low-privilege process, and the `abortSignal` and
-`decompressionLimits` options this library exposes. Do not rely on any single library's hardening
+containerization, memory and time limits (a worker you can end: `abortSignal` cannot interrupt a
+parse already running), a low-privilege process, and the `abortSignal` and `decompressionLimits`
+options this library exposes. Do not rely on any single library's hardening
 as a complete defense.
 
 I am the sole maintainer, with no security team behind me. I take legitimate reports seriously and

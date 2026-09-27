@@ -7,6 +7,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { decodeCharacterReference, decodeCharacterReferences } from '../utils/htmlEntities.js';
 import { iframeAllowed } from '../utils/sanitize.js';
 import { ASCII_WHITESPACE, trimAsciiWhitespace, trimEndChars, trimStartChars } from '../utils/textUtils.js';
+import { lookupTable, setOwn } from '../utils/lookupUtils.js';
 
 // Sentinel node type for a standalone bookmark-anchor block (e.g. `<a id="x"></a>` on its
 // own line). A post-parse pass folds these into the following node's anchorIds so they
@@ -44,14 +45,14 @@ const splitFlowArrayItems = (inner: string): string[] => {
  * `danger`) to the canonical AdmonitionMetadata type. Per MARKDOWN_DIALECT.md's
  * Decisions, `danger` folds into `caution` - there is no separate danger type.
  */
-const ADMONITION_TYPE_MAP: Record<string, AdmonitionMetadata['admonitionType']> = {
+const ADMONITION_TYPE_MAP: Record<string, AdmonitionMetadata['admonitionType']> = lookupTable({
     note: 'note',
     tip: 'tip',
     important: 'important',
     warning: 'warning',
     caution: 'caution',
     danger: 'caution'
-};
+});
 
 /** Where the next `-->` is, remembered between calls so that scanning many `<!--` stays linear. */
 interface CommentCloseCache { at: number; from: number }
@@ -338,15 +339,17 @@ function tableRowCells(line: string): string[] {
     const cells: string[] = [];
     let cell = '';
     for (let i = 0; i < line.length; i++) {
+        // `\|` is a pipe in the cell whatever stands before it, as GFM reads it (a backslash before it is
+        // not an escape of its own here): the generator writes a code span's `\|` as `\\|`, which, read
+        // as an escaped backslash and a pipe, split the cell and broke the span.
         if (line[i] === '\\' && line[i + 1] === '|') { cell += '|'; i++; }
-        else if (line[i] === '\\' && i + 1 < line.length) { cell += line[i] + line[i + 1]; i++; }
         else if (line[i] === '|') { cells.push(cell); cell = ''; }
         else cell += line[i];
     }
     cells.push(cell);
     if (cells.length > 1 && !trimAsciiWhitespace(cells[0]) && trimStartChars(line, ASCII_WHITESPACE).startsWith('|')) cells.shift();
     const end = trimEndChars(line, ASCII_WHITESPACE);
-    if (cells.length > 1 && !trimAsciiWhitespace(cells[cells.length - 1]) && end.endsWith('|') && !isEscapedAt(end, end.length - 1)) cells.pop();
+    if (cells.length > 1 && !trimAsciiWhitespace(cells[cells.length - 1]) && end.endsWith('|') && end[end.length - 2] !== '\\') cells.pop();
     return cells;
 }
 
@@ -500,7 +503,10 @@ function addItemContentColumns(block: string, columns: Set<number>): void {
         if (!LIST_ITEM_START.test(line)) continue;
         const item = /^([ \t]*)([-*+]|\d{1,9}[.)])([ \t]*)/.exec(line)!;
         const indent = indentColumn(item[1]);
-        const spaces = indentColumn(item[3]);
+        // The space after the marker counted from where the marker ends: a tab there reaches the next
+        // multiple of four from that column, not from the line's start.
+        const markerEnd = indent + item[2].length;
+        const spaces = indentColumn(' '.repeat(markerEnd) + item[3]) - markerEnd;
         const empty = !line.slice(item[0].length).trim();
         columns.add(indent + item[2].length + (empty || spaces > 4 ? 1 : spaces));
     }
@@ -606,7 +612,7 @@ const LINK_DESTINATION = (() => {
  * - `footnoteId` (`[^id]`), `citationKey` (`[@key]`), `wikiPage`/`wikiAlias` (`[[page|alias]]`),
  *   `refBang`/`refText`/`refId` (`[text][ref]`, `[text][]`), and `shortBang`/`shortText` (`[text]`,
  *   the most generic bracket pattern, so last among those starting with `[`).
- * - `autolinkUrl` (`<https://...>`), `mathDisplay` (`$$...$$`, before `mathInline`, which would
+ * - `autolinkUrl` (`<https://...>`), `autolinkEmail` (`<me@example.com>`, a mail link), `mathDisplay` (`$$...$$`, before `mathInline`, which would
  *   otherwise match its inner `$...$`), and `mathInline` (`$...$`, with no whitespace just inside
  *   either `$`, the Pandoc/KaTeX heuristic that keeps "$5 and $10" as text).
  *
@@ -637,6 +643,7 @@ const INLINE_TOKENS = [
     String.raw`(?<refBang>!?)\[(?<refText>[^\[\]\n]*)\]\[(?<refId>[^\[\]\n]*)\]`,
     String.raw`(?<shortBang>!?)\[(?<shortText>[^\[\]\n]+)\]`,
     String.raw`<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>`,
+    String.raw`<(?<autolinkEmail>[\w.!#$%&'*+\/=?^\x60{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)>`,
     String.raw`\$\$(?!\$)(?<mathDisplay>(?:\\[\s\S]|[^$\\])+?)\$\$`,
     String.raw`\$(?!\s)(?<mathInline>[^$\n]+?)(?<!\s)\$`,
 ].join('|');
@@ -671,30 +678,50 @@ function liftFencedCode(text: string, replace: (lang: string, code: string) => s
     }
     // The list items the scan is inside, innermost last: the column each one's content starts at.
     const items: { column: number; start: number }[] = [];
-    // For a list item holding a fence, computed once: per fence character, the longest closing
-    // fence indented as the item's fences are (up to three spaces past its content) on each of its
-    // lines or any later one of it, where a line with content indented less than its content ends
-    // it. An opener in the item is then decided at once, as a top-level one is.
-    const itemClosers = new Map<number, Record<string, Int32Array>>();
+    // Every closing fence, in order, and for each line the next line at or after it holding content:
+    // an item's end is found by stepping over its content lines only, not its blank ones.
+    const closers: { at: number; indent: number; char: string; length: number }[] = [];
+    const nextContent = new Int32Array(lines.length + 1).fill(lines.length);
+    for (let i = lines.length - 1; i >= 0; i--) {
+        nextContent[i] = trimAsciiWhitespace(lines[i]) ? i : nextContent[i + 1];
+    }
+    for (let i = 0; i < lines.length; i++) {
+        const close = closingFence.exec(lines[i]);
+        if (close) closers.push({ at: i, indent: close[1].length, char: close[2][0], length: close[2].length });
+    }
+    /** The index in `list` (ascending `at`) of the first entry after line `line`. */
+    const firstAfter = (list: { at: number }[], line: number) => {
+        let lo = 0, hi = list.length;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid].at <= line) lo = mid + 1; else hi = mid; }
+        return lo;
+    };
+    // For a list item holding a fence, computed once: the closing fences indented as the item's fences
+    // are (up to three spaces past its content) among its lines, where a line with content indented
+    // less than its content ends it, and per fence character the longest of them from each one on. An
+    // opener in the item is then decided at once, as a top-level one is. Only those fences are kept,
+    // not a value for each of the item's lines: items nested in items, each holding an unclosed fence
+    // and ending in blank lines, took time and memory for every line of every one of them.
+    const itemClosers = new Map<number, { list: { at: number }[]; longest: Record<string, Int32Array> }>();
     const closersIn = (item: { column: number; start: number }) => {
-        let longest = itemClosers.get(item.start);
-        if (!longest) {
-            let end = item.start + 1;
-            while (end < lines.length && !(trimAsciiWhitespace(lines[end]) && indentOf(lines[end]) < item.column)) end++;
-            const size = end - item.start;
-            longest = { '`': new Int32Array(size + 1), '~': new Int32Array(size + 1) };
-            for (let k = end - 1; k > item.start; k--) {
-                const at = k - item.start;
-                longest['`'][at] = longest['`'][at + 1];
-                longest['~'][at] = longest['~'][at + 1];
-                const close = closingFence.exec(lines[k]);
-                if (close && close[1].length >= item.column && close[1].length - item.column <= 3) {
-                    longest[close[2][0]][at] = Math.max(longest[close[2][0]][at], close[2].length);
-                }
+        let found = itemClosers.get(item.start);
+        if (!found) {
+            let end = nextContent[item.start + 1] ?? lines.length;
+            while (end < lines.length && indentOf(lines[end]) >= item.column) end = nextContent[end + 1];
+            const list: { at: number; char: string; length: number }[] = [];
+            for (let k = firstAfter(closers, item.start); k < closers.length && closers[k].at < end; k++) {
+                const close = closers[k];
+                if (close.indent >= item.column && close.indent - item.column <= 3) list.push(close);
             }
-            itemClosers.set(item.start, longest);
+            const longest = { '`': new Int32Array(list.length + 1), '~': new Int32Array(list.length + 1) };
+            for (let k = list.length - 1; k >= 0; k--) {
+                longest['`'][k] = longest['`'][k + 1];
+                longest['~'][k] = longest['~'][k + 1];
+                longest[list[k].char as '`' | '~'][k] = Math.max(longest[list[k].char as '`' | '~'][k], list[k].length);
+            }
+            found = { list, longest };
+            itemClosers.set(item.start, found);
         }
-        return longest;
+        return found;
     };
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -712,7 +739,8 @@ function liftFencedCode(text: string, replace: (lang: string, code: string) => s
                 const close = closingFence.exec(candidate);
                 return !!close && close[2][0] === char && close[2].length >= fence.length && close[1].length >= base && close[1].length - base <= 3;
             };
-            const closed = container ? closersIn(container)[char][i + 1 - container.start] >= fence.length : longestAfter[char][i + 1] >= fence.length;
+            const inItem = container && closersIn(container);
+            const closed = inItem ? inItem.longest[char][firstAfter(inItem.list, i)] >= fence.length : longestAfter[char][i + 1] >= fence.length;
             if (closed) {
                 let j = i + 1;
                 while (!closes(lines[j])) j++;
@@ -753,7 +781,12 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // generator writes for a rule or a page, slide or sheet boundary starting the document.
         // Read as front matter, everything to the next rule was lost.)
         const endIdx = textStr.indexOf('\n---\n', 4);
-        if (endIdx !== -1) {
+        // Front matter is YAML: each line a `key: value` (a list item, an indented or a comment line
+        // after one). Otherwise `---`, text and `---` are a rule and a setext heading, as Pandoc reads
+        // them; read as front matter, the text was lost.
+        const isYaml = endIdx !== -1 && textStr.substring(4, endIdx).split('\n').every(line =>
+            !line.trim() || /^[^\s:#][^:]*:(?:\s|$)/.test(line) || /^\s+\S|^-\s|^#/.test(line));
+        if (endIdx !== -1 && isYaml) {
             const frontMatter = textStr.substring(4, endIdx);
             textStr = textStr.substring(endIdx + 5);
 
@@ -797,7 +830,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     else if (val === 'false') parsedVal = false;
                     else if (!isNaN(Number(val)) && val !== '') parsedVal = Number(val);
 
-                    nativeProps[key] = parsedVal;
+                    setOwn(nativeProps, key, parsedVal);
 
                     if (key === 'title') metadata.title = val;
                     else if (key === 'author') metadata.author = val;
@@ -805,7 +838,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     else if (key === 'modified') metadata.modified = new Date(val);
                     else if (key === 'description') metadata.description = val;
                     else {
-                        customProps[key] = parsedVal;
+                        setOwn(customProps, key, parsedVal);
                     }
                 }
             }
@@ -979,8 +1012,17 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // splitting, for the same reason as footnotes/abbreviations: they conventionally
     // live at the end of the document, after every place they're referenced. Keyed by
     // trimmed/lowercased label, matching CommonMark's case-insensitive reference matching.
+    // A label ends at its first unescaped `]` (`[Step \[2\]: configure](url)`, a link, was read as the
+    // label `Step \[2\` and the paragraph lost), and a definition does not interrupt a paragraph: one
+    // on the line after text (`- item` then `[x]: y`) is that text's continuation.
     const linkDefinitions = new Map<string, { url: string; title?: string }>();
-    textStr = textStr.replace(/^\[([^\]]{1,999})\]:[ \t]*(\S+)(?:[ \t]+"((?:[^"\\]|\\.)*)")?[ \t]*$/gm, (_match, label, url, title) => {
+    let lastDefinitionEnd = -1;
+    textStr = textStr.replace(/^\[((?:[^\]\\]|\\[\s\S]){1,999})\]:[ \t]*(\S+)(?:[ \t]+"((?:[^"\\]|\\.)*)")?[ \t]*$/gm, (match: string, label: string, url: string, title: string | undefined, offset: number, whole: string) => {
+        if (offset > 0 && lastDefinitionEnd !== offset - 1) {
+            const previousLine = whole.slice(whole.lastIndexOf('\n', offset - 2) + 1, offset - 1);
+            if (trimAsciiWhitespace(previousLine)) return match;
+        }
+        lastDefinitionEnd = offset + match.length;
         linkDefinitions.set(label.trim().toLowerCase(), { url: decodeMarkdownText(url), title: title === undefined ? undefined : decodeMarkdownText(title) });
         return '';
     });
@@ -1269,8 +1311,12 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     nodes.push(plainText(`${g.shortBang}[${label}]`));
                 }
             } else if (g.autolinkUrl !== undefined) { // <url> autolink
-                const url = g.autolinkUrl;
-                nodes.push({ type: 'text', text: decodeCharacterReferences(url), formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined, metadata: { link: url, linkType: 'external' } as TextMetadata });
+                // Its references decoded in the target too, as in the text (CommonMark reads them in URLs):
+                // left in the target, `&amp;` was written back as `&amp;amp;`.
+                const url = decodeCharacterReferences(g.autolinkUrl);
+                nodes.push({ type: 'text', text: url, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined, metadata: { link: url, linkType: 'external' } as TextMetadata });
+            } else if (g.autolinkEmail !== undefined) { // <address> autolink: a mail link (CommonMark)
+                nodes.push({ type: 'text', text: g.autolinkEmail, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined, metadata: { link: `mailto:${g.autolinkEmail}`, linkType: 'external' } as TextMetadata });
             } else if (g.mathDisplay !== undefined) { // Display math inside the text
                 // As KaTeX, MathJax, GitLab and Pandoc read it: display math, wherever it is written.
                 if (!g.mathDisplay.trim()) nodes.push(plainText(match[0]));
@@ -1460,25 +1506,37 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     const markdownPieces: string[] = [];
     const pieceNonce = Math.random().toString(36).slice(2);
     const PIECE_TOKEN = new RegExp(`\uE000${pieceNonce}:(\\d+)\uE001`, 'g');
+    const isInlineNode = (node: OfficeContentNode) => node.type === 'text' || node.type === 'image' || node.type === 'break'
+        || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math === 'inline');
     const restoreMarkdownPieces = async (nodes: OfficeContentNode[]): Promise<OfficeContentNode[]> => {
+        let changed = false;
         const out: OfficeContentNode[] = [];
         for (const node of nodes) {
-            if (node.children?.length) node.children = await restoreMarkdownPieces(node.children);
-            if (node.type !== 'text' || !node.text?.includes('\uE000')) {
-                // A paragraph that a piece of several blocks landed in is those blocks, and its runs.
-                if (node.type === 'paragraph' && node.children?.some(child => child.type !== 'text' && child.type !== 'image' && child.type !== 'break' && !(child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math === 'inline'))) {
-                    let run: OfficeContentNode[] = [];
-                    const flush = () => { if (run.length) out.push({ ...node, children: run }); run = []; };
-                    for (const child of node.children) {
-                        if (child.type === 'text' || child.type === 'image' || child.type === 'break' || child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math === 'inline') run.push(child);
-                        else { flush(); out.push(child); }
+            if (node.children?.length) {
+                const restored = await restoreMarkdownPieces(node.children);
+                if (restored !== node.children) {
+                    node.children = restored;
+                    // A paragraph a piece's blocks landed in is those blocks, and its runs of text.
+                    if (node.type === 'paragraph' && restored.some(child => !isInlineNode(child))) {
+                        changed = true;
+                        let run: OfficeContentNode[] = [];
+                        const flush = () => { if (run.some(child => child.type !== 'text' || child.text?.trim())) out.push({ ...node, children: run }); run = []; };
+                        for (const child of restored) {
+                            if (isInlineNode(child)) run.push(child);
+                            else { flush(); out.push(child); }
+                        }
+                        flush();
+                        continue;
                     }
-                    flush();
-                    continue;
                 }
+            }
+            if (node.type !== 'text' || !node.text?.includes('\uE000')) {
                 out.push(node);
                 continue;
             }
+            // Each piece is a block of its own, as blank lines around it make it (a paragraph beside the
+            // text of the cell): two pieces ran together as one line.
+            changed = true;
             let last = 0;
             for (const match of node.text.matchAll(PIECE_TOKEN)) {
                 const before = node.text.slice(last, match.index);
@@ -1486,15 +1544,27 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 const parsed: OfficeContentNode[] = [];
                 await parseBlocks(splitIntoBlocks(markdownPieces[Number(match[1])] ?? ''), parsed);
                 foldAnchorPlaceholders(parsed);
-                // One paragraph joins the text around it; blocks stand as blocks.
-                if (parsed.length === 1 && parsed[0].type === 'paragraph') appendAll(out, parsed[0].children ?? []);
-                else appendAll(out, parsed);
+                appendAll(out, parsed);
                 last = match.index! + match[0].length;
             }
             const after = node.text.slice(last);
             if (after.trim()) out.push({ ...node, text: after });
         }
-        return out;
+        return changed ? out : nodes;
+    };
+    // A piece that landed where no Markdown is read (the text of a `<pre>`, an attribute such as alt
+    // text) is that text, as written: its token was left there.
+    const restoreRawPieces = (nodes: OfficeContentNode[]): void => {
+        const raw = (value: string) => value.replace(PIECE_TOKEN, (_, index: string) => markdownPieces[Number(index)] ?? '');
+        for (const node of nodes) {
+            if (typeof node.text === 'string' && node.text.includes('\uE000')) node.text = raw(node.text);
+            for (const record of [node.metadata as Record<string, unknown> | undefined, (node as any).htmlAttributes as Record<string, unknown> | undefined]) {
+                if (!record) continue;
+                for (const [key, value] of Object.entries(record)) if (typeof value === 'string' && value.includes('\uE000')) record[key] = raw(value);
+            }
+            if (node.children?.length) restoreRawPieces(node.children);
+            if (node.notes?.length) restoreRawPieces(node.notes);
+        }
     };
 
     const splitIntoBlocks = (text: string): string[] => {
@@ -1551,18 +1621,25 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // see the "Lists" block dispatch below, which merges such a line into the
         // previous item's content instead of dropping it.
         let inList: boolean = false;
+        // Whether the sub-block's second line is a table's delimiter row, found when that line is added:
+        // tested before every line, a long second line was read again for each line after it.
+        let inTable = false;
+        const add = (line: string) => {
+            currentSubBlock.push(line);
+            if (currentSubBlock.length === 2) inTable = line.includes('-') && /^[-:| \t]+$/.test(line);
+        };
         const flush = () => {
             if (currentSubBlock.length > 0) {
                 separators.push(blocks.length === firstBlock ? rawSeparators[r] : '\n');
                 blocks.push(currentSubBlock.join('\n'));
             }
             currentSubBlock = [];
+            inTable = false;
         };
         for (const line of lines) {
             checkAbortSignal(config.abortSignal);
             // Paragraph text is open when the sub-block holds lines that are neither a list's nor a
             // table's: what follows it may continue it rather than start a block (CommonMark).
-            const inTable: boolean = currentSubBlock.length >= 2 && currentSubBlock[1].includes('-') && /^[-:| \t]+$/.test(currentSubBlock[1]);
             const inParagraph: boolean = currentSubBlock.length > 0 && !inList && !inTable;
             // A line of `=` or `-` under paragraph text is a setext heading's underline; otherwise
             // three or more `-`, `*` or `_` (spaces between allowed) are a thematic break, which
@@ -1589,7 +1666,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
             if (isSetextUnderline) {
                 // The underline ends the heading's block, so the heading is its last line.
-                currentSubBlock.push(line);
+                add(line);
                 flush();
                 inList = false;
                 continue;
@@ -1601,7 +1678,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             // 3. Current line is an HTML tag (div)
             if (isHeading || isRule || isHtmlTag || staysInListMode !== inList) flush();
 
-            currentSubBlock.push(line);
+            add(line);
             inList = staysInListMode;
 
             // Headings, thematic breaks and HTML tags are single-line blocks for our state machine
@@ -1622,7 +1699,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // the current block OPENS with an INDENTED marker. An unindented `- b` after a blank line is
     // deliberately left split (a flat loose list keeps its own listId), and anything that is not
     // an indented marker (continuation text, indented code, placeholders) never triggers a merge.
-    const indentedMarkerStart = /^(?: {2,}|\t)[ \t]*(?:[-*+]|\d+[.)])(?:[ \t]|$)/;
+    // (Two spaces, then any more: ` {2,}[ \t]*` tried every split of a long run of them.)
+    const indentedMarkerStart = /^(?: {2}|\t)[ \t]*(?:[-*+]|\d+[.)])(?:[ \t]|$)/;
     const mergedBlocks: string[] = [];
     // Whether the last merged block is an indented code block, and a list: a list takes an indented
     // marker after it, and an indented code block the one after it (see below).
@@ -1931,8 +2009,13 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const codeLines = untrimmedBlock.split('\n');
             const nonBlankLines = codeLines.filter(l => trimAsciiWhitespace(l).length > 0);
             if (nonBlankLines.length > 0 && nonBlankLines.every(l => /^(?: {4}|\t)/.test(l))) {
-                const stripped = codeLines.map(l => l.replace(/^(?: {4}|\t)/, '')).join('\n');
-                content.push({ type: 'code', text: stripped });
+                // Blank lines before and after the code are not part of it (CommonMark): the one
+                // ending the document came through as a trailing line break.
+                const codeText = codeLines.map(l => l.replace(/^(?: {4}|\t)/, ''));
+                let first = 0, last = codeText.length;
+                while (first < last && /^[ \t]*$/.test(codeText[first])) first++;
+                while (last > first && /^[ \t]*$/.test(codeText[last - 1])) last--;
+                content.push({ type: 'code', text: codeText.slice(first, last).join('\n') });
                 continue;
             }
         }
@@ -2069,8 +2152,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Lists
         if (LIST_ITEM_START.test(block.split('\n', 1)[0])) {
             const lines = block.split('\n');
-            const listId = `md-list-${listIdCounter++}`;
+            let listId = `md-list-${listIdCounter++}`;
             const listCounters = new Map<number, number>();
+            // The marker each level's list uses (its bullet, or an ordered list's `.` or `)`): another
+            // starts a new list, as CommonMark reads it (`1. one` after `- b` counted on from the bullets).
+            const levelMarkers = new Map<number, string>();
             // Relative indent stack (not a fixed-width divisor) so nesting level is
             // computed from what indentation actually appeared in this block, rather
             // than assuming a specific indent width. This makes the parser agnostic to
@@ -2106,6 +2192,14 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     const marker = match[2];
                     const isOrdered = !!marker.match(/\d+[.)]/);
                     const listType: 'ordered' | 'unordered' = isOrdered ? 'ordered' : 'unordered';
+                    const markerKind = isOrdered ? marker.slice(-1) : marker;
+                    const previousKind = levelMarkers.get(level);
+                    if (previousKind !== undefined && previousKind !== markerKind) {
+                        listCounters.delete(level);
+                        if (level === 0) listId = `md-list-${listIdCounter++}`;
+                    }
+                    levelMarkers.set(level, markerKind);
+                    for (const key of [...levelMarkers.keys()]) if (key > level) levelMarkers.delete(key);
 
                     if (listCounters.get(level) === undefined) {
                         if (isOrdered) {
@@ -2170,7 +2264,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Table (Simple Pipe or HTML). An HTML table is in an HTML block, which a block-level tag starts
         // a line of (`<table>`, or a `<center>`, `<figure>` or `<p>` holding it): `<table>` in a code
         // span or a sentence is text.
-        const htmlTable = /<table\b/i.test(block) && HTML_BLOCK_LINE.test(block);
+        // The HTML block starts at that line: text before it is Markdown (a paragraph the block
+        // interrupts), and `<table>` there, in a code span, is text.
+        const htmlStart = HTML_BLOCK_LINE.exec(block);
+        const htmlTable = !!htmlStart && /<table\b/i.test(block.slice(htmlStart.index));
+        if (htmlTable && htmlStart!.index > 0) {
+            const cut = htmlStart!.index + 1;
+            await parseBlocks([block.slice(0, htmlStart!.index)], content);
+            block = block.slice(cut);
+        }
         if ((block.includes('|') && hasTableDelimiterRow(block)) || htmlTable) {
             // Pandoc-style trailing attribute list (`{align=right}`) immediately after the
             // table, or Kramdown's `{: align=right}` on its own following line - both land
@@ -2189,7 +2291,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 // pictures join this document's attachments, and its footnote references take their
                 // `[^id]:` definitions from this document.
                 const html = await parseHtml(Buffer.from(block), config);
-                if (markdownPieces.length) html.content = await restoreMarkdownPieces(html.content);
+                if (markdownPieces.length) {
+                    html.content = await restoreMarkdownPieces(html.content);
+                    restoreRawPieces(html.content);
+                }
                 if (html.content.some(n => n.type === 'table')) {
                     const renamed = new Map<string, string>();
                     for (const attachment of html.attachments) {
@@ -2224,7 +2329,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 // `--:` right; a bare `--` column has none), so every cell can carry its column's
                 // alignment on CellMetadata.align (the header row precedes the separator, so a
                 // per-cell pass alone could not see it).
-                const sepLine = lines.find(l => l.match(/^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/));
+                // The delimiter row is the first such line after the header: a body row of `-` or `:`
+                // cells (`| - | - |`) is a row, which was dropped as another delimiter row.
+                const sepIndex = lines.findIndex((l, i) => i >= 1 && /^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/.test(l));
+                const sepLine = sepIndex >= 0 ? lines[sepIndex] : undefined;
                 const columnAligns: ('left' | 'center' | 'right' | null)[] = sepLine
                     ? sepLine.replace(/^\||\|$/g, '').split('|').map(c => {
                         const t = c.trim();
@@ -2233,7 +2341,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     })
                     : [];
                 for (let i = 0; i < lines.length; i++) {
-                    if (lines[i].match(/^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/)) continue; // Separator row (per-cell `:?-+:?`, GFM-style; accepts short cells like `|-|-|`)
+                    if (i === sepIndex) continue; // Separator row (per-cell `:?-+:?`, GFM-style; accepts short cells like `|-|-|`)
 
                     const cellsStr = tableRowCells(lines[i]);
                     const cells: OfficeContentNode[] = cellsStr.map((c, colIdx) => {

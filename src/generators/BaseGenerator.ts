@@ -170,8 +170,13 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
 
         let childrenOutput = '';
         if (node.children) {
+            // The output of the child before, for what goes between it and the next (see childSeparator).
+            let previous = '';
             for (const child of node.children) {
-                childrenOutput += await this.processNodeRecursive(child, processor);
+                const piece = await this.processNodeRecursive(child, processor);
+                if (!piece) continue;
+                childrenOutput += this.childSeparator(previous, child, piece) + piece;
+                previous = piece;
             }
         }
 
@@ -190,6 +195,15 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         }
 
         return result;
+    }
+
+    /**
+     * What goes between `previous`, the output of a node's child (empty for none), and `piece`, the
+     * output of the child after it, `child`. Given that output alone, not all the node's output so
+     * far: reading the end of a string built up piece by piece copies all of it each time.
+     */
+    protected childSeparator(_previous: string, _child: OfficeContentNode, _piece: string): string {
+        return '';
     }
 
     /**

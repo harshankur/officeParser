@@ -1,5 +1,6 @@
 import { OfficeContentNode, OfficeErrorType, OfficeIssue, StructuredStyleMapping } from '../types.js';
 import { getOfficeError } from './errorUtils.js';
+import { lookupTable } from './lookupUtils.js';
 
 export interface StyleMapping {
     selector: {
@@ -113,12 +114,13 @@ export class StyleMapper {
         }
 
         // Metadata attributes
-        if (node.metadata && attr in node.metadata) {
+        // Own fields only: `constructor` or `toString` is in every object, and answered with a function.
+        if (node.metadata && Object.prototype.hasOwnProperty.call(node.metadata, attr)) {
             return (node.metadata as any)[attr];
         }
 
         // Formatting attributes
-        if (node.formatting && attr in node.formatting) {
+        if (node.formatting && Object.prototype.hasOwnProperty.call(node.formatting, attr)) {
             return (node.formatting as any)[attr];
         }
 
@@ -177,7 +179,7 @@ export class StyleMapper {
             throw getOfficeError(OfficeErrorType.INVALID_SELECTOR, this.issues, selectorStr);
         }
 
-        const typeMap: Record<string, string> = {
+        const typeMap: Record<string, string> = lookupTable({
             'p': 'paragraph',
             'h': 'heading',
             't': 'table',
@@ -185,7 +187,7 @@ export class StyleMapper {
             'td': 'cell',
             'li': 'list',
             'img': 'image'
-        };
+        });
 
         const nodeType = selectorMatch[1] ? (typeMap[selectorMatch[1]] || selectorMatch[1]) : undefined;
         const attrStr = selectorMatch[2];

@@ -8,6 +8,7 @@ import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, 
 import { isSourceComment } from '../utils/commentUtils.js';
 import { contentHash, imageToTextPdf, newDecodeBudget } from '../utils/textPdf.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { lookupTable } from '../utils/lookupUtils.js';
 
 /**
  * A line break inside a paragraph. `\newline` (and `\\`) raise "There's no line here to end" when
@@ -32,7 +33,7 @@ const IMAGE_PROBE_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.eps', '.PDF',
  * else (GIF, BMP, TIFF, WebP, SVG, EMF) has to be converted first, so it is bundled but drawn as a
  * framed placeholder.
  */
-const INCLUDABLE_IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'application/pdf': 'pdf' };
+const INCLUDABLE_IMAGE_EXT: Record<string, string> = lookupTable({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'application/pdf': 'pdf' });
 
 /** LaTeX's own nesting limit for `itemize`/`enumerate` ("Too deeply nested" past it); beamer allows one level fewer. */
 const MAX_LIST_DEPTH = 4;
@@ -129,8 +130,13 @@ interface RenderContext {
     display: boolean;
     /** Inside a moving argument (heading, frame title): fragile commands take `\protect`, line breaks become spaces. */
     moving: boolean;
-    /** Footnotes: written in place, as marks with deferred text (inside `tabular`), or dropped (page headers). */
-    notes: 'direct' | 'deferred' | 'omit';
+    /**
+     * Footnotes: written in place, as marks with deferred text (inside `tabular`), as marks whose text
+     * follows the footnote they stand in (in a footnote's own text), in place in a `longtable` cell
+     * (which holds a footnote's text back), in parentheses where no mark can be numbered (in an
+     * endnote's, a deferred footnote's or a cell footnote's text), or dropped (page headers).
+     */
+    notes: 'direct' | 'deferred' | 'cell' | 'nested' | 'parenthetical' | 'omit';
     /** `\label`s may be placed. */
     labels: boolean;
     /** Tallest an image may be drawn here. */
@@ -254,6 +260,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private readonly emittedLabels = new Set<string>();
 
     private deferredFootnotes: string[] = [];
+    /** Texts of the notes a note's own text refers to, written as `\\footnotetext` after it (see noteMark). */
+    private nestedFootnotes: string[] = [];
     /** Colors the body uses, as validated `RRGGBB` hex, each defined once by name. */
     private readonly colors = new Set<string>();
     private readonly warnedFeatures = new Set<string>();
@@ -923,11 +931,11 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      * A note's body. Its runs' sizes are dropped: LaTeX sets footnotes and endnotes in its own
      * smaller size, and a source note's explicit size (Word's 10pt footnote text) says the same.
      */
-    private async noteBody(note: OfficeContentNode): Promise<string> {
+    private async noteBody(note: OfficeContentNode, inner: RenderContext['notes']): Promise<string> {
         const savedSize = this.suppressSize;
         this.suppressSize = true;
         try {
-            return (await this.withCtx({ ...this.argumentCtx(), notes: 'omit' }, () => this.renderFlow(this.bodyBlocks(note)))).trim();
+            return (await this.withCtx({ ...this.argumentCtx(), notes: inner }, () => this.renderFlow(this.bodyBlocks(note)))).trim();
         } finally {
             this.suppressSize = savedSize;
         }
@@ -940,16 +948,38 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private async noteMark(note: OfficeContentNode): Promise<string> {
         if (this.ctx.notes === 'omit') return '';
         const meta = note.metadata as NoteMetadata | undefined;
-        const body = await this.noteBody(note);
+        // A note a note's text refers to was left out. In a footnote written in place it is a mark,
+        // its text after that footnote; where no mark can be numbered with its text (in an endnote,
+        // printed at the end, or a footnote whose text follows a table) it is in parentheses.
+        if (this.ctx.notes === 'nested') {
+            this.nestedFootnotes.push(await this.noteBody(note, 'parenthetical'));
+            return '\\footnotemark{}';
+        }
+        if (this.ctx.notes === 'parenthetical') return ` (${await this.noteBody(note, 'parenthetical')})`;
+        const direct = meta?.noteType !== 'endnote' && this.ctx.notes === 'direct';
+        const outerNested = this.nestedFootnotes;
+        this.nestedFootnotes = [];
+        let body: string;
+        let nested: string[];
+        try {
+            body = await this.noteBody(note, direct ? 'nested' : 'parenthetical');
+        } finally {
+            nested = this.nestedFootnotes;
+            this.nestedFootnotes = outerNested;
+        }
+        // The texts of the notes this note's text refers to, numbered to match their marks in it.
+        const nestedTexts = nested.length
+            ? `\\addtocounter{footnote}{-${nested.length}}${nested.map(b => `\\stepcounter{footnote}\\footnotetext{${b}}`).join('')}`
+            : '';
         if (meta?.noteType === 'endnote') {
             this.uses.endnotes = true;
-            return `${this.cmd('endnote')}{${body}}`;
+            return `${this.cmd('endnote')}{${body}}${nestedTexts}`;
         }
         if (this.ctx.notes === 'deferred') {
             this.deferredFootnotes.push(body);
             return '\\footnotemark{}';
         }
-        return `${this.cmd('footnote')}{${body}}`;
+        return `${this.cmd('footnote')}{${body}}${nestedTexts}`;
     }
 
     /** A note with no reference point (an orphan definition): its mark on a line of its own. */
@@ -1208,8 +1238,15 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private async tableBand(rows: OfficeContentNode[], rowOverrides: (string | false | void)[], grid: TableSlot[][], cols: number, firstBand: boolean): Promise<string> {
         const longtable = this.ctx.longtable;
         if (longtable) this.uses.longtable = true;
-        const ownsDeferral = !longtable && this.ctx.notes === 'direct';
-        const cellNotes = longtable ? this.ctx.notes : (this.ctx.notes === 'omit' ? 'omit' : 'deferred');
+        // Where footnotes are written in place (the body, a longtable's cell), a tabular's notes are
+        // marks whose texts it writes after itself; in a tabular within a tabular, the outer one
+        // writes them; elsewhere (a note's own text, a page header) a table's notes are what that
+        // place makes them. A longtable's cells write theirs in place.
+        const inPlace = this.ctx.notes === 'direct' || this.ctx.notes === 'cell';
+        const ownsDeferral = !longtable && inPlace;
+        const cellNotes: RenderContext['notes'] = longtable
+            ? (this.ctx.notes === 'direct' ? 'cell' : this.ctx.notes)
+            : (inPlace || this.ctx.notes === 'deferred' ? 'deferred' : this.ctx.notes);
 
         const env = longtable ? 'longtable' : 'tabular';
         const compact = TABLE_COMPACT_STEPS.find(step => cols >= step.minCols);
@@ -1935,7 +1972,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 const collect = (n: OfficeContentNode) => { if (n.notes) notes.push(...n.notes); n.children?.forEach(collect); };
                 collect(node);
                 let thanks = '';
-                for (const note of notes) thanks += `\\thanks{${await this.noteBody(note)}}`;
+                for (const note of notes) thanks += `\\thanks{${await this.noteBody(note, 'parenthetical')}}`;
                 return runs + thanks;
             });
         };

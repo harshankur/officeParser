@@ -26,8 +26,9 @@ import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { mathmlToLatex } from '../utils/mathUtils.js';
-import { clampRepeat } from '../utils/numberUtils.js';
+import { cellSpan, clampRepeat, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { TextBuilder } from '../utils/textUtils.js';
+import { lookupTable, plainRecord } from '../utils/lookupUtils.js';
 
 /**
  * Tracks how many table cells a single document has been allowed to materialize.
@@ -256,8 +257,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
     // Style Map: styleName -> TextFormatting
     // Inline style parsing (from content.xml automatic styles)
-    const styleMap: { [key: string]: TextFormatting } = {};
-    const paragraphStyleMap: { [key: string]: ParagraphStyleInfo } = {};
+    // Null-prototype, keyed by the document's own style names (see listCounters below).
+    const styleMap: { [key: string]: TextFormatting } = Object.create(null);
+    const paragraphStyleMap: { [key: string]: ParagraphStyleInfo } = Object.create(null);
     // Null-prototype: `listId` is the raw document `text:style-name`/`xml:id`, so a plain `{}` lets a
     // `listId="__proto__"` write onto `Object.prototype` two levels down (global pollution from one
     // crafted ODF). With no prototype the `__proto__` key is an ordinary own property.
@@ -285,14 +287,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             if (paraProps) {
                 const textAlign = paraProps.getAttribute("fo:text-align");
                 if (textAlign) {
-                    const alignMap: Record<string, 'left' | 'center' | 'right' | 'justify'> = {
+                    const alignMap: Record<string, 'left' | 'center' | 'right' | 'justify'> = lookupTable({
                         'start': 'left',
                         'left': 'left',
                         'center': 'center',
                         'end': 'right',
                         'right': 'right',
                         'justify': 'justify'
-                    };
+                    });
                     if (alignMap[textAlign]) {
                         styleInfo.alignment = alignMap[textAlign];
                     }
@@ -857,8 +859,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 // Built without reading back what it holds, which would copy all of it per paragraph.
                 const cellTextParts = new TextBuilder();
                 const colsRepeated = toRepeatCount(cell.getAttribute("table:number-columns-repeated"));
-                const colSpan = parseInt(cell.getAttribute("table:number-columns-spanned") || "1");
-                const rowSpan = parseInt(cell.getAttribute("table:number-rows-spanned") || "1");
+                const colSpan = cellSpan(cell.getAttribute("table:number-columns-spanned"), MAX_COL_SPAN);
+                const rowSpan = cellSpan(cell.getAttribute("table:number-rows-spanned"), MAX_ROW_SPAN);
 
                 // Helper to recursively process cell children (handles frames, text-boxes, etc. in ODP)
                 const processChildren = (node: Element) => {
@@ -1300,7 +1302,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                 // Track list counters for this listId (similar to WordParser)
                 if (!listCounters[listId]) {
-                    listCounters[listId] = {};
+                    listCounters[listId] = Object.create(null);
                 }
                 const indentKey = indentation.toString();
                 if (listCounters[listId][indentKey] === undefined) {
@@ -2106,7 +2108,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     assignAttachmentData(content);
 
     // Create combined styleMap for metadata (matches DOCX format)
-    const combinedStyleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify' } } = {};
+    const combinedStyleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify' } } = Object.create(null);
     for (const styleName in styleMap) {
         combinedStyleMap[styleName] = {
             formatting: styleMap[styleName],
@@ -2161,7 +2163,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         fileType,
         {
             ...metadata,
-            styleMap: combinedStyleMap
+            styleMap: plainRecord(combinedStyleMap)
         },
         content,
         attachments,

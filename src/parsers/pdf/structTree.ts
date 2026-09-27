@@ -450,7 +450,8 @@ function classifyListType(label: string): 'ordered' | 'unordered' {
 
 /** Collapses TOC dot-leaders ("Title ...... 3" -> "Title 3") in a node's text and text-run children. */
 function stripDotLeaders(node: OfficeContentNode): void {
-    const clean = (s: string | undefined) => (s || '').replace(/\s*\.{4,}\s*/g, ' ');
+    // A match starts where whitespace does, not at each space of a run (each read to its end).
+    const clean = (s: string | undefined) => (s || '').replace(/(?<!\s)\s*\.{4,}\s*/g, ' ');
     if (node.text) node.text = clean(node.text).trim();
     for (const c of node.children || []) {
         if (c.type === 'text') c.text = clean(c.text);
@@ -485,7 +486,7 @@ function parseListNumber(label: string): number | null {
         const parts = t.match(/\d+/g);
         if (parts && parts.length) return parseInt(parts[parts.length - 1], 10);
     }
-    const core = t.replace(/^[(\[]+/, '').replace(/[.)\]\s]+$/, '');
+    const core = t.replace(/^[(\[]+/, '').replace(/(?<![.)\]\s])[.)\]\s]+$/, '');
     if (/^[ivxlcdm]+$/i.test(core)) { const n = romanToInt(core); return n > 0 ? n : null; }
     if (/^[a-z]$/i.test(core)) return core.toLowerCase().charCodeAt(0) - 96; // a -> 1
     return null;

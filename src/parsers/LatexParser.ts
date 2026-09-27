@@ -9,6 +9,7 @@ import { LATEX_SYMBOL_CHARACTERS, LISTINGS_LANGUAGE_NAMES } from '../utils/latex
 import { ADMONITION_COLOR } from '../utils/officeGenUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
+import { setOwn } from '../utils/lookupUtils.js';
 
 // ── limits ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -114,8 +115,24 @@ const TABLE_ENVS: Record<string, string> = {
 /** Environments that only draw pictures: their content is skipped rather than read as text. */
 const DRAWING_ENVS = new Set(['tikzpicture', 'pgfpicture', 'picture', 'forest', 'axis', 'circuitikz', 'pspicture', 'tikzcd']);
 
-/** `filecontents` bodies, which are file data rather than document source. */
-const FILECONTENTS_BODY = /\\begin\s*\{filecontents\*?\}[\s\S]*?\\end\s*\{filecontents\*?\}/g;
+/**
+ * `src` without its `filecontents` bodies, which are file data rather than document source. Scanned
+ * forward once: a pattern looking for each start's end read the rest of the source again for every
+ * unclosed one (a megabyte of them took seconds). An unclosed body is left in place, as the pattern did.
+ */
+function withoutFilecontents(src: string): string {
+    const begin = /\\begin\s*\{filecontents\*?\}/g;
+    const end = /\\end\s*\{filecontents\*?\}/g;
+    let out = '', from = 0;
+    for (let open = begin.exec(src); open; open = begin.exec(src)) {
+        end.lastIndex = open.index + open[0].length;
+        const close = end.exec(src);
+        if (!close) break;
+        out += src.slice(from, open.index);
+        from = begin.lastIndex = close.index + close[0].length;
+    }
+    return out + src.slice(from);
+}
 
 /**
  * Environments with no meaning of their own for the AST (layout wrappers): their content is read
@@ -880,9 +897,12 @@ class LatexReader {
      */
     private prescan(src: string): void {
         // File data (an image carried as a PDF, say) is no evidence of the document's structure.
-        src = src.replace(FILECONTENTS_BODY, '');
+        src = withoutFilecontents(src);
         // `\documentstyle` is LaTeX 2.09's `\documentclass`.
-        const cls = /\\document(?:class|style)\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/.exec(src);
+        // Options and name stop at the next bracket or brace, and the whitespace after the options is
+        // part of them: each scanning to the end, or trying every split of the spaces between them, took
+        // time in the square of an unclosed `\documentclass[` repeated.
+        const cls = /\\document(?:class|style)\s*(?:\[([^\][]*)\]\s*)?\{([^{}]*)\}/.exec(src);
         if (cls) {
             this.native.documentClass = cls[2].trim();
             // A macro among the options (the LaTeX generator's driver choice) cannot be expanded here: it is left out.
@@ -2009,7 +2029,7 @@ class LatexReader {
             }
             case 'fontsize': {
                 const [size] = this.readArgs(sc, 'mm');
-                const pt = /^\s*([\d.]+)\s*(pt)?\s*$/.exec(size ?? '');
+                const pt = /^\s*([\d.]+)\s*(?:(pt)\s*)?$/.exec(size ?? '');
                 if (pt) this.state.fmt.size = `${Math.round(parseFloat(pt[1]) * 100) / 100}pt`;
                 return;
             }
@@ -2377,7 +2397,7 @@ class LatexReader {
     }
 
     private dimenPt(raw: string): number | undefined {
-        const m = /^\s*([-+]?[\d.]+)\s*(pt|bp|in|cm|mm|pc|em|ex|px|sp)?\s*$/.exec(raw);
+        const m = /^\s*([-+]?[\d.]+)\s*(?:(pt|bp|in|cm|mm|pc|em|ex|px|sp)\s*)?$/.exec(raw);
         if (!m) return undefined;
         const n = parseFloat(m[1]);
         const factor: Record<string, number> = { pt: 1, bp: 1.00375, in: 72.27, cm: 28.4528, mm: 2.84528, pc: 12, em: 10, ex: 4.3, px: 0.75, sp: 1 / 65536 };
@@ -2480,7 +2500,9 @@ class LatexReader {
 
     private hypersetup(raw: string): void {
         for (const [key, value] of this.keyValues(raw)) {
-            const v = this.plainText(value);
+            // Read only for the keys that take it: `pdfinfo` reads its entries one by one, and reading
+            // its whole value as well parsed each level of a nested one twice (twice as long per level).
+            const v = ['pdftitle', 'pdfauthor', 'pdfsubject', 'pdfkeywords'].includes(key) ? this.plainText(value) : '';
             switch (key) {
                 // The PDF metadata a document states outright is its metadata; \title and \author are
                 // what the title block prints, and fill in only when it states none.
@@ -2498,7 +2520,7 @@ class LatexReader {
                         else if (k === 'LastModifiedBy') this.metadata.lastModifiedBy = text;
                         else if (k === 'Title') this.metadata.title ??= text;
                         else if (k === 'Author') this.metadata.author ??= text;
-                        else if (k) (this.metadata.customProperties ??= {})[k] = text;
+                        else if (k) setOwn((this.metadata.customProperties ??= {}), k, text);
                     }
                     break;
             }
@@ -2583,8 +2605,10 @@ class LatexReader {
         }
         let text = decodeTex(this.project!.files.get(resolved)!, this.inputEncoding).text.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
         if (subfile) {
-            const body = /\\begin\{document\}([\s\S]*?)\\end\{document\}/.exec(text);
-            if (body) text = body[1];
+            // Looked up once each (a pattern tried every `\begin{document}` against the rest of the file).
+            const start = text.indexOf('\\begin{document}');
+            const end = start === -1 ? -1 : text.indexOf('\\end{document}', start + '\\begin{document}'.length);
+            if (end !== -1) text = text.slice(start + '\\begin{document}'.length, end);
         }
         // Included text counts against the same budget as macro expansion, so including a large file
         // many times over (not only nesting includes) is bounded too.
@@ -2637,10 +2661,12 @@ class LatexReader {
         let width = kv.get('width');
         // The LaTeX generator's bounded form, `{\ifdim W>\linewidth\linewidth\else W\fi}` (natural width W,
         // capped at the line), is read as W.
-        const bounded = width ? /^\s*\{?\s*\\ifdim\s*([-+]?[\d.]+\s*[a-z]*)\s*>\s*\\linewidth\s*\\linewidth\s*\\else\s*\1\s*\\fi\s*\}?\s*$/.exec(width) : null;
+        // (Each optional part carries the whitespace after it: two `\s*` with only something optional
+        // between them tried every split of a run of spaces.)
+        const bounded = width ? /^\s*(?:\{\s*)?\\ifdim\s*([-+]?[\d.]+(?:\s*[a-z]+)?)\s*>\s*\\linewidth\s*\\linewidth\s*\\else\s*\1\s*\\fi\s*(?:\}\s*)?$/.exec(width) : null;
         if (bounded) width = bounded[1];
         if (width) {
-            const frac = /^\s*([\d.]*)\s*\\(linewidth|textwidth|columnwidth|hsize)\s*$/.exec(width);
+            const frac = /^\s*(?:([\d.]+)\s*)?\\(linewidth|textwidth|columnwidth|hsize)\s*$/.exec(width);
             if (frac) meta.width = `${Math.round((parseFloat(frac[1] || '1')) * 1000) / 10}%`;
             else { const pt = this.dimenPt(width); if (pt) meta.width = `${pt}pt`; }
         }
@@ -2787,7 +2813,7 @@ class LatexReader {
             this.nestingLimitHit = true;
             logWarning(OfficeWarningType.LATEX_EXPANSION_LIMIT_REACHED, this.config, { limit: 'nesting depth' });
         }
-        this.addText(flow, raw.replace(/\\(begin|end)\s*\{[^}]*\}/g, ' ').replace(/\\[A-Za-z@]+\*?|\\.|[{}]/g, ' ').replace(/\s+/g, ' '));
+        this.addText(flow, raw.replace(/\\(begin|end)\s*\{[^{}]*\}/g, ' ').replace(/\\[A-Za-z@]+\*?|\\.|[{}]/g, ' ').replace(/\s+/g, ' '));
     }
 
     /** Reads an environment's body into the current flow. */
@@ -2942,15 +2968,18 @@ class LatexReader {
     private keywords(flow: Flow, raw: string | null, ieee: boolean): void {
         if (raw === null) return;
         // llncs separates keywords with `\and`, elsarticle with `\sep`.
-        const source = raw.replace(/\s*\\(and|sep)\b\s*/g, ', ');
-        const text = this.plainText(source);
+        // A match starts where whitespace does (not at each space of a run, each read to its end).
+        const source = raw.replace(/(?<!\s)\s*\\(and|sep)\b\s*/g, ', ');
+        // Parsed once, for the text printed and the metadata alike: parsed for each, keywords within
+        // keywords took twice as long for each level.
+        this.endParagraph(flow);
+        const body = this.parseBlocksOf(source, undefined, false);
+        const text = body.map(b => b.text ?? textOf(b.children)).join(' ').replace(/\s+/g, ' ').trim();
         if (!text) return;
         if (!this.pdfMetadata.has('keywords')) this.metadata.keywords = text;
-        this.endParagraph(flow);
         const label: OfficeContentNode = ieee
             ? { type: 'text', text: 'Index Terms: ', formatting: { bold: true, italic: true } }
             : { type: 'text', text: 'Keywords: ', formatting: { bold: true } };
-        const body = this.parseBlocksOf(source, undefined, false);
         for (const b of body) this.keywordBlocks.add(b);
         const first = body[0];
         if (first?.type === 'paragraph') {
@@ -3421,7 +3450,7 @@ class LatexReader {
         return rows;
     }
 
-    private static RULES = /^\s*(?:\\(?:hline|toprule|midrule|bottomrule|endhead|endfirsthead|endfoot|endlastfoot|hhline\s*\{[^}]*\}|cline\s*\{[^}]*\}|cmidrule(?:\s*\([^)]*\))?\s*(?:\[[^\]]*\])?\s*\{[^}]*\}|addlinespace(?:\s*\[[^\]]*\])?|noalign\s*\{[^}]*\}|rowcolor\s*(?:\[[^\]]*\])?\s*\{[^}]*\}|specialrule\s*\{[^}]*\}\{[^}]*\}\{[^}]*\})(?:\[[^\]]*\])?\s*)+/;
+    private static RULES = /^\s*(?:\\(?:hline|toprule|midrule|bottomrule|endhead|endfirsthead|endfoot|endlastfoot|hhline\s*\{[^}]*\}|cline\s*\{[^}]*\}|cmidrule\s*(?:\([^)]*\)\s*)?(?:\[[^\]]*\]\s*)?\{[^}]*\}|addlinespace(?:\s*\[[^\]]*\])?|noalign\s*\{[^}]*\}|rowcolor\s*(?:\[[^\]]*\]\s*)?\{[^}]*\}|specialrule\s*\{[^}]*\}\{[^}]*\}\{[^}]*\})(?:\[[^\]]*\])?\s*)+/;
 
     private buildTable(body: string, aligns: (('left' | 'center' | 'right') | undefined)[], env: string): { table: OfficeContentNode; caption: OfficeContentNode[] } | null {
         void env;
@@ -3445,13 +3474,13 @@ class LatexReader {
             }
             if (/\\endfoot/.test(prefix) && !/\\endlastfoot/.test(prefix)) { seenFoot = true; }
             if (/\\midrule/.test(prefix) && rows.length && !seenHead && rows.length <= 2 && !rows.some(r => r.header)) rows.forEach(r => { r.header = true; });
-            const rowColor = /\\rowcolor\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/.exec(prefix);
+            const rowColor = /\\rowcolor\s*(?:\[([^\]]*)\]\s*)?\{([^}]*)\}/.exec(prefix);
             const cellsNow = [first, ...cells.slice(1)];
             // What follows the last `\\` (usually just a closing rule) or a line holding only a rule
             // is not a row; an empty row written with its `&`s is.
             if (cellsNow.length === 1 && !first.trim() && (rawIndex === raw.length - 1 || prefix)) continue;
             // A caption row (longtable) is the table's caption, not a row.
-            const cap = /^\s*\\caption\*?\s*(?:\[[^\]]*\])?\s*\{([\s\S]*)\}\s*$/.exec(first);
+            const cap = /^\s*\\caption\*?\s*(?:\[[^\]]*\]\s*)?\{([\s\S]*)\}\s*$/.exec(first);
             if (cellsNow.length === 1 && cap) {
                 caption.push(...this.parseBlocksOf(cap[1], f => { f.paragraphStyle = 'Caption'; }));
                 continue;
@@ -3483,9 +3512,11 @@ class LatexReader {
                     src = contentStart >= 0 ? src.slice(contentStart + 1, this.matchBrace(src, contentStart)) : '';
                 }
                 src = src.trim();
-                const cc = /^\\cellcolor\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/.exec(src);
+                const cc = /^\\cellcolor\s*(?:\[([^\]]*)\]\s*)?\{([^}]*)\}/.exec(src);
                 if (cc) { bg = this.resolveColor(cc[2], cc[1] ?? null); src = src.slice(cc[0].length).trim(); }
-                const mr = /^\\multirow\s*(?:\[[^\]]*\])?\s*\{\s*(\d+)\s*\}\s*(?:\[[^\]]*\])?\s*\{[^}]*\}\s*(?:\[[^\]]*\])?\s*\{/.exec(src);
+                // (The whitespace after each optional argument is part of it, here and in RULES: two
+                // `\s*` with an optional argument between them tried every split of a run of spaces.)
+                const mr = /^\\multirow\s*(?:\[[^\]]*\]\s*)?\{\s*(\d+)\s*\}\s*(?:\[[^\]]*\]\s*)?\{[^}]*\}\s*(?:\[[^\]]*\]\s*)?\{/.exec(src);
                 if (mr) {
                     rowSpan = Math.max(1, Math.min(rows.length - ri, +mr[1]));
                     const open = mr[0].length - 1;
@@ -3620,12 +3651,17 @@ class LatexReader {
 function declaredEncoding(head: string): string | undefined {
     // A commented-out declaration declares nothing.
     const live = head.replace(/(^|[^\\])%.*$/gm, '$1');
-    const inputenc = /\\usepackage\s*\[([^\]]*)\]\s*\{inputenc\}/.exec(live) ?? /\\inputencoding\s*\{([^}]*)\}/.exec(live);
+    // An option list or argument stops at the next bracket or brace (scanning on to the end from each
+    // start took time in the square of an unclosed `\usepackage[` repeated).
+    const inputenc = /\\usepackage\s*\[([^\][]*)\]\s*\{inputenc\}/.exec(live) ?? /\\inputencoding\s*\{([^{}]*)\}/.exec(live);
     if (inputenc) {
         const option = inputenc[1].split(',').map(o => o.trim()).reverse().find(o => own(INPUTENC_ENCODINGS, o));
         if (option) return INPUTENC_ENCODINGS[option];
     }
-    const magic = /^%\s*!TEX\s+encoding\s*=\s*([A-Za-z0-9_ -]+?)\s*$/im.exec(head)?.[1].toLowerCase().replace(/[\s_-]+/g, '');
+    // Line by line, the name trimmed rather than matched lazily before trailing spaces (which tried every
+    // split of a long run of them).
+    const magicLine = /^%[ \t]*!TEX[ \t]+encoding[ \t]*=([^\n]*)$/im.exec(head)?.[1].trim();
+    const magic = magicLine && /^[A-Za-z0-9_ -]+$/.test(magicLine) ? magicLine.toLowerCase().replace(/[\s_-]+/g, '') : undefined;
     if (!magic) return undefined;
     if (/^utf8/.test(magic)) return 'utf-8';
     if (own(MAGIC_ENCODINGS, magic)) return MAGIC_ENCODINGS[magic];

@@ -14,6 +14,7 @@ import { ConversionResult, GeneratorConfig, OfficeErrorType, OfficeParserAST, Su
 import { withoutSourceComments } from './utils/commentUtils.js';
 import { withKnownNodeTypes } from './utils/nodeTypeUtils.js';
 import { withBoundedSheetGrids } from './utils/sheetGridUtils.js';
+import { withWellTypedValues } from './utils/valueTypeUtils.js';
 import { getOfficeError } from './utils/errorUtils.js';
 
 /**
@@ -54,9 +55,11 @@ export class OfficeGenerator {
         // removed here, once, rather than each generator having to remember to skip it.
         const keepsComments = normalizedDestination === 'md' || normalizedDestination === 'html' || normalizedDestination === 'tex';
         // A node of a type the AST does not define is written as its content, which no generator
-        // then has to know how to handle. A table or sheet whose cell coordinates span a grid too
+        // then has to know how to handle; a value of another type than the AST defines (an array
+        // for a string, text for a number) is coerced or removed, so none reaches a writer that
+        // escapes one kind and writes another raw. A table or sheet whose cells span a grid too
         // large to write (a few cells far apart) is laid out closer, before any writer fills it.
-        const known = withBoundedSheetGrids(withKnownNodeTypes(ast));
+        const known = withBoundedSheetGrids(withKnownNodeTypes(withWellTypedValues(ast)));
         const input = keepsComments ? known : withoutSourceComments(known);
 
         switch (normalizedDestination) {
