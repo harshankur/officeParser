@@ -444,6 +444,9 @@ function unwrapAlignDivs(text: string): { text: string; align?: 'left' | 'center
 /** Nodes the generator writes anchors for: waiting anchors go to the next of these. */
 const ANCHOR_HOLDERS = new Set<string>(['paragraph', 'heading', 'list', 'image', 'table', 'sheet', 'slide', 'page', 'code', 'break', 'admonition', 'definitionList']);
 
+/** How deeply nested an HTML table that blank lines run through may be, for its pieces to join (see splitIntoBlocks). */
+const MAX_JOINED_TABLE_DEPTH = 16;
+
 /**
  * The change in how many HTML tables are open over `text`: its `<table` tags less its `</table>` tags.
  */
@@ -1417,12 +1420,14 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     const rawSeparators: string[] = [];
     // An HTML table a blank line runs through (`<table>`, rows, a blank line, more rows) is one
     // table: a renderer passes each piece through as HTML, and a browser builds one table of them.
-    // Pieces join while a table the first piece opened is open and each piece starts with a tag.
+    // Pieces join while a table the first piece opened is open and each piece starts with a tag, up
+    // to MAX_JOINED_TABLE_DEPTH tables deep: pieces that only open tables, never closing one, would
+    // otherwise join into one block nested past what the HTML parser reads.
     let tableDepth = 0;
     for (let i = 0; i < parts.length; i += 2) {
         const part = parts[i];
         const separator = i > 0 ? parts[i - 1] : '';
-        if (tableDepth > 0 && /^[ \t]*</.test(part)) {
+        if (tableDepth > 0 && tableDepth <= MAX_JOINED_TABLE_DEPTH && /^[ \t]*</.test(part)) {
             rawBlocks[rawBlocks.length - 1] += separator + part;
             tableDepth += htmlTableDepthChange(part);
             continue;
@@ -1559,10 +1564,15 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // anchor ids of the node the rest of the block becomes (folded in below), not visible text.
         // A block of nothing but anchors is handled further down.
         const leadingAnchors = /^\s*(?:<a\s[^>]*>\s*<\/a>[ \t]*)+\n?/i.exec(block);
+        // Those on the line of the block's first content (not a line of their own), which a definition
+        // list gives its first term (see there).
+        let firstLineAnchors: OfficeContentNode | undefined;
         if (leadingAnchors && trimAsciiWhitespace(block.slice(leadingAnchors[0].length))) {
             const anchorIds = [...leadingAnchors[0].matchAll(/<a\s[^>]*\b(?:name|id)="([^"]*)"/gi)].map(m => m[1]).filter(Boolean);
             if (anchorIds.length > 0) {
-                content.push({ type: ANCHOR_PLACEHOLDER as any, metadata: { anchorIds } as any, children: [] });
+                const placeholder = { type: ANCHOR_PLACEHOLDER as any, metadata: { anchorIds } as any, children: [] };
+                content.push(placeholder);
+                if (!leadingAnchors[0].endsWith('\n')) firstLineAnchors = placeholder;
                 block = block.slice(leadingAnchors[0].length);
             }
         }
@@ -1917,12 +1927,16 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 if (!isDefinition(lines[i])) valid = !lines[i].startsWith(':') && i + 1 < lines.length && isDefinition(lines[i + 1]);
             }
             if (valid) {
-                content.push({
-                    type: 'definitionList',
-                    children: lines.map((line): OfficeContentNode => (isDefinition(line)
-                        ? { type: 'definitionDescription', children: parseInline(line.replace(/^:[ \t]+/, '')) }
-                        : { type: 'definitionTerm', children: parseInline(line) })),
-                });
+                const children = lines.map((line): OfficeContentNode => (isDefinition(line)
+                    ? { type: 'definitionDescription', children: parseInline(line.replace(/^:[ \t]+/, '')) }
+                    : { type: 'definitionTerm', children: parseInline(line) }));
+                // Anchors starting the first term's line are the term's, as the generator writes a term's
+                // ids; the list's stand on a line of their own before it.
+                if (firstLineAnchors && content[content.length - 1] === firstLineAnchors) {
+                    content.pop();
+                    children[0].metadata = { anchorIds: (firstLineAnchors.metadata as any).anchorIds };
+                }
+                content.push({ type: 'definitionList', children });
                 continue;
             }
         }

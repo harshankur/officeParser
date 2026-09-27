@@ -3580,6 +3580,7 @@ async function testMarkdownRoundTrips(): Promise<void> {
         ['<a id="a"></a>\n\n```\nc\n```', [['code', ['a']]]],
         ['<a id="a"></a>\n\n---\n\nafter', [['break', ['a']]]],
         ['<a id="a"></a>\n\nTerm\n: <a id="d"></a>Desc', [['definitionList', ['a']], ['definitionDescription', ['d']]]],
+        ['<a id="t"></a>Term\n: Desc\n<a id="t2"></a>Term 2\n: Desc 2', [['definitionTerm', ['t']], ['definitionTerm', ['t2']]]],
     ] as const) {
         const parsed = await mdAst(src);
         assert.deepStrictEqual(idsOf(parsed.content), ids, `MD: the ids of ${JSON.stringify(src)}`);

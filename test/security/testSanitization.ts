@@ -574,6 +574,7 @@ async function markdownTests() {
         ['a quote of blocks', `> - a\n${'> - b\n'.repeat(40_000)}`],
         ['empty anchors in a line', 'a <a id="x"></a>'.repeat(60_000)], ['unclosed anchors in a line', '<a id="x" '.repeat(60_000)],
         ['an HTML table blank lines run through', `<table>\n${'<tr><td>a</td></tr>\n\n'.repeat(20_000)}</table>`],
+        ['HTML tables opened and never closed, between blank lines', '<table>\n\n'.repeat(20_000)],
         ['indented code across blank lines', '    a\n\n'.repeat(60_000)], ['lazy underlines in a quote', '> q\n===\n'.repeat(40_000)],
     ] as const) {
         const started = Date.now();
