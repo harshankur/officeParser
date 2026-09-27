@@ -3548,6 +3548,14 @@ async function testMarkdownRoundTrips(): Promise<void> {
         const back = await OfficeParser.parseOffice(Buffer.from(pdf), { extractAttachments: true } as any);
         assert.ok(back.attachments.length > 0, `PDF (native): the picture in a paragraph of ${file} is drawn`);
     }
+    // The ids HtmlGenerator writes on equations and on the wrapper of a picture among the blocks read back.
+    const idNodes = [
+        { type: 'paragraph', children: [T('p '), { type: 'code', text: 'x', metadata: { math: 'inline', anchorIds: ['mi'] } }] },
+        { type: 'code', text: 'y^2', metadata: { math: 'block', anchorIds: ['mb'] } },
+        { type: 'image', metadata: { url: 'https://x.test/b.png', altText: 'B', anchorIds: ['ib'] } },
+    ];
+    const idsHtml = (await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: idNodes } as any, 'html', { htmlConfig: { standalone: false } } as any)).value as string;
+    assert.deepStrictEqual(idsOf((await htmlAst(idsHtml)).content), [['code', ['mi']], ['code', ['mb']], ['image', ['ib']]], `HTML: equation and picture ids read back (${idsHtml})`);
     // A heading's generated id comes from its text, whether the node or only its runs carry it, and a
     // heading whose text slugifies to nothing gets none rather than id="".
     assert.ok((await htmlOnce('<h2>My Title</h2>')).includes('<h2 id="my-title">'), 'HTML: a heading read from HTML gets its generated id');

@@ -931,7 +931,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return {
                     type: 'code',
                     text: latex,
-                    metadata: { math: mathMode } as CodeMetadata
+                    metadata: { math: mathMode, anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as CodeMetadata
                 };
             }
 
@@ -950,7 +950,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return {
                     type: 'code',
                     text: latex,
-                    metadata: { math: isBlock ? 'block' : 'inline' } as CodeMetadata
+                    metadata: { math: isBlock ? 'block' : 'inline', anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as CodeMetadata
                 };
             }
 
@@ -1051,8 +1051,10 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
 
                 // If it's a div and contains block elements, return children directly
                 const hasBlockElements = children.some(c => ['paragraph', 'table', 'heading', 'list', 'image', 'chart', 'code', 'embed', 'admonition', 'definitionList'].includes(c.type));
+                // A div of blocks is read through; its id marks its first block (HtmlGenerator puts a
+                // picture's there, and a page's section or sheet is linked to by it).
                 if (tagName === 'div' && hasBlockElements) {
-                    return children;
+                    return anchorIds.length > 0 ? [anchorMark(anchorIds), ...children] : children;
                 }
 
                 // Flatten nested paragraphs to avoid deep AST nesting (e.g. from notes)
