@@ -9,7 +9,8 @@ TestNumber: 42
 TestBool: true
 ---
 
-# Demonstration of DOCX support in calibre {#ole-link1}
+<a name="ole-link1"></a><a name="ole-link2"></a><a name="toc581531977"></a>
+# Demonstration of DOCX support in calibre {#demonstration-of-docx-support-in-calibre}
 
 This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action.
 
@@ -17,13 +18,15 @@ There is support for images, tables, lists, footnotes, endnotes, links, dropcaps
 
 To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books”** button and then click “ **Convert”.** Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”** .
 
+<a name="toc2054249818"></a>
 <div style="text-align: center">
 
-# Text Formatting {#toc2054249818}
+# Text Formatting {#text-formatting}
 
 </div>
 
-## Inline formatting {#toc2137712100}
+<a name="toc2137712100"></a>
+## Inline formatting {#inline-formatting}
 
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
 
@@ -31,19 +34,22 @@ Here is some **bold,** *italic,* ***bold-italic,*** <u>underlined </u>and ~~stru
 
 A paragraph with styled text: *subtle emphasis* f ollowed by **strong text** a nd ***intense emphasis*** . This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
 
-## Fun with fonts {#toc1074133965}
+<a name="toc1074133965"></a>
+## Fun with fonts {#fun-with-fonts}
 
 This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface , notice how every letter has the same width, even i and m . Every embedded font will automatically be embedded in the output ebook during conversion.
 
+<a name="toc2022725662"></a>
 ## Paragraph level formatting {#paragraph-level-formatting}
 
 <div style="text-align: right">==You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.==</div>
 
 For the lovers of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.
 
+<a name="toc28114276"></a>
 <div style="text-align: center">
 
-# Tables {#toc28114276}
+# Tables {#tables}
 
 </div>
 
@@ -287,15 +293,17 @@ W e end with a fancy calendar, note how much of the original formatting is prese
   </tr>
 </table>
 
+<a name="toc54889875"></a>
 <div style="text-align: center">
 
-# Structural Elements {#toc54889875}
+# Structural Elements {#structural-elements}
 
 </div>
 
 Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.
 
-## Footnotes & Endnotes {#toc201580556}
+<a name="toc201580556"></a>
+## Footnotes & Endnotes {#footnotes-endnotes}
 
 Footnotes
 
@@ -307,17 +315,20 @@ Endnotes are typically used for longer notes, they remain endnotes when converte
 
 are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices.
 
-## Dropcaps {#toc1977424358}
+<a name="toc1977424358"></a>
+## Dropcaps {#dropcaps}
 
 D
 
 rop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to s p ecify how many lines of text a drop-cap should use.
 
-## Links {#toc1233048813}
+<a name="toc1233048813"></a>
+## Links {#links}
 
 Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the [<u>calibre download page</u>](http://calibre-ebook.com/download) . Then we have a link that points back to the section on [<u>paragraph level formatting</u>](#paragraph-level-formatting) in this document.
 
-## Table of Contents {#toc64145348}
+<a name="toc64145348"></a>
+## Table of Contents {#table-of-contents}
 
 You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook.
 
@@ -355,9 +366,10 @@ You can see the Table of Contents created by calibre by clicking the Table of Co
 
 [<u>Continued Lists</u>](#toc1471533984) [<u>8</u>](#toc1471533984)
 
+<a name="toc484565143"></a>
 <div style="text-align: center">
 
-# Images {#toc484565143}
+# Images {#images}
 
 </div>
 
@@ -367,25 +379,29 @@ Centered images like this are useful for large pictures that should be a focus o
 
 There is no analogous technology in ebooks , so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was *inserted* , not necessarily where it appears on the page in Word.
 
+<a name="toc1359965655"></a>
 <div style="text-align: center">
 
-# Lists {#toc1359965655}
+# Lists {#lists}
 
 </div>
 
 All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.
 
-## Bulleted List {#toc1958162433}
+<a name="toc1958162433"></a>
+## Bulleted List {#bulleted-list}
 
 - One
 - Two
 
-## Numbered List {#toc415190676}
+<a name="toc415190676"></a>
+## Numbered List {#numbered-list}
 
 1. One, with a very long line to demonstrate that the hanging indent for the list is working correctly
 2. Two
 
-## Multi-level List s {#toc1093260318}
+<a name="toc1093260318"></a>
+## Multi-level List s {#multi-level-lists}
 
 1. One
     1. Two
@@ -402,7 +418,8 @@ A Multi-level list with bullets:
             - Four
 - Five
 
-## Continued Lists {#toc1471533984}
+<a name="toc1471533984"></a>
+## Continued Lists {#continued-lists}
 
 1. One
 2. Two

@@ -39,7 +39,7 @@ A paragraph with styled text: *subtle emphasis*  followed by **strong text** and
 
 This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion.
 
-<a name="paragraph-level-formatting"></a><a name="toc2022725662"></a>
+<a name="toc2022725662"></a>
 ## Paragraph level formatting {#paragraph-level-formatting}
 
 <div style="text-align: right">You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.</div>

@@ -3472,6 +3472,87 @@ async function testMarkdownRoundTrips(): Promise<void> {
     // An unknown node's link reaches its text at block level too.
     assert.strictEqual((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [{ type: 'mystery', children: [T('inner')], metadata: { link: 'http://l.k', linkType: 'external' } }] } as any, 'md')).value, '[inner](http://l.k)', 'MD: an unknown node keeps its link');
 
+    // HTML captions: the caption HtmlGenerator writes (a file name) is a label, any other caption in an
+    // image container is text; a caption holding blocks keeps them as blocks.
+    const htmlAst = (src: string) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'html' } as any);
+    const plain = (nodes: any[]): string => nodes.map((n: any) => n.text ?? plain(n.children ?? [])).join('|');
+    const realCaption = await htmlAst('<div class="image-container"><img src="photo.png"><div class="caption">The team in 2024</div></div>');
+    assert.deepStrictEqual([realCaption.content.map(n => n.type), plain(realCaption.content)], [['image', 'paragraph'], '|The team in 2024'], 'HTML: a caption of text in an image container is kept');
+    const blockCaption = await htmlAst('<figure><img src="a.png"><figcaption><p>line one</p><p>line two</p></figcaption></figure>');
+    assert.deepStrictEqual(blockCaption.content.map(n => n.type), ['image', 'paragraph', 'paragraph'], 'HTML: a caption of paragraphs is those paragraphs');
+    // A picture in a paragraph touches the text around it, and its id is on the <img>; the second and
+    // later ids of a node, written as anchors before it, are read back as its ids.
+    for (const src of ['<p>see <img src="a.png" alt="A">.</p>', '<p>text <img id="pic1" src="a.png" alt="A"> more</p>', '<a id="x1" name="x1"></a><a id="x2" name="x2"></a><p>para</p>']) {
+        const first = await htmlOnce(src);
+        assert.strictEqual(await htmlOnce(first), first, `HTML: ${src} saves the same HTML twice (${first})`);
+    }
+    assert.ok((await htmlOnce('<p>see <img src="a.png" alt="A">.</p>')).includes('alt="A">.</p>'), 'HTML: nothing is written between a picture and the text after it');
+    const idsOf = (nodes: any[]): any[] => nodes.flatMap((n: any) => [...(n.metadata?.anchorIds ? [[n.type, n.metadata.anchorIds]] : []), ...idsOf(n.children ?? [])]);
+    for (const [src, ids] of [
+        ['<p>text <img id="pic1" src="a.png" alt="A"> more</p>', [['image', ['pic1']]]],
+        ['<a id="x1" name="x1"></a><a id="x2" name="x2"></a><p>para</p>', [['paragraph', ['x1', 'x2']]]],
+        ['<p id="p1">see <a id="in"></a>here <a name="b1"></a><img id="pic2" src="b.png"></p>', [['paragraph', ['p1', 'in']], ['image', ['pic2', 'b1']]]],
+        ['text <a id="d" name="d"></a><h2>H</h2>', [['heading', ['d']]]],
+        ['<table><tr><td id="c1">a</td></tr></table><hr id="r"><dl id="l"><dt id="t">t</dt><dd>d</dd></dl><blockquote id="q">q</blockquote>', [['cell', ['c1']], ['break', ['r']], ['definitionList', ['l']], ['definitionTerm', ['t']], ['paragraph', ['q']]]],
+        ['<div><a id="only"></a></div>', [['paragraph', ['only']]]],
+    ] as const) {
+        assert.deepStrictEqual(idsOf((await htmlAst(src)).content), ids, `HTML: the ids of ${src}`);
+    }
+    // A heading's generated id comes from its text, whether the node or only its runs carry it, and a
+    // heading whose text slugifies to nothing gets none rather than id="".
+    assert.ok((await htmlOnce('<h2>My Title</h2>')).includes('<h2 id="my-title">'), 'HTML: a heading read from HTML gets its generated id');
+    assert.ok(!(await htmlOnce('<h2>标题</h2>')).includes('id=""'), 'HTML: no empty id');
+
+    // Markdown blocks as CommonMark reads them: an HTML table a blank line runs through is one table, an
+    // indented code block runs on across blank lines, and a `=`/`-` line after a quote is not a heading's
+    // underline; `<table>` in a code span is text.
+    const mdAst = (src: string) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md' } as any);
+    const splitTable = await mdAst('<table>\n<tr><td>a</td></tr>\n   \n<tr><td>b</td></tr>\n</table>\n\nafter');
+    assert.deepStrictEqual([splitTable.content.map(n => n.type), splitTable.content[0].children!.length], [['table', 'paragraph'], 2], 'MD: an HTML table with a blank line in it is one table');
+    for (const [src, code] of [['    a\n    \n    b', 'a\n\nb'], ['    a\n\n\n    b', 'a\n\n\nb'], ['para\n\n    c1\n\n    c2', 'c1\n\nc2']] as const) {
+        const blocks = (await mdAst(src)).content.filter(n => n.type === 'code');
+        assert.deepStrictEqual(blocks.map(n => n.text), [code], `MD: indented code ${JSON.stringify(src)}`);
+    }
+    for (const [src, types] of [['> quote\n===', ['paragraph']], ['   > quote\n---', ['paragraph', 'break']], ['> quote\nlazy\n-', ['paragraph']], ['use `<table>` here', ['paragraph']]] as const) {
+        const parsed = await mdAst(src);
+        assert.deepStrictEqual(parsed.content.map(n => n.type), types, `MD: blocks of ${JSON.stringify(src)}`);
+    }
+    assert.strictEqual(plain((await mdAst('use `<table>` here')).content), 'use |<table>| here', 'MD: a tag in a code span is its text');
+    // Anchors: an empty `<a id>` in a line is the id of the picture after it, else of the line's block,
+    // one naming no id is text, and a bookmark before a code block, rule, admonition or definition list
+    // is that block's.
+    for (const [src, ids] of [
+        ['text <a id="m"></a> more', [['paragraph', ['m']]]],
+        ['text <a id="pic"></a>![A](a.png) more', [['image', ['pic']]]],
+        ['a <a href="x"></a> b', []],
+        ['| h |\n| --- |\n| <a id="c"></a>cell |', [['cell', ['c']]]],
+        ['<a id="a"></a>\n\n> [!NOTE]\n> n\n\nafter', [['admonition', ['a']]]],
+        ['<a id="a"></a>\n\n```\nc\n```', [['code', ['a']]]],
+        ['<a id="a"></a>\n\n---\n\nafter', [['break', ['a']]]],
+        ['<a id="a"></a>\n\nTerm\n: <a id="d"></a>Desc', [['definitionList', ['a']], ['definitionDescription', ['d']]]],
+    ] as const) {
+        const parsed = await mdAst(src);
+        assert.deepStrictEqual(idsOf(parsed.content), ids, `MD: the ids of ${JSON.stringify(src)}`);
+        const written = ((await parsed.to('md', { generateIds: false } as any)).value as string).trim();
+        await stable(md, written, written, `the ids of ${JSON.stringify(src)} over saves (${written})`);
+        assert.deepStrictEqual(idsOf((await mdAst(written)).content), ids, `MD: the ids of ${JSON.stringify(src)} read back`);
+    }
+    assert.strictEqual(plain((await mdAst('a <a href="x"></a> b')).content), 'a <a href="x"></a> b', 'MD: an empty anchor naming no id is text');
+    // One line (an item, a cell, a definition) holds no heading or quote: their text is written. A line
+    // break among blocks, before a rule, or an id that slugifies to nothing writes nothing.
+    const cr = { type: 'break', metadata: { breakType: 'carriageReturn' } };
+    for (const [label, content, expected] of [
+        ['a heading in a definition', (await htmlAst('<dl><dt>t</dt><dd><h1>h</h1></dd></dl>')).content, 't\n: h'],
+        ['a quote in a list item', (await htmlAst('<ul><li>a<blockquote>q</blockquote></li></ul>')).content, '- a<br>q'],
+        ['a line break among blocks', [{ type: 'paragraph', children: [T('a')] }, cr, { type: 'paragraph', children: [T('b')] }], 'a\n\nb'],
+        ['a line break before a rule', [{ type: 'paragraph', children: [T('a'), cr, { type: 'break', metadata: { breakType: 'thematic' } }, T('b')] }], 'a\n\n---\n\nb'],
+        ['an id that slugifies to nothing', [{ type: 'paragraph', metadata: { anchorIds: ['!!!'] }, children: [T('x')] }], 'x'],
+    ] as const) {
+        const written = await writeDoc(content as any);
+        assert.strictEqual(written, expected, `MD: ${label}`);
+        await stable(md, written, written, `${label} over saves`);
+    }
+
     // HTML decodes every numeric reference and HTML 4's names, in text and in attribute values.
     const html = await OfficeParser.parseOffice(Buffer.from('<p>it&rsquo;s &copy; &#8217; &#x2019; &eacute; &amp;quot; <a href="http://x.com/?a=1&amp;b=2" title="t &amp; u">l</a> <img src="i.png" alt="Tom &amp; Jerry" title="q &quot;x&quot;"></p>'), { fileType: 'html' } as any);
     // (The space between the link and the image is a node of its own, as in HTML.)

@@ -79,21 +79,47 @@ const codeSpan = (text: string): string => {
     return `${fence}${pad}${text}${pad}${fence}`;
 };
 
+/** Nodes whose children are a line of text (in Markdown, a line break goes only in one of these). */
+const LINE_HOLDERS = new Set(['paragraph', 'heading', 'list', 'cell', 'definitionTerm', 'definitionDescription']);
+
+const isLineBreak = (node: OfficeContentNode): boolean =>
+    node.type === 'break' && (node.metadata as BreakMetadata | undefined)?.breakType === 'carriageReturn';
+
+/** A text node of whitespace alone, carrying nothing. */
+const isBlankRun = (node: OfficeContentNode): boolean =>
+    node.type === 'text' && !node.metadata && !node.notes?.length && !node.comments?.length && !trimAsciiWhitespace(node.text ?? '');
+
+/** A block written in the middle of a paragraph's children: a rule, a code block or display math. */
+const isBlockInLine = (node: OfficeContentNode): boolean =>
+    (node.type === 'break' && (node.metadata as BreakMetadata | undefined)?.breakType === 'thematic')
+    || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math !== 'inline');
+
 /**
- * A paragraph's or heading's children without the line breaks ending it (and blank runs after them):
- * Markdown has none there. A renderer drops trailing spaces, shows a backslash ending the last line as
- * text, and a paragraph of breaks alone as a lone backslash.
+ * A paragraph's or heading's children without the line breaks (and blank runs among them) that end it
+ * or stand next to a block in it: Markdown has none there, as a line ends where a block does. A
+ * renderer drops trailing spaces, shows a backslash ending the last line as text, and a paragraph of
+ * breaks alone as a lone backslash.
  */
-const withoutTrailingBreaks = (children: OfficeContentNode[]): OfficeContentNode[] => {
-    let end = children.length;
-    let broke = false;
-    while (end > 0) {
-        const child = children[end - 1];
-        if (child.type === 'break' && (child.metadata as BreakMetadata | undefined)?.breakType === 'carriageReturn') broke = true;
-        else if (!(child.type === 'text' && !child.metadata && !child.notes?.length && !child.comments?.length && !trimAsciiWhitespace(child.text ?? ''))) break;
-        end--;
+const withoutBreaksAtBlocks = (children: OfficeContentNode[]): OfficeContentNode[] => {
+    let out: OfficeContentNode[] | undefined;
+    for (let i = 0; i < children.length;) {
+        if (!isLineBreak(children[i]) && !isBlankRun(children[i])) {
+            if (out) out.push(children[i]);
+            i++;
+            continue;
+        }
+        let end = i;
+        let broke = false;
+        while (end < children.length && (isLineBreak(children[end]) || isBlankRun(children[end]))) broke = isLineBreak(children[end++]) || broke;
+        const after = children[end];
+        if (broke && (after === undefined || isBlockInLine(after) || (i > 0 && isBlockInLine(children[i - 1])))) {
+            out ??= children.slice(0, i);
+        } else if (out) {
+            for (let k = i; k < end; k++) out.push(children[k]);
+        }
+        i = end;
     }
-    return broke ? children.slice(0, end) : children;
+    return out ?? children;
 };
 
 /** A footnote or endnote standing among blocks rather than attached to text: a definition no text refers to. */
@@ -324,6 +350,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private inListItem = 0;
     /** How many definition terms or descriptions are being written: each is one line too. */
     private inDefinition = 0;
+    /** How many nodes holding a line of text (a paragraph, heading, item, cell, definition) are being written. */
+    private lineDepth = 0;
     /** Each list item's written depth (see assignListDepths). */
     private listDepths = new WeakMap<OfficeContentNode, number>();
     /**
@@ -364,7 +392,38 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private renderAnchors(metadata: any, takePending = true): string {
         if (!this.resolvedFallbackToHtml.anchors || this.config.ignoreInternalLinks) return '';
         const ids = [...(takePending ? this.pendingAnchorIds.splice(0) : []), ...(metadata?.anchorIds || [])];
-        return ids.map((aid: string) => `<a id="${this.slugify(aid)}"></a>`).join('');
+        return this.anchorSlugs(ids).map(id => `<a id="${id}"></a>`).join('');
+    }
+
+    /**
+     * `ids` as written: slugified, each once (the last time it appears), and without those that slugify
+     * to nothing, which are no id (`<a id="">` is read back as text).
+     */
+    private anchorSlugs(ids: string[]): string[] {
+        const seen = new Set<string>();
+        const slugs: string[] = [];
+        for (let i = ids.length - 1; i >= 0; i--) {
+            const slug = this.slugify(ids[i]);
+            if (slug && !seen.has(slug)) {
+                seen.add(slug);
+                slugs.push(slug);
+            }
+        }
+        return slugs.reverse();
+    }
+
+    /**
+     * A block's anchors (and those waiting, see pendingAnchorIds) on a line of their own before it: a
+     * blank line either side, so they neither join the text before nor make it a heading's underline.
+     */
+    private anchorsBefore(metadata: any): string {
+        const anchors = this.renderAnchors(metadata);
+        return anchors ? `\n\n${anchors}\n\n` : '';
+    }
+
+    /** Writing a list item, pipe-table cell or definition: one line of Markdown, where no block can go. */
+    private get inOneLine(): boolean {
+        return this.inPipeTableCell || this.inListItem > 0 || this.inDefinition > 0;
     }
 
     /**
@@ -502,7 +561,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             const mapping = this.getSemanticMapping(node);
             if (mapping) {
                 // Map common HTML tags to Markdown equivalents
-                if (mapping.tag === 'blockquote') return `> ${this.renderAnchors(node.metadata)}${trimBlockEdges(childrenOutput)}\n\n`;
+                // A quote cannot go in one line (a list item, cell or definition): its text is written.
+                if (mapping.tag === 'blockquote') return `${this.inOneLine ? '' : '> '}${this.renderAnchors(node.metadata)}${trimBlockEdges(childrenOutput)}\n\n`;
                 if (mapping.tag === 'code') return `\`${childrenOutput}\` `;
                 if (mapping.tag === 'pre') return `\`\`\`\n${childrenOutput}\n\`\`\`\n\n`;
 
@@ -653,9 +713,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const waiting = this.resolvedFallbackToHtml.anchors && !this.config.ignoreInternalLinks ? this.pendingAnchorIds.splice(0) : [];
                     const generated = this.config.generateIds && !meta?.anchorIds?.length ? this.slugify(this.getNodeText(node)) : '';
                     if (!this.config.ignoreInternalLinks && (meta?.anchorIds?.length || waiting.length)) {
-                        const ids = [...waiting, ...(meta?.anchorIds ?? []), ...(generated ? [generated] : [])];
-                        const lastId = this.slugify(ids.pop()!);
-                        // Slugify the explicit ID to ensure it's a valid Markdown identifier
+                        // Slugified, as a Markdown identifier must be; the last is the heading's own.
+                        const ids = this.anchorSlugs([...waiting, ...(meta?.anchorIds ?? []), ...(generated ? [generated] : [])]);
+                        const lastId = ids.pop();
                         if (lastId) id = ` {#${lastId}}`;
                         remainingAnchors = ids;
                     } else if (generated) {
@@ -666,8 +726,16 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const prefix = '#'.repeat(level) + (headingText || id ? ' ' : '');
 
                     const anchors = this.resolvedFallbackToHtml.anchors
-                        ? remainingAnchors.map(aid => `<a name="${this.slugify(aid)}"></a>`).join('')
+                        ? remainingAnchors.map(aid => `<a name="${aid}"></a>`).join('')
                         : '';
+                    // In a list item, cell or definition (one line of Markdown) a heading cannot be one:
+                    // its text is written, with its ids, rather than a `#` read back as text.
+                    if (this.inOneLine) {
+                        const lineAnchors = this.resolvedFallbackToHtml.anchors
+                            ? [...remainingAnchors, ...(id ? [id.slice(3, -1)] : [])].map(aid => `<a id="${aid}"></a>`).join('')
+                            : '';
+                        return `${lineAnchors}${trimBlockEdges(childrenOutput)}\n\n`;
+                    }
                     let content = `${prefix}${headingText}${headingText ? id : id.trimStart()}`;
 
                     // Alignment fallback via HTML div/p
@@ -809,10 +877,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'row':
-                case 'cell': {
-                    // These are handled manually in the 'table' case above
+                    // Handled in the 'table' case above
                     return childrenOutput;
-                }
+                case 'cell':
+                    // Its ids start its line, where the parser reads them back as its own.
+                    return `${this.renderAnchors(node.metadata)}${childrenOutput}`;
 
                 case 'break': {
                     // A hard line break (CommonMark: two trailing spaces before the newline)
@@ -824,10 +893,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     const meta = node.metadata as BreakMetadata | undefined;
                     // Where the break starts a line (after another break), two trailing spaces would
                     // make a whitespace-only line, which ends the paragraph: a backslash does not.
-                    if (meta?.breakType === 'carriageReturn') return this.atLineStart ? '\\\n' : '  \n';
+                    // Among blocks (no line of text around it) a line break is nothing Markdown can show.
+                    if (meta?.breakType === 'carriageReturn') return this.lineDepth === 0 ? '' : this.atLineStart ? '\\\n' : '  \n';
                     // A rule is a block, blank lines around it: `a---b` in a paragraph was text. In a list
                     // item, cell or definition (one line of Markdown) it cannot be one, and is a line break.
-                    if (meta?.breakType === 'thematic') return this.inPipeTableCell || this.inListItem > 0 || this.inDefinition > 0 ? '\n' : '\n\n---\n\n';
+                    if (meta?.breakType === 'thematic') return this.inOneLine ? `${this.renderAnchors(meta)}\n` : `${this.anchorsBefore(meta) || '\n\n'}---\n\n`;
                     return '\n';
                 }
 
@@ -848,10 +918,14 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // parser behaviour change with its own baseline consequences.)
                     // A list item and a pipe-table cell are one line of Markdown, where no block can go:
                     // block math is written as inline math, its line ends as spaces (whitespace to TeX).
-                    const inLine = this.inPipeTableCell || this.inListItem > 0 || this.inDefinition > 0;
+                    const inLine = this.inOneLine;
+                    // A block's anchors stand on a line before it; in one line, or on inline math, they
+                    // are written before it in the line (the line's own, read back).
+                    const anchors = inLine || meta?.math === 'inline' ? this.renderAnchors(meta) : '';
+                    const anchorsBefore = inLine || meta?.math === 'inline' ? '' : this.anchorsBefore(meta);
                     if (meta?.math === 'block' && inLine) {
                         const mathInline = markdownEscapeTags(node.text || '').replace(/[$]+/g, '').replace(/\s*[\r\n]+\s*/g, ' ').trim();
-                        return this.resolvedDialect.math === 'dollar' ? `$${mathInline}$` : mathInline;
+                        return anchors + (this.resolvedDialect.math === 'dollar' ? `$${mathInline}$` : mathInline);
                     }
                     if (meta?.math === 'block') {
                         // A content line of exactly `$$` would close the block early, so it is
@@ -859,13 +933,13 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         // space from each, so every such line reads back as written).
                         const mathBlock = markdownEscapeTags(node.text || '')
                             .split('\n').map(l => (/^ *\$\$$/.test(l) ? ` ${l}` : l)).join('\n');
-                        return this.resolvedDialect.math === 'dollar' ? `\n$$\n${mathBlock}\n$$\n\n` : `\n${mathBlock}\n\n`;
+                        return this.resolvedDialect.math === 'dollar' ? `${anchorsBefore || '\n'}$$\n${mathBlock}\n$$\n\n` : `${anchorsBefore || '\n'}${mathBlock}\n\n`;
                     }
                     if (meta?.math === 'inline') {
                         // Dropping `$` and newlines is lossless here: the parser's own inline-math
                         // recognizer is `\$(?!\s)([^$\n]+?)(?<!\s)\$`, which can never capture either.
                         const mathInline = markdownEscapeTags(node.text || '').replace(/[$\r\n]+/g, '');
-                        return this.resolvedDialect.math === 'dollar' ? `$${mathInline}$` : mathInline;
+                        return anchors + (this.resolvedDialect.math === 'dollar' ? `$${mathInline}$` : mathInline);
                     }
                     const lang = (meta?.language || '').replace(/[\r\n`]+/g, '');
                     // A `code` node is always block-level: genuinely inline code is a monospace
@@ -881,12 +955,12 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         // so an embedded ``` can't close the block early and inject markup.
                         const longestRun = Math.max(0, ...((node.text || '').match(/`+/g) || []).map(s => s.length));
                         const fence = '`'.repeat(Math.max(3, longestRun + 1));
-                        return `\n${fence}${lang}\n${node.text || ''}\n${fence}\n\n`;
+                        return `${anchorsBefore || '\n'}${fence}${lang}\n${node.text || ''}\n${fence}\n\n`;
                     }
                     // In a list item or pipe-table cell each line is a code span, and the item's or
                     // cell's line breaks (`<br>`) keep them apart: a fence there was joined into
                     // `` ```<br>a<br>``` ``, which read back as one span holding the tags.
-                    return `${(node.text || '').split(/\r?\n/).map(line => (line ? codeSpan(line) : '')).join('\n')} `;
+                    return `${anchors}${(node.text || '').split(/\r?\n/).map(line => (line ? codeSpan(line) : '')).join('\n')} `;
                 }
 
                 case 'sheet': {
@@ -1000,34 +1074,34 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // there is no round-trip to preserve and escaping is free.
                     const title = meta?.title ? markdownEscapeInline(foldLines(meta.title)) : '';
                     const body = trimAsciiWhitespace(childrenOutput);
+                    const anchors = this.anchorsBefore(meta);
 
                     switch (this.resolvedDialect.admonitions) {
                         case 'fence':
                             // GLFM fenced-div: no dedicated title syntax, so a custom title (if
                             // any) is folded into the body as a bold first line.
-                            return `:::${type}\n${title ? `**${title}**\n\n` : ''}${body}\n:::\n\n`;
+                            return `${anchors}:::${type}\n${title ? `**${title}**\n\n` : ''}${body}\n:::\n\n`;
                         case 'fence-attribute':
                             // Pandoc's own fenced-div-with-class syntax; same title handling as fence.
-                            return `::: {.${type}}\n${title ? `**${title}**\n\n` : ''}${body}\n:::\n\n`;
+                            return `${anchors}::: {.${type}}\n${title ? `**${title}**\n\n` : ''}${body}\n:::\n\n`;
                         case 'none': {
                             // Degrade to a plain bold-labeled blockquote, no special marker.
                             const quotedLines = body.split('\n').map(l => l.length > 0 ? `> ${l}` : '>').join('\n');
                             const heading = title || label.charAt(0) + label.slice(1).toLowerCase();
-                            return `> **${heading}:**\n${quotedLines}\n\n`;
+                            return `${anchors}> **${heading}:**\n${quotedLines}\n\n`;
                         }
                         case 'blockquote':
                         default: {
                             // Canonical GitHub blockquote form. No dedicated title syntax either
                             // (matches this library's historical output).
                             const quotedLines = body.split('\n').map(l => l.length > 0 ? `> ${l}` : '>').join('\n');
-                            return `> [!${label}]\n${quotedLines}\n\n`;
+                            return `${anchors}> [!${label}]\n${quotedLines}\n\n`;
                         }
                     }
                 }
 
                 case 'definitionList':
-                    if (this.resolvedDialect.definitionLists === 'none') return `${childrenOutput}\n`;
-                    return `${childrenOutput}\n`;
+                    return `${this.anchorsBefore(node.metadata)}${childrenOutput}\n`;
 
                 case 'definitionTerm':
                 case 'definitionDescription': {
@@ -1035,8 +1109,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // holds a paragraph, from HTML's <dt><p>, was followed by a blank line, which ended
                     // the list): line breaks inside join as a list item's do.
                     const line = joinLines(trimAsciiWhitespace(childrenOutput), this.resolvedFallbackToHtml.itemLineBreaks ? '<br>' : ' ');
-                    if (node.type === 'definitionTerm') return this.resolvedDialect.definitionLists === 'none' ? `**${line}**\n\n` : `${line}\n`;
-                    return this.resolvedDialect.definitionLists === 'none' ? `${line}\n\n` : `: ${line}\n`;
+                    // Its ids start its line, where the parser reads them back as its own.
+                    const anchors = this.renderAnchors(node.metadata);
+                    if (node.type === 'definitionTerm') return this.resolvedDialect.definitionLists === 'none' ? `${anchors}**${line}**\n\n` : `${anchors}${line}\n`;
+                    return this.resolvedDialect.definitionLists === 'none' ? `${anchors}${line}\n\n` : `: ${anchors}${line}\n`;
                 }
 
                 case 'comment':
@@ -1172,12 +1248,14 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         let childrenOutput = '';
         if (!walkedByProcessor && node.children && node.children.length > 0) {
             // Optimization: Merge adjacent text nodes with identical formatting
-            const optimizedChildren = this.optimizeNodes(node.type === 'paragraph' || node.type === 'heading' ? withoutTrailingBreaks(node.children) : node.children);
+            const optimizedChildren = this.optimizeNodes(node.type === 'paragraph' || node.type === 'heading' ? withoutBreaksAtBlocks(node.children) : node.children);
             this.assignListDepths(optimizedChildren);
             // What a paragraph, list item or definition holds starts a line, where a block marker at
             // its start must be escaped (`- # x` is an item holding a heading); a heading or cell holds
             // inline content only.
             const startsLines = (node.type === 'paragraph' || node.type === 'list' || node.type === 'definitionTerm' || node.type === 'definitionDescription') && !this.inPipeTableCell;
+            const holdsLine = LINE_HOLDERS.has(node.type);
+            if (holdsLine) this.lineDepth++;
             if (node.type === 'list') this.inListItem++;
             const definition = node.type === 'definitionTerm' || node.type === 'definitionDescription';
             if (definition) this.inDefinition++;
@@ -1209,6 +1287,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 appendBlock(children, child, childOutput);
             }
             childrenOutput = children.toString();
+            if (holdsLine) this.lineDepth--;
             if (node.type === 'list') this.inListItem--;
             if (definition) this.inDefinition--;
         }

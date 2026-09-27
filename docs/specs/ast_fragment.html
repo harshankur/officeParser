@@ -223,15 +223,15 @@
         <li><strong><code>admonition</code></strong>: A callout/alert block (GitHub <code>&gt; [!NOTE]</code> or
             GLFM <code>:::note ... :::</code> on import; LaTeX <code>beamer</code> blocks and the LaTeX generator's
             coloured admonition boxes read back the same way). Carries <code>AdmonitionMetadata.admonitionType</code>
-            (<code>'note' | 'tip' | 'important' | 'warning' | 'caution'</code>) and an optional <code>title</code>.
-            Has <code>children</code> for its block content.</li>
+            (<code>'note' | 'tip' | 'important' | 'warning' | 'caution'</code>), an optional <code>title</code>
+            and <code>anchorIds</code>. Has <code>children</code> for its block content.</li>
         <li><strong><code>embed</code></strong>: A rich embed such as a YouTube video. Carries
             <code>EmbedMetadata</code>: <code>embedType</code>, <code>videoId</code>, <code>url</code>,
             <code>width</code>, <code>align</code>.</li>
         <li><strong><code>definitionList</code></strong> / <strong><code>definitionTerm</code></strong> /
             <strong><code>definitionDescription</code></strong>: Markdown Extra-style definition lists
             (<code>Term\n: Definition</code>). The list node's <code>children</code> alternate term and
-            description nodes.</li>
+            description nodes. Each may carry <code>DefinitionMetadata.anchorIds</code>.</li>
         <li><strong><code>list</code></strong> task-list items: <code>ListMetadata.isTask</code> and
             <code>.checked</code> mark a GFM task-list item (<code>- [x] Done</code>).</li>
         <li>Text-node metadata additions: <code>TextMetadata.citationKey</code> (Pandoc/MultiMarkdown
@@ -276,6 +276,7 @@
             </ul>
         </li>
         <li><strong><code>clear</code></strong>: (Only for <code>textWrapping</code>) Specifies where the next available line should start when wrapping around floating objects (<code>all</code>, <code>left</code>, <code>right</code>, <code>none</code>).</li>
+        <li><strong><code>anchorIds</code></strong>: Bookmark ids on a rule or page break (HTML <code>&lt;hr id&gt;</code>, a Markdown <code>&lt;a id&gt;</code> line before <code>---</code>), so a link can target it.</li>
     </ul>
     <blockquote>
         [!NOTE]

@@ -1,4 +1,5 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { anchorMark, isAnchorMark, resolveAnchorMarks } from '../utils/anchorUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
@@ -53,6 +54,15 @@ const IMPLIED_END: Record<string, ImpliedEnd> = (() => {
     return rules;
 })();
 
+/**
+ * What HtmlGenerator writes in a picture's caption: nothing, or the picture's file name. Anything else
+ * in a caption is the document's own text, and kept.
+ */
+const WRITER_CAPTION = /^(?:[^\s/\\<>]+\.(?:png|jpe?g|gif|bmp|tiff?|svg|webp|emf|wmf|ico|avif|heic))?$/i;
+
+/** Node types that are blocks: a caption holding one is not wrapped in a paragraph. */
+const BLOCK_NODE_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'code', 'image', 'chart', 'embed', 'admonition', 'definitionList', 'break']);
+
 /** Elements that are blocks in HTML's layout: what one holds is never part of the text around it. */
 const BLOCK_LEVEL_TAGS = new Set(['address', 'article', 'aside', 'blockquote', 'center', 'details', 'dialog', 'dd', 'div', 'dl', 'dt', 'fieldset',
     'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'li', 'main', 'menu', 'nav', 'ol', 'p',
@@ -102,7 +112,8 @@ const collapseSpacesAcrossNodes = (nodes: OfficeContentNode[]): OfficeContentNod
             if (!current.text && !current.notes?.length && !current.comments?.length) continue;
         }
         out.push(current);
-        previous = current;
+        // A named anchor takes no room: the spaces either side of it are one.
+        if (!isAnchorMark(current)) previous = current;
     }
     return out;
 };
@@ -145,6 +156,7 @@ const trimBlockEdges = (nodes: OfficeContentNode[]): OfficeContentNode[] => {
     for (const [start, step, edge] of [[0, 1, /^ /], [out.length - 1, -1, / $/]] as const) {
         for (let i = start; i >= 0 && i < out.length; i += step) {
             const node = out[i];
+            if (isAnchorMark(node)) continue;
             if (node.type !== 'text') break;
             if (!node.text) continue;
             if (edge.test(node.text)) {
@@ -942,7 +954,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     : 'note';
                 const admonitionNode: OfficeContentNode = {
                     type: 'admonition',
-                    metadata: { admonitionType } as AdmonitionMetadata,
+                    metadata: { admonitionType, anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as AdmonitionMetadata,
                     children: parseChildren(node, newFormatting, listContext)
                 };
                 if (config.includeRawContent) admonitionNode.rawContent = '<div class="admonition">...</div>';
@@ -957,12 +969,14 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const kids = parseChildren(node, newFormatting, listContext);
                 const isBlock = (t: string) => t === 'paragraph' || t === 'heading' || t === 'list';
                 if (!kids.some(k => isBlock(k.type))) {
-                    return { type: 'paragraph', metadata: { style: 'Quote' } as any, children: kids };
+                    return { type: 'paragraph', metadata: { style: 'Quote', ...(anchorIds.length > 0 && { anchorIds }) } as any, children: kids };
                 }
                 kids.forEach(k => {
                     if (isBlock(k.type)) k.metadata = { ...(k.metadata as any), style: 'Quote' };
                 });
-                return kids;
+                // The quote's id is the first of what it holds, where HtmlGenerator writes a quoted
+                // paragraph's id (on its <blockquote>).
+                return anchorIds.length > 0 ? [anchorMark(anchorIds), ...kids] : kids;
             }
 
             // Mermaid diagrams. Attribute-driven producers render a
@@ -993,12 +1007,15 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             // save. Any other caption, and a <figcaption>, is a block of its own, which must not run
             // into the picture before it.
             const isClass = (name: string) => (node.attributes?.class || '').split(/\s+/).includes(name);
-            if (tagName === 'div' && isClass('caption') && node.parent?.tagName === 'div' && (node.parent.attributes?.class || '').split(/\s+/).includes('image-container')) {
+            if (tagName === 'div' && isClass('caption') && node.parent?.tagName === 'div' && (node.parent.attributes?.class || '').split(/\s+/).includes('image-container')
+                && WRITER_CAPTION.test(rawChildText(node).trim())) {
                 return [];
             }
             if (tagName === 'figcaption' || (tagName === 'div' && isClass('caption'))) {
                 const caption = parseChildren(node, newFormatting, listContext);
-                return caption.some(c => c.type !== 'text' || c.text?.trim()) ? { type: 'paragraph', children: caption } : [];
+                if (!caption.some(c => c.type !== 'text' || c.text?.trim())) return [];
+                // Blocks in it stay blocks (a <p> cannot hold a <p>); inline content is one paragraph.
+                return caption.some(c => BLOCK_NODE_TYPES.has(c.type)) ? caption : { type: 'paragraph', children: caption };
             }
             // Skip structural containers produced by HtmlGenerator to avoid deep AST nesting
             if (tagName === 'div' && (
@@ -1067,18 +1084,21 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             if (tagName === 'dl') {
                 return {
                     type: 'definitionList',
+                    ...(anchorIds.length > 0 && { metadata: { anchorIds } }),
                     children: parseChildren(node, newFormatting, listContext)
                 };
             }
             if (tagName === 'dt') {
                 return {
                     type: 'definitionTerm',
+                    ...(anchorIds.length > 0 && { metadata: { anchorIds } }),
                     children: parseChildren(node, newFormatting, listContext)
                 };
             }
             if (tagName === 'dd') {
                 return {
                     type: 'definitionDescription',
+                    ...(anchorIds.length > 0 && { metadata: { anchorIds } }),
                     children: parseChildren(node, newFormatting, listContext)
                 };
             }
@@ -1228,7 +1248,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     metadata: {
                         colSpan: colSpan && !isNaN(colSpan) ? colSpan : undefined,
                         rowSpan: rowSpan && !isNaN(rowSpan) ? rowSpan : undefined,
-                        align: cellAlign
+                        align: cellAlign,
+                        anchorIds: anchorIds.length > 0 ? anchorIds : undefined
                     } as CellMetadata,
                     children: parseChildren(node, newFormatting, listContext),
                     htmlAttributes: collectHtmlAttributes(node, ['colspan', 'rowspan', 'align'])
@@ -1289,6 +1310,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                                 attachmentName: name,
                                 altText: alt,
                                 title: node.attributes?.title,
+                                anchorIds: anchorIds.length > 0 ? anchorIds : undefined,
                                 width,
                                 align
                             } as ImageMetadata
@@ -1328,6 +1350,12 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const href = node.attributes?.href;
                 const wikilinkPage = node.attributes?.['data-wikilink-page'];
                 const children = parseChildren(node, newFormatting, listContext);
+                // A named anchor with no target (`<a id="x"></a>`, `<a name="sec">Title</a>`) marks a
+                // bookmark: its id goes to the node it stands at (see resolveAnchorMarks).
+                const anchorName = node.attributes?.id || node.attributes?.name;
+                if (!href && wikilinkPage === undefined && node.attributes?.['data-wikilink'] === undefined && anchorName) {
+                    return [anchorMark([anchorName]), ...children];
+                }
                 if (wikilinkPage !== undefined) {
                     children.forEach(c => {
                         if (c.type === 'text') {
@@ -1379,7 +1407,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 // as <hr class="page-break"> on emission, so that variant round-trips back to a
                 // page break; every other <hr> is thematic. Previously <hr> was dropped entirely.
                 const isPageBreak = (node.attributes?.class || '').split(/\s+/).includes('page-break');
-                const hrNode: OfficeContentNode = { type: 'break', metadata: { breakType: isPageBreak ? 'page' : 'thematic' } };
+                const hrNode: OfficeContentNode = { type: 'break', metadata: { breakType: isPageBreak ? 'page' : 'thematic', anchorIds: anchorIds.length > 0 ? anchorIds : undefined } };
                 if (config.includeRawContent) {
                     hrNode.rawContent = '<hr/>';
                 }
@@ -1467,16 +1495,24 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
     // paragraph for each piece of text.
     let inlineRun: OfficeContentNode[] = [];
     const flushInlineRun = () => {
+        const isBlank = (n: OfficeContentNode) => n.type === 'text' && !n.text?.trim() && !n.notes?.length && !n.comments?.length;
+        // Named anchors ending a run of text stand before the block after it (`text <a id="x"></a><h2>`),
+        // which they mark, as HtmlGenerator writes a block's anchors: they are not the run's.
+        let end = inlineRun.length;
+        while (end > 0 && (isAnchorMark(inlineRun[end - 1]) || isBlank(inlineRun[end - 1]))) end--;
+        const trailingMarks = end > 0 ? inlineRun.slice(end).filter(isAnchorMark) : [];
+        if (trailingMarks.length) inlineRun = inlineRun.slice(0, end);
         const children = config.preserveXmlWhitespace ? inlineRun : trimBlockEdges(collapseSpacesAcrossNodes(inlineRun));
-        // Pictures with nothing else in the run stand as blocks of their own, as before; beside text
-        // they are part of its paragraph.
-        if (children.some(n => n.type === 'image') && children.every(n => n.type === 'image' || (n.type === 'text' && !n.text?.trim() && !n.notes?.length && !n.comments?.length))) {
-            for (const n of children) if (n.type === 'image') content.push(n);
+        // Pictures and named anchors with nothing else in the run stand among the blocks, as before
+        // (an anchor then marks the next block); beside text they are part of its paragraph.
+        if (children.some(n => n.type === 'image' || isAnchorMark(n)) && children.every(n => n.type === 'image' || isAnchorMark(n) || isBlank(n))) {
+            for (const n of children) if (!isBlank(n)) content.push(n);
         } else if (children.some(n => n.type !== 'text' || n.text || n.notes?.length || n.comments?.length)) content.push({ type: 'paragraph', children });
+        for (const mark of trailingMarks) content.push(mark);
         inlineRun = [];
     };
     // A line break, inline math and a picture sit in a line of text; a rule or page break (<hr>) is a block.
-    const isInlineNode = (n: OfficeContentNode) => n.type === 'text' || n.type === 'image'
+    const isInlineNode = (n: OfficeContentNode) => n.type === 'text' || n.type === 'image' || isAnchorMark(n)
         || (n.type === 'break' && !['thematic', 'page'].includes((n.metadata as { breakType?: string } | undefined)?.breakType ?? ''))
         || (n.type === 'code' && (n.metadata as CodeMetadata | undefined)?.math === 'inline');
     for (let i = 0; i < body.children.length; i++) {
@@ -1515,5 +1551,5 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
         });
     }
 
-    return createAST('html', metadata, content, attachments, config, undefined);
+    return createAST('html', metadata, resolveAnchorMarks(content), attachments, config, undefined);
 };

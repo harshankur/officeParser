@@ -1,4 +1,5 @@
 import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
+import { anchorMark, resolveAnchorMarks } from '../utils/anchorUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseHtml } from './HtmlParser.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -441,7 +442,26 @@ function unwrapAlignDivs(text: string): { text: string; align?: 'left' | 'center
 }
 
 /** Nodes the generator writes anchors for: waiting anchors go to the next of these. */
-const ANCHOR_HOLDERS = new Set<string>(['paragraph', 'heading', 'list', 'image', 'table', 'sheet', 'slide', 'page']);
+const ANCHOR_HOLDERS = new Set<string>(['paragraph', 'heading', 'list', 'image', 'table', 'sheet', 'slide', 'page', 'code', 'break', 'admonition', 'definitionList']);
+
+/**
+ * The change in how many HTML tables are open over `text`: its `<table` tags less its `</table>` tags.
+ */
+function htmlTableDepthChange(text: string): number {
+    if (!/<\/?table/i.test(text)) return 0;
+    return (text.match(/<table\b/gi)?.length ?? 0) - (text.match(/<\/table\s*>/gi)?.length ?? 0);
+}
+
+/** Whether every line of `block` with content is indented four columns: an indented code block. */
+function isIndentedCodeBlock(block: string): boolean {
+    let content = false;
+    for (const line of block.split('\n')) {
+        if (!trimAsciiWhitespace(line)) continue;
+        if (!/^(?: {4}|\t)/.test(line)) return false;
+        content = true;
+    }
+    return content;
+}
 
 /** A thematic break: three or more `-`, `*` or `_`, spaces between allowed, indented at most three spaces. */
 const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
@@ -526,7 +546,9 @@ const LINK_DESTINATION = (() => {
  * - `codeFence`: a backtick run, the opener of a code span; see codeSpanCloser.
  * - `underline`/`subscript`/`superscript`/`spanStyle`+`spanContent`: HTML-style inline formatting,
  *   each ending before another opening tag of its kind.
- * - `lineBreak` (`<br>`), `htmlComment` (the `<!--` of an inline source comment; see commentAt).
+ * - `lineBreak` (`<br>`), `anchorTag` (an empty `<a id="x"></a>`, a bookmark target: the id of the
+ *   picture right after it, else of the line's paragraph, heading, item or cell; an empty `<a>`
+ *   naming no id is text), `htmlComment` (the `<!--` of an inline source comment; see commentAt).
  * - `footnoteId` (`[^id]`), `citationKey` (`[@key]`), `wikiPage`/`wikiAlias` (`[[page|alias]]`),
  *   `refBang`/`refText`/`refId` (`[text][ref]`, `[text][]`), and `shortBang`/`shortText` (`[text]`,
  *   the most generic bracket pattern, so last among those starting with `[`).
@@ -552,6 +574,7 @@ const INLINE_TOKENS = [
     String.raw`<sub>(?<subscript>(?:(?!<sub>).)+?)<\/sub>`,
     String.raw`<sup>(?<superscript>(?:(?!<sup>).)+?)<\/sup>`,
     String.raw`(?<lineBreak><br\s*\/?>)`,
+    String.raw`(?<anchorTag><a\s[^<>\n]*>[ \t]*<\/a>)`,
     String.raw`(?<htmlComment><!--)`,
     String.raw`<span\s+style="(?<spanStyle>[^"\n]*)">(?<spanContent>(?:(?!<span[\s>]).)+?)<\/span>`,
     String.raw`\[\^(?<footnoteId>[^\[\]\n]+)\]`,
@@ -1058,6 +1081,12 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 if (!comment) { next = match.index + 4; continue; }
                 next = comment.end;
             }
+            let anchorIds: string[] = [];
+            if (g.anchorTag !== undefined) {
+                const id = /\sid="([^"]*)"/i.exec(g.anchorTag)?.[1] || /\sname="([^"]*)"/i.exec(g.anchorTag)?.[1];
+                if (!id) { next = match.index + 2; continue; }
+                anchorIds = [id];
+            }
             let closeAt = -1;
             // The stars of a run that open emphasis: as many as a closing run allows, from three down,
             // the rest are text (`***a**` is a star, then bold `a`).
@@ -1110,6 +1139,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 appendAll(nodes, parseInline(g.subscript, { ...currentFormatting, subscript: true }));
             } else if (g.superscript !== undefined) { // Superscript
                 appendAll(nodes, parseInline(g.superscript, { ...currentFormatting, superscript: true }));
+            } else if (g.anchorTag !== undefined) { // An empty anchor: an id (see resolveAnchorMarks)
+                nodes.push(anchorMark(anchorIds));
             } else if (g.lineBreak !== undefined) { // Raw inline <br>/<br/>/<br /> - a hard line break.
                 // MarkdownGenerator emits a raw <br> for a line break inside a table cell (a GFM pipe
                 // cell can't hold a newline), so the parser must read it back symmetrically as a break
@@ -1351,7 +1382,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     };
 
     // Fold standalone anchor placeholders into the anchorIds of the next node that can hold them (one
-    // the generator writes anchors for: a code block, rule or comment is passed over) so a bookmark
+    // the generator writes anchors for: a comment or embed is passed over) so a bookmark
     // target emitted on its own line round-trips as a real anchor. Anchors no node follows are an
     // empty paragraph holding them, where they stand, as the generator writes a bookmark on an empty
     // paragraph (they joined the node before them, which could not always hold them).
@@ -1379,13 +1410,35 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // A text's blocks: split at blank lines, then at headings, lists and HTML divs that start
     // without one. Used for the document and, recursively, for what a quote or note holds.
     const splitIntoBlocks = (text: string): string[] => {
-    // A line of only spaces and tabs is a blank line too (CommonMark).
-    const rawBlocks = text.split(/\n(?:[ \t]*\n)+/);
+    // A line of only spaces and tabs is a blank line too (CommonMark). Each block keeps the blank
+    // lines before it, which an indented code block holds (see below).
+    const parts = text.split(/(\n(?:[ \t]*\n)+)/);
+    const rawBlocks: string[] = [];
+    const rawSeparators: string[] = [];
+    // An HTML table a blank line runs through (`<table>`, rows, a blank line, more rows) is one
+    // table: a renderer passes each piece through as HTML, and a browser builds one table of them.
+    // Pieces join while a table the first piece opened is open and each piece starts with a tag.
+    let tableDepth = 0;
+    for (let i = 0; i < parts.length; i += 2) {
+        const part = parts[i];
+        const separator = i > 0 ? parts[i - 1] : '';
+        if (tableDepth > 0 && /^[ \t]*</.test(part)) {
+            rawBlocks[rawBlocks.length - 1] += separator + part;
+            tableDepth += htmlTableDepthChange(part);
+            continue;
+        }
+        rawBlocks.push(part);
+        rawSeparators.push(separator);
+        tableDepth = /^ {0,3}<table\b/i.test(part) ? htmlTableDepthChange(part) : 0;
+    }
     const blocks: string[] = [];
+    const separators: string[] = [];
 
     // Sub-split blocks that contain headings or lists without double newlines
-    for (const rawBlock of rawBlocks) {
+    for (let r = 0; r < rawBlocks.length; r++) {
+        const rawBlock = rawBlocks[r];
         if (!trimAsciiWhitespace(rawBlock)) continue;
+        const firstBlock = blocks.length;
 
         // Match headings or lists that might be joined with other text via single newline
         const lines = rawBlock.split('\n');
@@ -1397,7 +1450,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // previous item's content instead of dropping it.
         let inList: boolean = false;
         const flush = () => {
-            if (currentSubBlock.length > 0) blocks.push(currentSubBlock.join('\n'));
+            if (currentSubBlock.length > 0) {
+                separators.push(blocks.length === firstBlock ? rawSeparators[r] : '\n');
+                blocks.push(currentSubBlock.join('\n'));
+            }
             currentSubBlock = [];
         };
         for (const line of lines) {
@@ -1410,7 +1466,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             // three or more `-`, `*` or `_` (spaces between allowed) are a thematic break, which
             // is never a list item.
             // (Not under a quote's paragraph: an underline cannot continue a quote lazily.)
-            const isSetextUnderline: boolean = inParagraph && !currentSubBlock[0].startsWith('>') && SETEXT_UNDERLINE.test(line);
+            const isSetextUnderline: boolean = inParagraph && !/^ {0,3}>/.test(currentSubBlock[0]) && SETEXT_UNDERLINE.test(line);
             const isRule: boolean = !isSetextUnderline && THEMATIC_BREAK.test(line);
             const isHeading: boolean = !isSetextUnderline && ATX_HEADING_START.test(line);
             const item: RegExpExecArray | null = isSetextUnderline || isRule ? null : LIST_ITEM_START.exec(line);
@@ -1452,9 +1508,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 inList = false;
             }
         }
-        if (currentSubBlock.length > 0) {
-            blocks.push(currentSubBlock.join('\n'));
-        }
+        flush();
     }
 
     // Re-join a list block that a blank line tore away from its parent. The generator's older
@@ -1468,15 +1522,26 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // an indented marker (continuation text, indented code, placeholders) never triggers a merge.
     const indentedMarkerStart = /^(?: {2,}|\t)[ \t]*(?:[-*+]|\d+[.)])(?:[ \t]|$)/;
     const mergedBlocks: string[] = [];
-    for (const block of blocks) {
-        const prev = mergedBlocks[mergedBlocks.length - 1];
-        if (prev !== undefined
-            && LIST_ITEM_START.test(prev.split('\n', 1)[0])
-            && indentedMarkerStart.test(block.split('\n', 1)[0])) {
-            mergedBlocks[mergedBlocks.length - 1] = `${prev}\n${block}`;
-        } else {
-            mergedBlocks.push(block);
+    // Whether the last merged block is an indented code block, and a list: a list takes an indented
+    // marker after it, and an indented code block the one after it (see below).
+    let previousIsList = false;
+    let previousIsCode = false;
+    for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i];
+        if (previousIsList && indentedMarkerStart.test(block.split('\n', 1)[0])) {
+            mergedBlocks[mergedBlocks.length - 1] += `\n${block}`;
+            continue;
         }
+        const isCode = isIndentedCodeBlock(block);
+        // An indented code block runs on across blank lines (CommonMark): the next indented block
+        // after one is part of it, with the blank lines between.
+        if (isCode && previousIsCode && separators[i] !== '\n') {
+            mergedBlocks[mergedBlocks.length - 1] += separators[i] + block;
+            continue;
+        }
+        mergedBlocks.push(block);
+        previousIsList = LIST_ITEM_START.test(block.split('\n', 1)[0]);
+        previousIsCode = isCode;
     }
     return mergedBlocks;
     };
@@ -1782,7 +1847,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // text; multi-line setext text (CommonMark's "Foo\nbar\n===" merging into one
         // heading) is an explicitly out-of-scope simplification - any earlier lines in
         // the block are pushed as a separate paragraph first.
-        const setextMatch = block.match(/^([\s\S]*)\n([=]+|-+)[ \t]*$/);
+        // (Not a quote's: an underline cannot continue a quote lazily; see the quote branch.)
+        const setextMatch = block.startsWith('>') ? null : block.match(/^([\s\S]*)\n([=]+|-+)[ \t]*$/);
         if (setextMatch) {
             const lines = setextMatch[1].split('\n');
             const headingLine = lines[lines.length - 1];
@@ -1807,7 +1873,13 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // level per pass made a deeply nested line quadratic), and a line without one is a lazy
         // continuation of the quote's paragraph.
         if (block.startsWith('>')) {
-            const dequoted = block.replace(/^(?:>[ \t]?)+/gm, '');
+            // A line without a marker is a lazy continuation of the quote's paragraph: a line of `=`
+            // or `-` there is text, not a heading's underline, so it is escaped as it is dequoted.
+            const dequoted = block.split('\n').map(line => {
+                const markers = /^(?: {0,3}>[ \t]?)+/.exec(line);
+                if (markers) return line.slice(markers[0].length);
+                return SETEXT_UNDERLINE.test(line) ? `\\${trimStartChars(line, ' ')}` : line;
+            }).join('\n');
 
             // GitHub-style admonition: `> [!NOTE]` on the first quoted line.
             const admonitionHeaderMatch = dequoted.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*\n?([\s\S]*)$/i);
@@ -1956,8 +2028,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             continue;
         }
 
-        // Table (Simple Pipe or HTML)
-        if ((block.includes('|') && hasTableDelimiterRow(block)) || block.includes('<table')) {
+        // Table (Simple Pipe or HTML). An HTML table starts a line (up to three spaces in), as an HTML
+        // block does: `<table>` in a code span or a sentence is text.
+        const htmlTable = /(?:^|\n) {0,3}<table\b/i.test(block);
+        if ((block.includes('|') && hasTableDelimiterRow(block)) || htmlTable) {
             // Pandoc-style trailing attribute list (`{align=right}`) immediately after the
             // table, or Kramdown's `{: align=right}` on its own following line - both land
             // in this same raw block since there's no blank line separating them.
@@ -1968,7 +2042,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 block = block.slice(0, tableAttrLineMatch.index);
             }
 
-            if (block.includes('<table')) {
+            if (htmlTable) {
                 // An HTML table is HTML: a Markdown renderer shows it as written, and it is read with
                 // the HTML parser, so its cells keep their formatting, links, pictures, math, line
                 // breaks and nested tables, and text around it in the block is kept too. Its
@@ -2105,5 +2179,5 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         content.push(note);
     }
 
-    return createAST('md', metadata, content, attachments, config, undefined);
+    return createAST('md', metadata, resolveAnchorMarks(content), attachments, config, undefined);
 };

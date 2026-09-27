@@ -572,10 +572,26 @@ async function markdownTests() {
         ['a definition list', 't\n: d\n'.repeat(40_000)], ['a footnote continued across blank lines', `a[^1]\n\n[^1]: a${'\n\n    b'.repeat(20_000)}`],
         ['footnotes across blank lines', 'x[^1]\n\n' + Array.from({ length: 10_000 }, (_, i) => `[^${i}]: a\n\n    b\n`).join('\n')],
         ['a quote of blocks', `> - a\n${'> - b\n'.repeat(40_000)}`],
+        ['empty anchors in a line', 'a <a id="x"></a>'.repeat(60_000)], ['unclosed anchors in a line', '<a id="x" '.repeat(60_000)],
+        ['an HTML table blank lines run through', `<table>\n${'<tr><td>a</td></tr>\n\n'.repeat(20_000)}</table>`],
+        ['indented code across blank lines', '    a\n\n'.repeat(60_000)], ['lazy underlines in a quote', '> q\n===\n'.repeat(40_000)],
     ] as const) {
         const started = Date.now();
         await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'md' } as any);
         check(`md: ${label} parse in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+    }
+    // Named anchors are ids of the node they stand at, each node's added once: many of them in a line,
+    // or before a block, cost time in proportion to their number, read and written.
+    for (const [label, text, fileType] of [
+        ['md: 60,000 anchors in a line', 'a <a id="x1"></a>'.repeat(60_000), 'md'],
+        ['html: 60,000 anchors in a paragraph', `<p>${'a <a id="x"></a>'.repeat(60_000)}</p>`, 'html'],
+        ['html: 60,000 anchors before a heading', `${'<a id="x"></a>'.repeat(60_000)}<h2>h</h2>`, 'html'],
+    ] as const) {
+        const started = Date.now();
+        const ast = await OfficeParser.parseOffice(Buffer.from(text), { fileType } as any);
+        await ast.to('md');
+        await ast.to('html');
+        check(`${label} are read and written in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
     }
     // Footnotes that refer to themselves, to each other, or along a long chain: a note referring to
     // itself recursed until the stack ran out, and a chain made an AST too deep to serialize. A note in

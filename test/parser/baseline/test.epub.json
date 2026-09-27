@@ -4886,6 +4886,11 @@
     },
     {
       "type": "definitionList",
+      "metadata": {
+        "anchorIds": [
+          "note_1"
+        ]
+      },
       "children": [
         {
           "type": "definitionTerm",
@@ -4932,6 +4937,11 @@
     },
     {
       "type": "definitionList",
+      "metadata": {
+        "anchorIds": [
+          "note_2"
+        ]
+      },
       "children": [
         {
           "type": "definitionTerm",

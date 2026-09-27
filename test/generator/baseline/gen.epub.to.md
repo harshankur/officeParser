@@ -387,8 +387,12 @@ An interruption in our regularly scheduled listing, for this essential and very 
 
 # Notes {#calibre-pb-5}
 
+<a id="note-1"></a>
+
 \[[←1](index_split_003.html#back_note_1 "1")\]
 : In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre.
+
+<a id="note-2"></a>
 
 \[[←2](index_split_003.html#back_note_2 "2")\]
 : Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note.

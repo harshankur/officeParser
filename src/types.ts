@@ -2556,6 +2556,16 @@ export interface AdmonitionMetadata {
     title?: string;
     /** Which concrete input syntax produced this node. Always populated by the parser. */
     sourceSyntax?: 'github' | 'gitlab';
+    /** Unique anchor IDs for internal linking. */
+    anchorIds?: string[];
+}
+
+/**
+ * Metadata for a definition list and its terms and descriptions (`<dl>`, `<dt>`, `<dd>`).
+ */
+export interface DefinitionMetadata {
+    /** Unique anchor IDs for internal linking. */
+    anchorIds?: string[];
 }
 
 /**
@@ -2705,6 +2715,9 @@ export interface BreakMetadata {
      * - 'right': text wrapping break shall restart in next text region unblocked on the right
      */
     clear?: 'all' | 'left' | 'none' | 'right';
+
+    /** Unique anchor IDs for internal linking (a rule or page break can be a link's target). */
+    anchorIds?: string[];
 }
 
 /**
@@ -2933,9 +2946,9 @@ export type OfficeContentNode = BaseContentNode & (
     | { type: 'slideMaster'; metadata?: SlideMetadata }
     | { type: 'embed'; metadata?: EmbedMetadata }
     | { type: 'admonition'; metadata?: AdmonitionMetadata }
-    | { type: 'definitionList'; metadata?: undefined }
-    | { type: 'definitionTerm'; metadata?: undefined }
-    | { type: 'definitionDescription'; metadata?: undefined }
+    | { type: 'definitionList'; metadata?: DefinitionMetadata }
+    | { type: 'definitionTerm'; metadata?: DefinitionMetadata }
+    | { type: 'definitionDescription'; metadata?: DefinitionMetadata }
 );
 
 /**

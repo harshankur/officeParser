@@ -652,8 +652,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // paragraph's text/link runs) must concatenate with no separator: adding `\n\n`
                 // around an inline <a> put a blank line inside the <p>, which reparsed as a stray
                 // space before the following punctuation (`[video](url) .`). A source comment inside a
-                // run is inline too: a blank line after it would part the words around it.
-                const inlineNode = node.type === 'text' || (isSourceComment(node) && runHasText);
+                // run is inline too: a blank line after it would part the words around it, and so is
+                // anything in a paragraph's or heading's line (a picture, inline math) but a line
+                // break, after which the line starts afresh.
+                const inlineNode = node.type === 'text' || (isSourceComment(node) && runHasText) || (this.inlineDepth > 0 && node.type !== 'break');
                 if (!inlineNode && !result.endsWith('\n\n')) {
                     if (result.endsWith('\n')) result += '\n';
                     else result += '\n\n';
@@ -800,7 +802,13 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             for (const child of node.children!) {
                 if (isBlockInParagraph(child)) {
                     await flush();
-                    splitResult += await this.processNodeArray([child]);
+                    // The block stands on its own, outside the paragraph's line of text.
+                    this.inlineDepth--;
+                    try {
+                        splitResult += await this.processNodeArray([child]);
+                    } finally {
+                        this.inlineDepth++;
+                    }
                 } else {
                     run.push(child);
                 }
@@ -909,12 +917,16 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let idAttr = '';
         let extraAnchors = '';
 
-        const anchorIds = this.config.ignoreInternalLinks ? [] : [...((node.metadata as any)?.anchorIds || [])];
+        // An empty id is none (`id=""` names nothing a link can reach).
+        const anchorIds: string[] = this.config.ignoreInternalLinks ? [] : ((node.metadata as any)?.anchorIds || []).filter((id: string) => !!id);
 
         if (this.config.generateIds) {
             if (node.type === 'heading') {
-                const slug = this.slugify(node.text || '');
-                if (!anchorIds.includes(slug)) anchorIds.push(slug);
+                // From the heading's text, whether the node carries it or only its runs do. A heading
+                // whose text slugifies to nothing (no Latin letters or digits) gets no generated id,
+                // rather than an empty one.
+                const slug = this.slugify(node.text || this.getNodeText(node));
+                if (slug && !anchorIds.includes(slug)) anchorIds.push(slug);
             } else if (node.type === 'sheet') {
                 const sheetIndex = this.ast?.content.filter(n => n.type === 'sheet').indexOf(node) ?? 0;
                 const sheetId = `sheet-${sheetIndex}`;
@@ -1008,18 +1020,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // alt is the descriptive alt text, not the OCR text: OCR text is surfaced visibly under
                 // 'image+ocr-text' rather than hidden in alt (where a broken/referenced image would leak
                 // it into the rendered page).
-                let img = `<img src="${sanitizeImageUrl(src)}" alt="${this.escape(meta?.altText || '')}"${imgTitle}${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
-                // A picture that is a link (a badge) is wrapped in it, as a linked run is.
-                if (meta?.link && (!this.config.ignoreInternalLinks || meta.linkType === 'external')) {
+                const imgWithId = (id: string): string => {
+                    const tag = `<img src="${sanitizeImageUrl(src)}" alt="${this.escape(meta?.altText || '')}"${id}${imgTitle}${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
+                    // A picture that is a link (a badge) is wrapped in it, as a linked run is.
+                    if (!meta?.link || (this.config.ignoreInternalLinks && meta.linkType !== 'external')) return tag;
                     const linkTitle = meta.linkTitle ? ` title="${this.escape(meta.linkTitle)}"` : '';
-                    img = `<a href="${sanitizeUrl(meta.link)}"${linkTitle}${meta.linkType === 'external' ? ' target="_blank"' : ''}>${img}</a>`;
-                }
-                // In a paragraph or heading (phrasing content only) the picture is written inline: the
-                // block markup below inside a <p> is split apart by every browser and parser.
+                    return `<a href="${sanitizeUrl(meta.link)}"${linkTitle}${meta.linkType === 'external' ? ' target="_blank"' : ''}>${tag}</a>`;
+                };
+                // In a paragraph or heading (phrasing content only) the picture is written inline, its
+                // id on the <img>: the block markup below inside a <p> is split apart by every browser
+                // and parser.
                 if (this.inlineDepth > 0) {
                     const ocrText = mode === 'image+ocr-text' && ocr ? `<br><span class="ocr-text">${this.escape(ocr)}</span>` : '';
-                    return `${extraAnchors}${idAttr ? `<span${idAttr}>${img}</span>` : img}${ocrText}`;
+                    return `${extraAnchors}${imgWithId(idAttr)}${ocrText}`;
                 }
+                const img = imgWithId('');
                 let content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
                 // image+ocr-text: the image, then its recognized text (a <pre> keeps the 2-D layout).
                 if (mode === 'image+ocr-text' && ocr) content += `<pre class="ocr-text">${this.escape(ocr)}</pre>`;
@@ -1108,9 +1123,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
             case 'break': {
                 const breakType = (node.metadata as any)?.breakType;
-                if (breakType === 'page') return '<hr class="page-break">';
+                if (breakType === 'page') return `${extraAnchors}<hr class="page-break"${idAttr}>`;
                 // A thematic break is a plain rule; the parser reads a bare <hr> back as one.
-                if (breakType === 'thematic') return '<hr>';
+                if (breakType === 'thematic') return `${extraAnchors}<hr${idAttr}>`;
                 return '<br>';
             }
 

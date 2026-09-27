@@ -276,8 +276,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private bookmarksFor(node: OfficeContentNode): { start: string; end: string } {
         if (this.config.ignoreInternalLinks) return { start: '', end: '' };
         const names: string[] = [...(((node.metadata as any)?.anchorIds) || [])];
-        if (this.config.generateIds && node.type === 'heading' && node.text) {
-            const slug = this.slugify(node.text);
+        if (this.config.generateIds && node.type === 'heading') {
+            const slug = this.slugify(node.text || this.getNodeText(node));
             if (slug && !names.includes(slug)) names.push(slug);
         }
         let start = '', end = '';

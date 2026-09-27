@@ -323,8 +323,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private bookmarksFor(node: OfficeContentNode): string {
         if (this.config.ignoreInternalLinks) return '';
         const names: string[] = [...(((node.metadata as any)?.anchorIds) || [])];
-        if (this.config.generateIds && node.type === 'heading' && node.text) {
-            const slug = this.slugify(node.text);
+        if (this.config.generateIds && node.type === 'heading') {
+            const slug = this.slugify(node.text || this.getNodeText(node));
             if (slug && !names.includes(slug)) names.push(slug);
         }
         let out = '';

@@ -88,7 +88,10 @@
       "metadata": {
         "level": 1,
         "anchorIds": [
-          "OLE_LINK1"
+          "OLE_LINK1",
+          "OLE_LINK2",
+          "_Toc581531977",
+          "demonstration-of-docx-support-in-calibre"
         ]
       },
       "children": [
@@ -195,7 +198,8 @@
         "level": 1,
         "alignment": "center",
         "anchorIds": [
-          "_Toc2054249818"
+          "_Toc2054249818",
+          "text-formatting"
         ]
       },
       "children": [
@@ -217,7 +221,8 @@
       "metadata": {
         "level": 2,
         "anchorIds": [
-          "_Toc2137712100"
+          "_Toc2137712100",
+          "inline-formatting"
         ]
       },
       "children": [
@@ -461,7 +466,8 @@
       "metadata": {
         "level": 2,
         "anchorIds": [
-          "_Toc1074133965"
+          "_Toc1074133965",
+          "fun-with-fonts"
         ]
       },
       "children": [
@@ -519,7 +525,9 @@
       "metadata": {
         "level": 2,
         "anchorIds": [
-          "_Paragraph_level_formatting"
+          "_Paragraph_level_formatting",
+          "_Toc2022725662",
+          "paragraph-level-formatting"
         ]
       },
       "children": [
@@ -569,7 +577,8 @@
         "level": 1,
         "alignment": "center",
         "anchorIds": [
-          "_Toc28114276"
+          "_Toc28114276",
+          "tables"
         ]
       },
       "children": [
@@ -4715,7 +4724,8 @@
         "level": 1,
         "alignment": "center",
         "anchorIds": [
-          "_Toc54889875"
+          "_Toc54889875",
+          "structural-elements"
         ]
       },
       "children": [
@@ -4748,7 +4758,8 @@
       "metadata": {
         "level": 2,
         "anchorIds": [
-          "_Toc201580556"
+          "_Toc201580556",
+          "footnotes-endnotes"
         ]
       },
       "children": [
@@ -4828,7 +4839,8 @@
       "metadata": {
         "level": 2,
         "anchorIds": [
-          "_Toc1977424358"
+          "_Toc1977424358",
+          "dropcaps"
         ]
       },
       "children": [
@@ -4874,7 +4886,8 @@
       "metadata": {
         "level": 2,
         "anchorIds": [
-          "_Toc1233048813"
+          "_Toc1233048813",
+          "links"
         ]
       },
       "children": [
@@ -4942,7 +4955,8 @@
       "metadata": {
         "level": 2,
         "anchorIds": [
-          "_Toc64145348"
+          "_Toc64145348",
+          "table-of-contents"
         ]
       },
       "children": [
@@ -5648,7 +5662,8 @@
         "level": 1,
         "alignment": "center",
         "anchorIds": [
-          "_Toc484565143"
+          "_Toc484565143",
+          "images"
         ]
       },
       "children": [
@@ -5763,7 +5778,8 @@
         "level": 1,
         "alignment": "center",
         "anchorIds": [
-          "_Toc1359965655"
+          "_Toc1359965655",
+          "lists"
         ]
       },
       "children": [
@@ -5796,7 +5812,8 @@
       "metadata": {
         "level": 2,
         "anchorIds": [
-          "_Toc1958162433"
+          "_Toc1958162433",
+          "bulleted-list"
         ]
       },
       "children": [
@@ -5859,7 +5876,8 @@
       "metadata": {
         "level": 2,
         "anchorIds": [
-          "_Toc415190676"
+          "_Toc415190676",
+          "numbered-list"
         ]
       },
       "children": [
@@ -5922,7 +5940,8 @@
       "metadata": {
         "level": 2,
         "anchorIds": [
-          "_Toc1093260318"
+          "_Toc1093260318",
+          "multi-level-lists"
         ]
       },
       "children": [
@@ -6200,7 +6219,8 @@
       "metadata": {
         "level": 2,
         "anchorIds": [
-          "_Toc1471533984"
+          "_Toc1471533984",
+          "continued-lists"
         ]
       },
       "children": [
