@@ -1034,11 +1034,13 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     const ocrText = mode === 'image+ocr-text' && ocr ? `<br><span class="ocr-text">${this.escape(ocr)}</span>` : '';
                     return `${extraAnchors}${imgWithId(idAttr)}${ocrText}`;
                 }
-                const img = imgWithId('');
+                // Among the blocks too its id is on the <img>, after the anchors of its other ids, as they
+                // are read back: on the wrapper it was read after them, and the order flipped each save.
+                const img = imgWithId(idAttr);
                 let content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
                 // image+ocr-text: the image, then its recognized text (a <pre> keeps the 2-D layout).
                 if (mode === 'image+ocr-text' && ocr) content += `<pre class="ocr-text">${this.escape(ocr)}</pre>`;
-                return `${extraAnchors}<div${idAttr}>${content}</div>`;
+                return `${extraAnchors}<div>${content}</div>`;
             }
 
             case 'chart': {
@@ -1458,10 +1460,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // attribute bag's raw className, so escaping at the join covers both sources.
                 const classAttr = ` class="${this.escape(mergedClasses.join(' '))}"`;
 
-                // Ensure we don't have duplicate IDs
+                // The sheet's element takes the id its tab links to; its own ids are anchors before it
+                // (the first was dropped for that id, which the extra anchors then repeated).
                 const finalIdAttr = ` id="${sheetId}"`;
+                const sheetAnchors = anchorIds.filter(aid => aid !== sheetId).map(aid => `<a id="${this.escape(aid)}" name="${this.escape(aid)}"></a>`).join('');
 
-                return `${extraAnchors}<div${finalIdAttr}${classAttr}${mappedAttrs}${styleAttr}>${tableHtml}${nonRowHtml}</div>`;
+                return `${sheetAnchors}<div${finalIdAttr}${classAttr}${mappedAttrs}${styleAttr}>${tableHtml}${nonRowHtml}</div>`;
             }
 
             case 'paragraph':
@@ -1507,7 +1511,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     // An unreferenced (orphan) note has no citation anchor, so the back-link would
                     // dangle - omit it.
                     const backLink = meta?.unreferenced ? '' : ` <a href="#footnote-ref-${key}">↩</a>`;
-                    return `<div id="footnote-${key}" data-footnote-id="${key}">${childrenOutput}${backLink}</div>`;
+                    // The note's own ids (a bookmark in it) start it, where the parser gives them back.
+                    const noteAnchors = anchorIds.map(aid => `<a id="${this.escape(aid)}" name="${this.escape(aid)}"></a>`).join('');
+                    return `<div id="footnote-${key}" data-footnote-id="${key}">${noteAnchors}${childrenOutput}${backLink}</div>`;
                 }
                 const noteClass = meta?.noteType ? ` note-${this.escape(meta.noteType)}` : '';
                 return `${extraAnchors}<div class="slide-note${noteClass}"${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
@@ -2349,7 +2355,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     }
 
     protected override slugify(text: string): string {
-        return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        return text.toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, '-').replace(/(^-|-$)/g, '');
     }
 
     private getColumnLetter(colIndex: number): string {

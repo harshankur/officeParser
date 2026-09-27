@@ -807,7 +807,9 @@ Table Node (type: 'table')
         └── children: [ Paragraph | List | Table | ... ]
 ```
 
-- `row` / `col`: zero-based grid position
+- `row` / `col`: zero-based grid position. Generators fill the grid between cells, so a table or sheet whose
+  positions would span more than 2,000,000 empty cells (one cell far from the rest) is laid out closer when written:
+  the rows and columns no cell starts or ends in are left out, and if that is not enough, each row's cells follow one another
 - `rowSpan` / `colSpan`: merged cells (DOCX, ODF, HTML, Markdown HTML-tables, and tagged PDF)
 - Cells can contain nested tables
 

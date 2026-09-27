@@ -69,8 +69,13 @@ const SHEET_CHROME_CLASSES = new Set(['excel-row-num', 'excel-row-num-header', '
 const isSheetChrome = (node: HtmlNode): boolean => node.type === 'element' && (node.tagName === 'td' || node.tagName === 'th')
     && (node.attributes?.class || '').split(/\s+/).some(name => SHEET_CHROME_CLASSES.has(name));
 
-/** Node types that are blocks: a caption holding one is not wrapped in a paragraph. */
-const BLOCK_NODE_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'code', 'image', 'chart', 'embed', 'admonition', 'definitionList', 'break']);
+/** Node types that are blocks, wherever they stand: a caption holding one is not wrapped in a paragraph. */
+const BLOCK_NODE_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'chart', 'embed', 'admonition', 'definitionList']);
+
+/** Whether `node` is a block: one of BLOCK_NODE_TYPES, a code block or display equation, or a rule or page break. */
+const isBlockNode = (node: OfficeContentNode): boolean => BLOCK_NODE_TYPES.has(node.type)
+    || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math !== 'inline')
+    || (node.type === 'break' && ['thematic', 'page'].includes((node.metadata as { breakType?: string } | undefined)?.breakType ?? ''));
 
 /** Elements that are blocks in HTML's layout: what one holds is never part of the text around it. */
 const BLOCK_LEVEL_TAGS = new Set(['address', 'article', 'aside', 'blockquote', 'center', 'details', 'dialog', 'dd', 'div', 'dl', 'dt', 'fieldset',
@@ -92,6 +97,28 @@ const decodeEntities = decodeCharacterReferences;
 
 /** An element's raw child text as the source had it (code/math bodies). A comment is not text. */
 const rawChildText = (node: HtmlNode): string => node.children.map(c => (c.type === 'comment' ? '' : c.text || '')).join('');
+
+/**
+ * The raw text of preformatted content: its text at every depth (the `<span>`s a syntax highlighter
+ * wraps each token in) and a line break for each `<br>`. Reading the direct text alone dropped every
+ * highlighted token and ran the lines together.
+ */
+const preformattedText = (node: HtmlNode): string => {
+    let out = '';
+    const walk = (n: HtmlNode, depth: number): void => {
+        for (const c of n.children) {
+            if (c.type === 'comment') continue;
+            if (c.type === 'element') {
+                if (c.tagName === 'br') out += '\n';
+                else if (depth < MAX_HTML_NESTING_DEPTH) walk(c, depth + 1);
+            } else {
+                out += c.text || '';
+            }
+        }
+    };
+    walk(node, 0);
+    return out;
+};
 
 /** Plain text of parsed content nodes, leaving out source comments: a hidden note is not text. */
 /**
@@ -957,10 +984,14 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             // Admonition: attribute-driven editors render
             // <div class="admonition admonition-note" data-type="note">…children…</div>.
             if (tagName === 'div' && (node.attributes?.class || '').split(/\s+/).includes('admonition')) {
+                // Its type from `data-type`, else from a class naming one (`admonition warning`,
+                // `admonition-warning`), else a note.
+                const admonitionTypes = ['note', 'tip', 'important', 'warning', 'caution'] as const;
                 const admonitionTypeAttr = node.attributes?.['data-type'];
-                const admonitionType = (['note', 'tip', 'important', 'warning', 'caution'] as const).includes(admonitionTypeAttr as any)
+                const fromClass = (node.attributes?.class || '').split(/\s+/).map(name => name.replace(/^admonition-/, '')).find(name => (admonitionTypes as readonly string[]).includes(name));
+                const admonitionType = (admonitionTypes as readonly string[]).includes(admonitionTypeAttr as any)
                     ? admonitionTypeAttr as AdmonitionMetadata['admonitionType']
-                    : 'note';
+                    : (fromClass as AdmonitionMetadata['admonitionType'] | undefined) ?? 'note';
                 const admonitionNode: OfficeContentNode = {
                     type: 'admonition',
                     metadata: { admonitionType, anchorIds: anchorIds.length > 0 ? anchorIds : undefined } as AdmonitionMetadata,
@@ -1022,8 +1053,20 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const writersLabel = tagName === 'div' && node.parent?.tagName === 'div' && (node.parent.attributes?.class || '').split(/\s+/).includes('image-container')
                     && caption.every(c => c.type === 'text') && WRITER_CAPTION.test(plainTextOf(caption).trim());
                 if (writersLabel) return [];
-                // Blocks in it stay blocks (a <p> cannot hold a <p>); inline content is one paragraph.
-                return caption.some(c => BLOCK_NODE_TYPES.has(c.type)) ? caption : { type: 'paragraph', children: caption };
+                // Blocks in it stay blocks (a <p> cannot hold a <p>); each run of inline content (text, a
+                // line break, inline math, a picture) is a paragraph.
+                if (!caption.some(isBlockNode)) return { type: 'paragraph', children: caption };
+                const parts: OfficeContentNode[] = [];
+                let run: OfficeContentNode[] = [];
+                const flush = () => {
+                    if (run.some(c => c.type !== 'text' || c.text?.trim())) parts.push({ type: 'paragraph', children: run });
+                    run = [];
+                };
+                for (const child of caption) {
+                    if (isBlockNode(child)) { flush(); parts.push(child); } else run.push(child);
+                }
+                flush();
+                return parts;
             }
             // Skip structural containers produced by HtmlGenerator to avoid deep AST nesting
             if (tagName === 'div' && (
@@ -1437,9 +1480,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     if (langMatch) language = langMatch.replace('language-', '');
                     // Decode entities: the code body is stored raw, so `&lt;`/`&gt;`/`&amp;` (e.g. a
                     // mermaid `-->` arrow, or `a < b` in a snippet) must be turned back into text.
-                    codeText = decodeEntities(rawChildText(codeNode));
+                    codeText = decodeEntities(preformattedText(codeNode));
                 } else {
-                    codeText = decodeEntities(rawChildText(node));
+                    codeText = decodeEntities(preformattedText(node));
                 }
                 // A `mermaid` class token (on the <pre> or its <code>) names the language when no
                 // explicit language-* class is present - some producers emit <pre class="mermaid">.
@@ -1501,7 +1544,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                     else contentNodes.push(parsed);
                 }
             }
-            footnoteDefinitions.set(key, contentNodes);
+            // The space written before the back-link ended the note's text once the link was left out,
+            // and grew by one each save: the definition's edges are trimmed as a block's are.
+            footnoteDefinitions.set(key, config.preserveXmlWhitespace ? contentNodes : trimBlockEdges(collapseSpacesAcrossNodes(contentNodes)));
         }
     }
     // Inline content written directly in the body (text, and inline elements such as <b> or <a>) is one

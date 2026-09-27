@@ -21,10 +21,12 @@ const CELL_SEPARATOR = '\t';
 const TEXT_NODE_CLASS: Readonly<Record<OfficeContentNodeType, 'block' | 'inline'>> = {
     paragraph: 'block', heading: 'block', row: 'block', sheet: 'block', slide: 'block', note: 'block',
     list: 'block', table: 'block', code: 'block',
+    // A definition's term and description are lines of their own, and an admonition's text ends its
+    // line (they ran into each other and into the paragraph after them).
+    admonition: 'block', definitionList: 'block', definitionTerm: 'block', definitionDescription: 'block',
     text: 'inline', image: 'inline', chart: 'inline', drawing: 'inline', cell: 'inline', page: 'inline',
     break: 'inline', comment: 'inline', header: 'inline', footer: 'inline', slideMaster: 'inline',
-    embed: 'inline', admonition: 'inline', definitionList: 'inline', definitionTerm: 'inline',
-    definitionDescription: 'inline',
+    embed: 'inline',
 };
 
 /**

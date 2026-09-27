@@ -3548,6 +3548,81 @@ async function testMarkdownRoundTrips(): Promise<void> {
         const back = await OfficeParser.parseOffice(Buffer.from(pdf), { extractAttachments: true } as any);
         assert.ok(back.attachments.length > 0, `PDF (native): the picture in a paragraph of ${file} is drawn`);
     }
+
+    // Findings of the pre-release review. Each saves the same output from the first save on.
+    const mdOf = (src: string) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md', onWarning: () => {} } as any);
+    const htmlOf = (src: string) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'html', onWarning: () => {} } as any);
+    const plainOf = (nodes: any[]): string => nodes.map((n: any) => n.text ?? plainOf(n.children ?? [])).join('|');
+    const idsIn = (nodes: any[]): any[] => nodes.flatMap((n: any) => [...(n.metadata?.anchorIds ? [[n.type, n.metadata.anchorIds]] : []), ...idsIn(n.children ?? [])]);
+    const settles = async (format: 'md' | 'html', ast: any, label: string) => {
+        const outs: string[] = [];
+        for (let save = 0; save < 3; save++) {
+            outs.push((await OfficeGenerator.generate(ast, format, { generateIds: false, htmlConfig: { standalone: false }, onWarning: () => {} } as any)).value as string);
+            ast = await OfficeParser.parseOffice(Buffer.from(outs[save]), { fileType: format, onWarning: () => {} } as any);
+        }
+        assert.ok(outs[0] === outs[1] && outs[1] === outs[2], `${format}: ${label} saves the same output (${JSON.stringify(outs)})`);
+        return { out: outs[0], ast };
+    };
+    const docOf = (content: any[], type = 'docx') => ({ type, metadata: {}, attachments: [], content } as any);
+    // A document starting with a rule (or a page, slide or sheet boundary) is not front matter: the
+    // text to the next rule was lost.
+    const pages = await settles('md', docOf([{ type: 'page', children: [{ type: 'paragraph', children: [T('Page one text')] }] }, { type: 'page', children: [{ type: 'paragraph', children: [T('Page two text')] }] }]), 'pages');
+    assert.ok(plainOf(pages.ast.content).includes('Page one text'), 'MD: a leading rule is not front matter');
+    assert.strictEqual((await mdOf('---\ntitle: T\n---\n\nbody')).metadata.title, 'T', 'MD: front matter is still read');
+    // A line break in an admonition's or a footnote's own text is written (the words ran together).
+    for (const [src, ft, expected] of [['<div class="admonition warning">line one<br>line two</div>', 'html', '> [!WARNING]\n> line one  \n> line two'], ['Text[^1] more.\n\n[^1]: line one<br>line two', 'md', 'Text[^1] more.\n\n[^1]: line one  \n    line two']] as const) {
+        const { out } = await settles('md', await OfficeParser.parseOffice(Buffer.from(src), { fileType: ft } as any), src);
+        assert.strictEqual(out, expected, `MD: line breaks of ${src}`);
+    }
+    // An HTML table in a block-level wrapper on its line is a table; captions holding a line break or
+    // inline math stay their own paragraph.
+    for (const src of ['<center><table><tr><td>A1</td></tr></table></center>', '<figure><table><tr><td>A1</td></tr></table></figure>']) {
+        assert.ok((await mdOf(src)).content.some(n => n.type === 'table'), `MD: a table in ${src}`);
+    }
+    for (const src of ['<figure><img src="a.png" alt="cat"><figcaption>a<br>b</figcaption></figure>', '<figure><img src="a.png" alt="cat"><figcaption>Area <span class="math math-inline" data-math="inline">x^2</span></figcaption></figure>']) {
+        assert.deepStrictEqual((await htmlOf(src)).content.map(n => n.type), ['image', 'paragraph'], `HTML: the caption of ${src} is a paragraph`);
+    }
+    // Headings in any script keep their ids, and links to them their targets.
+    const scripts = await settles('md', await mdOf('## Überblick\n\n## Введение\n\n[a](#überblick) [b](#введение)'), 'non-ASCII ids');
+    assert.ok(scripts.out.includes('(#überblick)') && scripts.out.includes('(#введение)'), `MD: non-ASCII link targets (${scripts.out})`);
+    const scriptHtml = (await OfficeGenerator.generate(await mdOf('## Введение\n\n[b](#введение)'), 'html', { htmlConfig: { standalone: false } } as any)).value as string;
+    assert.ok(scriptHtml.includes('id="введение"') && scriptHtml.includes('href="#введение"'), `HTML: a non-ASCII heading id (${scriptHtml})`);
+    const scriptTex = (await OfficeGenerator.generate(await mdOf('## Введение\n\n## Обзор\n\n[b](#введение)'), 'tex', { onWarning: () => {} } as any)).value as string;
+    const labels = [...scriptTex.matchAll(/\\label\{([^}]*)\}/g)].map(m => m[1]);
+    assert.ok(labels.length === 2 && labels[0] !== labels[1] && scriptTex.includes(`\\hyperref[${labels[0]}]`), `LaTeX: distinct labels for non-ASCII headings (${labels})`);
+    // A literal reference inside emphasis keeps its level of escaping.
+    await stable(md, '**&amp;quot;** *&amp;amp;* [&amp;amp;x](u)', '**&amp;quot;** *&amp;amp;* [&amp;amp;x](u)', 'references inside emphasis and link text');
+    // A picture among the blocks with two ids, bookmarks in a footnote and an admonition, and the ids in
+    // a table written as HTML are kept, and saved the same way each time.
+    await settles('html', await htmlOf('<p>Intro</p><a id="fig1"></a><img id="pic" src="a.png" alt="A"><p>End</p>'), 'a picture with two ids');
+    const noteBookmark = await settles('md', await mdOf('Text[^1] and more.\n\n[^1]: <a id="fn-target"></a>Note body\n\nSee [the note](#fn-target).'), 'a bookmark in a footnote');
+    assert.ok(noteBookmark.out.includes('[^1]: <a id="fn-target"></a>Note body'), `MD: a footnote's bookmark (${noteBookmark.out})`);
+    await settles('html', await mdOf('Text[^1] and more.\n\n[^1]: <a id="fn-target"></a>Note body'), 'a bookmark in a footnote');
+    assert.deepStrictEqual(idsIn((await htmlOf('<div class="admonition note">text <a id="x"></a>more</div>')).content), [['admonition', ['x']]], 'HTML: a bookmark in an admonition\'s text');
+    const htmlTableIds = (await OfficeGenerator.generate(docOf([{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', metadata: { colSpan: 2, anchorIds: ['c1'] }, children: [{ type: 'paragraph', metadata: { anchorIds: ['p1'] }, children: [T('merged')] }] }] }, { type: 'row', children: [{ type: 'cell', children: [{ type: 'image', metadata: { url: 'a.png', altText: 'A', anchorIds: ['im'] } }] }, { type: 'cell', children: [T('b')] }] }] }]), 'md', { generateIds: false } as any)).value as string;
+    assert.deepStrictEqual(idsIn((await mdOf(htmlTableIds)).content), [['cell', ['c1']], ['paragraph', ['p1']], ['image', ['im']]], `MD: ids in a table written as HTML (${htmlTableIds})`);
+    // An admonition, definition list or embed in a list item or cell is written as that one line holds it.
+    for (const src of ['<table><tr><th>H</th></tr><tr><td><div class="admonition note"><p>careful</p></div></td></tr></table>', '<ul><li>Item<dl><dt>T</dt><dd>D</dd></dl></li></ul>', '<ul><li>Item <div data-youtube-video="abcdefghijk"></div></li></ul>']) {
+        await settles('md', await htmlOf(src), src);
+    }
+    // RTF: a picture among the blocks is a paragraph of its own; plain text: a definition's term and
+    // description are lines of their own.
+    const blockPicture = (await OfficeGenerator.generate(docOf([{ type: 'image', metadata: { url: 'https://example.com/b.png' } }, { type: 'paragraph', children: [T('next')] }]), 'rtf', { onWarning: () => {} } as any)).value as string;
+    assert.deepStrictEqual((await OfficeParser.parseOffice(Buffer.from(blockPicture), { fileType: 'rtf' } as any)).content.map(n => plainOf(n.children ?? [])), ['https://example.com/b.png', 'next'], 'RTF: a picture among the blocks is its own paragraph');
+    assert.strictEqual((await (await mdOf('Term Alpha\n: Description\n\nAfter')).to('text')).value, 'Term Alpha\nDescription\nAfter', 'Text: definition lines');
+    // Content indented to a list item's content column is the item's (a table, a paragraph), not code;
+    // Markdown in an HTML table's cells between blank lines is read into the cell.
+    assert.deepStrictEqual((await mdOf('1. Step one\n\n    <table><tr><td>A</td></tr></table>\n\n2. Step two')).content.map(n => n.type), ['list', 'table', 'list'], 'MD: a table under a list item');
+    assert.deepStrictEqual((await mdOf('- item\n\n    more of the item\n\n      code under it')).content.map(n => n.type), ['list', 'paragraph', 'code'], 'MD: a paragraph and code under a list item');
+    const mdCell = await mdOf('<table>\n<tr>\n<td>\n\n**bold** cell\n\n</td>\n</tr>\n</table>\n\nAfter');
+    assert.deepStrictEqual([mdCell.content.map(n => n.type), mdCell.content[0].children![0].children![0].children!.map(n => [n.text, n.formatting?.bold ?? false])], [['table', 'paragraph'], [['bold', true], [' cell', false]]], 'MD: Markdown in an HTML table cell');
+    // Preformatted text keeps the tokens a highlighter wraps and its line breaks.
+    for (const [src, code] of [['<pre>line a<br>line b</pre>', 'line a\nline b'], ['<pre><code><span class="k">let</span> x = <span class="n">1</span>;</code></pre>', 'let x = 1;']] as const) {
+        assert.strictEqual((await htmlOf(src)).content[0].text, code, `HTML: ${src}`);
+    }
+    // A sheet's own id is kept beside the id its tab links to, written once.
+    const sheetIds = (await OfficeGenerator.generate(docOf([{ type: 'sheet', metadata: { sheetName: 'S', anchorIds: ['sh'] }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [T('a')] }] }] }], 'xlsx'), 'html', { htmlConfig: { standalone: false } } as any)).value as string;
+    assert.ok(sheetIds.includes('<a id="sh" name="sh"></a><div id="sheet-0"') && (sheetIds.match(/sheet-0"/g) || []).length === 2, `HTML: a sheet's ids (${sheetIds.slice(0, 200)})`);
     // The ids HtmlGenerator writes on equations and on the wrapper of a picture among the blocks read back.
     const idNodes = [
         { type: 'paragraph', children: [T('p '), { type: 'code', text: 'x', metadata: { math: 'inline', anchorIds: ['mi'] } }] },

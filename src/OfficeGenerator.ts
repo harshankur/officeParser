@@ -13,6 +13,7 @@ import { TextGenerator } from './generators/TextGenerator.js';
 import { ConversionResult, GeneratorConfig, OfficeErrorType, OfficeParserAST, SupportedDestination, SupportedFileType, UniversalGeneratorFormat } from './types.js';
 import { withoutSourceComments } from './utils/commentUtils.js';
 import { withKnownNodeTypes } from './utils/nodeTypeUtils.js';
+import { withBoundedSheetGrids } from './utils/sheetGridUtils.js';
 import { getOfficeError } from './utils/errorUtils.js';
 
 /**
@@ -53,8 +54,9 @@ export class OfficeGenerator {
         // removed here, once, rather than each generator having to remember to skip it.
         const keepsComments = normalizedDestination === 'md' || normalizedDestination === 'html' || normalizedDestination === 'tex';
         // A node of a type the AST does not define is written as its content, which no generator
-        // then has to know how to handle.
-        const known = withKnownNodeTypes(ast);
+        // then has to know how to handle. A table or sheet whose cell coordinates span a grid too
+        // large to write (a few cells far apart) is laid out closer, before any writer fills it.
+        const known = withBoundedSheetGrids(withKnownNodeTypes(ast));
         const input = keepsComments ? known : withoutSourceComments(known);
 
         switch (normalizedDestination) {

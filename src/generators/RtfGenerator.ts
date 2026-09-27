@@ -5,6 +5,9 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { embedUrl } from '../utils/officeGenUtils.js';
 
+/** Nodes whose children are a line of text: a picture in one sits in its line. */
+const LINE_HOLDERS = new Set(['paragraph', 'heading', 'list', 'cell', 'definitionTerm', 'definitionDescription']);
+
 /**
  * Generates high-fidelity RTF (Rich Text Format) from an AST.
  */
@@ -26,6 +29,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     private inHeading = false;
     /** As `inHeading`, but for the inherited font size - see `hasUniformFormatting`. */
     private headingUniformSize = false;
+    /** How many nodes holding a line of text (a paragraph, heading, item, cell, definition) are being written. */
+    private lineDepth = 0;
     /** Whether a code block or equation was written, in the monospace font (`\\f2`) the font table then lists. */
     private usedMonospace = false;
     /** Whether the math-as-source warning was given (once per document). */
@@ -101,7 +106,14 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             this.inHeading = this.hasUniformFormatting(node, f => f?.bold === true);
             this.headingUniformSize = this.hasUniformFormatting(node, f => !!f?.size);
         }
-        const result = await super.processNodeRecursive(node, processor);
+        const holdsLine = LINE_HOLDERS.has(node.type);
+        if (holdsLine) this.lineDepth++;
+        let result: string;
+        try {
+            result = await super.processNodeRecursive(node, processor);
+        } finally {
+            if (holdsLine) this.lineDepth--;
+        }
         this.inTable = wasInTable;
         this.inHeading = wasInHeading;
         this.headingUniformSize = wasHeadingSize;
@@ -287,6 +299,11 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         if (safe) pict = `{\\field{\\*\\fldinst{HYPERLINK "${safe}"}}{\\fldrslt ${this.escapeRtf(meta?.altText || safe)}}}`;
                         else if (meta?.altText) pict = this.escapeRtf(meta.altText);
                         else if (mode === 'image-only') return ocrRtf;
+                    }
+                    // Among the blocks a picture is a paragraph of its own: it ran into the text after it.
+                    if (this.lineDepth === 0 && pict) {
+                        const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                        pict = `${pPr}\\sa120 ${pict}\\par\n`;
                     }
                     // image+ocr-text: the image, then its recognized text.
                     return mode === 'image+ocr-text' ? pict + ocrRtf : pict;

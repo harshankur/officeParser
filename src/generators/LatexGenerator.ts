@@ -174,7 +174,14 @@ function fmtPt(n: number): string {
 
 /** Reduces an anchor id or link target to a label name TeX and hyperref accept verbatim. */
 function labelName(raw: string): string {
-    return String(raw ?? '').replace(/^#/, '').replace(/[^A-Za-z0-9:._-]/g, '-').slice(0, MAX_LABEL_LENGTH);
+    // A character outside ASCII is written as its code point (`-u432-`), so ids in other scripts
+    // stay distinct labels: as `-` they all ran together. A label too long to keep whole ends in a
+    // hash of all of it, which keeps two that share a start apart.
+    const name = String(raw ?? '').replace(/^#/, '').replace(/[^\x00-\x7F]/gu, ch => `-u${ch.codePointAt(0)!.toString(16)}-`).replace(/[^A-Za-z0-9:._-]/g, '-');
+    if (name.length <= MAX_LABEL_LENGTH) return name;
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < name.length; i++) hash = Math.imul(hash ^ name.charCodeAt(i), 0x01000193);
+    return `${name.slice(0, MAX_LABEL_LENGTH - 9)}-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 /** Expands tabs to spaces at {@link CODE_TAB_WIDTH}-column stops. */
@@ -1571,13 +1578,16 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      * A code block. Where environments that read raw input are allowed it is `lstlisting` (for a
      * language `listings` knows, ASCII-only, since `listings` mangles multi-byte UTF-8 under pdfTeX)
      * or `verbatim`; neither is used if the code contains its own end marker, which would close the
-     * environment early and turn the rest of the code into live LaTeX. Elsewhere (a cell, a note) it
-     * is typewriter text with every character escaped.
+     * environment early and turn the rest of the code into live LaTeX. Nor in a `beamer` document if
+     * it contains `\end{frame}`: a frame holding verbatim material is `fragile`, which beamer reads
+     * raw up to a line `\end{frame}`, so that line in the code would end the frame and run the lines
+     * after it as LaTeX (reading files, or running commands under shell escape). Elsewhere (a cell, a
+     * note) it is typewriter text with every character escaped.
      */
     private codeText(text: string, language: string | undefined, prefix: string): string {
         const lines = trimEndChars(String(text ?? '').replace(/\r\n?/g, '\n'), '\n').split('\n').map(expandTabs);
         const code = lines.join('\n');
-        if (!this.ctx.verbatim) return prefix + this.inlineCodeLines(code);
+        if (!this.ctx.verbatim || (this.beamer && /\\end\s*\{\s*frame\s*\}/.test(code))) return prefix + this.inlineCodeLines(code);
         const listingsLang = language ? LISTINGS_LANGUAGES[language.trim().toLowerCase()] : undefined;
         if (listingsLang && /^[\x20-\x7E\n]*$/.test(code) && !/\\end\s*\{\s*lstlisting\s*\}/.test(code)) {
             this.uses.listings = true;

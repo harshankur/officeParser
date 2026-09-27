@@ -172,6 +172,8 @@ Autolink: visit <https://example.com/autolink> for details.
 - Continuation parent item
   continuation text merged into the parent item
 
+An indented code block, standing on its own (after the list, four spaces would be the item's content):
+
     indented code block line one
     indented code block line two
 

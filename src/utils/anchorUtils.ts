@@ -9,6 +9,10 @@ const ANCHOR_MARK = '__anchor_mark__';
 /** Nodes whose content is a line of text: an anchor mark inside one is one of its own ids. */
 const ANCHOR_INLINE_HOLDERS = new Set<string>(['paragraph', 'heading', 'list', 'cell', 'definitionTerm', 'definitionDescription']);
 
+/** Nodes that sit in a line of text: a mark right before one stands in that line. */
+const isInlineNode = (node: OfficeContentNode): boolean => node.type === 'text' || node.type === 'break'
+    || (node.type === 'code' && (node.metadata as { math?: string } | undefined)?.math === 'inline');
+
 /** An anchor mark naming `ids`. */
 export const anchorMark = (ids: string[]): OfficeContentNode => ({ type: ANCHOR_MARK as any, metadata: { anchorIds: ids } as any });
 
@@ -27,10 +31,12 @@ function addIds(node: OfficeContentNode, ids: string[]): void {
  * `nodes` (and every node's children, notes and comments) with each anchor mark's ids added to the
  * node it stands at, after that node's own ids (HtmlGenerator writes the first id on the element and
  * the rest as anchors before it). In a line of text that is the picture the mark stands right before,
- * else the line's container; among blocks it is the next block (the one before, when none follows; the
- * container, when there is none; an empty paragraph, at the top of a document holding nothing else).
- * Each node's ids are added once, so many marks cost time in proportion to their number. The tree is
- * at most the parser's depth limit deep.
+ * else the line's container (also a note's or admonition's, holding text itself: a text run has no
+ * ids); among blocks it is the next block (the one before, when none follows; the container, when
+ * there is none; an empty paragraph, at the top of a document holding nothing else). Marks starting a
+ * note are the note's, where the generators write a note's ids. Each node's ids are added once, so
+ * many marks cost time in proportion to their number. The tree is at most the parser's depth limit
+ * deep.
  */
 export function resolveAnchorMarks(nodes: OfficeContentNode[], parent?: OfficeContentNode): OfficeContentNode[] {
     for (const node of nodes) {
@@ -49,14 +55,15 @@ export function resolveAnchorMarks(nodes: OfficeContentNode[], parent?: OfficeCo
             continue;
         }
         if (carried.length) {
-            if (inLine && node.type !== 'image') for (const id of carried) parentIds.push(id);
+            const toParent = parent && ((inLine && node.type !== 'image') || isInlineNode(node) || (parent.type === 'note' && !out.length));
+            if (toParent) for (const id of carried) parentIds.push(id);
             else addIds(node, carried);
             carried = [];
         }
         out.push(node);
     }
     if (carried.length) {
-        if (inLine) for (const id of carried) parentIds.push(id);
+        if (inLine || (parent && out.length && isInlineNode(out[out.length - 1]))) for (const id of carried) parentIds.push(id);
         else if (out.length) addIds(out[out.length - 1], carried);
         else if (parent) addIds(parent, carried);
         else out.push({ type: 'paragraph', metadata: { anchorIds: carried } as any, children: [] });

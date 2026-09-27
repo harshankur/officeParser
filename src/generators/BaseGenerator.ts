@@ -193,12 +193,13 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     }
 
     /**
-     * Helper to generate a unique ID (slug) from text.
+     * Helper to generate a unique ID (slug) from text. Letters and digits of every script are kept, as
+     * GitHub's heading ids keep them (`#überblick`, `#введение`): only punctuation and symbols go.
      */
     protected slugify(text: string): string {
         return text
             .toLowerCase()
-            .replace(/[^\w\s-]/g, '')
+            .replace(/[^\p{L}\p{M}\p{N}\s_-]/gu, '')
             .replace(/[\s_-]+/g, '-')
             .replace(/^-+|-+$/g, '');
     }

@@ -79,7 +79,7 @@ const codeSpan = (text: string): string => {
     return `${fence}${pad}${text}${pad}${fence}`;
 };
 
-/** Nodes whose children are a line of text (in Markdown, a line break goes only in one of these). */
+/** Nodes whose children are a line of text (in Markdown, a line break goes only in one of these, or in a node holding text directly). */
 const LINE_HOLDERS = new Set(['paragraph', 'heading', 'list', 'cell', 'definitionTerm', 'definitionDescription']);
 
 const isLineBreak = (node: OfficeContentNode): boolean =>
@@ -352,6 +352,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private inDefinition = 0;
     /** How many nodes holding a line of text (a paragraph, heading, item, cell, definition) are being written. */
     private lineDepth = 0;
+    /** For each definition list being written, innermost last: whether it is in one line (see inOneLine). */
+    private definitionListsInLine: boolean[] = [];
     /** Each list item's written depth (see assignListDepths). */
     private listDepths = new WeakMap<OfficeContentNode, number>();
     /**
@@ -410,6 +412,18 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             }
         }
         return slugs.reverse();
+    }
+
+    /**
+     * A node's ids in a table written as HTML: the first as the element's `id`, the rest as empty
+     * anchors (inside a container element, before a picture or equation), slugified as the Markdown
+     * anchors are. They were left out, and links to them went nowhere.
+     */
+    private htmlIds(metadata: any): { attr: string; extra: string } {
+        if (!this.resolvedFallbackToHtml.anchors || this.config.ignoreInternalLinks) return { attr: '', extra: '' };
+        const ids = this.anchorSlugs(metadata?.anchorIds || []);
+        if (!ids.length) return { attr: '', extra: '' };
+        return { attr: ` id="${escapeHtml(ids[0])}"`, extra: ids.slice(1).map(id => `<a id="${escapeHtml(id)}"></a>`).join('') };
     }
 
     /**
@@ -999,14 +1013,14 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             // Dialect has no footnote syntax - the caller inlines this bare body
                             // as a parenthetical at the reference point instead of collecting it
                             // into an end-of-document "### Notes" section under a [^id] marker.
-                            return trimAsciiWhitespace(childrenOutput);
+                            return `${this.deferAnchors(meta)}${trimAsciiWhitespace(childrenOutput)}`;
                         }
                         // Indent continuation lines one level so a multi-line body re-parses as a
                         // single definition (a bare newline would end it). Single-line bodies, the
-                        // common case, are unaffected.
-                        return `[^${this.getFootnoteKey(node)}]: ${trimAsciiWhitespace(childrenOutput).replace(/\n/g, '\n    ')}\n\n`;
+                        // common case, are unaffected. The note's ids start its body.
+                        return `[^${this.getFootnoteKey(node)}]: ${this.renderAnchors(meta)}${trimAsciiWhitespace(childrenOutput).replace(/\n/g, '\n    ')}\n\n`;
                     }
-                    return `> **Note:** ${trimAsciiWhitespace(childrenOutput)}\n\n`;
+                    return `> ${this.renderAnchors(meta)}**Note:** ${trimAsciiWhitespace(childrenOutput)}\n\n`;
                 }
 
                 case 'embed': {
@@ -1016,7 +1030,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // emitted and re-recognises), 'directive' (a remark-directive leaf), 'link'
                     // (a plain link), 'thumbnail' (YouTube-only clickable preview).
                     const meta = node.metadata as EmbedMetadata;
-                    const mode = this.resolvedEmbeds;
+                    // In a list item, cell or definition (one line of Markdown) an embed's block cannot
+                    // go: it is a link there (its HTML block was read back as text).
+                    const mode = this.inOneLine ? 'link' : this.resolvedEmbeds;
                     // A directive label sits inside `::name[...]`: on one line, escaped (its brackets
                     // too, which would end it), as the parser decodes it. A link label is link text,
                     // escaped as text. An attribute value sits inside `{...}`; percent-encode the
@@ -1092,6 +1108,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // there is no round-trip to preserve and escaping is free.
                     const title = meta?.title ? markdownEscapeInline(foldLines(meta.title)) : '';
                     const body = trimAsciiWhitespace(childrenOutput);
+                    // In a list item, cell or definition (one line of Markdown) no quote can go: its
+                    // label, bold, then its text (the marker was read back as text).
+                    if (this.inOneLine) return `${this.deferAnchors(meta)}**${title || label.charAt(0) + label.slice(1).toLowerCase()}:** ${body}\n\n`;
                     const anchors = this.anchorsBefore(meta);
 
                     switch (this.resolvedDialect.admonitions) {
@@ -1119,6 +1138,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'definitionList':
+                    // In a list item, cell or definition (one line of Markdown) it is its lines (see below).
+                    if (this.inOneLine) return `${this.deferAnchors(node.metadata)}${childrenOutput}\n`;
                     return `${this.anchorsBefore(node.metadata)}${childrenOutput}\n`;
 
                 case 'definitionTerm':
@@ -1127,6 +1148,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // holds a paragraph, from HTML's <dt><p>, was followed by a blank line, which ended
                     // the list): line breaks inside join as a list item's do.
                     const line = joinLines(trimAsciiWhitespace(childrenOutput), this.resolvedFallbackToHtml.itemLineBreaks ? '<br>' : ' ');
+                    // In a list that is itself in one line (a list item, cell or definition), no `: ` line
+                    // can start: the term is bold and the description plain, lines of that line.
+                    if (this.definitionListsInLine[this.definitionListsInLine.length - 1]) {
+                        return `${this.deferAnchors(node.metadata)}${node.type === 'definitionTerm' ? `**${line}**` : line}\n`;
+                    }
                     // Its ids start its line, where the parser reads them back as its own.
                     const anchors = this.renderAnchors(node.metadata);
                     if (node.type === 'definitionTerm') return this.resolvedDialect.definitionLists === 'none' ? `${anchors}**${line}**\n\n` : `${anchors}${line}\n`;
@@ -1274,8 +1300,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             // its start must be escaped (`- # x` is an item holding a heading); a heading or cell holds
             // inline content only.
             const startsLines = (node.type === 'paragraph' || node.type === 'list' || node.type === 'definitionTerm' || node.type === 'definitionDescription') && !this.inPipeTableCell;
-            const holdsLine = LINE_HOLDERS.has(node.type);
+            // So does any other node holding text directly (an admonition's or a note's inline content).
+            const holdsLine = LINE_HOLDERS.has(node.type) || optimizedChildren.some(child => child.type === 'text');
             if (holdsLine) this.lineDepth++;
+            if (node.type === 'definitionList') this.definitionListsInLine.push(this.inOneLine);
             if (node.type === 'list') this.inListItem++;
             const definition = node.type === 'definitionTerm' || node.type === 'definitionDescription';
             if (definition) this.inDefinition++;
@@ -1308,6 +1336,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             }
             childrenOutput = children.toString();
             if (holdsLine) this.lineDepth--;
+            if (node.type === 'definitionList') this.definitionListsInLine.pop();
             if (node.type === 'list') this.inListItem--;
             if (definition) this.inDefinition--;
         }
@@ -1671,10 +1700,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             case 'code': {
                 const meta = n.metadata as CodeMetadata | undefined;
                 const code = n.text || '';
-                if (meta?.math === 'inline') return `<span class="math math-inline" data-math="inline">${esc(`$${code}$`)}</span>`;
-                if (meta?.math === 'block') return `<div class="math math-block" data-math="block">${esc(`$$${code}$$`)}</div>`;
+                const { attr, extra } = this.htmlIds(meta);
+                if (meta?.math === 'inline') return `${extra}<span class="math math-inline" data-math="inline"${attr}>${esc(`$${code}$`)}</span>`;
+                if (meta?.math === 'block') return `${extra}<div class="math math-block" data-math="block"${attr}>${esc(`$$${code}$$`)}</div>`;
                 const lang = meta?.language ? ` class="language-${esc(meta.language)}"` : '';
-                return `<pre><code${lang}>${esc(code)}</code></pre>`;
+                return `${extra}<pre${attr}><code${lang}>${esc(code)}</code></pre>`;
             }
             case 'image': {
                 const mode = this.imageMode();
@@ -1689,18 +1719,24 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (bytes <= this.config.maxInlineImageBytes) src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
                     else this.warn(OfficeWarningType.IMAGE_NOT_INLINED, { name: meta!.attachmentName, bytes, limit: this.config.maxInlineImageBytes });
                 }
-                let img = `<img src="${sanitizeImageUrl(src)}" alt="${esc(meta?.altText || '')}"${meta?.title ? ` title="${esc(meta.title)}"` : ''}>`;
+                const { attr, extra } = this.htmlIds(meta);
+                let img = `<img src="${sanitizeImageUrl(src)}" alt="${esc(meta?.altText || '')}"${meta?.title ? ` title="${esc(meta.title)}"` : ''}${attr}>`;
                 if (meta?.link) img = link(meta.link, meta.linkType, meta.linkTitle, img);
-                return mode === 'image+ocr-text' && ocr ? `${img}<br>${ocr}` : img;
+                return extra + (mode === 'image+ocr-text' && ocr ? `${img}<br>${ocr}` : img);
             }
-            case 'paragraph': return `<p>${co}</p>`;
+            case 'paragraph': {
+                const { attr, extra } = this.htmlIds(n.metadata);
+                return `<p${attr}>${extra}${co}</p>`;
+            }
             case 'heading': {
                 const level = Math.min(Math.max(Number((n.metadata as any)?.level) || 1, 1), 6);
-                return `<h${level}>${co}</h${level}>`;
+                const { attr, extra } = this.htmlIds(n.metadata);
+                return `<h${level}${attr}>${extra}${co}</h${level}>`;
             }
             case 'list': {
                 const ordered = (n.metadata as ListMetadata | undefined)?.listType === 'ordered';
-                return ordered ? `<ol><li>${co}</li></ol>` : `<ul><li>${co}</li></ul>`;
+                const { attr, extra } = this.htmlIds(n.metadata);
+                return ordered ? `<ol><li${attr}>${extra}${co}</li></ol>` : `<ul><li${attr}>${extra}${co}</li></ul>`;
             }
             case 'table': return await this.renderTableAsHtml(n);
             case 'embed': {
@@ -1784,7 +1820,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     content += await this.processNodeRecursive(child, (n, co) => this.htmlCellNode(n, co));
                 }
             }
-            return `    <td${rs}${cs}>${content}</td>\n`;
+            const { attr, extra } = this.htmlIds(meta);
+            return `    <td${rs}${cs}${attr}>${extra}${content}</td>\n`;
         }
         return '';
     }

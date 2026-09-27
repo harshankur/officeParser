@@ -575,11 +575,30 @@ async function markdownTests() {
         ['empty anchors in a line', 'a <a id="x"></a>'.repeat(60_000)], ['unclosed anchors in a line', '<a id="x" '.repeat(60_000)],
         ['an HTML table blank lines run through', `<table>\n${'<tr><td>a</td></tr>\n\n'.repeat(20_000)}</table>`],
         ['HTML tables opened and never closed, between blank lines', '<table>\n\n'.repeat(20_000)],
+        ['HTML tables with Markdown in their cells', '<table><tr><td>\n\n*x* y\n\n</td></tr></table>\n\n'.repeat(10_000)],
+        ['blocks under a list of many indents', `${Array.from({ length: 5_000 }, (_, i) => `${' '.repeat(i % 400)}- item`).join('\n')}${'\n\n    more'.repeat(20_000)}`],
         ['indented code across blank lines', '    a\n\n'.repeat(60_000)], ['lazy underlines in a quote', '> q\n===\n'.repeat(40_000)],
     ] as const) {
         const started = Date.now();
         await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'md' } as any);
         check(`md: ${label} parse in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+    }
+    // A sheet's cell coordinates cannot make a grid no memory holds: one cell at Excel's last position,
+    // cells along a diagonal (each row and column its own), or a span of a billion columns. Every
+    // writer fills the grid between cells, and HTML draws all of it.
+    const T0 = (text: string) => ({ type: 'text', text });
+    const sheetOf = (rows: any[]) => ({ type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: rows }] } as any);
+    for (const [label, ast] of [
+        ['a cell at XFD1048576', sheetOf([{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [T0('a')] }] }, { type: 'row', children: [{ type: 'cell', metadata: { row: 1_048_575, col: 16_383 }, children: [T0('far')] }] }])],
+        ['5,000 cells along a diagonal', sheetOf(Array.from({ length: 5_000 }, (_, i) => ({ type: 'row', children: [{ type: 'cell', metadata: { row: i, col: i }, children: [T0('d' + i)] }] })))],
+        ['a span of a billion columns', sheetOf([{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0, colSpan: 1e9, rowSpan: 1e9 }, children: [T0('wide')] }] }])],
+    ] as const) {
+        for (const format of ['html', 'csv', 'md', 'tex', 'docx', 'odt', 'rtf', 'text', 'epub'] as const) {
+            const started = Date.now();
+            const out: any = (await OfficeGenerator.generate(ast, format, { onWarning: () => {} } as any)).value;
+            const size = typeof out === 'string' ? out.length : out.length ?? out.byteLength;
+            check(`${format}: ${label} is written bounded`, Date.now() - started < 5000 && size < 5_000_000, `${Date.now() - started}ms, ${size} bytes`);
+        }
     }
     // Named anchors are ids of the node they stand at, each node's added once: many of them in a line,
     // or before a block, cost time in proportion to their number, read and written.
@@ -2138,6 +2157,9 @@ async function latexSanitizationTests() {
             ] }, { type: 'row', children: [{ type: 'cell', children: [{ type: 'code', text: `${P}\\end{verbatim}`, metadata: { language: P } }] }] }] },
             { type: 'code', text: `x\n\\end{verbatim}\n${P}`, metadata: { language: 'python' } },
             { type: 'code', text: `x\n\\end{lstlisting}\n${P}`, metadata: { language: 'python' } },
+            // beamer reads a fragile frame raw up to a line `\end{frame}`, so one in a code block ended the frame.
+            { type: 'code', text: `x\n\\end{frame}\n${P}` },
+            { type: 'code', text: `x\n  \\end{frame}\n${P}`, metadata: { language: 'python' } },
             { type: 'code', metadata: { math: 'block' }, text: P },
             { type: 'image', metadata: { attachmentName: `../${P}.png`, altText: P, width: `${P}%`, align: P } },
             { type: 'image', metadata: { url: `javascript:${P}`, altText: P } },
@@ -2159,6 +2181,9 @@ async function latexSanitizationTests() {
         check(`latex ${label}: exactly one live document end`, label === 'fragment' ? docEnds === 0 : docEnds === 1, `found ${docEnds}`);
         if (doc === scripts) check(`latex ${label}: the script fonts were set up`, out.includes('\\setCJKmainfont') && out.includes('\\setmainjfont') && out.includes('cmunrm.otf') && out.includes('luaotfload.add_fallback'));
         check(`latex ${label}: hostile spans and indices stay bounded`, out.length < 250000 && !/\d{8,}pt|\{\d{8,}\}/.test(out), `length ${out.length}`);
+        // liveLatexSource treats verbatim bodies as inert; in a beamer frame one holding `\end{frame}` is not.
+        const frameEnds = [...out.matchAll(/\\begin\{(verbatim|lstlisting)\}[^\n]*\n([\s\S]*?)\n\\end\{\1\}/g)].filter(m => /\\end\s*\{\s*frame\s*\}/.test(m[2]));
+        check(`latex ${label}: no verbatim body holds \\end{frame}`, label !== 'beamer' || frameEnds.length === 0, `${frameEnds.length} found`);
     }
     const bundle = (await OfficeGenerator.generate(hostile, 'tex', { texConfig: { bundle: true }, onWarning: () => { } } as any)).value as Uint8Array;
     const names = Object.keys(unzipSync(bundle));
