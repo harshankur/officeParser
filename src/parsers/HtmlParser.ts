@@ -1349,7 +1349,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // Exact lookup, so `max-width: 100%` - the standard responsive-image style, and by
                 // far the most common inline style on an <img> - is no longer read as a declared
                 // width. It constrains the rendered size; it is not an author-specified width.
-                const width = node.attributes?.['data-width'] || getDeclaration(imgDecls, 'width');
+                // The `width` attribute too (`<img width="200">`, as READMEs size a logo), which was dropped.
+                const width = node.attributes?.['data-width'] || getDeclaration(imgDecls, 'width') || node.attributes?.width || undefined;
 
                 // Alignment is inferred from which auto margin is present. Comparing the parsed
                 // value rather than substring-matching "margin-left: 0" stops `margin-left: 0.5rem`

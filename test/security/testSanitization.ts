@@ -2509,6 +2509,15 @@ async function parserHardeningTests() {
     await timed('docx: an image width of 200 KB of spaces is written', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'image', metadata: { url: 'a.png', width: '1' + ' '.repeat(200000) + 'x' } }] }]), 'docx' as any, { onWarning: () => {} } as any));
     await timed('md: block math of 200 KB of spaces is written inline', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'a' }, { type: 'code', text: 'x' + ' '.repeat(200000) + 'y', metadata: { math: 'block' } }] }]), 'md' as any, { onWarning: () => {} } as any));
 
+    // Raw HTML in Markdown, read as links and pictures, passes the writers' URL checks like any other.
+    const rawHtml = await parseQuiet(Buffer.from('<a href="javascript:alert(1)">x</a> <a href="java&#115;cript:alert(2)">y</a> <img src="javascript:alert(3)" alt="z" onerror="alert(4)">\n\n<p><a href="javascript:alert(5)">w</a><img src="x" onerror="alert(6)"></p>\n'), 'md');
+    for (const format of ['md', 'html'] as const) {
+        const out = (await OfficeGenerator.generate(rawHtml.ast!, format, { onWarning: () => {} } as any)).value as string;
+        check(`md: raw HTML links and pictures reach ${format} output without a script URL or handler`, !rawHtml.error && !/javascript:|onerror|alert\(/i.test(out), out.slice(0, 300));
+    }
+    await timed('md: 160k unclosed inline tags parse', () => parseQuiet(Buffer.from('x <b><kbd class="a"><a href="u">'.repeat(40000)), 'md'));
+    await timed('md: 80k HTML block paragraphs parse', () => parseQuiet(Buffer.from('<p>x</p>\n\n'.repeat(80000)), 'md'));
+
     // Spans are held to what a browser allows, and never below 1.
     const gridSpan = await parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/<w:body>/, '<w:body><w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2147483647"/></w:tcPr><w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:gridSpan w:val="-5"/></w:tcPr><w:p><w:r><w:t>neg</w:t></w:r></w:p></w:tc></w:tr></w:tbl>')); }), 'docx');
     const spans = (ast: any) => { const out: any[] = []; const walk = (ns: any[]) => ns?.forEach((n: any) => { if (n.type === 'cell') out.push([n.metadata?.colSpan, n.metadata?.rowSpan, n.metadata?.col]); walk(n.children); }); walk(ast?.content); return out; };

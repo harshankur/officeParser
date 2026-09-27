@@ -591,6 +591,42 @@ const LINK_DESTINATION = (() => {
 })();
 
 /**
+ * The inline HTML elements Markdown text may hold, as the formatting each gives what it holds: raw
+ * HTML a renderer shows as formatting, where it was escaped into visible tags on the first save
+ * (`Press <kbd>Ctrl</kbd>` became `Press &lt;kbd>Ctrl&lt;/kbd>`). `code` marks the elements whose
+ * content is code (read as written, references decoded); an element with no formatting of its own
+ * (`<span>`, `<small>`) is its content. `<a>`, `<abbr>`, `<q>` and `<img>` are read in inlineHtml.
+ */
+const HTML_INLINE_ELEMENTS: Readonly<Record<string, TextFormatting | 'code'>> = lookupTable({
+    b: { bold: true }, strong: { bold: true },
+    i: { italic: true }, em: { italic: true }, cite: { italic: true }, var: { italic: true }, dfn: { italic: true },
+    s: { strikethrough: true }, strike: { strikethrough: true }, del: { strikethrough: true },
+    u: { underline: true }, ins: { underline: true },
+    sub: { subscript: true }, sup: { superscript: true },
+    mark: { backgroundColor: '#ffff00' },
+    code: 'code', kbd: 'code', samp: 'code', tt: 'code',
+    span: {}, small: {}, big: {}, font: {}, bdi: {}, bdo: {}, time: {}, data: {}, a: {}, abbr: {}, q: {},
+} as Record<string, TextFormatting | 'code'>);
+
+/** An HTML tag's attributes (`name="value"`, `name='value'`, `name=value`, `name`), names lowercased and values decoded. */
+function htmlAttributes(source: string): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const m of source.matchAll(/([^\s"'<>\/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
+        const name = m[1].toLowerCase();
+        if (!out.has(name)) out.set(name, decodeCharacterReferences(m[2] ?? m[3] ?? m[4] ?? ''));
+    }
+    return out;
+}
+
+/** The closing tag of each inline element, matched in any case (`</B>`, `</b >`). */
+const HTML_CLOSERS = new Map<string, RegExp>();
+const htmlCloser = (tag: string): RegExp => {
+    let closer = HTML_CLOSERS.get(tag);
+    if (!closer) HTML_CLOSERS.set(tag, closer = new RegExp(`</${tag}\\s*>`, 'gi'));
+    return closer;
+};
+
+/**
  * The inline tokenizer's alternatives, as named groups (so adding one never renumbers the dispatch):
  *
  * - `esc`: a backslash-escaped ASCII punctuation character. Listed first, as only a backslash starts
@@ -606,6 +642,8 @@ const LINK_DESTINATION = (() => {
  * - `codeFence`: a backtick run, the opener of a code span; see codeSpanCloser.
  * - `underline`/`subscript`/`superscript`/`spanStyle`+`spanContent`: HTML-style inline formatting,
  *   each ending before another opening tag of its kind.
+ * - `htmlTag`/`htmlAttrs`: any other opening tag (`<kbd>`, `<a href>`, `<img>`); one that is not an
+ *   inline element HTML_INLINE_ELEMENTS knows, or that is never closed, is text (see inlineHtml).
  * - `lineBreak` (`<br>`), `anchorTag` (an empty `<a id="x"></a>`, a bookmark target: the id of the
  *   picture right after it, else of the line's paragraph, heading, item or cell; an empty `<a>`
  *   naming no id is text), `htmlComment` (the `<!--` of an inline source comment; see commentAt).
@@ -637,6 +675,7 @@ const INLINE_TOKENS = [
     String.raw`(?<anchorTag><a\s[^<>\n]*>[ \t]*<\/a>)`,
     String.raw`(?<htmlComment><!--)`,
     String.raw`<span\s+style="(?<spanStyle>[^"\n]*)">(?<spanContent>(?:(?!<span[\s>]).)+?)<\/span>`,
+    String.raw`<(?<htmlTag>[a-zA-Z][a-zA-Z0-9]*)(?<htmlAttrs>\s[^<>]{0,1000})?>`,
     String.raw`\[\^(?<footnoteId>[^\[\]\n]+)\]`,
     String.raw`\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]`,
     String.raw`\[\[(?<wikiPage>[^\[\]|\n]+)(?:\|(?<wikiAlias>[^\[\]\n]+))?\]\]`,
@@ -1114,32 +1153,37 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Builds the same image/link node shape regardless of whether the URL came from
         // an inline `(url)` or a resolved reference definition - shared by the inline
         // image/link branch and the two reference-style branches below.
+        // A picture: an attachment when its source is data (with extractAttachments), else a reference.
+        const imageNode = (url: string, altText: string, title: string | undefined, attrs?: object): OfficeContentNode => {
+            if (url.startsWith('data:')) {
+                const dataMatch = url.match(/^data:([^;]+);base64,(.*)$/);
+                if (dataMatch && config.extractAttachments) {
+                    const mimeType = dataMatch[1] as any;
+                    const data = dataMatch[2];
+                    const name = `image_${attachments.length + 1}.${mimeType.split('/')[1]}`;
+                    attachments.push({
+                        type: 'image',
+                        mimeType,
+                        data,
+                        name,
+                        extension: mimeType.split('/')[1]
+                    });
+                    return { type: 'image', metadata: { attachmentName: name, altText, title, ...attrs } as ImageMetadata };
+                }
+            }
+            return { type: 'image', metadata: { url, altText, title, ...attrs } as ImageMetadata };
+        };
         const buildLinkOrImageNodes = (isImage: boolean, altText: string, rawUrl: string, attrsStr?: string): OfficeContentNode[] => {
             const { url, title } = splitUrlTitle(rawUrl);
             if (isImage) {
-                // Alt text is plain text, decoded as a Markdown renderer decodes it.
-                altText = decodeMarkdownText(altText);
-                // Pandoc-style attribute list immediately after an image, e.g. {width=50% .centered}
-                const attrs = attrsStr !== undefined ? parseAttributeList(attrsStr) : undefined;
-                if (url.startsWith('data:')) {
-                    const dataMatch = url.match(/^data:([^;]+);base64,(.*)$/);
-                    if (dataMatch && config.extractAttachments) {
-                        const mimeType = dataMatch[1] as any;
-                        const data = dataMatch[2];
-                        const name = `image_${attachments.length + 1}.${mimeType.split('/')[1]}`;
-                        attachments.push({
-                            type: 'image',
-                            mimeType,
-                            data,
-                            name,
-                            extension: mimeType.split('/')[1]
-                        });
-                        return [{ type: 'image', metadata: { attachmentName: name, altText, title, ...attrs } as ImageMetadata }];
-                    }
-                }
-                return [{ type: 'image', metadata: { url, altText, title, ...attrs } as ImageMetadata }];
+                // Alt text is plain text, decoded as a Markdown renderer decodes it; a Pandoc-style
+                // attribute list may follow the image, e.g. {width=50% .centered}.
+                return [imageNode(url, decodeMarkdownText(altText), title, attrsStr !== undefined ? parseAttributeList(attrsStr) : undefined)];
             }
-            const linkNodes = parseInline(altText, currentFormatting);
+            return applyLink(parseInline(altText, currentFormatting), url, title);
+        };
+        // `linkNodes` linked to `url`: its runs, and a picture among them (a badge) carries the link itself.
+        const applyLink = (linkNodes: OfficeContentNode[], url: string, title: string | undefined): OfficeContentNode[] => {
             // A link with no text (`[](url)`) keeps its target, on an empty run.
             if (linkNodes.length === 0) linkNodes.push(plainText(''));
             // A target in this document (`#id`) is internal, as the other parsers read it.
@@ -1153,6 +1197,49 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 }
             });
             return linkNodes;
+        };
+
+        // Raw inline HTML (see HTML_INLINE_ELEMENTS): what an element holds, with its formatting; a
+        // code element's content as written; `<a href>` a link (`<a id>` an anchor before its content);
+        // `<abbr title>` an abbreviation; `<q>` its content in quotation marks; `<img>` a picture.
+        const inlineHtml = (tag: string, attrsSource: string, inner: string): OfficeContentNode[] => {
+            const attrs = htmlAttributes(attrsSource);
+            if (tag === 'img') {
+                const width = attrs.get('width');
+                const align = attrs.get('align')?.toLowerCase();
+                return [imageNode(attrs.get('src')!, attrs.get('alt') ?? '', attrs.get('title') || undefined, {
+                    ...(width && { width }),
+                    ...((align === 'left' || align === 'center' || align === 'right') && { align }),
+                })];
+            }
+            const element = HTML_INLINE_ELEMENTS[tag];
+            if (element === 'code') return [{ type: 'text', text: decodeCharacterReferences(inner), formatting: { ...currentFormatting, font: 'monospace' } }];
+            const content = parseInline(inner, { ...currentFormatting, ...element });
+            if (tag === 'a') {
+                const href = attrs.get('href');
+                if (href !== undefined) return applyLink(content, href, attrs.get('title') || undefined);
+                const id = attrs.get('id') || attrs.get('name');
+                return id ? [anchorMark([id]), ...content] : content;
+            }
+            const title = attrs.get('title');
+            if (tag === 'abbr' && title) {
+                for (const n of content) if (n.type === 'text') n.metadata = { ...(n.metadata as object), abbreviationTitle: title } as TextMetadata;
+            }
+            return tag === 'q' ? [plainText('“'), ...content, plainText('”')] : content;
+        };
+        // Where each inline element's next closing tag is, from where this text's scan stands: looked
+        // up once while it lies ahead, and never again once none follows, so any number of elements
+        // never closed costs time linear in the text.
+        const htmlClosersAt = new Map<string, { at: number; length: number } | null>();
+        const closeHtml = (tag: string, from: number): { at: number; length: number } | null => {
+            const known = htmlClosersAt.get(tag);
+            if (known === null || (known && known.at >= from)) return known;
+            const closer = htmlCloser(tag);
+            closer.lastIndex = from;
+            const m = closer.exec(text);
+            const found = m ? { at: m.index, length: m[0].length } : null;
+            htmlClosersAt.set(tag, found);
+            return found;
         };
 
         // The tokenizer (see INLINE_TOKENS) finds the next inline construct; text between constructs
@@ -1209,6 +1296,16 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 closeAt = (g.tildes !== undefined ? closeTildes : closeEquals)(next, 2);
                 if (closeAt === -1) continue;
                 next = closeAt + 2;
+            } else if (g.htmlTag !== undefined) {
+                // Not an element it reads, a picture with no source, or an element never closed: text.
+                const tag = g.htmlTag.toLowerCase();
+                if (tag === 'img' ? !htmlAttributes(g.htmlAttrs ?? '').get('src') : HTML_INLINE_ELEMENTS[tag] === undefined) { next = match.index + 1; continue; }
+                if (tag !== 'img') {
+                    const close = closeHtml(tag, next);
+                    if (!close) { next = match.index + 1; continue; }
+                    closeAt = close.at;
+                    next = close.at + close.length;
+                }
             }
             const constructStart = g.stars !== undefined ? match.index + g.stars.length - starLength : match.index;
             if (constructStart > lastIndex) {
@@ -1241,6 +1338,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 appendAll(nodes, parseInline(g.subscript, { ...currentFormatting, subscript: true }));
             } else if (g.superscript !== undefined) { // Superscript
                 appendAll(nodes, parseInline(g.superscript, { ...currentFormatting, superscript: true }));
+            } else if (g.htmlTag !== undefined) { // Raw inline HTML: an element, or a picture (see inlineHtml)
+                appendAll(nodes, inlineHtml(g.htmlTag.toLowerCase(), g.htmlAttrs ?? '', closeAt === -1 ? '' : text.slice(match.index + match[0].length, closeAt)));
             } else if (g.anchorTag !== undefined) { // An empty anchor: an id (see resolveAnchorMarks)
                 nodes.push(anchorMark(anchorIds));
             } else if (g.lineBreak !== undefined) { // Raw inline <br>/<br/>/<br /> - a hard line break.
@@ -1565,6 +1664,40 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             if (node.children?.length) restoreRawPieces(node.children);
             if (node.notes?.length) restoreRawPieces(node.notes);
         }
+    };
+
+    // An HTML block, read with the HTML parser as a renderer shows it: its Markdown pieces restored,
+    // its pictures joining this document's attachments, and its footnote references taking their
+    // `[^id]:` definitions from this document.
+    // Its comments are kept, as Markdown's are (the HTML parser drops them unless asked, and a
+    // comment in an HTML table or block was lost).
+    const readHtmlBlock = async (block: string): Promise<OfficeParserAST> => {
+        const html = await parseHtml(Buffer.from(block), { ...config, htmlParserConfig: { ...config.htmlParserConfig, preserveComments: true } });
+        if (markdownPieces.length) {
+            html.content = await restoreMarkdownPieces(html.content);
+            restoreRawPieces(html.content);
+        }
+        const renamed = new Map<string, string>();
+        for (const attachment of html.attachments) {
+            const name = `image_${attachments.length + 1}.${attachment.extension || 'png'}`;
+            renamed.set(attachment.name, name);
+            attachments.push({ ...attachment, name });
+        }
+        const adopt = (nodes: OfficeContentNode[]) => {
+            for (const node of nodes) {
+                const image = node.type === 'image' ? node.metadata as ImageMetadata | undefined : undefined;
+                if (image?.attachmentName && renamed.has(image.attachmentName)) image.attachmentName = renamed.get(image.attachmentName)!;
+                if (node.notes?.length) {
+                    node.notes = node.notes.map(note => {
+                        const noteId = (note.metadata as any)?.noteId;
+                        return (noteId !== undefined && footnoteDefinitions.has(noteId) ? footnoteNode(noteId) : null) ?? note;
+                    });
+                }
+                if (node.children) adopt(node.children);
+            }
+        };
+        adopt(html.content);
+        return html;
     };
 
     const splitIntoBlocks = (text: string): string[] => {
@@ -2261,19 +2394,19 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             continue;
         }
 
-        // Table (Simple Pipe or HTML). An HTML table is in an HTML block, which a block-level tag starts
-        // a line of (`<table>`, or a `<center>`, `<figure>` or `<p>` holding it): `<table>` in a code
-        // span or a sentence is text.
-        // The HTML block starts at that line: text before it is Markdown (a paragraph the block
-        // interrupts), and `<table>` there, in a code span, is text.
-        const htmlStart = HTML_BLOCK_LINE.exec(block);
-        const htmlTable = !!htmlStart && /<table\b/i.test(block.slice(htmlStart.index));
-        if (htmlTable && htmlStart!.index > 0) {
+        // An HTML block (CommonMark's): a line starting with a block-level tag (`<table>`, `<p
+        // align="center">`, `<details>`, `<div>`, `<h1>`), or a `<pre>` closed in the block, starts
+        // one, which runs to the blank line. It is read with the HTML parser, as a renderer shows it:
+        // it was text, its tags escaped into view on the first save. `<table>` in a code span or a
+        // sentence is text. The block starts at that line: text before it is Markdown (a paragraph
+        // the block interrupts).
+        const htmlStart = HTML_BLOCK_LINE.exec(block) ?? (/^ {0,3}<pre[\s>]/i.test(block) && /<\/pre\s*>/i.test(block) ? { index: 0 } : null);
+        if (htmlStart && htmlStart.index > 0) {
             const cut = htmlStart!.index + 1;
             await parseBlocks([block.slice(0, htmlStart!.index)], content);
             block = block.slice(cut);
         }
-        if ((block.includes('|') && hasTableDelimiterRow(block)) || htmlTable) {
+        if (htmlStart || (block.includes('|') && hasTableDelimiterRow(block))) {
             // Pandoc-style trailing attribute list (`{align=right}`) immediately after the
             // table, or Kramdown's `{: align=right}` on its own following line - both land
             // in this same raw block since there's no blank line separating them.
@@ -2284,44 +2417,16 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 block = block.slice(0, tableAttrLineMatch.index);
             }
 
-            if (htmlTable) {
-                // An HTML table is HTML: a Markdown renderer shows it as written, and it is read with
-                // the HTML parser, so its cells keep their formatting, links, pictures, math, line
-                // breaks and nested tables, and text around it in the block is kept too. Its
-                // pictures join this document's attachments, and its footnote references take their
-                // `[^id]:` definitions from this document.
-                const html = await parseHtml(Buffer.from(block), config);
-                if (markdownPieces.length) {
-                    html.content = await restoreMarkdownPieces(html.content);
-                    restoreRawPieces(html.content);
+            if (htmlStart) {
+                // HTML is read with the HTML parser: a table's cells keep their formatting, links,
+                // pictures, math, line breaks and nested tables, and text around it in the block is
+                // kept too (see readHtmlBlock).
+                const html = await readHtmlBlock(block);
+                for (const node of html.content) {
+                    if (node.type === 'table' && tableAlign) node.metadata = { ...node.metadata, align: tableAlign };
+                    content.push(node);
                 }
-                if (html.content.some(n => n.type === 'table')) {
-                    const renamed = new Map<string, string>();
-                    for (const attachment of html.attachments) {
-                        const name = `image_${attachments.length + 1}.${attachment.extension || 'png'}`;
-                        renamed.set(attachment.name, name);
-                        attachments.push({ ...attachment, name });
-                    }
-                    const adopt = (nodes: OfficeContentNode[]) => {
-                        for (const node of nodes) {
-                            const image = node.type === 'image' ? node.metadata as ImageMetadata | undefined : undefined;
-                            if (image?.attachmentName && renamed.has(image.attachmentName)) image.attachmentName = renamed.get(image.attachmentName)!;
-                            if (node.notes?.length) {
-                                node.notes = node.notes.map(note => {
-                                    const noteId = (note.metadata as any)?.noteId;
-                                    return (noteId !== undefined && footnoteDefinitions.has(noteId) ? footnoteNode(noteId) : null) ?? note;
-                                });
-                            }
-                            if (node.children) adopt(node.children);
-                        }
-                    };
-                    adopt(html.content);
-                    for (const node of html.content) {
-                        if (node.type === 'table' && tableAlign) node.metadata = { ...node.metadata, align: tableAlign };
-                        content.push(node);
-                    }
-                    continue;
-                }
+                continue;
             } else {
                 const lines = trimAsciiWhitespace(block).split('\n');
                 const rows: OfficeContentNode[] = [];

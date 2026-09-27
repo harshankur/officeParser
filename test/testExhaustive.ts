@@ -3778,6 +3778,22 @@ async function testSecondReview(): Promise<void> {
     // A CSV comment row survives a save to Markdown.
     await settles('md', await parse('# note\na,b\n1,2\n', 'csv'), 'a CSV comment row');
 
+    // Raw HTML in Markdown is read as a renderer shows it, where its tags were escaped into view on
+    // the first save: an HTML block by the HTML parser, an inline element as its formatting.
+    for (const [src, expected] of [
+        ['<p align="center">\n  <img src="logo.png" width="200" alt="Logo">\n</p>\n', '<div style="text-align: center">![Logo](logo.png){width=200}</div>'],
+        ['<h1 align="center">Title</h1>\n', '<div style="text-align: center">\n\n# Title\n\n</div>'],
+        ['<details>\n<summary>More</summary>\n\nHidden text\n\n</details>\n', 'More\n\nHidden text'],
+        ['Intro line\n<p>Para</p>\n', 'Intro line\n\nPara'],
+        ['Press <kbd>Ctrl</kbd>+<kbd>C</kbd>, <b>bold</b>, <i>it</i>, <code>x &lt; y</code>, <sup class="n">2</sup>.', 'Press `Ctrl`+`C`, **bold**, *it*, `x < y`, <sup>2</sup>.'],
+        ['See <a href="https://e.com">the site</a> and <img src="a.png" alt="A"> here.', 'See [the site](https://e.com) and ![A](a.png) here.'],
+        ['Unknown <foo>tag</foo>, unclosed <b>bold, a lone </i>.', 'Unknown &lt;foo>tag&lt;/foo>, unclosed &lt;b>bold, a lone &lt;/i>.'],
+        ['Code `<b>x</b>` stays code.', 'Code `<b>x</b>` stays code.'],
+    ] as const) {
+        const { out } = await settles('md', await parse(src, 'md'), `raw HTML ${JSON.stringify(src)}`);
+        assert.strictEqual(out, expected, `MD: raw HTML ${JSON.stringify(src)}`);
+    }
+    assert.strictEqual(JSON.stringify((await parse('<abbr title="HyperText">HTML</abbr>', 'md')).content[0].children![0].metadata), '{"abbreviationTitle":"HyperText"}', 'MD: <abbr title> is an abbreviation');
     // HTML: numeric references in 0x80-0x9F are Windows-1252's characters, as browsers read them.
     assert.strictEqual(plain((await parse('<p>It&#146;s &#147;q&#148; &#150; x</p>', 'html')).content), 'It’s “q” – x', 'HTML: Windows-1252 references');
     // Preformatted text is all of the block's text, less the line break after <pre>.
