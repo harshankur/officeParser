@@ -1120,6 +1120,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // at top level the block loop below separates it like any other block. A review
                     // comment keeps its existing rendering (its children).
                     if (isSourceComment(node)) return `<!--${sanitizeCommentText(node.text || '')}-->`;
+                    // A comment of text alone (a CSV comment line) is that text: it was dropped.
+                    if (!node.children?.length && node.text) return `${markdownEscapeInline(node.text, this.atLineStart)}\n\n`;
                     return childrenOutput;
 
                 case 'chart':
@@ -1469,6 +1471,24 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         // First pass: Process rows and determine max columns (accounting for colspans)
         const processedRows: string[][] = [];
         for (const rowNode of (node.children ?? [])) {
+            // Content among the rows that is no row (a CSV comment line, a picture) is a row of one
+            // cell where it stands: it was an empty row, its content gone.
+            if (rowNode.type !== 'row') {
+                const wasInPipeTableCell = this.inPipeTableCell;
+                this.inPipeTableCell = true;
+                let content: string;
+                try {
+                    content = await this.processNodeRecursive(rowNode, processor);
+                } finally {
+                    this.inPipeTableCell = wasInPipeTableCell;
+                }
+                content = joinLines(trimAsciiWhitespace(content), this.resolvedFallbackToHtml.cellLineBreaks ? '<br>' : ' ').replace(/\|/g, '\\|');
+                if (content) {
+                    processedRows.push([content]);
+                    maxCols = Math.max(maxCols, 1);
+                }
+                continue;
+            }
             // The first row becomes the header row - the `| --- |` separator emitted below marks
             // it as such - so bold inside it is already implied.
             const wasInImplicitBold = this.inImplicitBold;
@@ -1672,7 +1692,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             }
             case 'comment':
                 if (isSourceComment(n)) return `<!--${sanitizeCommentText(n.text || '')}-->`;
-                return co;
+                return !n.children?.length && n.text ? esc(n.text) : co;
             case 'chart':
             case 'drawing':
             case 'slide':
@@ -1700,13 +1720,18 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             return override;
         }
 
-        if (node.type === 'table') {
+        // A sheet is written as a table is (it was written as nothing: every sheet under a dialect
+        // without pipe tables, and one with merged cells).
+        if (node.type === 'table' || node.type === 'sheet') {
             let rows = '';
             this.inHtmlTable++;
             try {
                 if (node.children) {
                     for (const row of node.children) {
-                        rows += await this.renderTableAsHtml(row, await this.handleOnNode(row));
+                        // Content among the rows that is no row is a row of one cell, where it stands.
+                        rows += row.type === 'row' || row.type === 'cell'
+                            ? await this.renderTableAsHtml(row, await this.handleOnNode(row))
+                            : `  <tr>\n${await this.renderTableAsHtml({ type: 'cell', children: [row] }, undefined)}  </tr>\n`;
                     }
                 }
             } finally {

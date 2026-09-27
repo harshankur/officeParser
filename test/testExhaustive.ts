@@ -3418,6 +3418,8 @@ async function testMarkdownRoundTrips(): Promise<void> {
         ['<dl><dt><p>a<dd>b<dt>c<dd>d</dl>', 'definitionList(definitionTerm,definitionDescription,definitionTerm,definitionDescription)'],
         ['<ul><li><p>a<li>b</ul>', 'list|list'], ['text <img src="a.png"> more', 'paragraph'], ['<div><img src="x.png"><div class="caption">cap</div></div>', 'image|paragraph'],
         ['<div class="image-container"><img src="x.png"><div class="caption">x.png</div></div>', 'image'],
+        ['<div class="image-container"><img src="x.png"><div class="caption">image1.tmp</div></div>', 'image'],
+        ['<div class="image-container"><img src="x.png"><div class="caption"><b>The team</b></div></div>', 'image|paragraph'],
     ] as const) {
         const parsed = await OfficeParser.parseOffice(Buffer.from(src), { fileType: 'html' } as any);
         const shapeOf = (n: any): string => n.type === 'definitionList' ? `definitionList(${n.children.map((c: any) => c.type).join(',')})` : n.type;
@@ -3498,6 +3500,35 @@ async function testMarkdownRoundTrips(): Promise<void> {
     ] as const) {
         assert.deepStrictEqual(idsOf((await htmlAst(src)).content), ids, `HTML: the ids of ${src}`);
     }
+    // A sheet written as HTML reads back as its data: the row numbers and column letters HtmlGenerator
+    // draws around it are not cells of it.
+    const sheetHtml = (await OfficeGenerator.generate({ type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [{ type: 'row', children: [{ type: 'cell', children: [T('a')] }, { type: 'cell', children: [T('b')] }] }, { type: 'row', children: [{ type: 'cell', children: [T('c')] }, { type: 'cell', children: [T('d')] }] }] }] } as any, 'html', { htmlConfig: { standalone: false } } as any)).value as string;
+    const sheetBack = (await htmlAst(sheetHtml)).content.find(n => n.type === 'table')!;
+    assert.deepStrictEqual(sheetBack.children!.map(row => row.children!.map(cell => plain(cell.children ?? []))), [['a', 'b'], ['c', 'd']], 'HTML: a sheet reads back without its row numbers and column letters');
+    // A sheet with merged cells, or under a dialect without pipe tables, is written to Markdown as an HTML
+    // table (it was written as nothing), and content among a table's rows (a CSV comment line) is a
+    // row of one cell where it stands (it was an empty row). RTF writes code blocks, equations (as their
+    // LaTeX), definition terms and descriptions, and a CSV comment line, which it dropped or ran together.
+    const mergedSheet = { type: 'xlsx', metadata: {}, attachments: [], content: [{ type: 'sheet', metadata: { sheetName: 'S' }, children: [
+        { type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0, colSpan: 2 }, children: [T('merged')] }] },
+        { type: 'comment', text: '# a comment line' },
+        { type: 'row', children: [{ type: 'cell', metadata: { row: 2, col: 0 }, children: [T('c')] }, { type: 'cell', metadata: { row: 2, col: 1 }, children: [T('d')] }] }] }] } as any;
+    for (const dialect of ['extended', 'commonmark'] as const) {
+        const written = (await OfficeGenerator.generate(mergedSheet, 'md', { mdConfig: { dialect } } as any)).value as string;
+        assert.ok(['merged', '# a comment line', '>c<', '>d<'].every(part => written.includes(part)), `MD: a sheet with merged cells keeps its content (${dialect}: ${written})`);
+    }
+    const commentSheet = { ...mergedSheet, content: [{ ...mergedSheet.content[0], children: [mergedSheet.content[0].children[2], mergedSheet.content[0].children[1]] }] };
+    assert.ok(((await OfficeGenerator.generate(commentSheet, 'md')).value as string).includes('| # a comment line |'), 'MD: a CSV comment line is a row of its table');
+    const rtfBack = async (content: any[]) => {
+        const rtf = (await OfficeGenerator.generate({ type: 'md', metadata: {}, attachments: [], content } as any, 'rtf', { onWarning: () => {} } as any)).value as string;
+        return (await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf' } as any)).content.map(n => plain(n.children ?? [])).filter(Boolean);
+    };
+    assert.deepStrictEqual(await rtfBack([
+        { type: 'code', text: 'let x = 1;\nx++;', metadata: { language: 'js' } }, { type: 'code', text: 'x^2', metadata: { math: 'block' } },
+        { type: 'paragraph', children: [T('math '), { type: 'code', text: 'y_1', metadata: { math: 'inline' } }, T(' inline')] },
+        { type: 'definitionList', children: [{ type: 'definitionTerm', children: [T('Term')] }, { type: 'definitionDescription', children: [T('Description')] }] },
+        { type: 'comment', text: '# a comment line' }, { type: 'comment', text: 'hidden', metadata: { sourceSyntax: 'html' } },
+    ]), ['let x = 1;\nx++;', 'x^2', 'math |y_1| inline', 'Term', 'Description', '# a comment line'], 'RTF: code, equations, definitions and a comment line are written');
     // A heading's generated id comes from its text, whether the node or only its runs carry it, and a
     // heading whose text slugifies to nothing gets none rather than id="".
     assert.ok((await htmlOnce('<h2>My Title</h2>')).includes('<h2 id="my-title">'), 'HTML: a heading read from HTML gets its generated id');

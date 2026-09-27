@@ -1293,26 +1293,40 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             case 'sheet': {
                 const rows = node.children || [];
 
+                // Each cell's place in the grid: the row and column a spreadsheet parser gives it, else
+                // (a sheet built by hand) the next free place in reading order, past the cells a merge
+                // above covers. A cell with no place was left out of the grid, and with it the sheet.
+                const places = new Map<OfficeContentNode, { r: number; c: number }>();
+                const coveredThrough: number[] = [];
+                let nextRow = 0;
+                for (const child of rows) {
+                    if (child.type !== 'row') continue;
+                    const cellsInRow = (child.children || []).filter(c => c.type === 'cell');
+                    const firstRow = (cellsInRow[0]?.metadata as CellMetadata | undefined)?.row;
+                    const rowIndex = typeof firstRow === 'number' ? firstRow : nextRow;
+                    let col = 0;
+                    for (const cell of cellsInRow) {
+                        const meta = cell.metadata as CellMetadata | undefined;
+                        const r = typeof meta?.row === 'number' ? meta.row : rowIndex;
+                        let c = typeof meta?.col === 'number' ? meta.col : col;
+                        if (typeof meta?.col !== 'number') while ((coveredThrough[c] ?? -1) >= r) c++;
+                        places.set(cell, { r, c });
+                        const cSpan = meta?.colSpan || 1;
+                        if ((meta?.rowSpan || 1) > 1) for (let k = c; k < c + cSpan; k++) coveredThrough[k] = Math.max(coveredThrough[k] ?? -1, r + (meta?.rowSpan || 1) - 1);
+                        col = c + cSpan;
+                    }
+                    nextRow = rowIndex + 1;
+                }
+
                 // Find grid bounds
                 let maxRow = -1;
                 let maxCol = -1;
-
-                for (const child of rows) {
-                    if (child.type === 'row') {
-                        for (const cell of child.children || []) {
-                            if (cell.type === 'cell') {
-                                const meta = cell.metadata as CellMetadata;
-                                if (meta) {
-                                    const r = meta.row;
-                                    const c = meta.col;
-                                    const rSpan = meta.rowSpan || 1;
-                                    const cSpan = meta.colSpan || 1;
-                                    if (r + rSpan - 1 > maxRow) maxRow = r + rSpan - 1;
-                                    if (c + cSpan - 1 > maxCol) maxCol = c + cSpan - 1;
-                                }
-                            }
-                        }
-                    }
+                for (const [cell, { r, c }] of places) {
+                    const meta = cell.metadata as CellMetadata | undefined;
+                    const rSpan = meta?.rowSpan || 1;
+                    const cSpan = meta?.colSpan || 1;
+                    if (r + rSpan - 1 > maxRow) maxRow = r + rSpan - 1;
+                    if (c + cSpan - 1 > maxCol) maxCol = c + cSpan - 1;
                 }
 
                 let tableHtml = '';
@@ -1333,27 +1347,24 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                         if (child.type === 'row') {
                             const cellsInRow = child.children?.filter(c => c.type === 'cell') || [];
                             if (cellsInRow.length > 0) {
-                                const r = (cellsInRow[0].metadata as CellMetadata).row;
-                                rowNodeMap.set(r, child);
+                                rowNodeMap.set(places.get(cellsInRow[0])!.r, child);
 
                                 for (const cell of cellsInRow) {
-                                    const meta = cell.metadata as CellMetadata;
-                                    if (meta) {
-                                        const c = meta.col;
-                                        if (r >= 0 && r <= maxRow && c >= 0 && c <= maxCol) {
-                                            grid[r][c] = cell;
+                                    const meta = cell.metadata as CellMetadata | undefined;
+                                    const { r, c } = places.get(cell)!;
+                                    if (r >= 0 && r <= maxRow && c >= 0 && c <= maxCol) {
+                                        grid[r][c] = cell;
 
-                                            const rSpan = meta.rowSpan || 1;
-                                            const cSpan = meta.colSpan || 1;
-                                            if (rSpan > 1 || cSpan > 1) {
-                                                for (let rOffset = 0; rOffset < rSpan; rOffset++) {
-                                                    for (let cOffset = 0; cOffset < cSpan; cOffset++) {
-                                                        if (rOffset === 0 && cOffset === 0) continue;
-                                                        const targetR = r + rOffset;
-                                                        const targetC = c + cOffset;
-                                                        if (targetR <= maxRow && targetC <= maxCol) {
-                                                            mergedCovered[targetR][targetC] = true;
-                                                        }
+                                        const rSpan = meta?.rowSpan || 1;
+                                        const cSpan = meta?.colSpan || 1;
+                                        if (rSpan > 1 || cSpan > 1) {
+                                            for (let rOffset = 0; rOffset < rSpan; rOffset++) {
+                                                for (let cOffset = 0; cOffset < cSpan; cOffset++) {
+                                                    if (rOffset === 0 && cOffset === 0) continue;
+                                                    const targetR = r + rOffset;
+                                                    const targetC = c + cOffset;
+                                                    if (targetR <= maxRow && targetC <= maxCol) {
+                                                        mergedCovered[targetR][targetC] = true;
                                                     }
                                                 }
                                             }

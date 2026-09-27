@@ -55,10 +55,19 @@ const IMPLIED_END: Record<string, ImpliedEnd> = (() => {
 })();
 
 /**
- * What HtmlGenerator writes in a picture's caption: nothing, or the picture's file name. Anything else
- * in a caption is the document's own text, and kept.
+ * What HtmlGenerator writes in a picture's caption: nothing, or the picture's attachment name (a file
+ * name, whatever its extension: `image1.png`, `image1.tmp`). Anything else in a caption is the
+ * document's own text, and kept.
  */
-const WRITER_CAPTION = /^(?:[^\s/\\<>]+\.(?:png|jpe?g|gif|bmp|tiff?|svg|webp|emf|wmf|ico|avif|heic))?$/i;
+const WRITER_CAPTION = /^(?:[^\s<>]*[^\s<>.]\.[A-Za-z0-9]{1,8})?$/;
+
+/**
+ * The cells HtmlGenerator adds around a sheet's data, as a spreadsheet shows them: the row numbers,
+ * the column letters, and the corner between them. They are not the sheet's content.
+ */
+const SHEET_CHROME_CLASSES = new Set(['excel-row-num', 'excel-row-num-header', 'excel-col-header']);
+const isSheetChrome = (node: HtmlNode): boolean => node.type === 'element' && (node.tagName === 'td' || node.tagName === 'th')
+    && (node.attributes?.class || '').split(/\s+/).some(name => SHEET_CHROME_CLASSES.has(name));
 
 /** Node types that are blocks: a caption holding one is not wrapped in a paragraph. */
 const BLOCK_NODE_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'code', 'image', 'chart', 'embed', 'admonition', 'definitionList', 'break']);
@@ -1007,13 +1016,12 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
             // save. Any other caption, and a <figcaption>, is a block of its own, which must not run
             // into the picture before it.
             const isClass = (name: string) => (node.attributes?.class || '').split(/\s+/).includes(name);
-            if (tagName === 'div' && isClass('caption') && node.parent?.tagName === 'div' && (node.parent.attributes?.class || '').split(/\s+/).includes('image-container')
-                && WRITER_CAPTION.test(rawChildText(node).trim())) {
-                return [];
-            }
             if (tagName === 'figcaption' || (tagName === 'div' && isClass('caption'))) {
                 const caption = parseChildren(node, newFormatting, listContext);
                 if (!caption.some(c => c.type !== 'text' || c.text?.trim())) return [];
+                const writersLabel = tagName === 'div' && node.parent?.tagName === 'div' && (node.parent.attributes?.class || '').split(/\s+/).includes('image-container')
+                    && caption.every(c => c.type === 'text') && WRITER_CAPTION.test(plainTextOf(caption).trim());
+                if (writersLabel) return [];
                 // Blocks in it stay blocks (a <p> cannot hold a <p>); inline content is one paragraph.
                 return caption.some(c => BLOCK_NODE_TYPES.has(c.type)) ? caption : { type: 'paragraph', children: caption };
             }
@@ -1215,9 +1223,12 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 return tableNode;
             }
             if (tagName === 'tr') {
+                const cells = parseChildren(node, newFormatting, listContext);
+                // The row of column letters over a sheet (HtmlGenerator's) is no row of the sheet.
+                if (!cells.length && node.children.some(isSheetChrome)) return [];
                 const rowNode: OfficeContentNode = {
                     type: 'row',
-                    children: parseChildren(node, newFormatting, listContext),
+                    children: cells,
                     htmlAttributes: collectHtmlAttributes(node, [])
                 };
                 if (config.includeRawContent) {
@@ -1225,6 +1236,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig):
                 }
                 return rowNode;
             }
+            if (isSheetChrome(node)) return [];
             if (tagName === 'td' || tagName === 'th') {
                 // Merged cells: mirrors the colspan/rowspan reading already done in
                 // MarkdownParser's inline HTML-table handler.

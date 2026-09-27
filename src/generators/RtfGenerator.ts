@@ -1,7 +1,8 @@
-import { ConversionResult, GeneratorConfig, HeadingMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, TextMetadata } from '../types.js';
+import { CodeMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextMetadata } from '../types.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
+import { isSourceComment } from '../utils/commentUtils.js';
 
 /**
  * Generates high-fidelity RTF (Rich Text Format) from an AST.
@@ -24,6 +25,10 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     private inHeading = false;
     /** As `inHeading`, but for the inherited font size - see `hasUniformFormatting`. */
     private headingUniformSize = false;
+    /** Whether a code block or equation was written, in the monospace font (`\\f2`) the font table then lists. */
+    private usedMonospace = false;
+    /** Whether the math-as-source warning was given (once per document). */
+    private mathWarned = false;
 
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'rtf'>) {
         super('rtf', ast, config);
@@ -32,6 +37,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     async generate(): Promise<ConversionResult<'rtf'>> {
         this.colorTable = [];
         this.colorIndex = new Map();
+        this.usedMonospace = false;
+        this.mathWarned = false;
 
         // We first process all nodes to collect colors and analyze structure
         const bodyContent = await this.renderBody(this.ast);
@@ -55,7 +62,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         }
 
         // 2. Font Table
-        output += '{\\fonttbl{\\f0\\fnil\\fcharset0 Arial;}{\\f1\\fnil\\fcharset0 Times New Roman;}}\n';
+        output += `{\\fonttbl{\\f0\\fnil\\fcharset0 Arial;}{\\f1\\fnil\\fcharset0 Times New Roman;}${this.usedMonospace ? '{\\f2\\fmodern\\fcharset0 Courier New;}' : ''}}\n`;
 
         // 3. Color Table
         if (this.colorTable.length > 0) {
@@ -278,6 +285,42 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     return (node.metadata as any)?.breakType === 'page' ? '\\page\n' : '\\line\n';
                 }
 
+                case 'code': {
+                    // A code block, or an equation (as its LaTeX source: RTF has no math of its own), in
+                    // the monospace font, its lines kept; inline math sits in its line. Both were dropped.
+                    const meta = node.metadata as CodeMetadata | undefined;
+                    if (meta?.math && !this.mathWarned) {
+                        this.mathWarned = true;
+                        this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'rtf', feature: 'math' });
+                    }
+                    this.usedMonospace = true;
+                    const lines = this.escapeRtf(node.text || this.getNodeText(node)).split(/\r\n|\r|\n/).join('\\line ');
+                    if (meta?.math === 'inline') return `{\\f2 ${lines}}`;
+                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    return `${pPr}\\sa120{\\f2 ${lines}}\\par\n`;
+                }
+
+                case 'definitionTerm':
+                case 'definitionDescription': {
+                    // A term, bold, and its description, indented, each a paragraph of its own (they ran
+                    // into each other and into the next paragraph); one holding paragraphs is them.
+                    if (node.children?.some(child => child.type !== 'text' && child.type !== 'break' && child.type !== 'image' && !(child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math === 'inline'))) return childrenOutput;
+                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    return node.type === 'definitionTerm'
+                        ? `${pPr}\\sa0{\\b ${childrenOutput}}\\par\n`
+                        : `${pPr}\\li720\\sa120 ${childrenOutput}\\par\n`;
+                }
+
+                case 'comment': {
+                    // A comment with only text (a CSV comment line) is a paragraph of it; one with
+                    // children (a review comment) is written through them. A source comment (`<!-- -->`,
+                    // the author's hidden note) has no place in RTF, and is left out as before.
+                    if (isSourceComment(node)) return '';
+                    if (node.children?.length || !node.text) return childrenOutput;
+                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    return `${pPr}\\sa120 ${this.escapeRtf(node.text)}\\par\n`;
+                }
+
                 case 'embed': {
                     // RTF has no embed concept - degrade to the URL as plain text rather than
                     // silently dropping the node (it has no children to fall back to).
@@ -300,15 +343,11 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 case 'note':
                 case 'sheet':
                 case 'page':
-                case 'code':
-                case 'comment':
                 case 'header':
                 case 'footer':
                 case 'slideMaster':
                 case 'admonition':
                 case 'definitionList':
-                case 'definitionTerm':
-                case 'definitionDescription':
                     return childrenOutput;
             }
         };

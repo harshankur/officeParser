@@ -7,10 +7,10 @@ title: "Sheet1"
 | # Created: 11/28/2025 | 4:36:44 PM |  |  |  |  |  |  |  |  |  |  |  |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | # Modified: 12/26/2025 | 11:08:56 AM |  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
+| # TestString: Hello from custom props |  |  |  |  |  |  |  |  |  |  |  |  |
+| # TestNumber: 42 |  |  |  |  |  |  |  |  |  |  |  |  |
+| # TestBool: true |  |  |  |  |  |  |  |  |  |  |  |  |
+| # Sheet: Sheet1 |  |  |  |  |  |  |  |  |  |  |  |  |
 | Demonstration of DOCX support in calibre  |  |  |  |  |  |  |  |  |  |  |  |  |
 | This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action.  |  |  |  |  |  |  |  |  |  |  |  |  |
 | There is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting.  |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -27,7 +27,7 @@ title: "Sheet1"
 | Two  |  |  |  |  |  |  |  |  |  |  |  |  |
 | We now resume our normal programming  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Four  |  |  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
+| # Sheet: Sheet2 |  |  |  |  |  |  |  |  |  |  |  |  |
 | Text Formatting  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Inline formatting  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Here, we demonstrate various types of inline text formatting and the use of embedded fonts.  |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -40,7 +40,7 @@ title: "Sheet1"
 | Paragraph level formatting  |  |  |  |  |  |  |  |  |  |  |  |  |
 | You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.  |  |  |  |  |  |  |  |  |  |  |  |  |
 | For the lovers of poetry amongst you, paragraphs with hanging indents, like this often<br>come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.  |  |  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
+| # Sheet: Sheet3 |  |  |  |  |  |  |  |  |  |  |  |  |
 | Tables  |  |  |  |  |  |  |  |  |  |  |  |  |
 | ITEM  | NEEDED  |  |  |  |  |  |  |  |  |  |  |  |
 | Books  | 1  |  |  |  |  |  |  |  |  |  |  |  |
@@ -56,7 +56,7 @@ title: "Sheet1"
 | Point C  | 64  | 56  | —  |  |  |  |  |  |  |  |  |  |
 | Point D  | 37  | 32  | 91  | —  |  |  |  |  |  |  |  |  |
 | Point E  | 93  | 35  | 54  | 43  | —  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
+| # Sheet: Sheet4 |  |  |  |  |  |  |  |  |  |  |  |  |
 | Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.  |  |  |  |  |  |  |  |  |  |  |  |  |
 | College  | New students  | Graduating students  | Change  |  |  |  |  |  |  |  |  |  |
 |  | Undergraduate  |  |  |  |  |  |  |  |  |  |  |  |
@@ -71,7 +71,7 @@ title: "Sheet1"
 | One  | Two  | To the left is a table inside a table, with some cells merged.  |  |  |  |  |  |  |  |  |  |  |
 | Three  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Four  |  |  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
+| # Sheet: Sheet5 |  |  |  |  |  |  |  |  |  |  |  |  |
 | We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.  |  |  |  |  |  |  |  |  |  |  |  |  |
 | December 2007  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Sun  |  | Mon  |  | Tue  |  | Wed  |  | Thu  |  | Fri  |  | Sat  |
@@ -81,7 +81,7 @@ title: "Sheet1"
 | 16  |  | 17  |  | 18  |  | 19  |  | 20  |  | 21  |  | 22  |
 | 23  |  | 24  |  | 25  |  | 26  |  | 27  |  | 28  |  | 29  |
 | 30  |  | 31  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
+| # Sheet: Sheet6 |  |  |  |  |  |  |  |  |  |  |  |  |
 | Structural Elements  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.   |  |  |  |  |  |  |  |  |  |  |  |  |
 | Footnotes & Endnotes  |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -91,11 +91,11 @@ title: "Sheet1"
 | rop caps are used to emphasize the leading paragraph at the start of a section. In Word it is possible to specify how many lines of text a drop-cap should use.  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Links  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the calibre download page. Then we have a link that points back to the section on paragraph level formatting in this document.  |  |  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
+| # Sheet: Sheet7 |  |  |  |  |  |  |  |  |  |  |  |  |
 | Images  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Centered images like this are useful for large pictures that should be a focus of attention.   |  |  |  |  |  |  |  |  |  |  |  |  |
 | There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was inserted, not necessarily where it appears on the page in Word.  |  |  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
+| # Sheet: Sheet8 |  |  |  |  |  |  |  |  |  |  |  |  |
 | Lists  |  |  |  |  |  |  |  |  |  |  |  |  |
 | All types of lists are supported by the conversion, with the exception of lists that use fancy bullets, these get converted to regular bullets.  |  |  |  |  |  |  |  |  |  |  |  |  |
 | Bulleted List  |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -123,7 +123,7 @@ title: "Sheet1"
 | An interruption in our regularly scheduled listing, for this essential and very relevant public service announcement.  |  |  |  |  |  |  |  |  |  |  |  |  |
 | iii | We now resume our normal programming  |  |  |  |  |  |  |  |  |  |  |  |
 | iv | Four  |  |  |  |  |  |  |  |  |  |  |  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
+| # Sheet: Chart Sheet |  |  |  |  |  |  |  |  |  |  |  |  |
 | Charts |  |  |  |  |  |  |  |  |  |  |  |  |
 |  | Series 1 | Series 2 | Series 3 |  |  |  |  |  |  |  |  |  |
 | Category 1 | 4.3 | 2.4 | 2 |  |  |  |  |  |  |  |  |  |
