@@ -3598,6 +3598,11 @@ async function testMarkdownRoundTrips(): Promise<void> {
         ['a line break among blocks', [{ type: 'paragraph', children: [T('a')] }, cr, { type: 'paragraph', children: [T('b')] }], 'a\n\nb'],
         ['a line break before a rule', [{ type: 'paragraph', children: [T('a'), cr, { type: 'break', metadata: { breakType: 'thematic' } }, T('b')] }], 'a\n\n---\n\nb'],
         ['an id that slugifies to nothing', [{ type: 'paragraph', metadata: { anchorIds: ['!!!'] }, children: [T('x')] }], 'x'],
+        // Ids of what a line holds are its container's, written where a reader gives them.
+        ['ids in a list item', [{ type: 'list', metadata: { listType: 'unordered', listId: 'l', indentation: 0, itemIndex: 0 }, children: [T('item '), { type: 'code', text: 'c', metadata: { anchorIds: ['ic'] } }] }], '- <a id="ic"></a>item<br>`c`'],
+        ['ids in a cell', [{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', children: [T('p1')] }, { type: 'paragraph', metadata: { anchorIds: ['p2'] }, children: [T('p2')] }] }] }] }], '| <a id="p2"></a>p1<br>p2 |\n| --- |'],
+        ['ids of inline math', [{ type: 'paragraph', children: [T('see '), { type: 'code', text: 'x', metadata: { math: 'inline', anchorIds: ['m'] } }] }], '<a id="m"></a>see $x$'],
+        ['spaces before a block in a paragraph', [{ type: 'paragraph', children: [T('a '), { type: 'code', text: 'blk' }, T(' b')] }], 'a\n\n```\nblk\n```\n\nb'],
     ] as const) {
         const written = await writeDoc(content as any);
         assert.strictEqual(written, expected, `MD: ${label}`);

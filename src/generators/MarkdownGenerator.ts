@@ -413,6 +413,18 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     }
 
     /**
+     * Anchors of a node in a line the parser gives them to its container: a paragraph's inline math, or
+     * anything in a list item, cell or definition (one line of Markdown). An anchor there reads back as
+     * the container's, so it is written where the container's are, at the line's start (they wait in
+     * pendingAnchorIds, which the container's own anchors take), rather than moving there on the next
+     * save.
+     */
+    private deferAnchors(metadata: any): string {
+        if (this.resolvedFallbackToHtml.anchors && !this.config.ignoreInternalLinks && metadata?.anchorIds?.length) this.pendingAnchorIds.push(...metadata.anchorIds);
+        return '';
+    }
+
+    /**
      * A block's anchors (and those waiting, see pendingAnchorIds) on a line of their own before it: a
      * blank line either side, so they neither join the text before nor make it a heading's underline.
      */
@@ -562,7 +574,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             if (mapping) {
                 // Map common HTML tags to Markdown equivalents
                 // A quote cannot go in one line (a list item, cell or definition): its text is written.
-                if (mapping.tag === 'blockquote') return `${this.inOneLine ? '' : '> '}${this.renderAnchors(node.metadata)}${trimBlockEdges(childrenOutput)}\n\n`;
+                if (mapping.tag === 'blockquote') return this.inOneLine
+                    ? `${this.deferAnchors(node.metadata)}${trimBlockEdges(childrenOutput)}\n\n`
+                    : `> ${this.renderAnchors(node.metadata)}${trimBlockEdges(childrenOutput)}\n\n`;
                 if (mapping.tag === 'code') return `\`${childrenOutput}\` `;
                 if (mapping.tag === 'pre') return `\`\`\`\n${childrenOutput}\n\`\`\`\n\n`;
 
@@ -581,7 +595,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // <script>) when the Markdown is rendered to HTML.
                     // Where a paragraph line starts, its leading spaces are dropped, as a reader drops
                     // them (four would make it a code block).
-                    let text = markdownEscapeInline(this.atLineStart ? (node.text || '').replace(/^[ \t]+/, '') : node.text || '', this.atLineStart);
+                    // So are the spaces ending a line before a block in the paragraph (a code block, a rule).
+                    let source = this.atLineStart ? (node.text || '').replace(/^[ \t]+/, '') : node.text || '';
+                    if (this.nextSibling && isBlockInLine(this.nextSibling)) source = trimEndChars(source, ' \t');
+                    let text = markdownEscapeInline(source, this.atLineStart);
                     if (this.config.includeFormatting && node.formatting) {
                         // Inline code: re-wrap the RAW text in backticks. The content is literal
                         // inside a code span, so the entity-escaped form above must not show through.
@@ -731,10 +748,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // In a list item, cell or definition (one line of Markdown) a heading cannot be one:
                     // its text is written, with its ids, rather than a `#` read back as text.
                     if (this.inOneLine) {
-                        const lineAnchors = this.resolvedFallbackToHtml.anchors
-                            ? [...remainingAnchors, ...(id ? [id.slice(3, -1)] : [])].map(aid => `<a id="${aid}"></a>`).join('')
-                            : '';
-                        return `${lineAnchors}${trimBlockEdges(childrenOutput)}\n\n`;
+                        this.deferAnchors({ anchorIds: [...remainingAnchors, ...(id ? [id.slice(3, -1)] : [])] });
+                        return `${trimBlockEdges(childrenOutput)}\n\n`;
                     }
                     let content = `${prefix}${headingText}${headingText ? id : id.trimStart()}`;
 
@@ -756,7 +771,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         if (meta?.anchorIds?.length && this.resolvedFallbackToHtml.anchors && !this.config.ignoreInternalLinks) this.pendingAnchorIds.push(...meta.anchorIds);
                         return '';
                     }
-                    const anchors = this.renderAnchors(meta);
+                    const anchors = this.inOneLine ? this.deferAnchors(meta) : this.renderAnchors(meta);
 
                     // Alignment fallback via HTML div/p
                     if (this.resolvedFallbackToHtml.alignment && meta?.alignment && meta.alignment !== 'left') {
@@ -897,7 +912,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (meta?.breakType === 'carriageReturn') return this.lineDepth === 0 ? '' : this.atLineStart ? '\\\n' : '  \n';
                     // A rule is a block, blank lines around it: `a---b` in a paragraph was text. In a list
                     // item, cell or definition (one line of Markdown) it cannot be one, and is a line break.
-                    if (meta?.breakType === 'thematic') return this.inOneLine ? `${this.renderAnchors(meta)}\n` : `${this.anchorsBefore(meta) || '\n\n'}---\n\n`;
+                    if (meta?.breakType === 'thematic') return this.inOneLine ? `${this.deferAnchors(meta)}\n` : `${this.anchorsBefore(meta) || '\n\n'}---\n\n`;
                     return '\n';
                 }
 
@@ -920,8 +935,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // block math is written as inline math, its line ends as spaces (whitespace to TeX).
                     const inLine = this.inOneLine;
                     // A block's anchors stand on a line before it; in one line, or on inline math, they
-                    // are written before it in the line (the line's own, read back).
-                    const anchors = inLine || meta?.math === 'inline' ? this.renderAnchors(meta) : '';
+                    // are the line's container's (see deferAnchors).
+                    const anchors = inLine || meta?.math === 'inline' ? this.deferAnchors(meta) : '';
                     const anchorsBefore = inLine || meta?.math === 'inline' ? '' : this.anchorsBefore(meta);
                     if (meta?.math === 'block' && inLine) {
                         const mathInline = markdownEscapeTags(node.text || '').replace(/[$]+/g, '').replace(/\s*[\r\n]+\s*/g, ' ').trim();
