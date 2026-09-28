@@ -121,9 +121,10 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number
         const known = along.get(node);
         if (known !== undefined) return known;
         along.set(node, 1);
-        // The node itself: its text, and what its records and reference lists weigh.
-        const own = 1 + stringWeight(node.text, 0);
-        held += 1 + heldWeight(node.text, 0);
+        // The node itself: its text (and raw source), and what its records and reference lists weigh.
+        const raw = (node as { rawContent?: unknown }).rawContent;
+        const own = 1 + stringWeight(node.text, 0) + stringWeight(raw, 0);
+        held += 1 + heldWeight(node.text, 0) + heldWeight(raw, 0);
         let total = own;
         for (const record of [node.formatting, node.metadata, (node as { htmlAttributes?: unknown }).htmlAttributes]) {
             if (record && typeof record === 'object') total += valueTotal(record);
