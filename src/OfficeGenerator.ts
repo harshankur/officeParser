@@ -83,11 +83,15 @@ export class OfficeGenerator {
             // code carries a config of its own, and a limit of Infinity (or text) in it turned the check off.
             const configured: unknown = ast.config?.decompressionLimits?.maxRepeatedContent;
             const repeatedContent = typeof configured === 'number' && configured >= 0 ? Math.min(configured, 1024 * 1024 * 1024) : 16 * 1024 * 1024;
-            const tooShared = (candidate: OfficeParserAST) => sharedNodeVisits(candidate) > MAX_SHARED_NODE_VISITS + repeatedContent / 16;
-            if (tooShared(ast)) throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, config?.onWarning ? config : ast.config ?? config);
-            const known = withBoundedSheetGrids(withKnownNodeTypes(withWellTypedValues(ast)));
+            const maxVisits = MAX_SHARED_NODE_VISITS + repeatedContent / 16;
+            const tooLarge = (): never => { throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, config?.onWarning ? config : ast.config ?? config); };
+            const tooShared = (candidate: OfficeParserAST) => sharedNodeVisits(candidate) > maxVisits;
+            if (tooShared(ast)) tooLarge();
+            // Writing nodes of unknown types as their content is held to the same number of visits: notes,
+            // which sharedNodeVisits counts once, can hold such nodes along many paths.
+            const known = withBoundedSheetGrids(withKnownNodeTypes(withWellTypedValues(ast), { maxWork: maxVisits, onTooLarge: tooLarge }));
             input = keepsComments ? known : withoutSourceComments(known);
-            if (tooShared(input)) throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, config?.onWarning ? config : ast.config ?? config);
+            if (tooShared(input)) tooLarge();
         } catch (error) {
             throw asNestingError(error);
         }

@@ -3423,6 +3423,26 @@ async function parserHardeningTests() {
     const innerLink = await parseQuiet(Buffer.from('<table><tr><td><a href="https://outer.example/"><table><tr><td><a href="https://inner.example/">in</a></td></tr></table></a></td></tr></table>'), 'html');
     const innerJson = JSON.stringify(innerLink.ast?.content ?? []);
     check('html: text in a link inside a link follows the inner one', innerJson.includes('inner.example') && !/"text":"in"[^}]*outer\.example/.test(innerJson), innerJson.slice(0, 400));
+    // Generators: unknown nodes shared through notes are written once, notes carried up nested wrappers
+    // are not copied again at every level, and shared arrays are read once by the sharing check.
+    let noteShared: any = { type: 'wrap', text: 'leaf' };
+    for (let i = 0; i < 60; i++) noteShared = { type: 'wrap', text: 'x', notes: [noteShared, noteShared] };
+    await timed('generators: unknown nodes each holding the next twice in their notes, 60 deep, are written', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [noteShared] }]), 'text', { onWarning: () => {} } as any));
+    const sharedNoteList = Array(16000).fill({ type: 'note', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'n' }] }] });
+    let carried: any = { type: 'text', text: 'leaf' };
+    for (let i = 0; i < 1000; i++) carried = { type: 'wrap', notes: sharedNoteList, children: [carried] };
+    let carriedError: any;
+    const carriedStarted = Date.now();
+    try { await OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [carried] }]), 'text', { onWarning: () => {} } as any); } catch (e) { carriedError = e; }
+    check('generators: 1,000 wrappers holding one list of 16,000 notes are refused at once', carriedError?.officeIssue?.code === 'OUTPUT_TOO_LARGE' && Date.now() - carriedStarted < 2000, `${Date.now() - carriedStarted}ms ${carriedError}`);
+    let fewCarried: any = { type: 'text', text: 'leaf' };
+    for (let i = 0; i < 1000; i++) fewCarried = { type: 'wrap', notes: [{ type: 'note', children: [{ type: 'text', text: 'n' + i }] }], children: [fewCarried] };
+    await timed('generators: 1,000 nested unknown wrappers each carrying a note are written', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [fewCarried] }]), 'md', { onWarning: () => {} } as any));
+    const sharedKids = Array.from({ length: 100000 }, () => ({ type: 'text', text: 'x' }));
+    let arrayError: any;
+    const arrayStarted = Date.now();
+    try { await OfficeGenerator.generate(astWith(Array.from({ length: 1000000 }, () => ({ type: 'paragraph', children: sharedKids, notes: sharedNoteList }))), 'text', { onWarning: () => {} } as any); } catch (e) { arrayError = e; }
+    check('generators: a million nodes sharing one list of 100,000 children are refused at once', arrayError?.officeIssue?.code === 'OUTPUT_TOO_LARGE' && Date.now() - arrayStarted < 5000, `${Date.now() - arrayStarted}ms ${arrayError}`);
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';

@@ -29,34 +29,52 @@ export function mapNodeLists<T extends OfficeParserAST>(ast: T, transform: (node
 
 /**
  * How many more nodes a writer meets, walking every path through `children` (content and auxiliary),
- * than the AST holds. A node two parents share is written under each, so an AST built in code whose
- * nodes each hold the next one twice doubled a writer's work at every level: 30 levels would take half
- * an hour. Parsers share nodes only within the repeated-content budget (repeated ODF cells), and a note
- * or comment is written once however many nodes hold it, so those count once.
+ * than the AST holds, plus every reference a node's notes and comments make. A node two parents share
+ * is written under each, so an AST built in code whose nodes each hold the next twice doubled a
+ * writer's work at every level: 30 levels would take half an hour. Parsers share nodes only within the
+ * repeated-content budget (repeated ODF cells), and a note or comment is written once however many
+ * nodes hold it, so its content counts once; each reference to it counts too, since passes and writers
+ * handle each (1,000 wrappers holding one list of 16,000 notes made 16 million). Each list is read
+ * once, however many nodes hold it: an AST built in code can give one array to a million nodes.
  */
 export function sharedNodeVisits(ast: OfficeParserAST): number {
     const along = new Map<OfficeContentNode, number>();
+    const listTotals = new Map<unknown[], number>();
     const writtenOnce = new Set<OfficeContentNode>();
+    const readHeld = new Set<unknown[]>();
     const pending: OfficeContentNode[] = [];
+    let references = 0;
+    const listTotal = (list: unknown[]): number => {
+        const known = listTotals.get(list);
+        if (known !== undefined) return known;
+        listTotals.set(list, 0);
+        let total = 0;
+        for (const child of list) if (child && typeof child === 'object') total += count(child as OfficeContentNode);
+        listTotals.set(list, total);
+        return total;
+    };
     const count = (node: OfficeContentNode): number => {
         const known = along.get(node);
         if (known !== undefined) return known;
         along.set(node, 1);
         let total = 1;
-        for (const child of Array.isArray(node.children) ? node.children : []) if (child && typeof child === 'object') total += count(child);
+        if (Array.isArray(node.children)) total += listTotal(node.children);
         for (const list of [node.notes, node.comments]) {
-            if (Array.isArray(list)) for (const held of list) if (held && typeof held === 'object' && !writtenOnce.has(held)) { writtenOnce.add(held); pending.push(held); }
+            if (!Array.isArray(list)) continue;
+            references += list.length;
+            if (readHeld.has(list)) continue;
+            readHeld.add(list);
+            for (const held of list) if (held && typeof held === 'object' && !writtenOnce.has(held)) { writtenOnce.add(held); pending.push(held); }
         }
         along.set(node, total);
         return total;
     };
     let visits = 0;
-    const roots: unknown[] = [...(Array.isArray(ast.content) ? ast.content : [])];
+    if (Array.isArray(ast.content)) visits += listTotal(ast.content);
     const aux = ast.auxiliary as Record<string, unknown> | undefined;
-    if (aux && typeof aux === 'object') for (const key of AUXILIARY_LISTS) if (Array.isArray(aux[key])) appendAll(roots, (aux[key] as unknown[]));
-    for (const root of roots) if (root && typeof root === 'object') visits += count(root as OfficeContentNode);
+    if (aux && typeof aux === 'object') for (const key of AUXILIARY_LISTS) if (Array.isArray(aux[key])) visits += listTotal(aux[key] as unknown[]);
     while (pending.length) visits += count(pending.pop()!);
-    return visits - along.size;
+    return visits - along.size + references;
 }
 
 /**

@@ -40,19 +40,42 @@ const withInherited = (text: OfficeContentNode, inherited: Inherited | undefined
     } as OfficeContentNode;
 };
 
+/** What one replacement of unknown nodes keeps across the AST. */
+interface Pass {
+    /** Each known node's result, once (a node the AST shares keeps one result). */
+    known: Map<OfficeContentNode, OfficeContentNode>;
+    /**
+     * Each unknown node's content among blocks, in a table or in a row, once: there it takes no formatting
+     * from around it, so it is the same wherever the node stands. A node shared through notes lists (which
+     * sharedNodeVisits counts once, as writers write a note once) was written again along every path to
+     * it: 28 nodes, each holding the next twice in its notes, ended the process out of memory.
+     */
+    unknown: Map<OfficeContentNode, Partial<Record<Place, OfficeContentNode[]>>>;
+    /** Copies this pass made to carry notes and comments, not yet shared: more are added to them in place. */
+    owned: WeakSet<OfficeContentNode>;
+    /** What writing the content may still cost (nodes carried, copied or written again), and past it. */
+    workLeft: number;
+    onTooLarge: () => never;
+}
+
+const spend = (pass: Pass, work: number): void => {
+    pass.workLeft -= work;
+    if (pass.workLeft < 0) pass.onTooLarge();
+};
+
 /** A node of a known type with its lists' unknown nodes replaced, once per node (see withKnownNodeTypes). */
-function knownResult(node: OfficeContentNode, done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode {
-    let next = done.get(node);
+function knownResult(node: OfficeContentNode, pass: Pass): OfficeContentNode {
+    let next = pass.known.get(node);
     if (!next) {
-        done.set(node, node);
+        pass.known.set(node, node);
         next = node;
         for (const key of ['children', 'notes', 'comments'] as const) {
             const list = node[key];
             if (!list?.length) continue;
-            const replaced = replaceUnknownNodes(list, key === 'children' ? placeOfChildren(node.type) : 'block', done);
+            const replaced = replaceUnknownNodes(list, key === 'children' ? placeOfChildren(node.type) : 'block', pass);
             if (replaced !== list) next = { ...next, [key]: replaced };
         }
-        done.set(node, next);
+        pass.known.set(node, next);
     }
     return next;
 }
@@ -60,21 +83,20 @@ function knownResult(node: OfficeContentNode, done: Map<OfficeContentNode, Offic
 /**
  * `nodes` with each node of a type the AST does not define replaced by its content (its children, or
  * its text) in the form its place takes: among blocks a run of inline content is a paragraph, in a row
- * the content is a cell, and in a table a row. Returns `nodes` itself when nothing changes. Written
- * into `into` when given (the list a wrapper's content joins).
+ * the content is a cell, and in a table a row. Returns `nodes` itself when nothing changes.
  */
-function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place, done: Map<OfficeContentNode, OfficeContentNode>, inherited?: Inherited, into?: OfficeContentNode[]): OfficeContentNode[] {
-    let changed = !!inherited || !!into;
-    const out = into ?? [];
+function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place, pass: Pass, inherited?: Inherited): OfficeContentNode[] {
+    let changed = !!inherited;
+    const out: OfficeContentNode[] = [];
     for (const node of nodes) {
         if (isKnown(node.type)) {
-            const next = knownResult(node, done);
+            const next = knownResult(node, pass);
             if (next !== node) changed = true;
             out.push(next.type === 'text' ? withInherited(next, inherited) : next);
             continue;
         }
         changed = true;
-        writeUnknown(node, place, done, place === 'inline' ? inherited : undefined, out);
+        writeUnknown(node, place, pass, place === 'inline' ? inherited : undefined, out);
     }
     return changed ? out : nodes;
 }
@@ -85,11 +107,20 @@ function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place, done: Map
  * formatting and link of the wrappers reach the text in them as it is made. Copied up and given to all
  * of a wrapper's text at every level, 1,000 nested wrappers around 100,000 runs took 80 times as long
  * as none. Among blocks and in a table a nested wrapper's content is paragraphs or rows of its own,
- * which the wrapper's formatting does not reach.
+ * which the wrapper's formatting does not reach; there it is written once and shared (see Pass.unknown).
  */
-function writeUnknown(node: OfficeContentNode, place: Place, done: Map<OfficeContentNode, OfficeContentNode>, inherited: Inherited | undefined, out: OfficeContentNode[]): void {
-    const notes = node.notes?.length ? replaceUnknownNodes(node.notes, 'block', done) : undefined;
-    const comments = node.comments?.length ? replaceUnknownNodes(node.comments, 'block', done) : undefined;
+function writeUnknown(node: OfficeContentNode, place: Place, pass: Pass, inherited: Inherited | undefined, out: OfficeContentNode[]): void {
+    if (place !== 'inline') {
+        const written = pass.unknown.get(node)?.[place];
+        if (written) {
+            spend(pass, written.length);
+            for (const item of written) out.push(item);
+            return;
+        }
+    }
+    const start = out.length;
+    const notes = node.notes?.length ? replaceUnknownNodes(node.notes, 'block', pass) : undefined;
+    const comments = node.comments?.length ? replaceUnknownNodes(node.comments, 'block', pass) : undefined;
     // What text in it takes: its own formatting over its wrappers', its link before theirs.
     const inner: Inherited | undefined = node.formatting || node.metadata
         ? { formatting: node.formatting ? { ...inherited?.formatting, ...node.formatting } : inherited?.formatting, metadata: node.metadata ?? inherited?.metadata }
@@ -97,18 +128,37 @@ function writeUnknown(node: OfficeContentNode, place: Place, done: Map<OfficeCon
     const leaf = (): OfficeContentNode | undefined => node.text || notes || comments
         ? withInherited({ type: 'text', text: node.text ?? '' } as OfficeContentNode, inner)
         : undefined;
-    // Puts its notes and comments on `list[at]`, a copy of it.
+    // Puts its notes and comments on `list[at]`: on a copy of it the first time, then on that copy in
+    // place (each wrapper around the same content adds its own), where re-spreading the notes gathered
+    // so far at every level took time in the square of the depth.
     const carry = (list: OfficeContentNode[], at: number): void => {
-        const last = { ...list[at] };
-        if (notes) last.notes = [...(last.notes ?? []), ...notes];
-        if (comments) last.comments = [...(last.comments ?? []), ...comments];
-        list[at] = last;
+        let last = list[at];
+        if (!pass.owned.has(last)) {
+            spend(pass, (last.notes?.length ?? 0) + (last.comments?.length ?? 0));
+            last = { ...last, notes: last.notes ? last.notes.slice() : undefined, comments: last.comments ? last.comments.slice() : undefined };
+            if (!last.notes) delete last.notes;
+            if (!last.comments) delete last.comments;
+            pass.owned.add(last);
+            list[at] = last;
+        }
+        spend(pass, (notes?.length ?? 0) + (comments?.length ?? 0));
+        if (notes) { const own = last.notes ??= []; for (const note of notes) own.push(note); }
+        if (comments) { const own = last.comments ??= []; for (const comment of comments) own.push(comment); }
+    };
+    const remember = () => {
+        if (place === 'inline') return;
+        // Shared from now on: nothing adds to these in place any more.
+        const written = out.slice(start);
+        for (const item of written) pass.owned.delete(item);
+        let entry = pass.unknown.get(node);
+        if (!entry) pass.unknown.set(node, entry = {});
+        entry[place] = written;
     };
     if (place === 'row') {
         // In a row, its content is one cell, as it stands among blocks.
         let children: OfficeContentNode[];
         if (node.children?.length) {
-            children = replaceUnknownNodes(node.children, 'block', done, inner);
+            children = replaceUnknownNodes(node.children, 'block', pass, inner);
             if (children === node.children) children = children.slice();
         } else {
             const text = leaf();
@@ -119,6 +169,7 @@ function writeUnknown(node: OfficeContentNode, place: Place, done: Map<OfficeCon
             carry(children, children.length - 1);
         }
         out.push({ type: 'cell', children });
+        remember();
         return;
     }
     // Among blocks, inline content waits in a run for its paragraph. Where the last of its content went,
@@ -153,14 +204,14 @@ function writeUnknown(node: OfficeContentNode, place: Place, done: Map<OfficeCon
     } else {
         for (const child of node.children) {
             if (isKnown(child.type)) {
-                const next = knownResult(child, done);
+                const next = knownResult(child, pass);
                 write(next.type === 'text' ? withInherited(next, inner) : next);
                 continue;
             }
             // A wrapper among blocks makes paragraphs of its own: the run so far ends before it.
             if (place === 'block') flush();
             const before = out.length;
-            writeUnknown(child, place, done, place === 'inline' ? inner : undefined, out);
+            writeUnknown(child, place, pass, place === 'inline' ? inner : undefined, out);
             if (out.length > before) { lastList = out; lastAt = out.length - 1; }
         }
     }
@@ -171,17 +222,26 @@ function writeUnknown(node: OfficeContentNode, place: Place, done: Map<OfficeCon
         carry(lastList!, lastAt);
     }
     flush();
+    remember();
 }
 
 /**
  * The AST with every node of a type it does not define (from a hand-built AST, or one written by a
  * newer version) replaced by that node's content, so every generator writes the content instead of
  * failing on the node or leaving it out. Returns `ast` itself (same object, `.to()` intact) when all
- * types are known; otherwise a shallow copy with new `content`. The input is never mutated.
+ * types are known; otherwise a shallow copy with new `content`. The input is never mutated. What
+ * writing unknown nodes' content costs past `maxWork` (nodes carried, copied or written again for
+ * shared content) calls `onTooLarge`.
  */
-export function withKnownNodeTypes<T extends OfficeParserAST>(ast: T): T {
+export function withKnownNodeTypes<T extends OfficeParserAST>(ast: T, limits: { maxWork?: number; onTooLarge?: () => never } = {}): T {
     // A node the AST shares (one note every reference to it holds) is read once, not once per path to
     // it: notes referring to each other twice each took time doubling per level.
-    const seen = new Map();
-    return mapNodeLists(ast, nodes => replaceUnknownNodes(nodes, 'block', seen));
+    const pass: Pass = {
+        known: new Map(),
+        unknown: new Map(),
+        owned: new WeakSet(),
+        workLeft: limits.maxWork ?? Infinity,
+        onTooLarge: limits.onTooLarge ?? (() => { throw new RangeError('Invalid array length'); }),
+    };
+    return mapNodeLists(ast, nodes => replaceUnknownNodes(nodes, 'block', pass));
 }
