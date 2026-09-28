@@ -870,12 +870,12 @@
 <div id="sheet-8" class="spreadsheet-sheet"><table class="spreadsheet-table excel-grid"><thead><tr><th class="excel-row-num-header"></th><th class="excel-col-header">A</th><th class="excel-col-header">B</th><th class="excel-col-header">C</th><th class="excel-col-header">D</th><th class="excel-col-header">E</th><th class="excel-col-header">F</th></tr></thead><tbody><tr class="excel-row"><td class="excel-row-num">1</td><td>Charts</td><td class="excel-cell-empty"></td><td class="excel-cell-empty"></td><td class="excel-cell-empty"></td><td class="excel-cell-empty"></td><td class="excel-cell-empty"></td></tr>
 <tr class="excel-row"><td class="excel-row-num">2</td><td class="excel-cell-empty"></td><td class="excel-cell-empty"></td><td class="excel-cell-empty"></td><td>Series 1</td><td>Series 2</td><td>Series 3</td></tr>
 <tr class="excel-row"><td class="excel-row-num">3</td><td class="excel-cell-empty"></td><td class="excel-cell-empty"></td><td>Category 1</td><td>4.3</td><td>2.4</td><td>2</td></tr>
-<tr class="excel-row"><td class="excel-row-num">4</td><td><div class="chart-container"><canvas id="chart-1"></canvas></div>
+<tr class="excel-row"><td class="excel-row-num">4</td><td><div class="chart-container"><canvas id="chart-1"></canvas></div><script type="application/json" id="chart-1-data">{"title":"Chart Title","dataSets":[{"name":"Series D2","values":["4.3","2.5","3.5","4.5"],"pointLabels":[]},{"name":"Series E2","values":["2.4","4.4","1.8","2.8"],"pointLabels":[]},{"name":"Series F2","values":["2","2","3","5"],"pointLabels":[]}],"labels":["Category 1","Category 2","Category 3","Category 4"],"rawTexts":["Chart Title","Category 1","Category 2","Category 3","Category 4","Series D2","4.3","2.5","3.5","4.5","Series E2","2.4","4.4","1.8","2.8","Series F2","2","2","3","5"]}</script>
 <script>
     (function() {
         const initChart = () => {
             const ctx = document.getElementById('chart-1').getContext('2d');
-            const chartData = {"title":"Chart Title","dataSets":[{"name":"Series D2","values":["4.3","2.5","3.5","4.5"],"pointLabels":[]},{"name":"Series E2","values":["2.4","4.4","1.8","2.8"],"pointLabels":[]},{"name":"Series F2","values":["2","2","3","5"],"pointLabels":[]}],"labels":["Category 1","Category 2","Category 3","Category 4"],"rawTexts":["Chart Title","Category 1","Category 2","Category 3","Category 4","Series D2","4.3","2.5","3.5","4.5","Series E2","2.4","4.4","1.8","2.8","Series F2","2","2","3","5"]};
+            const chartData = JSON.parse(document.getElementById('chart-1-data').textContent);
             const getRandomColor = (index, alpha) => {
                 const colors = [
                     'rgba(255, 99, 132, ' + alpha + ')',

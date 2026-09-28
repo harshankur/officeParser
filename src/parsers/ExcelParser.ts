@@ -28,7 +28,7 @@ import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
+import { attachmentLookup, repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
 import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
@@ -329,6 +329,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     }
 
     const attachments: OfficeAttachment[] = [];
+    const attachmentsByName = attachmentLookup(attachments);
     const mediaFiles = files.filter(f => f.path.match(/xl\/media\/.*/));
     const chartFiles = files.filter(f => f.path.match(chartsRegex));
 
@@ -743,7 +744,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             if (images) {
                                 for (const imgId in images) {
                                     const imgInfo = images[imgId];
-                                    const attachment = attachments.find(a => a.name === imgInfo.path.split('/').pop());
+                                    const attachment = attachmentsByName.get(imgInfo.path.split('/').pop());
                                     if (attachment) {
                                         const imageNode: OfficeContentNode = {
                                             type: 'image',
@@ -764,7 +765,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             if (charts) {
                                 for (const chartRId in charts) {
                                     const chartName = charts[chartRId];
-                                    const attachment = attachments.find(a => a.name === chartName);
+                                    const attachment = attachmentsByName.get(chartName);
                                     if (attachment) {
                                         const chartNode: OfficeContentNode = {
                                             type: 'chart',
@@ -814,7 +815,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         for (const node of nodes) {
             if ('attachmentName' in (node.metadata || {})) {
                 const meta = node.metadata as ImageMetadata | ChartMetadata;
-                const attachment = attachments.find(a => a.name === meta.attachmentName);
+                const attachment = attachmentsByName.get(meta.attachmentName);
                 if (attachment) {
                     if (node.type === 'image') {
                         // Link OCR text to image node
@@ -829,7 +830,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     if (node.type === 'chart') {
                         // Link chart data text to chart node
                         if (attachment.chartData) {
-                            node.text = attachment.chartData.rawTexts.join(config.newlineDelimiter);
+                            node.text = attachmentsByName.chartText(attachment, config.newlineDelimiter);
                         }
                     }
                 }

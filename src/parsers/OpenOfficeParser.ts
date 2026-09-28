@@ -2215,6 +2215,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         traverseForNames(nodes);
         const attachmentsByName = new Map<string, OfficeAttachment>();
         for (const a of attachments) if (a.name && !attachmentsByName.has(a.name)) attachmentsByName.set(a.name, a);
+        // A chart's text, joined once for every node showing it.
+        const chartTexts = new Map<OfficeAttachment, string>();
+        const chartTextOf = (attachment: OfficeAttachment): string => {
+            let text = chartTexts.get(attachment);
+            if (text === undefined) chartTexts.set(attachment, text = attachment.chartData!.rawTexts.join(config.newlineDelimiter));
+            return text;
+        };
 
         const unusedImages = attachments.filter(a => a.type === 'image' && a.name && !usedAttachmentNames.has(a.name));
         let unusedImageIndex = 0;
@@ -2241,7 +2248,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             node.text = attachment.ocrText;
                         }
                         if (attachment.chartData && node.type === 'chart') {
-                            node.text = attachment.chartData.rawTexts.join(config.newlineDelimiter);
+                            node.text = chartTextOf(attachment);
                         }
                     }
                 }

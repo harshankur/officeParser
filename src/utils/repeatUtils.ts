@@ -9,7 +9,7 @@
  * string in 400 cells made 400 MB of CSV. Each use after the first is charged here.
  */
 
-import { OfficeContentNode, OfficeParserConfig, OfficeWarningType } from '../types.js';
+import { OfficeAttachment, OfficeContentNode, OfficeParserConfig, OfficeWarningType } from '../types.js';
 import { logWarning } from './errorUtils.js';
 
 /**
@@ -62,14 +62,41 @@ const FORMATTING_VALUES = ['font', 'color', 'backgroundColor', 'size'] as const;
  */
 const METADATA_VALUES = ['link', 'linkTitle', 'title', 'style', 'altText', 'author', 'initials', 'date', 'abbreviationTitle', 'backgroundColor', 'language', 'citationKey', 'label'] as const;
 
+/** The longest attachment name kept as it is (a longer one is shortened; see boundRepeatedValues). */
+const MAX_ATTACHMENT_NAME = 128;
+
 /**
- * Charges each formatting or metadata value a node shares with an earlier one, past REPEAT_ALLOWANCE
- * characters; once the budget is spent, a node repeating a long value goes without it (its own copy of
- * the holder, so nodes sharing the holder keep theirs). A node reached twice (shared) counts once.
+ * Bounds what a document repeats by reference, over everything a parser built:
+ *
+ * - Each formatting or metadata value a node shares with an earlier one is charged past
+ *   REPEAT_ALLOWANCE characters; once the budget is spent, a node repeating a long value goes without
+ *   it (on its own copy of the holder, so nodes sharing the holder keep theirs).
+ * - The text a node takes from its attachment (a chart's data, a picture's recognized text) is whole
+ *   on the first node showing that attachment and charged on the others, past the budget their start:
+ *   one 100 KB chart framed 2,000 times made 200 MB of text.
+ * - An attachment name longer than MAX_ATTACHMENT_NAME is shortened, on the attachment and on every
+ *   node naming it alike: it is written at every picture showing it, and one relationship target of
+ *   100 KB shown 2,000 times made 200 MB.
+ *
+ * A node reached twice (shared) counts once.
  */
-export const boundRepeatedValues = (roots: (OfficeContentNode[] | undefined)[], config: OfficeParserConfig): void => {
+export const boundRepeatedValues = (roots: (OfficeContentNode[] | undefined)[], attachments: OfficeAttachment[], config: OfficeParserConfig): void => {
     const seenNodes = new Set<OfficeContentNode>();
     const seenValues = new Set<string>();
+    const shownAttachments = new Set<string>();
+    const shortNames = new Map<string, string>();
+    const shortName = (name: string): string => {
+        let short = shortNames.get(name);
+        if (short === undefined) {
+            const extension = /\.[A-Za-z0-9]{1,10}$/.exec(name)?.[0] ?? '';
+            short = `${name.slice(0, 64)}~${shortNames.size + 1}${extension}`;
+            shortNames.set(name, short);
+        }
+        return short;
+    };
+    for (const attachment of attachments) {
+        if (typeof attachment?.name === 'string' && attachment.name.length > MAX_ATTACHMENT_NAME) attachment.name = shortName(attachment.name);
+    }
     const bound = (node: OfficeContentNode, field: 'formatting' | 'metadata', keys: readonly string[]): void => {
         const holder = node[field] as Record<string, unknown> | undefined;
         if (!holder || typeof holder !== 'object') return;
@@ -92,8 +119,43 @@ export const boundRepeatedValues = (roots: (OfficeContentNode[] | undefined)[], 
         seenNodes.add(node);
         bound(node, 'formatting', FORMATTING_VALUES);
         bound(node, 'metadata', METADATA_VALUES);
+        const metadata = node.metadata as Record<string, unknown> | undefined;
+        let attachmentName = metadata && typeof metadata === 'object' && typeof metadata.attachmentName === 'string' ? metadata.attachmentName : undefined;
+        if (attachmentName !== undefined) {
+            if (attachmentName.length > MAX_ATTACHMENT_NAME) metadata!.attachmentName = attachmentName = shortName(attachmentName);
+            if (typeof node.text === 'string' && node.text.length > REPEAT_ALLOWANCE) {
+                if (!shownAttachments.has(attachmentName)) shownAttachments.add(attachmentName);
+                else if (takeRepeats(config, 1, node.text.length) === 0) node.text = repeatPreview(node.text);
+            }
+        }
         for (const list of [node.comments, node.notes, node.children]) {
             if (Array.isArray(list)) for (let i = list.length - 1; i >= 0; i--) stack.push(list[i]);
         }
     }
+};
+
+/**
+ * Finds a parse's attachments by name through an index (a scan per node took nodes x attachments), and
+ * joins a chart's text once for every node showing it (joined per node, one chart framed 2,000 times
+ * built its text 2,000 times). Attachments added after a lookup are indexed at the next one.
+ */
+export const attachmentLookup = (attachments: OfficeAttachment[]) => {
+    const index = new Map<string, OfficeAttachment>();
+    let indexed = 0;
+    const chartTexts = new Map<OfficeAttachment, string>();
+    return {
+        get(name: string | undefined): OfficeAttachment | undefined {
+            for (; indexed < attachments.length; indexed++) {
+                const attachment = attachments[indexed];
+                if (attachment?.name && !index.has(attachment.name)) index.set(attachment.name, attachment);
+            }
+            return name === undefined ? undefined : index.get(name);
+        },
+        chartText(attachment: OfficeAttachment, delimiter: string): string | undefined {
+            if (!attachment.chartData) return undefined;
+            let text = chartTexts.get(attachment);
+            if (text === undefined) chartTexts.set(attachment, text = attachment.chartData.rawTexts.join(delimiter));
+            return text;
+        },
+    };
 };

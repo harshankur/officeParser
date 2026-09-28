@@ -2928,6 +2928,45 @@ async function parserHardeningTests() {
     const chunkList: any[] = Array.isArray(chunked) ? chunked : chunked.chunks;
     const chunkMetadata = chunkList.reduce((n: number, c: any) => n + JSON.stringify(c.metadata).length, 0);
     check('chunks: a 1 MB heading is not repeated in each chunk\'s metadata', chunkList.length > 0 && chunkMetadata < 5_000_000, `${chunkList.length} ${chunkMetadata}`);
+
+    // What a part, picture or definition gives each place using it is bounded too: a chart value its
+    // table repeats, a picture's name and a chart's text at every frame showing them, and a LaTeX
+    // heading, theorem title or beamer title at every reference or use.
+    const outputOf = async (ast: any, format: string) => ast ? ((await OfficeGenerator.generate(ast, format as any, { onWarning: () => {} } as any)).value as string) : '';
+    const chartValue = 'x'.repeat(100_000);
+    const repeatedValues = await warned(odfOf('text', '<text:p><draw:frame><draw:object xlink:href="./Object 1"/></draw:frame></text:p>', { 'Object 1/content.xml': chartDoc(`<table:table><table:table-header-rows><table:table-row><table:table-cell/><table:table-cell table:number-columns-repeated="2500"><text:p>S</text:p></table:table-cell></table:table-row></table:table-header-rows><table:table-row><table:table-cell><text:p>L</text:p></table:table-cell><table:table-cell office:value="${chartValue}" table:number-columns-repeated="2500"/></table:table-row></table:table>`) }), 'odt', { extractAttachments: true });
+    const repeatedValuesText = await outputOf(repeatedValues.ast, 'text');
+    check('odt: a 100 KB chart value repeated 2,500 times repeats within maxRepeatedContent', !repeatedValues.error && repeatedValuesText.length < 20_000_000 && repeatedValues.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${repeatedValuesText.length} ${repeatedValues.codes} ${repeatedValues.error}`);
+    const longName = 'a'.repeat(60_000);
+    const namedPictures = await parseQuiet(docxOf('<w:p><w:r><w:drawing><a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:embed="rId9"/></w:drawing></w:r></w:p>'.repeat(2000), { 'word/_rels/document.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${longName}.png"/></Relationships>`, [`word/media/${longName}.png`]: 'png' }), 'docx', { extractAttachments: true });
+    const namedHtml = await outputOf(namedPictures.ast, 'html');
+    const pictureNames = new Set<string>();
+    const collectNames = (ns: any[] | undefined) => ns?.forEach((n: any) => { if (n.metadata?.attachmentName) pictureNames.add(n.metadata.attachmentName); collectNames(n.children); });
+    collectNames(namedPictures.ast?.content);
+    const [shownName] = [...pictureNames];
+    check('docx: a 60 KB picture name shown 2,000 times is shortened alike on the picture and its attachment', !namedPictures.error && namedHtml.length < 20_000_000 && pictureNames.size === 1 && shownName.length <= 128 && shownName.endsWith('.png') && namedPictures.ast!.attachments.some(a => a.name === shownName), `${namedHtml.length} ${pictureNames.size} ${shownName?.length} ${namedPictures.ast?.attachments.map(a => a.name.length)}`);
+    const framedChart = await warned(pptxOf({
+        'ppt/slides/slide1.xml': `<?xml version="1.0"?><p:sld ${pns}><p:cSld><p:spTree>${'<p:graphicFrame><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId2"/></a:graphicData></a:graphic></p:graphicFrame>'.repeat(2000)}</p:spTree></p:cSld></p:sld>`,
+        'ppt/slides/_rels/slide1.xml.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>',
+        'ppt/charts/chart1.xml': `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numCache><c:pt idx="0"><c:v>${'9'.repeat(100_000)}</c:v></c:pt></c:numCache></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>`,
+    }), 'pptx', { extractAttachments: true });
+    const framedText = await outputOf(framedChart.ast, 'text');
+    const framedHtml = await outputOf(framedChart.ast, 'html');
+    const chartJson = /<script type="application\/json" id="([^"]+)">([\s\S]*?)<\/script>/.exec(framedHtml);
+    let chartJsonOk = false;
+    try { chartJsonOk = !!chartJson && Array.isArray(JSON.parse(chartJson[2]).dataSets) && framedHtml.includes(`getElementById('${chartJson[1]}')`); } catch { chartJsonOk = false; }
+    check('pptx: one 100 KB chart framed 2,000 times is written within bounds, its HTML data once', !framedChart.error && framedText.length < 20_000_000 && framedHtml.length < 20_000_000 && chartJsonOk && framedHtml.split('type="application/json"').length === 2, `${framedText.length} ${framedHtml.length} ${chartJsonOk} ${framedChart.error}`);
+    const longTitle = 'w'.repeat(100_000);
+    for (const [label, src] of [
+        ['a \\nameref to a 100 KB heading, 2,000 times', `\\documentclass{article}\\begin{document}\\section{${longTitle}}\\label{k}\n${'\\nameref{k}\n\n'.repeat(2000)}\\end{document}`],
+        ['a 100 KB theorem title on 2,000 theorems', `\\documentclass{article}\\newtheorem{t}{${longTitle}}\\begin{document}\n${'\\begin{t}x\\end{t}\n'.repeat(2000)}\\end{document}`],
+        ['a 100 KB beamer title on 2,000 title frames', `\\documentclass{beamer}\\title{${longTitle}}\\begin{document}\n${'\\begin{frame}\\maketitle\\end{frame}\n'.repeat(2000)}\\end{document}`],
+    ] as const) {
+        const started = Date.now();
+        const repeatedTex = await warned(Buffer.from(src), 'tex');
+        const texText = await outputOf(repeatedTex.ast, 'text');
+        check(`latex: ${label} repeats within maxRepeatedContent`, !repeatedTex.error && texText.length < 20_000_000 && Date.now() - started < 5000 && repeatedTex.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${texText.length} ${Date.now() - started}ms ${repeatedTex.codes} ${repeatedTex.error}`);
+    }
 }
 
 async function main() {

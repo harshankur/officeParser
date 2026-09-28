@@ -24,7 +24,7 @@ export function createAST(
     auxiliary: OfficeAuxiliaryContent | undefined,
 ): OfficeParserAST {
     // Last, over everything the parser built: values a definition gave many nodes are bounded in all.
-    boundRepeatedValues([content, auxiliary?.headers, auxiliary?.footers, auxiliary?.slideMasters, auxiliary?.outline], config);
+    boundRepeatedValues([content, auxiliary?.headers, auxiliary?.footers, auxiliary?.slideMasters, auxiliary?.outline], attachments, config);
     return {
         config,
         type,

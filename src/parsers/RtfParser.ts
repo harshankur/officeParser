@@ -46,6 +46,7 @@ import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { chargeRawContent } from '../utils/xmlUtils.js';
+import { attachmentLookup } from '../utils/repeatUtils.js';
 
 /**
  * Represents an RTF group (content enclosed in braces).
@@ -484,6 +485,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     const content: OfficeContentNode[] = [];
     const notes: OfficeContentNode[] = [];
     const attachments: OfficeAttachment[] = [];
+    const attachmentsByName = attachmentLookup(attachments);
 
     // State for paragraph construction
     let currentParagraphTextChunks: string[] = [];
@@ -1869,7 +1871,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             for (const node of nodes) {
                 if (node.type === 'image' && node.metadata && 'attachmentName' in node.metadata) {
                     const meta = node.metadata as ImageMetadata;
-                    const attachment = attachments.find(a => a.name === meta.attachmentName);
+                    const attachment = attachmentsByName.get(meta.attachmentName);
                     if (attachment) {
                         // Propagate OCR text to image node
                         if (attachment.ocrText) {

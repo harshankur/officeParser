@@ -1,4 +1,5 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextAlignment, TextFormatting, TextMetadata } from '../types.js';
+import { attachmentLookup, repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
 import { trimEndChars } from '../utils/textUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -791,6 +792,12 @@ class LatexReader {
     /** Raw `\title`/`\subtitle`/`\author`/`\date` arguments, for the block `\maketitle` typesets. */
     private titleParts: { title?: string; subtitle?: string; author?: string; date?: string } = {};
     private titleTypeset = false;
+    /** The last `\title` checked for text of its own (see typesetTitleBlock). */
+    private titleChecked: { raw: string; empty: boolean } | undefined;
+    /** The text of the first title block typeset, for the ones past the repeated-content budget (see typesetTitleBlock). */
+    private firstTitleText: string | undefined;
+    /** Theorem-like kinds already headed once (see theorem). */
+    private readonly theoremsHeaded = new Set<TheoremDef>();
     /** Set while a title block is being built, so a `\maketitle` inside `\title` cannot re-enter it. */
     private inTitle = false;
     /** Depth of plain-text extraction (metadata, labels), which never typesets a title block. */
@@ -2454,13 +2461,28 @@ class LatexReader {
     private typesetTitleBlock(flow: Flow): void {
         const { title, subtitle, author, date } = this.titleParts;
         // LaTeX refuses \maketitle without a \title, and empties the title after typesetting it once.
-        if (!title || !this.plainText(this.stripThanks(title))) return;
-        if (this.titleTypeset && !this.beamer) return;
+        if (!title || (this.titleTypeset && !this.beamer)) return;
+        // beamer typesets the block at every \maketitle (a title frame per section is common), reading
+        // it again from its source each time: after the first, each is charged to the document's
+        // repeated-content budget (see repeatUtils) before it is read, past which it is the start of the
+        // title's text. 2,000 title frames of a 100 KB title took 76 seconds and made 400 MB of HTML.
+        if (this.titleTypeset) {
+            const weight = title.length + (subtitle?.length ?? 0) + (author?.length ?? 0) + (date?.length ?? 0);
+            if (takeRepeats(this.config, 1, weight) === 0) {
+                this.endParagraph(flow);
+                this.pushBlock(flow, { type: 'paragraph', text: repeatPreview(this.firstTitleText ?? ''), children: [{ type: 'text', text: repeatPreview(this.firstTitleText ?? '') }], metadata: { style: 'Title', alignment: 'center' } as ParagraphMetadata });
+                return;
+            }
+        }
+        // Whether the title has text of its own, found once per title (beamer asks at every \maketitle).
+        if (title !== this.titleChecked?.raw) this.titleChecked = { raw: title, empty: !this.plainText(this.stripThanks(title)) };
+        if (this.titleChecked.empty) return;
         this.titleTypeset = true;
         this.endParagraph(flow);
         const thanks = (raw: string) => raw.replace(/\\thanks\b/g, '\\footnote');
         const heading = this.headingNode(thanks(title), 1);
         Object.assign(heading.metadata as HeadingMetadata, { style: 'Title', alignment: 'center' });
+        this.firstTitleText ??= heading.text;
         this.pushBlock(flow, heading);
         const line = (raw: string | undefined, style: string) => {
             if (raw === undefined) return;
@@ -2886,6 +2908,12 @@ class LatexReader {
      */
     private theorem(sc: Scanner, flow: Flow, env: string, def: TheoremDef): void {
         const note = sc.readRawOptional();
+        // Every theorem of a kind is headed by its title: after the first, each is charged to the
+        // document's repeated-content budget (see repeatUtils), past which it is headed by the start
+        // of it. One 100 KB title on 2,000 theorems made 200 MB of text.
+        let title = def.title;
+        if (!this.theoremsHeaded.has(def)) this.theoremsHeaded.add(def);
+        else if (takeRepeats(this.config, 1, title.length) === 0) title = repeatPreview(title);
         this.endParagraph(flow);
         let number: string | undefined;
         const counter = def.counter ? this.theoremCounters.get(def.counter) : undefined;
@@ -2897,15 +2925,15 @@ class LatexReader {
         const noteRuns = note !== null && note.trim() ? this.headingNode(note, 1).children ?? [] : [];
         if (this.beamer) {
             const inner = this.subFlow(sc, env, flow);
-            const title = `${def.title}${noteRuns.length ? ` (${textOf(noteRuns)})` : ''}`;
+            const blockTitle = `${title}${noteRuns.length ? ` (${textOf(noteRuns)})` : ''}`;
             const type: AdmonitionMetadata['admonitionType'] = env.startsWith('example') ? 'tip' : 'note';
-            this.addBlock(flow, { type: 'admonition', children: inner, metadata: { admonitionType: type, title } as AdmonitionMetadata });
+            this.addBlock(flow, { type: 'admonition', children: inner, metadata: { admonitionType: type, title: blockTitle } as AdmonitionMetadata });
             return;
         }
         const labelsBefore = this.labelLog.length;
         const inner = this.withState(s => { if (def.style === 'plain') s.fmt.italic = true; else delete s.fmt.italic; }, () => this.subFlow(sc, env, flow));
         const head: TextFormatting = def.style === 'remark' ? { italic: true } : { bold: true };
-        const runs: OfficeContentNode[] = [{ type: 'text', text: number ? `${def.title} ${number}` : def.title, formatting: head }];
+        const runs: OfficeContentNode[] = [{ type: 'text', text: number ? `${title} ${number}` : title, formatting: head }];
         if (noteRuns.length) runs.push({ type: 'text', text: ' (' }, ...noteRuns, { type: 'text', text: ')' });
         runs.push({ type: 'text', text: '.', formatting: head });
         const first = this.headInto(inner, runs);
@@ -3588,11 +3616,17 @@ class LatexReader {
 
     /** Fills in the text of `\ref`s now that every label is known. */
     private resolveRefs(): void {
+        // A reference repeats its target's name or number: after the first to a label, each is charged
+        // to the document's repeated-content budget (see repeatUtils), past which it reads the start of
+        // it. `\nameref` to one 100 KB heading 2,000 times made 200 MB of text.
+        const referenced = new Set<string>();
         for (const { node, label, kind } of this.refs) {
             const target = this.labelTargets.get(label);
             const number = (target as any)?.__number as string | undefined;
             const title = target?.type === 'heading' ? target.text : undefined;
             let text = kind === 'nameref' ? (title ?? label) : (number ?? title ?? label);
+            if (!referenced.has(label)) referenced.add(label);
+            else if (takeRepeats(this.config, 1, text.length) === 0) text = repeatPreview(text);
             if (kind === 'eqref') text = `(${text})`;
             node.text = text;
         }
@@ -3758,11 +3792,12 @@ export const parseLatex = async (buffer: Buffer, config: FullOfficeParserConfig)
             const ocrText = await ocrDuringParse(Buffer.from(att.data, 'base64'), config, att.name);
             if (ocrText !== undefined) att.ocrText = ocrText;
         }
+        const attachmentsByName = attachmentLookup(attachments);
         const assign = (nodes: OfficeContentNode[]) => {
             for (const n of nodes) {
                 const name = (n.metadata as ImageMetadata | undefined)?.attachmentName;
                 if (n.type === 'image' && name) {
-                    const ocr = attachments.find(a => a.name === name)?.ocrText;
+                    const ocr = attachmentsByName.get(name)?.ocrText;
                     if (ocr) n.text = ocr;
                 }
                 if (n.children) assign(n.children);

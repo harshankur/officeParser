@@ -1,5 +1,6 @@
 import { ChartData, OfficeParserConfig } from "../types";
 import { parseXmlString, getElementsByTagName, getDirectChildren, getFirstElementByTagName, getChildElements } from "./xmlUtils";
+import { repeatPreview, takeRepeats } from "./repeatUtils";
 
 /**
  * Extracts a single text element located at:
@@ -156,6 +157,15 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
  * Extracts structured chart data from ODF (ODP, ODS) chart content.xml.
  * @param xmlBuffer Chart XML buffer
  */
+/**
+ * How many of `copies` of a repeated cell's `text` are whole: every series a repeated cell fills
+ * carries its text, and the chart's text is written with each, so 1.3 KB repeating one 100 KB value
+ * 2,500 times made 250 MB. Copies after the first are charged to the document's repeated-content
+ * budget (see repeatUtils); the rest hold the text's start.
+ */
+const copiesWhole = (config: OfficeParserConfig | undefined, copies: number, text: string | undefined): number =>
+    copies <= 1 || !text ? copies : 1 + takeRepeats(config ?? {}, copies - 1, text.length);
+
 const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): ChartData => {
     const xml = xmlBuffer.toString("utf8");
     const dom = parseXmlString(xml, { config });
@@ -184,8 +194,9 @@ const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): Ch
                 // A repeated cell is as many series as it repeats, up to the chart's limit.
                 const colsRepeated = Math.min(repeats(headerCells[j].getAttribute("table:number-columns-repeated")), MAX_CHART_SERIES - dataSets.length);
                 const name = getDirectChildren(headerCells[j], "text:p")[0]?.textContent || undefined;
+                const whole = copiesWhole(config, colsRepeated, name);
                 for (let k = 0; k < colsRepeated; k++) {
-                    dataSets.push({ name, values: [], pointLabels: [] });
+                    dataSets.push({ name: k < whole || name === undefined ? name : repeatPreview(name), values: [], pointLabels: [] });
                 }
             }
 
@@ -202,7 +213,8 @@ const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): Ch
                     for (let j = 1; j < dataCells.length && dsIdx < dataSets.length; j++) {
                         const colsRepeated = Math.min(repeats(dataCells[j].getAttribute("table:number-columns-repeated")), dataSets.length - dsIdx, valuesLeft);
                         const val = dataCells[j].getAttribute("office:value") || getDirectChildren(dataCells[j], "text:p")[0]?.textContent || "";
-                        for (let k = 0; k < colsRepeated; k++) dataSets[dsIdx++].values.push(val);
+                        const whole = copiesWhole(config, colsRepeated, val);
+                        for (let k = 0; k < colsRepeated; k++) dataSets[dsIdx++].values.push(k < whole ? val : repeatPreview(val));
                         valuesLeft -= colsRepeated;
                     }
                 }

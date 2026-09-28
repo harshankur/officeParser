@@ -60,6 +60,7 @@
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/ [MS-DOCX] Specification
  */
 
+import { attachmentLookup } from '../utils/repeatUtils.js';
 import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -309,6 +310,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     const commentMap = new Map<string, OfficeContentNode[]>();
     const commentMetadataMap = new Map<string, CommentMetadata>();
     const attachments: OfficeAttachment[] = [];
+    const attachmentsByName = attachmentLookup(attachments);
     const mediaFiles = files.filter(f => f.path.match(mediaFileRegex));
 
     // Extract relationships
@@ -1248,7 +1250,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 for (const node of nodes) {
                     if (node.type === 'image' && 'attachmentName' in (node.metadata || {})) {
                         const meta = node.metadata as ImageMetadata;
-                        const attachment = attachments.find(a => a.name === meta.attachmentName);
+                        const attachment = attachmentsByName.get(meta.attachmentName);
                         if (attachment && attachment.ocrText) {
                             node.text = attachment.ocrText;
                             attachment.altText = meta.altText;

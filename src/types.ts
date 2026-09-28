@@ -778,7 +778,9 @@ export interface DecompressionLimits {
      * once and use it many times: an ODF cell or row repeated with `table:number-columns-repeated` /
      * `table:number-rows-repeated`, an XLSX shared string shown in many cells, a style's font or colour
      * given to every run using it, a relationship's link target given to every hyperlink naming it, a
-     * comment author named by id. The AST shares the value, so it stays small, but everything that reads
+     * comment author named by id, a chart's text at every frame showing it, a repeated chart value, and
+     * in LaTeX a heading's title at every `\nameref`, a theorem title at every theorem and beamer's
+     * title block at every `\maketitle`. The AST shares the value, so it stays small, but everything that reads
      * the AST afterwards (each generator, `toText`) writes it at each use: 700 bytes asking for 100,000
      * copies of a 2,000-span cell made 200 MB of text, and 1.7 KB of DOCX giving one 64 KB font to 2,000
      * runs made 131 MB of HTML. `maxTableCells` counts cells, not what they hold.
@@ -786,8 +788,9 @@ export interface DecompressionLimits {
      * Each use after the first costs what it weighs (characters, plus 16 for each node a repeated cell
      * holds) past 64, so short values repeat freely. Past the limit, with a
      * `REPEATED_CONTENT_LIMIT_EXCEEDED` warning, the remaining repeats of a content-bearing ODF cell are
-     * not made (later cells keep their row and column numbers), an XLSX cell shows the start of its
-     * string, and a node repeating a long style value or link goes without it. Raise it for documents
+     * not made (later cells keep their row and column numbers), an XLSX cell, chart value, frame or
+     * reference shows the start of its text, and a node repeating a long style value or link goes
+     * without it. Raise it for documents
      * that legitimately repeat large content.
      *
      * Default is 16777216.

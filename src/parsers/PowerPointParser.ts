@@ -22,6 +22,7 @@
  * @see https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
  */
 
+import { attachmentLookup } from '../utils/repeatUtils.js';
 import { ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, SlideMetadata, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
@@ -942,6 +943,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     }
 
     const attachments: OfficeAttachment[] = [];
+    const attachmentsByName = attachmentLookup(attachments);
     const mediaFiles = files.filter(f => f.path.match(/ppt\/media\/.*/));
     const chartFiles = files.filter(f => f.path.match(/ppt\/charts\/chart\d+\.xml/));
 
@@ -985,7 +987,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             for (const node of nodes) {
                 if ('attachmentName' in (node.metadata || {})) {
                     const meta = node.metadata as ImageMetadata | ChartMetadata;
-                    const attachment = attachments.find(a => a.name === meta.attachmentName);
+                    const attachment = attachmentsByName.get(meta.attachmentName);
                     if (attachment) {
                         if (node.type === 'image') {
                             attachment.altText = (meta as ImageMetadata).altText;
@@ -993,7 +995,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                                 node.text = attachment.ocrText;
                         }
                         if (node.type === 'chart') {
-                            node.text = attachment.chartData?.rawTexts.join(config.newlineDelimiter);
+                            node.text = attachmentsByName.chartText(attachment, config.newlineDelimiter);
                         }
                     }
                 }

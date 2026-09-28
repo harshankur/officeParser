@@ -161,6 +161,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      */
     imageSourceFor?: (attachment: OfficeAttachment) => string | undefined;
     private chartCounter = 0;
+    /**
+     * The id of the element holding each chart attachment's data, written with its first chart: written
+     * into every chart showing it, one 100 KB chart framed 2,000 times made 400 MB of HTML.
+     */
+    private readonly chartDataIds = new Map<object, string>();
     private isSpreadsheetMode = false;
     /**
      * Set while rendering a heading's children, so `formatText` can drop the run-level bold and
@@ -1093,13 +1098,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
                 if (chartAttachment && (chartAttachment as any).chartData) {
                     const chartData = (chartAttachment as any).chartData;
+                    let dataId = this.chartDataIds.get(chartAttachment);
+                    let data = '';
+                    if (dataId === undefined) {
+                        this.chartDataIds.set(chartAttachment, dataId = `${chartId}-data`);
+                        data = `<script type="application/json" id="${dataId}">${serializeForInlineScript(chartData)}</script>`;
+                    }
                     const canvas = `<div class="chart-container"><canvas id="${chartId}"></canvas></div>`;
                     const script = `
 <script>
     (function() {
         const initChart = () => {
             const ctx = document.getElementById('${chartId}').getContext('2d');
-            const chartData = ${serializeForInlineScript(chartData)};
+            const chartData = JSON.parse(document.getElementById('${dataId}').textContent);
             const getRandomColor = (index, alpha) => {
                 const colors = [
                     'rgba(255, 99, 132, ' + alpha + ')',
@@ -1158,7 +1169,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         else window.addEventListener('load', tryInit);
     })();
 </script>`;
-                    return `${extraAnchors}${canvas}${script}`;
+                    // The data after the chart's container, beside its script: placed before it, the container
+                    // laid out with no width in a slide and the chart drew nothing.
+                    return `${extraAnchors}${canvas}${data}${script}`;
                 }
                 return '';
             }
