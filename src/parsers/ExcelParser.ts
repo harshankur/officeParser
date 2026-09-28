@@ -28,7 +28,7 @@ import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { decodeXmlEntities, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
+import { decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
 /** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
@@ -143,39 +143,41 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const richStringText = new Map<number, string>();
 
     if (sharedStringsFile) {
-        const xml = parseXmlString(sharedStringsFile.content.toString());
-        const siNodes = getElementsByTagName(xml, "si");
+        const xml = parseXmlString(sharedStringsFile.content.toString(), { config });
+        // Each level read as children (see getChildElements): nested `si` or `r` elements, read as
+        // descendants, were read again at each level (1.9 KB took 20 seconds and 800 MB).
+        const siNodes = getChildElements(xml, "si");
         for (const si of siNodes) {
-            const runNodes = getElementsByTagName(si, "r");
+            const runNodes = getChildElements(si, "r");
             if (runNodes.length > 0) {
                 // Rich text with runs
                 const runs: OfficeContentNode[] = [];
                 for (const run of runNodes) {
-                    const tNode = getElementsByTagName(run, "t")[0];
+                    const tNode = getChildElements(run, "t")[0];
                     if (tNode) {
                         const text = tNode.textContent || '';
                         // Extract run formatting 
-                        const rPr = getElementsByTagName(run, "rPr")[0];
+                        const rPr = getChildElements(run, "rPr")[0];
                         const formatting: TextFormatting = {};
                         if (rPr) {
-                            if (getElementsByTagName(rPr, "b").length > 0) formatting.bold = true;
-                            if (getElementsByTagName(rPr, "i").length > 0) formatting.italic = true;
-                            if (getElementsByTagName(rPr, "u").length > 0) formatting.underline = true;
-                            if (getElementsByTagName(rPr, "strike").length > 0) formatting.strikethrough = true;
+                            if (getChildElements(rPr, "b").length > 0) formatting.bold = true;
+                            if (getChildElements(rPr, "i").length > 0) formatting.italic = true;
+                            if (getChildElements(rPr, "u").length > 0) formatting.underline = true;
+                            if (getChildElements(rPr, "strike").length > 0) formatting.strikethrough = true;
 
-                            const sz = getElementsByTagName(rPr, "sz")[0];
+                            const sz = getChildElements(rPr, "sz")[0];
                             if (sz) formatting.size = sz.getAttribute("val") + 'pt';
 
-                            const color = getElementsByTagName(rPr, "color")[0];
+                            const color = getChildElements(rPr, "color")[0];
                             if (color) {
                                 const rgb = color.getAttribute("rgb");
                                 if (rgb) formatting.color = '#' + rgb.substring(2);
                             }
 
-                            const rFont = getElementsByTagName(rPr, "rFont")[0];
+                            const rFont = getChildElements(rPr, "rFont")[0];
                             if (rFont) formatting.font = rFont.getAttribute("val") || undefined;
 
-                            const vertAlign = getElementsByTagName(rPr, "vertAlign")[0];
+                            const vertAlign = getChildElements(rPr, "vertAlign")[0];
                             if (vertAlign) {
                                 const val = vertAlign.getAttribute("val");
                                 if (val === "subscript") formatting.subscript = true;
@@ -192,7 +194,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 sharedStrings.push(runs);
             } else {
                 // Simple text case
-                const tNodes = getElementsByTagName(si, "t");
+                const tNodes = getChildElements(si, "t");
                 let text = '';
                 for (const t of tNodes) {
                     text += t.textContent || '';
@@ -207,7 +209,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const cellFormatMap: Record<number, TextFormatting> = {};
 
     if (stylesFile) {
-        const xml = parseXmlString(stylesFile.content.toString());
+        const xml = parseXmlString(stylesFile.content.toString(), { config });
 
         // Parse fonts
         const fontsNode = getElementsByTagName(xml, "fonts")[0];
@@ -334,7 +336,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const drawingFilename = relFile.path.split('/').pop()?.replace('.rels', '') || '';
             const drawingPath = `xl/drawings/${drawingFilename}`;
 
-            const relsXml = parseXmlString(relFile.content.toString());
+            const relsXml = parseXmlString(relFile.content.toString(), { config });
             const relationships = getElementsByTagName(relsXml, "Relationship");
 
             if (!drawingImageMap[drawingPath]) {
@@ -355,7 +357,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         // 2. Parse Drawings to get Alt Text and link to Rels
         const drawingFiles = files.filter(f => f.path.match(drawingsRegex));
         for (const drawingFile of drawingFiles) {
-            const xml = parseXmlString(drawingFile.content.toString());
+            const xml = parseXmlString(drawingFile.content.toString(), { config });
             const pics = getElementsByTagName(xml, "xdr:pic"); // SpreadsheetML drawing
 
             // Null-prototype, as the map is: a plain `{}` answered an `r:embed` of `__proto__` with
@@ -413,7 +415,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             // Extract structured chart data
             try {
-                const chartData = extractChartData(chart.content);
+                const chartData = extractChartData(chart.content, config);
                 attachment.chartData = chartData;
             } catch (e) {
                 logWarning(OfficeWarningType.CHART_DATA_EXTRACTION_FAILED, config, chart.path, e);
@@ -432,7 +434,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const drawingFilename = relFile.path.split('/').pop()?.replace('.rels', '') || '';
             const drawingPath = `xl/drawings/${drawingFilename}`;
 
-            const relsXml = parseXmlString(relFile.content.toString());
+            const relsXml = parseXmlString(relFile.content.toString(), { config });
             const relationships = getElementsByTagName(relsXml, "Relationship");
 
             if (!drawingChartMap[drawingPath]) {
@@ -459,7 +461,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
     if (workbookRelsFile) {
         // Parse rels to get rId -> file mapping
-        const relsXml = parseXmlString(workbookRelsFile.content.toString());
+        const relsXml = parseXmlString(workbookRelsFile.content.toString(), { config });
         const relationships = getElementsByTagName(relsXml, "Relationship");
         const rIdToFile: Record<string, string> = Object.create(null);
 
@@ -474,7 +476,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         }
 
         // Parse workbook.xml to get sheet name -> rId mapping
-        const workbookXml = parseXmlString(workbookFile.content.toString());
+        const workbookXml = parseXmlString(workbookFile.content.toString(), { config });
         const sheets = getElementsByTagName(workbookXml, "sheet");
 
         for (const sheet of sheets) {
@@ -509,7 +511,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const sheetCommentsMap: Record<string, OfficeContentNode[]> = Object.create(null);
 
             if (relsFile) {
-                const relsXml = parseXmlString(relsFile.content.toString());
+                const relsXml = parseXmlString(relsFile.content.toString(), { config });
                 const relationships = getElementsByTagName(relsXml, "Relationship");
                 for (const rel of relationships) {
                     const id = rel.getAttribute("Id");
@@ -523,7 +525,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             const commentsPath = 'xl/' + target.replace('../', '');
                             const cFile = files.find(f => f.path === commentsPath);
                             if (cFile) {
-                                const cXml = parseXmlString(cFile.content.toString());
+                                const cXml = parseXmlString(cFile.content.toString(), { config });
                                 const commentNodes = getElementsByTagName(cXml, "comment");
                                 const authorsList = getElementsByTagName(cXml, "author");
                                 const authors = authorsList.map(a => a.textContent || '');
@@ -766,15 +768,15 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     }
 
     const corePropsFile = files.find(f => f.path.match(corePropsFileRegex));
-    const metadata = corePropsFile ? parseOfficeMetadata(corePropsFile.content.toString()) : {};
+    const metadata = corePropsFile ? parseOfficeMetadata(corePropsFile.content.toString(), config) : {};
     const customPropsFile = files.find(f => f.path.match(customPropsFileRegex));
     if (customPropsFile) {
-        const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString());
+        const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString(), config);
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
     }
     const appPropsFile = files.find(f => f.path.match(appPropsFileRegex));
     if (appPropsFile) {
-        const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString());
+        const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString(), config);
         if (Object.keys(appProperties).length > 0) metadata.nativeProperties = appProperties;
     }
 

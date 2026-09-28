@@ -2702,6 +2702,34 @@ async function parserHardeningTests() {
     }), 'pptx')) as any;
     check('pptx: a comments part named 2,000 times is attached once', sharedComments.ast?.content[0]?.comments?.length === 20000, `${sharedComments.ast?.content[0]?.comments?.length} ${sharedComments.error}`);
 
+    // XML readers: content nested in its own kind is read once per level, not again at each (notes in
+    // notes doubled per level; tables in tables, text boxes in text boxes, shared-string runs and PPTX
+    // paragraphs grew with the square of the depth), and a document's XML holds a bounded number of
+    // elements (32 KB of empty elements filled a 4 GB heap).
+    let notes = '<text:p>x</text:p>';
+    for (let i = 0; i < 24; i++) notes = `<text:p>a<text:note text:id="n${i}"><text:note-body>${notes}</text:note-body></text:note></text:p>`;
+    await timed('odt: footnotes nested 24 deep are read', () => parseQuiet(odfOf('text', notes), 'odt'));
+    let annotations = '<text:p>x</text:p>';
+    for (let i = 0; i < 24; i++) annotations = `<text:p>a<office:annotation><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">A</dc:creator>${annotations}</office:annotation></text:p>`;
+    await timed('odt: comments nested 24 deep are read', () => parseQuiet(odfOf('text', annotations), 'odt'));
+    let cells = '<text:p>x</text:p>';
+    for (let i = 0; i < 300; i++) cells = `<table:table><table:table-row><table:table-cell>${cells}</table:table-cell></table:table-row></table:table>`;
+    await timed('ods: tables nested 300 deep are read', () => parseQuiet(odfOf('spreadsheet', cells.replace('<table:table>', '<table:table table:name="S">')), 'ods'));
+    let boxes = '<w:p><w:r><w:t>x</w:t></w:r></w:p>';
+    for (let i = 0; i < 40; i++) boxes = `<w:p><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml"><v:textbox><w:txbxContent>${boxes}</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>`;
+    await timed('docx: text boxes nested 40 deep are read', () => parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/<w:body>/, `<w:body>${boxes}`)); }), 'docx'));
+    let runs = '<t>x</t>';
+    for (let i = 0; i < 20000; i++) runs = `<r>${runs}</r>`;
+    await timed('xlsx: shared-string runs nested 20,000 deep are read', () => parseQuiet(repack('test.xlsx', z => { z['xl/sharedStrings.xml'] = enc(`<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si>${runs}</si></sst>`); }), 'xlsx'));
+    let tableRows = '<a:tc><a:txBody><a:p><a:r><a:t>x</a:t></a:r></a:p></a:txBody></a:tc>';
+    for (let i = 0; i < 600; i++) tableRows = `<a:tr><a:tc><a:txBody><a:p><a:r><a:t>c</a:t></a:r></a:p></a:txBody>${tableRows}</a:tc></a:tr>`;
+    await timed('pptx: table rows and cells nested 600 deep are read', () => parseQuiet(pptxOf({ 'ppt/slides/slide1.xml': `<?xml version="1.0"?><p:sld ${pns}><p:cSld><p:spTree><p:graphicFrame><a:graphic><a:graphicData><a:tbl>${tableRows}</a:tbl></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld></p:sld>` }), 'pptx'));
+    const elementBomb = await parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/<w:body>/, `<w:body>${'<z/>'.repeat(3_000_000)}`)); }), 'docx');
+    check('docx: 3,000,000 empty elements fail with XML_ELEMENT_LIMIT_EXCEEDED', /XML element limit exceeded/.test(elementBomb.error), elementBomb.error.slice(0, 120));
+    const raised = await parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/<w:body>/, `<w:body>${'<z/>'.repeat(300_000)}`)); }), 'docx', { decompressionLimits: { maxXmlElements: 400_000 } });
+    const lowered = await parseQuiet(repack('test.docx', z => z), 'docx', { decompressionLimits: { maxXmlElements: 100 } });
+    check('docx: maxXmlElements is the limit a parse is held to', !raised.error && /XML element limit exceeded/.test(lowered.error), `${raised.error} | ${lowered.error}`);
+
     // Spans are held to what a browser allows, and never below 1.
     const gridSpan = await parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/<w:body>/, '<w:body><w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2147483647"/></w:tcPr><w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:gridSpan w:val="-5"/></w:tcPr><w:p><w:r><w:t>neg</w:t></w:r></w:p></w:tc></w:tr></w:tbl>')); }), 'docx');
     const spans = (ast: any) => { const out: any[] = []; const walk = (ns: any[]) => ns?.forEach((n: any) => { if (n.type === 'cell') out.push([n.metadata?.colSpan, n.metadata?.rowSpan, n.metadata?.col]); walk(n.children); }); walk(ast?.content); return out; };

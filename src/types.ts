@@ -51,6 +51,8 @@ export enum OfficeErrorType {
     ZIP_ENTRY_INVALID_SIZE = 'ZIP_ENTRY_INVALID_SIZE',
     /** ZIP uncompressed size limit exceeded */
     ZIP_SIZE_LIMIT_EXCEEDED = 'ZIP_SIZE_LIMIT_EXCEEDED',
+    /** A document's XML holds more elements than `decompressionLimits.maxXmlElements` */
+    XML_ELEMENT_LIMIT_EXCEEDED = 'XML_ELEMENT_LIMIT_EXCEEDED',
     /** ZIP data yielded no readable entries (corrupt, truncated, or not a ZIP archive) */
     ZIP_NO_ENTRIES_FOUND = 'ZIP_NO_ENTRIES_FOUND',
     /** ZIP data is truncated: the End of Central Directory record is absent */
@@ -716,6 +718,18 @@ export interface DecompressionLimits {
      * Default is 1000000.
      */
     maxTableCells?: number;
+    /**
+     * Maximum number of XML elements read from one document's parts (DOCX, XLSX, PPTX, ODF and EPUB
+     * package XML, charts and metadata; XLSX sheets are read without building elements and do not
+     * count). An XML reader holds several hundred bytes of memory for each element, so a small zip of
+     * empty elements (32 KB holding 8 million) filled a 4 GB heap, far below `maxUncompressedBytes`.
+     * Past the limit the parse fails with `XML_ELEMENT_LIMIT_EXCEEDED`. Real documents are well below
+     * it (a long, heavily formatted Word document holds a few hundred thousand); raise it for larger
+     * ones, with memory to match.
+     *
+     * Default is 2000000.
+     */
+    maxXmlElements?: number;
 }
 
 /**

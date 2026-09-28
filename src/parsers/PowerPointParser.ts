@@ -29,7 +29,7 @@ import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
+import { getChildElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 
@@ -88,15 +88,15 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
     // Extract metadata
     const corePropsFile = files.find(f => f.path.match(corePropsFileRegex));
-    const metadata = corePropsFile ? parseOfficeMetadata(corePropsFile.content.toString()) : {};
+    const metadata = corePropsFile ? parseOfficeMetadata(corePropsFile.content.toString(), config) : {};
     const customPropsFile = files.find(f => f.path.match(customPropsFileRegex));
     if (customPropsFile) {
-        const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString());
+        const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString(), config);
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
     }
     const appPropsFile = files.find(f => f.path.match(appPropsFileRegex));
     if (appPropsFile) {
-        const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString());
+        const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString(), config);
         if (Object.keys(appProperties).length > 0) metadata.nativeProperties = appProperties;
     }
 
@@ -117,7 +117,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     if (!config.ignoreComments) {
         const authorsFile = files.find(f => f.path === 'ppt/commentAuthors.xml');
         if (authorsFile) {
-            const authorsXml = parseXmlString(authorsFile.content.toString());
+            const authorsXml = parseXmlString(authorsFile.content.toString(), { config });
             const authorNodes = getElementsByTagName(authorsXml, "p:cmAuthor");
             for (const aNode of authorNodes) {
                 const id = aNode.getAttribute("id");
@@ -142,7 +142,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         comments = [];
         const cFile = files.find(f => f.path.endsWith(target));
         if (cFile) {
-            for (const cNode of getElementsByTagName(parseXmlString(cFile.content.toString()), "p:cm")) {
+            for (const cNode of getElementsByTagName(parseXmlString(cFile.content.toString(), { config }), "p:cm")) {
                 const authorId = cNode.getAttribute("authorId");
                 const authorData = authorId !== null ? authorMap[authorId] : undefined;
                 const text = getElementsByTagName(cNode, "a:t").map(t => t.textContent || '').join('');
@@ -171,12 +171,14 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     // Helper to parse a table node
     const parseTable = (tblNode: Element, xmlContentString: string): OfficeContentNode => {
         const rows: OfficeContentNode[] = [];
-        const trNodes = getElementsByTagName(tblNode, "a:tr");
+        // Each level read as children (see getChildElements): rows, cells and paragraphs nested in
+        // their own kind, read as descendants, were read again at each level (2.9 KB took 18 seconds).
+        const trNodes = getChildElements(tblNode, "a:tr");
 
         for (let rIndex = 0; rIndex < trNodes.length; rIndex++) {
             const trNode = trNodes[rIndex];
             const cells: OfficeContentNode[] = [];
-            const tcNodes = getElementsByTagName(trNode, "a:tc");
+            const tcNodes = getChildElements(trNode, "a:tc");
 
             for (let cIndex = 0; cIndex < tcNodes.length; cIndex++) {
                 const tcNode = tcNodes[cIndex];
@@ -184,9 +186,9 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                 let cellText = '';
 
                 // Cells contain text bodies (txBody) which contain paragraphs
-                const txBody = getFirstElementByTagName(tcNode, "a:txBody");
+                const txBody = getChildElements(tcNode, "a:txBody")[0];
                 if (txBody) {
-                    const paragraphs = getElementsByTagName(txBody, "a:p");
+                    const paragraphs = getChildElements(txBody, "a:p");
                     for (const p of paragraphs) {
                         // Reuse paragraph parsing logic if possible, or duplicate for now
                         // For simplicity, duplicating basic logic here as the main loop one is tied to shapes
@@ -422,9 +424,9 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
         const isTitle = type === "title" || type === "ctrTitle";
 
-        const txBody = getFirstElementByTagName(spNode, "p:txBody");
+        const txBody = getChildElements(spNode, "p:txBody")[0];
         if (txBody) {
-            const paragraphs = getElementsByTagName(txBody, "a:p");
+            const paragraphs = getChildElements(txBody, "a:p");
 
             for (let i = 0; i < paragraphs.length; i++) {
                 const p = paragraphs[i];
@@ -446,7 +448,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                 }
 
                 // Paragraph Alignment and List Detection
-                const pPr = getFirstElementByTagName(p, "a:pPr");
+                const pPr = getChildElements(p, "a:pPr")[0];
                 let isList = false;
                 let listType: 'ordered' | 'unordered' = 'unordered';
                 let lvl = 0;
@@ -455,9 +457,9 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                     const lvlAttr = pPr.getAttribute("lvl");
                     if (lvlAttr) lvl = parseInt(lvlAttr);
 
-                    const buAutoNum = getFirstElementByTagName(pPr, "a:buAutoNum");
-                    const buChar = getFirstElementByTagName(pPr, "a:buChar");
-                    const buBlip = getFirstElementByTagName(pPr, "a:buBlip");
+                    const buAutoNum = getChildElements(pPr, "a:buAutoNum")[0];
+                    const buChar = getChildElements(pPr, "a:buChar")[0];
+                    const buBlip = getChildElements(pPr, "a:buBlip")[0];
                     const buNode = getFirstElementByTagName(pPr, "a:bu");
 
                     if (buAutoNum) {
@@ -775,7 +777,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                 // Prepare map for this slide
                 slideRelsMap[slideNum] = Object.create(null);
                 // Parse the rels XML
-                const relsXml = parseXmlString(file.content.toString());
+                const relsXml = parseXmlString(file.content.toString(), { config });
                 // Get all Relationship nodes
                 const relationships = getElementsByTagName(relsXml, "Relationship");
                 // Loop through each relationship node
@@ -858,7 +860,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         if (file.path.match(presentationFileRegex)) continue;
 
         const xmlContentString = file.content.toString();
-        const xml = parseXmlString(xmlContentString, { locator: config.includeRawContent });
+        const xml = parseXmlString(xmlContentString, { config, locator: config.includeRawContent });
 
         const slideMatch = file.path.match(slideNumberRegex);
         const slideNumber = slideMatch ? parseInt(slideMatch[1]) : 0;
@@ -969,7 +971,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
             // Extract text from chart XML
             try {
-                const chartData = await extractChartData(chart.content);
+                const chartData = await extractChartData(chart.content, config);
                 // Assign chartData to attachment
                 attachment.chartData = chartData;
             }

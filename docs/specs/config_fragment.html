@@ -297,6 +297,12 @@
                 <td><strong>Cell Expansion Limit</strong>: Maximum number of table cells materialized from <code>table:number-columns-repeated</code>/<code>table:number-rows-repeated</code> in any ODF table (spreadsheet grids and embedded tables in ODT/ODP/ODG alike). Beyond it, expansion clamps and warns instead of allocating without bound.</td>
             </tr>
             <tr>
+                <td><code>decompressionLimits.maxXmlElements</code></td>
+                <td><code>number</code></td>
+                <td><code>2000000</code></td>
+                <td><strong>XML Element Limit</strong>: Maximum number of XML elements read from one document's parts (DOCX, XLSX, PPTX, ODF and EPUB package XML, charts and metadata; XLSX sheets do not count). Each element takes several hundred bytes of memory to read, so a small zip of empty elements could fill the heap long before <code>maxUncompressedBytes</code>. Past it, the parse rejects with <code>XML_ELEMENT_LIMIT_EXCEEDED</code>.</td>
+            </tr>
+            <tr>
                 <td><code>htmlParserConfig</code></td>
                 <td><code>object</code></td>
                 <td><code>{}</code></td>

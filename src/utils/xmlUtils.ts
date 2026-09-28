@@ -11,7 +11,8 @@
  */
 
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
-import { OfficeMetadata } from '../types';
+import { OfficeErrorType, OfficeMetadata, OfficeParserConfig } from '../types';
+import { getOfficeError } from './errorUtils.js';
 import { parseOfficeDate } from './dateUtils.js';
 import { setOwn } from './lookupUtils.js';
 
@@ -31,11 +32,32 @@ export const isElement = (node: Node): node is Element => {
  * @param options - Optional parser settings (e.g., enable locators for source mapping)
  * @returns A Document object that can be queried using standard DOM methods
  */
-export const parseXmlString = (xml: string, options: { locator?: boolean } = {}): Document => {
+/** What each parse (its config object) may still read of `decompressionLimits.maxXmlElements`. */
+const xmlElementBudgets = new WeakMap<object, { left: number }>();
+
+/**
+ * Takes `xml`'s elements from its parse's budget (see DecompressionLimits.maxXmlElements), failing the
+ * parse past it: counted before the XML is read, from each `<` that opens an element.
+ */
+const takeXmlElements = (xml: string, config: OfficeParserConfig): void => {
+    let budget = xmlElementBudgets.get(config);
+    if (!budget) xmlElementBudgets.set(config, budget = { left: config.decompressionLimits?.maxXmlElements ?? DEFAULT_MAX_XML_ELEMENTS });
+    let count = 0;
+    for (let i = xml.indexOf('<'); i !== -1; i = xml.indexOf('<', i + 1)) {
+        const c = xml.charCodeAt(i + 1);
+        if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 58 || c > 127) count++;
+    }
+    budget.left -= count;
+    if (budget.left < 0) throw getOfficeError(OfficeErrorType.XML_ELEMENT_LIMIT_EXCEEDED, config, config.decompressionLimits?.maxXmlElements ?? DEFAULT_MAX_XML_ELEMENTS);
+};
+const DEFAULT_MAX_XML_ELEMENTS = 2000000;
+
+export const parseXmlString = (xml: string, options: { locator?: boolean; config?: OfficeParserConfig } = {}): Document => {
+    if (options.config) takeXmlElements(xml, options.config);
     // Recoverable problems (an entity it cannot resolve, which it keeps as written) are not printed:
     // xmldom writes each to the console by default, so a document could fill a host's logs at will.
     // A fatal one still throws after this returns.
-    const parser = new DOMParser({ ...options, onError: () => {} });
+    const parser = new DOMParser({ locator: options.locator, onError: () => {} });
     // @xmldom/xmldom 0.9.x is strict: a UTF-8 BOM (U+FEFF) prepended to the
     // XML string causes a fatalError because the XML declaration is no longer
     // at position 0. Strip it before parsing.
@@ -154,9 +176,17 @@ export const getRawContent = (node: Node, sourceXml: string, config: { serialize
  * @returns The first matching element, or undefined if none found
  */
 export const getFirstElementByTagName = (parent: Element | Document, tagName: string): Element | undefined => {
-    const elements = parent.getElementsByTagName(tagName);
-    if (elements && elements.length > 0) {
-        return elements[0] as Element;
+    // Walks the descendants in document order and stops at the first match: xmldom's
+    // getElementsByTagName builds the whole list first, so each call read the whole subtree, and a
+    // lookup at each level of nested content (tables in tables, frames in frames) took time in the
+    // product of the depth and the subtree.
+    let node: Node | null = parent.firstChild;
+    while (node) {
+        if (node.nodeType === 1 && (node as Element).tagName === tagName) return node as Element;
+        if (node.firstChild) { node = node.firstChild; continue; }
+        while (node && node !== parent && !node.nextSibling) node = node.parentNode;
+        if (!node || node === parent) return undefined;
+        node = node.nextSibling;
     }
     return undefined;
 };
@@ -171,6 +201,31 @@ export const getFirstElementByTagName = (parent: Element | Document, tagName: st
 export const getAttribute = (element: Element, attrName: string): string | undefined => {
     const attr = element.getAttribute(attrName);
     return attr !== null ? attr : undefined;
+};
+
+/**
+ * The `tag` elements under `root` not inside another `tag` element under it, in document order, and
+ * not inside any element named in `skip`: a note's own paragraphs, not a nested text box's; a sheet's
+ * rows, not those of a table in one of its cells. Descendant lookups (getElementsByTagName) return the
+ * nested ones as well, and a reader that also reaches them through the outer ones read them once per
+ * level of nesting, which grew with the square of the depth, or doubled per level.
+ */
+export const getOutermostElements = (root: Element | Document, tag: string, skip?: ReadonlySet<string>): Element[] => {
+    const out: Element[] = [];
+    const stack: Element[] = [];
+    const pushChildren = (node: Node) => {
+        for (let i = node.childNodes.length - 1; i >= 0; i--) {
+            const child = node.childNodes[i];
+            if (isElement(child)) stack.push(child);
+        }
+    };
+    pushChildren(root);
+    while (stack.length) {
+        const node = stack.pop()!;
+        if (node.nodeName === tag) out.push(node);
+        else if (!skip?.has(node.nodeName)) pushChildren(node);
+    }
+    return out;
 };
 
 /**
@@ -192,6 +247,19 @@ export const getDirectChildren = (parent: Element, tagName: string): Element[] =
         }
     }
     return result;
+};
+
+/**
+ * The child elements of `parent` named `tagName`, falling back to its local name when none carries the
+ * prefix (as getElementsByTagName does). For content that nests (a table's rows and cells, a text
+ * body's paragraphs, a shared string's runs), reading children rather than descendants reads each
+ * level once: descendant lookups read the nested levels again at each level.
+ */
+export const getChildElements = (parent: Element | Document, tagName: string): Element[] => {
+    const node = (parent as Document).documentElement && parent.nodeType === 9 ? (parent as Document).documentElement : parent as Element;
+    const own = getDirectChildren(node, tagName);
+    if (own.length > 0 || !tagName.includes(':')) return own;
+    return getDirectChildren(node, tagName.split(':').pop()!);
 };
 
 /**
@@ -222,9 +290,9 @@ export const getDirectChildren = (parent: Element, tagName: string): Element[] =
  * 
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/6c085e39-c695-4f83-91e8-3f277bb4e111
  */
-export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
+export const parseOfficeMetadata = (xmlContent: string, config?: OfficeParserConfig): OfficeMetadata => {
     // Step 1: Parse the XML content into a DOM document
-    const xml = parseXmlString(xmlContent);
+    const xml = parseXmlString(xmlContent, { config });
     const metadata: OfficeMetadata = {};
 
     // Check for OOXML Core Properties
@@ -359,8 +427,8 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
  * console.log(props['Reviewed']);   // true (boolean)
  * ```
  */
-export const parseOOXMLCustomProperties = (xmlContent: string): Record<string, string | number | boolean | Date> => {
-    const xml = parseXmlString(xmlContent);
+export const parseOOXMLCustomProperties = (xmlContent: string, config?: OfficeParserConfig): Record<string, string | number | boolean | Date> => {
+    const xml = parseXmlString(xmlContent, { config });
     const result: Record<string, string | number | boolean | Date> = {};
 
     const properties = getElementsByTagName(xml, "property");
@@ -406,8 +474,8 @@ export const parseOOXMLCustomProperties = (xmlContent: string): Record<string, s
  * @param xmlContent - Raw XML string from `docProps/app.xml`
  * @returns A record of property name -> typed value
  */
-export const parseOOXMLAppProperties = (xmlContent: string): Record<string, string | number | boolean> => {
-    const xml = parseXmlString(xmlContent);
+export const parseOOXMLAppProperties = (xmlContent: string, config?: OfficeParserConfig): Record<string, string | number | boolean> => {
+    const xml = parseXmlString(xmlContent, { config });
     const result: Record<string, string | number | boolean> = {};
 
     const appProperties = getElementsByTagName(xml, "Properties")[0];

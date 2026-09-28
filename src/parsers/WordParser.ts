@@ -66,7 +66,7 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
+import { getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { lookupTable, plainRecord } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
@@ -275,15 +275,15 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
 
     // Extract metadata
     const corePropsFile = files.find(f => f.path.match(corePropsFileRegex));
-    const metadata = corePropsFile ? parseOfficeMetadata(corePropsFile.content.toString()) : {};
+    const metadata = corePropsFile ? parseOfficeMetadata(corePropsFile.content.toString(), config) : {};
     const customPropsFile = files.find(f => f.path.match(customPropsFileRegex));
     if (customPropsFile) {
-        const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString());
+        const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString(), config);
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
     }
     const appPropsFile = files.find(f => f.path.match(appPropsFileRegex));
     if (appPropsFile) {
-        const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString());
+        const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString(), config);
         if (Object.keys(appProperties).length > 0) {
             metadata.nativeProperties = appProperties;
             if (appProperties['Pages'] && typeof appProperties['Pages'] === 'number') {
@@ -313,7 +313,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     // Null-prototype, as every map keyed by the document's own ids and names is here (see numberingMap).
     const relsMap: { [key: string]: string } = Object.create(null);
     if (relsFile) {
-        const relsXml = parseXmlString(relsFile.content.toString());
+        const relsXml = parseXmlString(relsFile.content.toString(), { config });
         const relationships = getElementsByTagName(relsXml, "Relationship");
         for (const relationship of relationships) {
             const id = relationship.getAttribute("Id");
@@ -332,7 +332,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     const numberingMap: { [key: string]: { [key: string]: { numFmt: string, lvlText: string, start: number } } } = Object.create(null);
 
     if (numberingFile) {
-        const numberingXml = parseXmlString(numberingFile.content.toString());
+        const numberingXml = parseXmlString(numberingFile.content.toString(), { config });
         const nums = getElementsByTagName(numberingXml, "w:num");
         const abstractNums = getElementsByTagName(numberingXml, "w:abstractNum");
 
@@ -392,7 +392,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     const styleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify', backgroundColor?: string, paragraphIndentation?: IndentationMetadata } } = Object.create(null);
 
     if (stylesFile) {
-        const stylesXml = parseXmlString(stylesFile.content.toString());
+        const stylesXml = parseXmlString(stylesFile.content.toString(), { config });
         const styles = getElementsByTagName(stylesXml, "w:style");
 
         for (const style of styles) {
@@ -433,7 +433,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     let docDefaults: Partial<TextFormatting> = {};
 
     if (stylesFile) {
-        const stylesXml = parseXmlString(stylesFile.content.toString());
+        const stylesXml = parseXmlString(stylesFile.content.toString(), { config });
         const docDefaultsNode = getFirstElementByTagName(stylesXml, "w:docDefaults");
         if (docDefaultsNode) {
             const rPrDefaultNode = getFirstElementByTagName(docDefaultsNode, "w:rPrDefault");
@@ -449,7 +449,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     // Detect the default paragraph style (for international compatibility)
     let defaultParaStyleId: string | undefined = undefined;
     if (stylesFile) {
-        const stylesXml = parseXmlString(stylesFile.content.toString());
+        const stylesXml = parseXmlString(stylesFile.content.toString(), { config });
         const styles = getElementsByTagName(stylesXml, "w:style");
 
         // Look for a style with w:type="paragraph" and w:default="1"
@@ -481,11 +481,14 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     // Helper to parse a paragraph node
     const parseParagraph = (pNode: Element, documentContent: string, pendingAnchorIds: string[] = []): OfficeContentNode => {
         // Check if it's a list item
-        const numPr = getFirstElementByTagName(pNode, "w:numPr");
+        // The paragraph's own properties (children of it, as the schema has them): looked up through
+        // its whole subtree, a text box's numbering made the paragraph around it a list item, and a
+        // lookup at each level of nested text boxes took time in the square of their content.
+        const pPr = getDirectChildren(pNode, "w:pPr")[0];
+        const numPr = pPr ? getDirectChildren(pPr, "w:numPr")[0] : undefined;
         const isList = !!numPr;
 
         // Check if it's a heading
-        const pPr = getFirstElementByTagName(pNode, "w:pPr");
         const pStyle = pPr ? getFirstElementByTagName(pPr, "w:pStyle") : null;
         const pStyleVal = pStyle?.getAttribute("w:val");
         const isHeading = pStyleVal ? (pStyleVal.startsWith("Heading") || pStyleVal === "Title") : false;
@@ -819,7 +822,10 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 for (const rNode of resolved) processChildNode(rNode);
             } else if (isElement(node) && (node.nodeName === 'w:pict' || node.nodeName === 'pict' || node.nodeName === 'w:drawing' || node.nodeName === 'drawing')) {
                 // Extract text boxes from legacy shapes or modern drawings
-                const textBoxes = getElementsByTagName(node, "w:txbxContent");
+                // The picture's own text boxes, not those in their paragraphs: parsing a text box's
+                // paragraphs reaches those, and taking them here too read nested text boxes again at
+                // each level (1.3 KB took half a minute).
+                const textBoxes = getOutermostElements(node, "w:txbxContent");
                 for (const txbx of textBoxes) {
                     const txbxChildren = Array.from(txbx.childNodes);
                     for (const txbxChild of txbxChildren) {
@@ -954,7 +960,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             // <w:trPr><w:tblHeader/> marks a row that repeats as the table's header on every page -
             // Word's own header-row flag, and what this library's DOCX generator writes. Without
             // reading it, a header row survived only when it happened to be all-bold.
-            const trPr = getFirstElementByTagName(trNode, "w:trPr");
+            const trPr = getDirectChildren(trNode, "w:trPr")[0];
             const tblHeader = trPr ? getFirstElementByTagName(trPr, "w:tblHeader") : null;
             // ST_OnOff turns the toggle off with "false"/"0"/"off"; a bare <w:tblHeader/> or any other
             // value (true/1/on) is on.
@@ -964,7 +970,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             let visualCol = 0;
             for (let tcIndex = 0; tcIndex < tcNodes.length; tcIndex++) {
                 const tcNode = tcNodes[tcIndex];
-                const tcPr = getFirstElementByTagName(tcNode, "w:tcPr");
+                const tcPr = getDirectChildren(tcNode, "w:tcPr")[0];
 
                 // Horizontal merge (colspan)
                 let colSpan = 1;
@@ -1087,26 +1093,26 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     if (!config.ignoreNotes) {
         const footnotesFile = files.find(f => f.path.match(footnotesFileRegex));
         if (footnotesFile) {
-            const footnotesDoc = parseXmlString(footnotesFile.content.toString());
+            const footnotesDoc = parseXmlString(footnotesFile.content.toString(), { config });
             const footnoteXml = footnotesFile.content.toString();
             const footnoteNodes = getElementsByTagName(footnotesDoc, "w:footnote");
             for (const node of footnoteNodes) {
                 const id = node.getAttribute("w:id");
                 if (!id || id === "-1" || id === "0") continue;
-                const pNodes = getElementsByTagName(node, "w:p");
+                const pNodes = getOutermostElements(node, "w:p");
                 footnoteMap.set(id, pNodes.map(p => parseParagraph(p, footnoteXml)));
             }
         }
 
         const endnotesFile = files.find(f => f.path.match(endnotesFileRegex));
         if (endnotesFile) {
-            const endnotesDoc = parseXmlString(endnotesFile.content.toString());
+            const endnotesDoc = parseXmlString(endnotesFile.content.toString(), { config });
             const endnoteXml = endnotesFile.content.toString();
             const endnoteNodes = getElementsByTagName(endnotesDoc, "w:endnote");
             for (const node of endnoteNodes) {
                 const id = node.getAttribute("w:id");
                 if (!id || id === "-1" || id === "0") continue;
-                const pNodes = getElementsByTagName(node, "w:p");
+                const pNodes = getOutermostElements(node, "w:p");
                 endnoteMap.set(id, pNodes.map(p => parseParagraph(p, endnoteXml)));
             }
         }
@@ -1116,7 +1122,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     if (!config.ignoreComments) {
         const commentsFile = files.find(f => f.path.match(commentsFileRegex));
         if (commentsFile) {
-            const commentsDoc = parseXmlString(commentsFile.content.toString());
+            const commentsDoc = parseXmlString(commentsFile.content.toString(), { config });
             const commentsXml = commentsFile.content.toString();
             const commentNodes = getElementsByTagName(commentsDoc, "w:comment");
             for (const node of commentNodes) {
@@ -1127,7 +1133,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 const initials = node.getAttribute("w:initials") || undefined;
 
                 commentMetadataMap.set(id, { commentId: id, author, date, initials });
-                const pNodes = getElementsByTagName(node, "w:p");
+                const pNodes = getOutermostElements(node, "w:p");
                 commentMap.set(id, pNodes.map(p => parseParagraph(p, commentsXml)));
             }
         }
@@ -1139,7 +1145,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     if (!config.ignoreHeadersAndFooters) {
         const headerFiles = files.filter(f => f.path.match(headerFileRegex));
         for (const hFile of headerFiles) {
-            const hDoc = parseXmlString(hFile.content.toString());
+            const hDoc = parseXmlString(hFile.content.toString(), { config });
             const hXml = hFile.content.toString();
             const hNodes = Array.from(hDoc.documentElement.childNodes).filter(isElement);
             for (const child of hNodes) {
@@ -1159,7 +1165,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
 
         const footerFiles = files.filter(f => f.path.match(footerFileRegex));
         for (const fFile of footerFiles) {
-            const fDoc = parseXmlString(fFile.content.toString());
+            const fDoc = parseXmlString(fFile.content.toString(), { config });
             const fXml = fFile.content.toString();
             const fNodes = Array.from(fDoc.documentElement.childNodes).filter(isElement);
             for (const child of fNodes) {
@@ -1190,7 +1196,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         if (file.path.match(footerFileRegex)) continue;
 
         const documentContent = file.content.toString();
-        const doc = parseXmlString(documentContent, { locator: config.includeRawContent });
+        const doc = parseXmlString(documentContent, { config, locator: config.includeRawContent });
         const body = getFirstElementByTagName(doc, "w:body");
         if (body) {
             const bodyChildren = Array.from(body.childNodes);

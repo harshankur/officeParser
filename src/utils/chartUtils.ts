@@ -1,4 +1,4 @@
-import { ChartData } from "../types";
+import { ChartData, OfficeParserConfig } from "../types";
 import { parseXmlString, getElementsByTagName, getDirectChildren } from "./xmlUtils";
 
 /**
@@ -71,9 +71,9 @@ const repeats = (value: string | null): number => {
  * Extracts fully structured chart data from OpenXML (PPTX, XLSX) chart XML.
  * @param xmlBuffer Chart XML buffer
  */
-const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
+const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): ChartData => {
     const xml = xmlBuffer.toString("utf8");
-    const dom = parseXmlString(xml);
+    const dom = parseXmlString(xml, { config });
     const root = dom.documentElement as Element;
     if (!root) return { title: undefined, xAxisTitle: undefined, yAxisTitle: undefined, dataSets: [], labels: [], rawTexts: [] };
 
@@ -152,9 +152,9 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
  * Extracts structured chart data from ODF (ODP, ODS) chart content.xml.
  * @param xmlBuffer Chart XML buffer
  */
-const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
+const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): ChartData => {
     const xml = xmlBuffer.toString("utf8");
-    const dom = parseXmlString(xml);
+    const dom = parseXmlString(xml, { config });
 
     const chart = getElementsByTagName(dom, "chart:chart")[0] || dom.documentElement;
     const titleNode = getElementsByTagName(chart, "chart:title")[0];
@@ -280,11 +280,11 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
  * Universal chart data extractor that selects logic based on XML content.
  * @param xmlBuffer Chart XML buffer
  */
-export const extractChartData = (xmlBuffer: Buffer): ChartData => {
+export const extractChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): ChartData => {
     const head = xmlBuffer.toString("utf8", 0, 500);
     if (head.includes("urn:oasis:names:tc:opendocument:xmlns:chart:1.0")) {
-        return extractOdfChartData(xmlBuffer);
+        return extractOdfChartData(xmlBuffer, config);
     } else {
-        return extractOpenXmlChartData(xmlBuffer);
+        return extractOpenXmlChartData(xmlBuffer, config);
     }
 };

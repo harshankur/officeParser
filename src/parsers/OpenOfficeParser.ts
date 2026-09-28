@@ -128,6 +128,19 @@ type ParseParaFn = (
  * attached at any of the three ODF placements is built identically. `parsePara` is the caller's
  * `parseParagraphContent` closure.
  */
+/** A note body's or annotation's own paragraphs (see getOutermostElements): a nested note's or annotation's are read by its own reader, and taking them too doubled per level of notes in notes (528 bytes of ODT ended the process out of memory). */
+const NESTED_NOTES = new Set(['text:note', 'office:annotation']);
+const ownParagraphs = (container: Element): Element[] => getOutermostElements(container, 'text:p', NESTED_NOTES);
+/**
+ * A frame's own text box, image, table, object, title or description (children of it, as the schema
+ * has them): looked up through the frame's whole subtree, frames nested in text boxes took time in
+ * the product of their depth and content (4.5 KB of ODT took 30 seconds), and a nested frame's image
+ * was taken for the outer one's.
+ */
+const frameChild = (frame: Element, tag: string): Element | undefined => getDirectChildren(frame, tag)[0];
+/** A cell's comment is its own node (its body is not the cell's text). */
+const CELL_SKIP = new Set(['office:annotation']);
+
 function buildAnnotationComment(
     element: Element,
     parsePara: ParseParaFn,
@@ -140,7 +153,7 @@ function buildAnnotationComment(
     const date = getFirstElementByTagName(element, "dc:date")?.textContent || undefined;
     const children: OfficeContentNode[] = [];
     let text = '';
-    for (const cp of getElementsByTagName(element, "text:p")) {
+    for (const cp of ownParagraphs(element)) {
         const c = parsePara(cp, paraStyleMap, styleMap, config, sourceXml);
         text += (text ? ' ' : '') + c.text;
         children.push({ type: 'paragraph', text: c.text, children: c.children, metadata: {} });
@@ -175,7 +188,7 @@ const toRepeatCount = (attr: string | null): number => {
 };
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
+import { getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
 /**
@@ -242,10 +255,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
             entry = null;
             if (objectFile) {
-                const mathNode = getFirstElementByTagName(parseXmlString(objectFile.content.toString()), "math");
+                const mathNode = getFirstElementByTagName(parseXmlString(objectFile.content.toString(), { config }), "math");
                 if (mathNode) entry = { formula: mathmlToLatex(mathNode).trim(), uses: 0 };
                 else {
-                    const chartData = extractChartData(objectFile.content);
+                    const chartData = extractChartData(objectFile.content, config);
                     entry = { chartData, chartText: chartData.rawTexts.join(" "), uses: 0 };
                 }
             }
@@ -316,7 +329,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             path => /(^|\/)content\.xml$/.test(path) && !objectContentFileRegex.test(path),
             config, { fileType, part: 'content.xml' });
     const stylesFile = files.find(f => f.path === 'styles.xml');
-    const stylesDom = stylesFile ? parseXmlString(stylesFile.content.toString()) : undefined;
+    const stylesDom = stylesFile ? parseXmlString(stylesFile.content.toString(), { config }) : undefined;
     const content: OfficeContentNode[] = [];
     const notes: OfficeContentNode[] = [];
 
@@ -588,7 +601,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                     if (noteBody) {
                         // Extract note content recursively
-                        const notePs = getElementsByTagName(noteBody, "text:p");
+                        const notePs = ownParagraphs(noteBody);
                         const noteChildren: OfficeContentNode[] = [];
                         let noteText = '';
 
@@ -645,8 +658,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     }
                 } else if (tagName === 'draw:frame') {
                     const frame = element;
-                    const drawTextBox = getFirstElementByTagName(frame, "draw:text-box");
-                    const drawObject = getFirstElementByTagName(frame, "draw:object");
+                    const drawTextBox = frameChild(frame, "draw:text-box");
+                    const drawObject = frameChild(frame, "draw:object");
 
                     if (drawTextBox) {
                         const textBoxChildren: OfficeContentNode[] = [];
@@ -686,8 +699,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         } else {
                             // Standard inline image extraction fallback if object is not a formula
                             let altText = '';
-                            const svgTitle = getFirstElementByTagName(frame, "svg:title");
-                            const svgDesc = getFirstElementByTagName(frame, "svg:desc");
+                            const svgTitle = frameChild(frame, "svg:title");
+                            const svgDesc = frameChild(frame, "svg:desc");
                             if (svgTitle && svgTitle.textContent) {
                                 altText = svgTitle.textContent;
                             } else if (svgDesc && svgDesc.textContent) {
@@ -695,7 +708,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             }
 
                             let imageHref = '';
-                            const drawImages = getElementsByTagName(frame, "draw:image");
+                            const drawImages = getDirectChildren(frame, "draw:image");
                             if (drawImages.length > 0) {
                                 imageHref = drawImages[0].getAttribute("xlink:href") || '';
                                 if (imageHref) {
@@ -721,8 +734,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     } else {
                         // Standard inline image extraction fallback
                         let altText = '';
-                        const svgTitle = getFirstElementByTagName(frame, "svg:title");
-                        const svgDesc = getFirstElementByTagName(frame, "svg:desc");
+                        const svgTitle = frameChild(frame, "svg:title");
+                        const svgDesc = frameChild(frame, "svg:desc");
                         if (svgTitle && svgTitle.textContent) {
                             altText = svgTitle.textContent;
                         } else if (svgDesc && svgDesc.textContent) {
@@ -730,7 +743,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         }
 
                         let imageHref = '';
-                        const drawImages = getElementsByTagName(frame, "draw:image");
+                        const drawImages = getDirectChildren(frame, "draw:image");
                         if (drawImages.length > 0) {
                             imageHref = drawImages[0].getAttribute("xlink:href") || '';
                             if (imageHref) {
@@ -1097,7 +1110,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
 
     const parseContentXml = (xmlString: string) => {
-        const xml = parseXmlString(xmlString, { locator: config.includeRawContent });
+        const xml = parseXmlString(xmlString, { config, locator: config.includeRawContent });
         const body = getFirstElementByTagName(xml, "office:body");
         if (!body) return;
         // One budget for the entire document. It has to span every table - spreadsheet sheets,
@@ -1410,10 +1423,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 const isHeading = presClass === "title" || presClass === "sub-title";
 
                 // In presentations, frames often contain text-boxes, images, tables, or objects
-                const textBox = getFirstElementByTagName(node, "draw:text-box");
-                const image = getFirstElementByTagName(node, "draw:image");
-                const table = getFirstElementByTagName(node, "table:table");
-                const object = getFirstElementByTagName(node, "draw:object");
+                const textBox = frameChild(node, "draw:text-box");
+                const image = frameChild(node, "draw:image");
+                const table = frameChild(node, "table:table");
+                const object = frameChild(node, "draw:object");
 
                 if (textBox) {
                     traverse(textBox, targetArray, isHeading || forceHeading, sourceXml);
@@ -1424,8 +1437,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 } else if (image) {
                     // Extract alt text from svg:title or svg:desc
                     let altText = '';
-                    const svgTitle = getFirstElementByTagName(node, "svg:title");
-                    const svgDesc = getFirstElementByTagName(node, "svg:desc");
+                    const svgTitle = frameChild(node, "svg:title");
+                    const svgDesc = frameChild(node, "svg:desc");
                     if (svgTitle && svgTitle.textContent) {
                         altText = svgTitle.textContent;
                     } else if (svgDesc && svgDesc.textContent) {
@@ -1541,20 +1554,23 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         if (fileType === 'ods') {
             const spreadsheet = getFirstElementByTagName(body, "office:spreadsheet");
             if (spreadsheet) {
-                const tables = getElementsByTagName(spreadsheet, "table:table");
+                // The sheets, rows, cells and paragraphs each level holds itself (see getOutermostElements):
+                // taken as descendants, a table nested in a cell was read again at each level (586
+                // bytes took 7 seconds), and became a sheet of its own.
+                const tables = getDirectChildren(spreadsheet, "table:table");
                 for (let i = 0; i < tables.length; i++) {
                     const table = tables[i];
                     const sheetName = table.getAttribute("table:name") || `Sheet${i + 1}`;
                     const rows: OfficeContentNode[] = [];
 
-                    const tableRows = getElementsByTagName(table, "table:table-row");
+                    const tableRows = getOutermostElements(table, "table:table-row");
                     let rowIndex = 0;
 
                     for (let r = 0; r < tableRows.length; r++) {
                         checkAbortSignal(config.abortSignal);
                         const row = tableRows[r];
                         const cells: OfficeContentNode[] = [];
-                        const tableCells = getElementsByTagName(row, "table:table-cell");
+                        const tableCells = getDirectChildren(row, "table:table-cell");
 
                         let colIndex = 0;
                         const rowsRepeated = toRepeatCount(row.getAttribute("table:number-rows-repeated"));
@@ -1571,24 +1587,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 ? []
                                 : getDirectChildren(cell, "office:annotation").map(a =>
                                     buildAnnotationComment(a, parseParagraphContent, paragraphStyleMap, styleMap, config, xmlString));
-                            const insideAnnotation = (el: Element): boolean => {
-                                let p: Node | null = el.parentNode;
-                                while (p && p !== cell) {
-                                    if (isElement(p) && (p as Element).tagName === 'office:annotation') return true;
-                                    p = p.parentNode;
-                                }
-                                return false;
-                            };
-
                             // Extract text from cell (paragraphs inside cell, excluding a comment's body)
                             let cellText = "";
                             const children: OfficeContentNode[] = [];
-                            const ps = getElementsByTagName(cell, "text:p").filter(p => !insideAnnotation(p));
+                            const ps = getOutermostElements(cell, "text:p", CELL_SKIP);
                             for (let p = 0; p < ps.length; p++) {
                                 const para = ps[p];
 
                                 // Parse text:span elements for formatted text
-                                const spans = getElementsByTagName(para, "text:span");
+                                const spans = getOutermostElements(para, "text:span");
                                 if (spans.length > 0) {
                                     for (const span of spans) {
                                         const styleName = span.getAttribute("text:style-name");
@@ -1629,8 +1636,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             for (const frame of drawFrames) {
                                 // Extract alt text from svg:title or svg:desc
                                 let altText = '';
-                                const svgTitle = getFirstElementByTagName(frame, "svg:title");
-                                const svgDesc = getFirstElementByTagName(frame, "svg:desc");
+                                const svgTitle = frameChild(frame, "svg:title");
+                                const svgDesc = frameChild(frame, "svg:desc");
                                 if (svgTitle && svgTitle.textContent) {
                                     altText = svgTitle.textContent;
                                 } else if (svgDesc && svgDesc.textContent) {
@@ -1639,7 +1646,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                                 // Extract image href
                                 let imageHref = '';
-                                const drawImages = getElementsByTagName(frame, "draw:image");
+                                const drawImages = getDirectChildren(frame, "draw:image");
                                 if (drawImages.length > 0) {
                                     const rawHref = drawImages[0].getAttribute("xlink:href");
                                     if (rawHref) {
@@ -1651,7 +1658,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 let chartHref = '';
                                 let isFormula = false;
                                 let formulaText = '';
-                                const drawObjects = getElementsByTagName(frame, "draw:object");
+                                const drawObjects = getDirectChildren(frame, "draw:object");
                                 if (drawObjects.length > 0) {
                                     const href = drawObjects[0].getAttribute("xlink:href");
                                     if (href) {
@@ -1936,7 +1943,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     if (config.extractAttachments) {
         const objectFiles = files.filter(f => f.path.match(/Object \d+\/content\.xml/));
         for (const objFile of objectFiles) {
-            const objXml = parseXmlString(objFile.content.toString());
+            const objXml = parseXmlString(objFile.content.toString(), { config });
             const isChart = getElementsByTagName(objXml, "chart:chart").length > 0;
 
             if (isChart) {
@@ -1950,7 +1957,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 };
 
                 // Extract data from chart XML
-                const chartData = extractChartData(objFile.content);
+                const chartData = extractChartData(objFile.content, config);
 
                 if (chartData.rawTexts.length > 0) {
                     attachment.chartData = chartData;
@@ -1974,7 +1981,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     }
 
     const metaFile = files.find(f => f.path.match(metaFileRegex));
-    const metadata = metaFile ? parseOfficeMetadata(metaFile.content.toString()) : {};
+    const metadata = metaFile ? parseOfficeMetadata(metaFile.content.toString(), config) : {};
 
     // Helper: Resolve ODS chart cell references to actual values
     // ODS charts often link to cell ranges (e.g., [Sheet1.$A$1:.$A$5]) instead of embedding values

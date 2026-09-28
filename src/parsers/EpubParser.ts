@@ -47,7 +47,7 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
     let opfPath: string | undefined;
     const containerFile = files.find(f => /META-INF\/container\.xml$/i.test(f.path));
     if (containerFile) {
-        const containerXml = parseXmlString(containerFile.content.toString('utf-8'));
+        const containerXml = parseXmlString(containerFile.content.toString('utf-8'), { config });
         const rootfile = getFirstElementByTagName(containerXml, 'rootfile');
         opfPath = rootfile ? getAttribute(rootfile, 'full-path') : undefined;
     }
@@ -58,7 +58,7 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
     }
 
     const opfDir = opfFile.path.includes('/') ? opfFile.path.substring(0, opfFile.path.lastIndexOf('/') + 1) : '';
-    const opfXml = parseXmlString(opfFile.content.toString('utf-8'));
+    const opfXml = parseXmlString(opfFile.content.toString('utf-8'), { config });
 
     // ─── Metadata (Dublin Core) ─────────────────────────────────────────────
     const metadata: OfficeMetadata = {};
