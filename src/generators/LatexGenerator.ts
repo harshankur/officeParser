@@ -10,6 +10,7 @@ import { isSourceComment } from '../utils/commentUtils.js';
 import { contentHash, imageToTextPdf, newDecodeBudget } from '../utils/textPdf.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { lookupTable } from '../utils/lookupUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
  * A line break inside a paragraph. `\newline` (and `\\`) raise "There's no line here to end" when
@@ -2022,7 +2023,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             return this.withCtx({ moving: true, display: false, verbatim: false, sections: false, labels: false, longtable: false, notes: 'omit' }, async () => {
                 const runs = await this.headingRuns(node, this.hasUniformFormatting(node, fmt => fmt?.bold === true));
                 const notes: OfficeContentNode[] = [];
-                const collect = (n: OfficeContentNode) => { if (n.notes) notes.push(...n.notes); n.children?.forEach(collect); };
+                const collect = (n: OfficeContentNode) => { if (n.notes) appendAll(notes, n.notes); n.children?.forEach(collect); };
                 collect(node);
                 let thanks = '';
                 for (const note of notes) thanks += `\\thanks{${await this.noteBody(note, 'parenthetical')}}`;

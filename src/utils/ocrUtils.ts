@@ -14,6 +14,7 @@ import { FullOfficeParserConfig, OcrConfig, OfficeErrorType, OfficeWarningType }
 import { isBrowser } from './envUtils.js';
 import { buildOfficeError, getAbortError, logWarning } from './errorUtils.js';
 import { median } from './numberUtils.js';
+import { appendAll } from './nodeListUtils.js';
 
 /**
  * Internal interface for tracking jobs in the scheduler queue.
@@ -130,7 +131,7 @@ export function layoutOcrText(page: any): string {
     const rows: OcrRow[] = [];
     for (const l of lines) {
         const last = rows[rows.length - 1];
-        if (last && l.y0 - last.y0 <= rowBand) last.words.push(...l.words);
+        if (last && l.y0 - last.y0 <= rowBand) appendAll(last.words, l.words);
         else rows.push({ words: [...l.words], y0: l.y0 });
     }
 

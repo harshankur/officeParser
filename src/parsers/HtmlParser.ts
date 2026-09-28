@@ -8,6 +8,7 @@ import { isEmptyMath, MathNode, mathmlTreeToLatex } from '../utils/mathUtils.js'
 import { isSafeHtmlAttributeName, iframeAllowed } from '../utils/sanitize.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
  * Maximum element nesting depth accepted from an HTML/XHTML source before the parser gives up
@@ -824,7 +825,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
                     const parsed = parseNode(child, fmt, lCtx, depth + 1);
                     if (parsed) {
-                        if (Array.isArray(parsed)) kids.push(...parsed);
+                        if (Array.isArray(parsed)) appendAll(kids, parsed);
                         else kids.push(parsed);
                     }
                 }
@@ -1136,7 +1137,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const flattenedChildren: OfficeContentNode[] = [];
                 for (const child of children) {
                     if (child.type === 'paragraph' && child.children) {
-                        flattenedChildren.push(...child.children);
+                        appendAll(flattenedChildren, child.children);
                     } else {
                         flattenedChildren.push(child);
                     }
@@ -1592,7 +1593,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
             for (const child of filteredChildren) {
                 const parsed = parseNode(child);
                 if (parsed) {
-                    if (Array.isArray(parsed)) contentNodes.push(...parsed);
+                    if (Array.isArray(parsed)) appendAll(contentNodes, parsed);
                     else contentNodes.push(parsed);
                 }
             }

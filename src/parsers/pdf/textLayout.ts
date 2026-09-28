@@ -15,6 +15,7 @@ import { ListMetadata, NodeBounds, OfficeContentNode, TextFormatting, TextMetada
 import { rotateBoundsToRendered, roundBounds, unionAll, unionBounds } from './geometry.js';
 import { PdfLayoutConfig, PdfLine, RawRun, TextFragment } from './pdfTypes.js';
 import { median } from '../../utils/numberUtils.js';
+import { appendAll } from '../../utils/nodeListUtils.js';
 
 // ── small numeric helpers ───────────────────────────────────────────────────
 
@@ -744,7 +745,7 @@ export function detectTables(lines: PdfLine[], page: PageContext, doc: DocContex
         if (rows[i].length < 2) { i++; continue; }
         let j = i;
         while (j < rows.length && rows[j].length >= 2) j++;
-        candidates.push(...adjacentRuns(rows.slice(i, j)));
+        appendAll(candidates, adjacentRuns(rows.slice(i, j)));
         i = j;
     }
 

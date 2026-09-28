@@ -240,6 +240,9 @@ export const buildOfficeError = (type: OfficeErrorType, info?: any): OfficeError
  */
 export const getWrappedError = (error: any, config: OfficeParserConfig, filePath?: string): Error => {
     if (error?.officeIssue) return error;
+    // A document nested past what the stack holds (elements in their own kind, hundreds deep) is that,
+    // not a corrupt file.
+    if (error instanceof RangeError && /call stack/i.test(error.message)) return getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, config);
 
     let message = error.message || error;
     let code: OfficeErrorType | OfficeWarningType = OfficeErrorType.FILE_CORRUPTED; // Default for wrapped errors

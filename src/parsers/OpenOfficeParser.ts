@@ -257,6 +257,7 @@ import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { takeRepeats } from '../utils/repeatUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
  * Helper to clean and extract attachment name from xlink:href or paths.
@@ -315,11 +316,28 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     let spaceBudget = 16 * 1024 * 1024;
     let repeatedObjectText = REPEATED_OBJECT_TEXT;
     const embeddedObjects = new Map<string, { formula?: string; chartData?: ChartData; chartText?: string; uses: number } | null>();
+    // The package's files by path, and by each tail of their path a folder starts (`Object 1/content.xml`
+    // of `Pictures/Object 1/content.xml`), the first of each: a scan of every file per object took
+    // objects x files.
+    let filesByPath: Map<string, (typeof files)[number]> | undefined;
+    const fileAt = (path: string) => {
+        if (!filesByPath) {
+            filesByPath = new Map();
+            for (const f of files) if (!filesByPath.has(f.path)) filesByPath.set(f.path, f);
+            for (const f of files) {
+                for (let at = f.path.indexOf('/'); at !== -1; at = f.path.indexOf('/', at + 1)) {
+                    const tail = f.path.slice(at + 1);
+                    if (tail && !filesByPath.has(tail)) filesByPath.set(tail, f);
+                }
+            }
+        }
+        return filesByPath.get(path);
+    };
     const readEmbeddedObject = (attachmentName: string): { formula?: string; chartData?: ChartData; chartText?: string } | null => {
         let entry = embeddedObjects.get(attachmentName);
         if (entry === undefined) {
             const objectPath = `${attachmentName}/content.xml`;
-            const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
+            const objectFile = fileAt(objectPath);
             entry = null;
             if (objectFile) {
                 const mathNode = getFirstElementByTagName(parseXmlString(objectFile.content.toString(), { config }), "math");
@@ -632,8 +650,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                     const spanContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, formatting, linkMetadata, sourceXml);
                     fullText += spanContent.text;
-                    children.push(...spanContent.children);
-                    anchorIds.push(...spanContent.anchorIds);
+                    appendAll(children, spanContent.children);
+                    appendAll(anchorIds, spanContent.anchorIds);
                 } else if (tagName === 'text:a' || tagName === 'draw:a') {
                     // Hyperlink: around text (text:a), or around a frame, a picture that is a link (draw:a)
                     let href = element.getAttribute('xlink:href') || '';
@@ -660,8 +678,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                     const linkContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, newLinkMetadata, sourceXml);
                     fullText += linkContent.text;
-                    children.push(...linkContent.children);
-                    anchorIds.push(...linkContent.anchorIds);
+                    appendAll(children, linkContent.children);
+                    appendAll(anchorIds, linkContent.anchorIds);
                 } else if (tagName === 'text:note' && !config.ignoreNotes) {
                     // Footnote or endnote
                     const noteClass = (element.getAttribute('text:note-class') || 'footnote') as 'footnote' | 'endnote';
@@ -733,7 +751,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     if (drawTextBox) {
                         const textBoxChildren: OfficeContentNode[] = [];
                         traverse(drawTextBox, textBoxChildren, false, sourceXml);
-                        children.push(...textBoxChildren);
+                        appendAll(children, textBoxChildren);
                         const textBoxText = textBoxChildren.map(c => c.text || '').join('\n');
                         fullText += textBoxText;
                     } else if (drawObject) {
@@ -1970,7 +1988,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 }
 
                 if (odpNotes.length > 0) {
-                    content.push(...odpNotes);
+                    appendAll(content, odpNotes);
                 }
             }
         }
@@ -2088,6 +2106,19 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     const sheetRows = new Map<OfficeContentNode, { rows: number[]; cells: Map<number, OfficeContentNode[]> }>();
     const resolvedReferences = new Map<string, string[]>();
     let resolutionBudget = 5 * MAX_CHART_VALUES;
+    // The sheets by name (the first of a name), found once: a scan of the document per reference took
+    // references x sheets (315 KB, three and a half minutes).
+    let sheetsByName: Map<string, OfficeContentNode> | undefined;
+    const sheetNamed = (nodes: OfficeContentNode[], name: string): OfficeContentNode | undefined => {
+        if (!sheetsByName) {
+            sheetsByName = new Map();
+            for (const n of nodes) {
+                const sheetName = n.type === 'sheet' ? (n.metadata as SheetMetadata)?.sheetName : undefined;
+                if (typeof sheetName === 'string' && !sheetsByName.has(sheetName)) sheetsByName.set(sheetName, n);
+            }
+        }
+        return sheetsByName.get(name);
+    };
     const rowsOf = (sheet: OfficeContentNode) => {
         let index = sheetRows.get(sheet);
         if (!index) {
@@ -2153,7 +2184,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
             if (!start || !end) return [ref];
 
-            const sheet = nodes.find(n => n.type === 'sheet' && (n.metadata as SheetMetadata)?.sheetName === sheetName);
+            // Every reference is charged, found or not.
+            if (--resolutionBudget < 0) return [ref];
+            const sheet = sheetNamed(nodes, sheetName);
             if (!sheet || !sheet.children) return [ref];
 
             const values: string[] = [];

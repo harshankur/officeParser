@@ -7,6 +7,7 @@ import { getAttribute, getElementsByTagName, getFirstElementByTagName, parseXmlS
 import { extractFiles } from '../utils/zipUtils.js';
 import { parseHtml } from './HtmlParser.js';
 import { setOwn } from '../utils/lookupUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
  * Resolves a manifest-relative href against the OPF file's directory, collapsing
@@ -202,7 +203,7 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
             attachments.push({ ...attachment, name });
         }
         if (renamed.size) renameImageAttachments(chapterAst.content, renamed);
-        content.push(...chapterAst.content);
+        appendAll(content, chapterAst.content);
     }
 
     // Keep manifest images that were NOT referenced inline (e.g. cover art, or images used

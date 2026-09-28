@@ -71,6 +71,10 @@ import { getChildElements, getDirectChildren, getElementsByTagName, getOutermost
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { lookupTable, plainRecord, setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
+
+/** A text box's content, which the text box's own paragraphs are parsed from (see ownFirst). */
+const TEXT_BOX: ReadonlySet<string> = new Set(['w:txbxContent', 'txbxContent']);
 
 /**
  * Parses a Word document (.docx) and extracts content, formatting, and metadata.
@@ -232,6 +236,38 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             return Object.keys(indentation).length > 0 ? indentation : undefined;
         }
         return undefined;
+    };
+
+    /**
+     * The first `tag` in `element` outside the text boxes it draws: parsing a text box's paragraphs reads
+     * what those hold, and a run finding a text box's picture or note reference as its own showed it twice.
+     */
+    const ownFirst = (element: Element, tag: string): Element | undefined => getOutermostElements(element, tag, TEXT_BOX)[0];
+
+    /**
+     * The child elements of `container` as Word lays them out: a content control (`w:sdt`) or custom XML
+     * element (`w:customXml`) stands for what it wraps, at any depth. A table of contents, a cover page or
+     * a form is a content control around paragraphs, rows or cells, and reading direct children alone
+     * dropped all of it.
+     */
+    const layoutChildren = (container: Element): Element[] => {
+        const out: Element[] = [];
+        const pending: Node[] = [];
+        const pushChildren = (element: Element) => { for (let i = element.childNodes.length - 1; i >= 0; i--) pending.push(element.childNodes[i]); };
+        pushChildren(container);
+        while (pending.length) {
+            const node = pending.pop()!;
+            if (!isElement(node)) continue;
+            if (node.nodeName === 'w:sdt') {
+                const inner = getDirectChildren(node, "w:sdtContent")[0];
+                if (inner) pushChildren(inner);
+            } else if (node.nodeName === 'w:customXml') {
+                pushChildren(node);
+            } else {
+                out.push(node);
+            }
+        }
+        return out;
     };
 
     /**
@@ -555,10 +591,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         const comments: OfficeContentNode[] = [];
 
         // Traverse children of paragraph (runs, hyperlinks, etc.)
+        // Whether a hyperlink enclosing the node being read gives its runs their link (see w:hyperlink).
+        let insideLink = false;
         const processChildNode = (node: Node) => {
             if (isElement(node) && (node.nodeName === 'w:r' || node.nodeName === 'm:r')) {
                 const runNode = node;
-                const rPr = getFirstElementByTagName(runNode, "w:rPr");
+                const rPr = getDirectChildren(runNode, "w:rPr")[0];
 
                 // Formatting
                 let formatting: TextFormatting = {};
@@ -669,16 +707,26 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                     }
                 }
 
+                // The run's drawings: for mc:AlternateContent, the branch resolveAlternateContent picks
+                // (reading both made one picture two), and none inside a text box of theirs.
+                const runDrawings: Element[] = [];
+                const pendingDrawing: Node[] = [];
+                const pushNodes = (nodes: ArrayLike<Node>) => { for (let i = nodes.length - 1; i >= 0; i--) pendingDrawing.push(nodes[i]); };
+                pushNodes(runNode.childNodes);
+                while (pendingDrawing.length) {
+                    const item = pendingDrawing.pop()!;
+                    if (!isElement(item) || TEXT_BOX.has(item.nodeName)) continue;
+                    if (item.nodeName === 'w:drawing' || item.nodeName === 'drawing' || item.nodeName === 'w:pict' || item.nodeName === 'pict') runDrawings.push(item);
+                    else if (item.nodeName === 'mc:AlternateContent' || item.nodeName === 'AlternateContent') pushNodes(resolveAlternateContent(item));
+                    else pushNodes(item.childNodes);
+                }
+
                 // Images/Drawings
                 if (config.extractAttachments) {
-                    const drawings = getElementsByTagName(runNode, "w:drawing");
-                    const picts = getElementsByTagName(runNode, "w:pict");
-                    const allImages = [...drawings, ...picts];
-
-                    for (const imgNode of allImages) {
+                    for (const imgNode of runDrawings) {
                         // Extract Alt Text
                         let altText = '';
-                        const docPr = getFirstElementByTagName(imgNode, "wp:docPr");
+                        const docPr = ownFirst(imgNode, "wp:docPr");
                         if (docPr) {
                             altText = docPr.getAttribute("descr") || docPr.getAttribute("title") || '';
                         }
@@ -688,11 +736,11 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
 
                         // Extract Relationship ID
                         let rId = '';
-                        const blip = getFirstElementByTagName(imgNode, "a:blip");
+                        const blip = ownFirst(imgNode, "a:blip");
                         if (blip) {
                             rId = blip.getAttribute("r:embed") || '';
                         } else {
-                            const imagedata = getFirstElementByTagName(imgNode, "v:imagedata");
+                            const imagedata = ownFirst(imgNode, "v:imagedata");
                             if (imagedata) {
                                 rId = imagedata.getAttribute("r:id") || '';
                             }
@@ -725,9 +773,21 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                     }
                 }
 
+                // A text box the run draws: its paragraphs' content joins this one (as a text box drawn
+                // straight in the paragraph does), where it was dropped.
+                for (const drawing of runDrawings) {
+                    for (const txbx of getOutermostElements(drawing, "w:txbxContent")) {
+                        for (const txbxParagraph of getOutermostElements(txbx, "w:p")) {
+                            const nestedP = parseParagraph(txbxParagraph, documentContent);
+                            appendAll(children, (nestedP.children || []));
+                            text += nestedP.text;
+                        }
+                    }
+                }
+
                 // Footnotes/Endnotes inside runs
                 if (!config.ignoreNotes) {
-                    const footnoteRef = getFirstElementByTagName(runNode, "w:footnoteReference");
+                    const footnoteRef = ownFirst(runNode, "w:footnoteReference");
                     if (footnoteRef) {
                         const id = footnoteRef.getAttribute("w:id");
                         if (id && footnoteMap.has(id)) {
@@ -748,7 +808,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                         }
                     }
 
-                    const endnoteRef = getFirstElementByTagName(runNode, "w:endnoteReference");
+                    const endnoteRef = ownFirst(runNode, "w:endnoteReference");
                     if (endnoteRef) {
                         const id = endnoteRef.getAttribute("w:id");
                         if (id && endnoteMap.has(id)) {
@@ -772,7 +832,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
 
                 // Comments inside runs
                 if (!config.ignoreComments) {
-                    const commentRef = getFirstElementByTagName(runNode, "w:commentReference");
+                    const commentRef = ownFirst(runNode, "w:commentReference");
                     if (commentRef) {
                         const id = commentRef.getAttribute("w:id");
                         if (id && commentMap.has(id)) {
@@ -806,18 +866,20 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                     linkMetadata = { link: relsMap[rId], linkType: 'external' };
                 }
 
-                // Process children of hyperlink (usually runs)
-                const hlChildren = Array.from(hlNode.childNodes);
-                for (const child of hlChildren) {
-                    // Capture the current length of children to apply metadata to new nodes
-                    const startIndex = children.length;
-                    processChildNode(child);
-                    // Apply link metadata to the newly added text nodes, and to a picture in the link
-                    if (linkMetadata) {
-                        for (let i = startIndex; i < children.length; i++) {
-                            if (children[i].type === 'text' || children[i].type === 'image') {
-                                children[i].metadata = { ...(children[i].metadata ?? {}), ...linkMetadata } as any;
-                            }
+                // Process children of hyperlink (usually runs). The outermost hyperlink with a link gives
+                // its runs (and a picture in it) that link, once, after they are read: every level of
+                // nested hyperlinks gave it again to all the runs inside it, so 1,000 levels around
+                // 400,000 runs (23 KB) took 17 seconds.
+                const applies = !!linkMetadata && !insideLink;
+                const wasInside = insideLink;
+                if (applies) insideLink = true;
+                const startIndex = children.length;
+                for (const child of Array.from(hlNode.childNodes)) processChildNode(child);
+                insideLink = wasInside;
+                if (applies) {
+                    for (let i = startIndex; i < children.length; i++) {
+                        if (children[i].type === 'text' || children[i].type === 'image') {
+                            children[i].metadata = { ...(children[i].metadata ?? {}), ...linkMetadata } as any;
                         }
                     }
                 }
@@ -836,13 +898,11 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 // each level (1.3 KB took half a minute).
                 const textBoxes = getOutermostElements(node, "w:txbxContent");
                 for (const txbx of textBoxes) {
-                    const txbxChildren = Array.from(txbx.childNodes);
-                    for (const txbxChild of txbxChildren) {
-                        if (isElement(txbxChild) && txbxChild.nodeName === 'w:p') {
-                            const nestedP = parseParagraph(txbxChild, documentContent);
-                            children.push(...(nestedP.children || []));
-                            text += nestedP.text;
-                        }
+                    // Its paragraphs wherever they sit: in a table or a content control of the text box too.
+                    for (const txbxParagraph of getOutermostElements(txbx, "w:p")) {
+                        const nestedP = parseParagraph(txbxParagraph, documentContent);
+                        appendAll(children, (nestedP.children || []));
+                        text += nestedP.text;
                     }
                 }
             } else if (isElement(node) && (node.nodeName === 'm:oMath' || node.nodeName === 'oMath'
@@ -882,7 +942,10 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             const numIdNode = getFirstElementByTagName(numPr, "w:numId");
             const ilvlNode = getFirstElementByTagName(numPr, "w:ilvl");
             const numId = numIdNode ? numIdNode.getAttribute("w:val") || '0' : '0';
-            const ilvl = ilvlNode ? parseInt(ilvlNode.getAttribute("w:val") || '0', 10) : 0;
+            // Word's levels are 0 to 8: a level of -20,000,000 ran the loop clearing deeper levels below
+            // for 20 million steps per paragraph, and one past 2^53 never ended.
+            const levelValue = ilvlNode ? parseInt(ilvlNode.getAttribute("w:val") || '0', 10) : 0;
+            const ilvl = Number.isFinite(levelValue) ? Math.max(0, Math.min(8, levelValue)) : 0;
 
             let listType: 'ordered' | 'unordered' = 'ordered';
             let itemIndex = 0;
@@ -957,15 +1020,15 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     // Helper to parse a table node
     const parseTable = (tblNode: Element, documentContent: string, pendingAnchorIds: string[] = []): OfficeContentNode => {
         const rows: OfficeContentNode[] = [];
-        const trNodes = getDirectChildren(tblNode, "w:tr");
+        const trNodes = layoutChildren(tblNode).filter(n => n.nodeName === 'w:tr');
         // Track vertical merges: colIndex -> { startCellNode, rowSpan }
         const vMergeMap = new Map<number, { node: OfficeContentNode, span: number }>();
 
         for (let rIndex = 0; rIndex < trNodes.length; rIndex++) {
             const trNode = trNodes[rIndex];
             const cells: OfficeContentNode[] = [];
-            // Only get direct child cells, not nested table cells
-            const tcNodes = getDirectChildren(trNode, "w:tc");
+            // The row's own cells, not nested table cells (a content control around a cell stands for it)
+            const tcNodes = layoutChildren(trNode).filter(n => n.nodeName === 'w:tc');
             // <w:trPr><w:tblHeader/> marks a row that repeats as the table's header on every page -
             // Word's own header-row flag, and what this library's DOCX generator writes. Without
             // reading it, a header row survived only when it happened to be all-bold.
@@ -1009,7 +1072,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 let cellText = '';
 
                 // Cells contain paragraphs (and other block-level elements)
-                const cellContentNodes = Array.from(tcNode.childNodes);
+                const cellContentNodes = layoutChildren(tcNode);
                 for (const child of cellContentNodes) {
                     if (isElement(child) && child.nodeName === 'w:p') {
                         const pNode = parseParagraph(child, documentContent);
@@ -1069,7 +1132,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                             );
                             if (hasFoldableContent) {
                                 if (!mergeInfo.node.children) mergeInfo.node.children = [];
-                                mergeInfo.node.children.push(...cellChildren);
+                                appendAll(mergeInfo.node.children, cellChildren);
                                 if (cellText.trim()) mergeInfo.node.text += " " + cellText;
                             }
                         } else {
@@ -1156,19 +1219,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         for (const hFile of headerFiles) {
             const hDoc = parseXmlString(hFile.content.toString(), { config });
             const hXml = hFile.content.toString();
-            const hNodes = Array.from(hDoc.documentElement.childNodes).filter(isElement);
-            for (const child of hNodes) {
+            for (const child of layoutChildren(hDoc.documentElement)) {
                 if (child.nodeName === 'w:p') headers.push(parseParagraph(child, hXml));
                 else if (child.nodeName === 'w:tbl') headers.push(parseTable(child, hXml));
-                else if (child.nodeName === 'w:sdt') {
-                    const contentNode = getFirstElementByTagName(child, "w:sdtContent");
-                    if (contentNode) {
-                        for (const sdtChild of Array.from(contentNode.childNodes).filter(isElement)) {
-                            if (sdtChild.nodeName === 'w:p') headers.push(parseParagraph(sdtChild, hXml));
-                            else if (sdtChild.nodeName === 'w:tbl') headers.push(parseTable(sdtChild, hXml));
-                        }
-                    }
-                }
             }
         }
 
@@ -1176,19 +1229,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         for (const fFile of footerFiles) {
             const fDoc = parseXmlString(fFile.content.toString(), { config });
             const fXml = fFile.content.toString();
-            const fNodes = Array.from(fDoc.documentElement.childNodes).filter(isElement);
-            for (const child of fNodes) {
+            for (const child of layoutChildren(fDoc.documentElement)) {
                 if (child.nodeName === 'w:p') footers.push(parseParagraph(child, fXml));
                 else if (child.nodeName === 'w:tbl') footers.push(parseTable(child, fXml));
-                else if (child.nodeName === 'w:sdt') {
-                    const contentNode = getFirstElementByTagName(child, "w:sdtContent");
-                    if (contentNode) {
-                        for (const sdtChild of Array.from(contentNode.childNodes).filter(isElement)) {
-                            if (sdtChild.nodeName === 'w:p') footers.push(parseParagraph(sdtChild, fXml));
-                            else if (sdtChild.nodeName === 'w:tbl') footers.push(parseTable(sdtChild, fXml));
-                        }
-                    }
-                }
             }
         }
     }
@@ -1208,7 +1251,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         const doc = parseXmlString(documentContent, { config, locator: config.includeRawContent });
         const body = getFirstElementByTagName(doc, "w:body");
         if (body) {
-            const bodyChildren = Array.from(body.childNodes);
+            const bodyChildren = layoutChildren(body);
             let pendingAnchorIds: string[] = [];
 
             for (const child of bodyChildren) {

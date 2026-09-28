@@ -5,6 +5,7 @@ import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed } from '.
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { clampInt } from '../utils/numberUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /** A child that is a block of its own (a code block or display equation), which a <p> cannot hold. */
 const isBlockInParagraph = (child: OfficeContentNode): boolean =>
@@ -161,6 +162,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      */
     imageSourceFor?: (attachment: OfficeAttachment) => string | undefined;
     private chartCounter = 0;
+    /** Each top-level sheet's place among the document's sheets, found once (see sheetIndex). */
+    private sheetIndexes: Map<OfficeContentNode, number> | undefined;
+    /**
+     * `sheet`'s place among the document's top-level sheets (-1 for none): the sheets were listed again
+     * for each, so 40,000 sheets (3 KB of ODS) took over a minute to write.
+     */
+    private sheetIndex(sheet: OfficeContentNode): number {
+        if (!this.sheetIndexes) {
+            this.sheetIndexes = new Map();
+            for (const node of this.ast?.content ?? []) if (node.type === 'sheet') this.sheetIndexes.set(node, this.sheetIndexes.size);
+        }
+        return this.sheetIndexes.get(sheet) ?? -1;
+    }
     /**
      * The id of the element holding each chart attachment's data, written with its first chart: written
      * into every chart showing it, one 100 KB chart framed 2,000 times made 400 MB of HTML.
@@ -251,9 +265,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // (and recorded) during the body walk above, so read it back rather than asking `onNode` a
             // second time about every sheet - the hook is allowed to have side effects.
             const sheets = this.ast.content.filter(node => node.type === 'sheet' && !this.onNodeSkipped.has(node));
-            const tabs = sheets.map((n, i) => {
-                const sheetName = (n.metadata as any)?.sheetName || `Sheet ${i + 1}`;
-                return `<a href="#sheet-${i}" class="spreadsheet-tab">${this.escape(sheetName)}</a>`;
+            // Each tab links to its sheet's own id (its place among all the sheets, as the sheet's div
+            // is numbered), so a sheet `onNode` skipped does not shift the links after it.
+            const tabs = sheets.map(n => {
+                const index = this.sheetIndex(n);
+                const sheetName = (n.metadata as any)?.sheetName || `Sheet ${index + 1}`;
+                return `<a href="#sheet-${index}" class="spreadsheet-tab">${this.escape(sheetName)}</a>`;
             }).join('');
             spreadsheetTabs = `<div class="spreadsheet-tabs">${tabs}</div>`;
             spreadsheetScript = `
@@ -875,7 +892,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
         if (node.notes && node.notes.length > 0) {
             if (node.type !== 'slide') {
-                this.collectedNotes.push(...node.notes);
+                appendAll(this.collectedNotes, node.notes);
             }
         }
 
@@ -970,8 +987,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const slug = this.slugify(node.text || this.getNodeText(node));
                 if (slug && !anchorIds.includes(slug)) anchorIds.push(slug);
             } else if (node.type === 'sheet') {
-                const sheetIndex = this.ast?.content.filter(n => n.type === 'sheet').indexOf(node) ?? 0;
-                const sheetId = `sheet-${sheetIndex}`;
+                const sheetId = `sheet-${Math.max(0, this.sheetIndex(node))}`;
                 if (!anchorIds.includes(sheetId)) anchorIds.push(sheetId);
             }
         }
@@ -1451,7 +1467,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                             if (typeof rowOverride === 'string') { tbodyRows += rowOverride; continue; }
                             const mapping = this.getSemanticMapping(rowNode);
                             const rClasses = ['excel-row'];
-                            if (mapping?.classes) rClasses.push(...mapping.classes);
+                            if (mapping?.classes) appendAll(rClasses, mapping.classes);
                             // Escaped like the `className` built for every other node type. This
                             // path rebuilds the class attribute from the raw mapping array rather
                             // than reusing that value, and was the only place it went out unescaped.
@@ -1500,15 +1516,14 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     nonRowHtml = await this.processNodeArray(nonRowNodes);
                 }
 
-                const isFirstSheet = this.ast.content.filter(n => n.type === 'sheet')[0] === node;
-                const isActive = isFirstSheet;
-                const sheetIndex = this.ast.content.filter(n => n.type === 'sheet').indexOf(node);
+                const sheetIndex = this.sheetIndex(node);
+                const isActive = sheetIndex === 0;
                 const sheetId = `sheet-${sheetIndex}`;
 
                 // Merge classes correctly to avoid duplicate class attributes
                 const mergedClasses = ['spreadsheet-sheet'];
                 if (isActive) mergedClasses.push('active');
-                if (classes.length > 0) mergedClasses.push(...classes);
+                if (classes.length > 0) appendAll(mergedClasses, classes);
                 // Escaped for the same reason as the row above; `classes` here also carries the
                 // attribute bag's raw className, so escaping at the join covers both sources.
                 const classAttr = ` class="${this.escape(mergedClasses.join(' '))}"`;

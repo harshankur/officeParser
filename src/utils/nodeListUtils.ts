@@ -53,8 +53,18 @@ export function sharedNodeVisits(ast: OfficeParserAST): number {
     let visits = 0;
     const roots: unknown[] = [...(Array.isArray(ast.content) ? ast.content : [])];
     const aux = ast.auxiliary as Record<string, unknown> | undefined;
-    if (aux && typeof aux === 'object') for (const key of AUXILIARY_LISTS) if (Array.isArray(aux[key])) roots.push(...(aux[key] as unknown[]));
+    if (aux && typeof aux === 'object') for (const key of AUXILIARY_LISTS) if (Array.isArray(aux[key])) appendAll(roots, (aux[key] as unknown[]));
     for (const root of roots) if (root && typeof root === 'object') visits += count(root as OfficeContentNode);
     while (pending.length) visits += count(pending.pop()!);
     return visits - along.size;
+}
+
+/**
+ * Appends `items` to `target` one by one. `appendAll(target, items)` passes every item as an argument,
+ * which throws a RangeError once there are more than the engine allows (about 120,000): a slide group
+ * of that many shapes, a chapter of that many paragraphs, or a paragraph of that many runs failed the
+ * parse, and a writer reported it as nesting too deep.
+ */
+export function appendAll<T>(target: T[], items: readonly T[]): void {
+    for (const item of items) target.push(item);
 }

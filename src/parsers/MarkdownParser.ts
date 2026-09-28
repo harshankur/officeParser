@@ -8,6 +8,7 @@ import { decodeCharacterReference, decodeCharacterReferences } from '../utils/ht
 import { iframeAllowed } from '../utils/sanitize.js';
 import { ASCII_WHITESPACE, trimAsciiWhitespace, trimEndChars, trimStartChars } from '../utils/textUtils.js';
 import { lookupTable, setOwn } from '../utils/lookupUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 // Sentinel node type for a standalone bookmark-anchor block (e.g. `<a id="x"></a>` on its
 // own line). A post-parse pass folds these into the following node's anchorIds so they
@@ -226,15 +227,6 @@ function splitUrlTitle(raw: string): { url: string; title?: string } {
     }
     // The target is decoded too, as a renderer decodes it (the generator escapes what it must).
     return { url: decodeMarkdownText(text) };
-}
-
-/**
- * Appends `items` to `target` one by one. `target.push(...items)` passes every item as an argument,
- * which throws once there are more than the engine allows (some hundred thousand nodes, from one
- * long line); a document is only as long as its author made it.
- */
-function appendAll<T>(target: T[], items: readonly T[]): void {
-    for (const item of items) target.push(item);
 }
 
 /** ASCII punctuation, the characters a backslash escapes in CommonMark. */
@@ -1406,7 +1398,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 const refId = (g.refId || label).trim().toLowerCase();
                 const def = linkDefinitions.get(refId);
                 if (def && expandReference(`link:${refId}`, def.url.length + (def.title?.length ?? 0))) {
-                    nodes.push(...buildLinkOrImageNodes(isImage, label, def.url));
+                    appendAll(nodes, buildLinkOrImageNodes(isImage, label, def.url));
                 } else {
                     // Not a known reference - preserve the literal bracketed text unchanged.
                     nodes.push(plainText(text.substring(match.index, match.index + match[0].length)));
@@ -1416,7 +1408,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 const label = g.shortText;
                 const def = linkDefinitions.get(label.trim().toLowerCase());
                 if (def && expandReference(`link:${label.trim().toLowerCase()}`, def.url.length + (def.title?.length ?? 0))) {
-                    nodes.push(...buildLinkOrImageNodes(isImage, label, def.url));
+                    appendAll(nodes, buildLinkOrImageNodes(isImage, label, def.url));
                 } else {
                     // Not a known reference - ordinary bracketed prose, preserve unchanged.
                     nodes.push(plainText(`${g.shortBang}[${label}]`));
@@ -1595,7 +1587,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         let carried: string[] = [];
         for (const node of content) {
             if ((node.type as any) === ANCHOR_PLACEHOLDER) {
-                carried.push(...(((node.metadata as any)?.anchorIds as string[]) || []));
+                appendAll(carried, (((node.metadata as any)?.anchorIds as string[]) || []));
                 continue;
             }
             if (carried.length > 0 && ANCHOR_HOLDERS.has(node.type)) {

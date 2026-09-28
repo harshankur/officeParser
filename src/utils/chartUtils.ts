@@ -1,6 +1,7 @@
 import { ChartData, OfficeParserConfig } from "../types";
 import { parseXmlString, getElementsByTagName, getDirectChildren, getFirstElementByTagName, getChildElements } from "./xmlUtils";
 import { repeatPreview, takeRepeats } from "./repeatUtils";
+import { appendAll } from "./nodeListUtils";
 
 /**
  * Extracts a single text element located at:
@@ -183,9 +184,9 @@ const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): Ch
         let rows: Element[] = [];
         const headerRowsNode = getDirectChildren(table, "table:table-header-rows")[0];
         if (headerRowsNode) {
-            rows.push(...getDirectChildren(headerRowsNode, "table:table-row"));
+            appendAll(rows, getDirectChildren(headerRowsNode, "table:table-row"));
         }
-        rows.push(...getDirectChildren(table, "table:table-row"));
+        appendAll(rows, getDirectChildren(table, "table:table-row"));
 
         if (rows.length > 0) {
             // Header row for series names

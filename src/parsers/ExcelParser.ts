@@ -330,6 +330,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
     const attachments: OfficeAttachment[] = [];
     const attachmentsByName = attachmentLookup(attachments);
+    // Drawings already placed on a sheet (see the sheet loop).
+    const drawingsPlaced = new Set<string>();
     const mediaFiles = files.filter(f => f.path.match(/xl\/media\/.*/));
     const chartFiles = files.filter(f => f.path.match(chartsRegex));
 
@@ -736,8 +738,12 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     for (const drawing of xmlElements(sheetXml, 'drawing')) {
                         const rId = /(?:^|\s)r:id="([^"]*)"/.exec(drawing.attrs)?.[1] ?? null;
 
-                        if (rId && drawingMap[rId]) {
+                        // Each drawing's pictures and charts once, on the first sheet naming it: placed at
+                        // every reference, 4.5 KB naming one drawing of 1,000 pictures 1,000 times made a
+                        // million picture nodes, and 20 KB ran the process out of memory.
+                        if (rId && drawingMap[rId] && !drawingsPlaced.has(drawingMap[rId])) {
                             const drawingPath = drawingMap[rId];
+                            drawingsPlaced.add(drawingPath);
 
                             // Find all images in this drawing
                             const images = drawingImageMap[drawingPath];

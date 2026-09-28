@@ -33,6 +33,7 @@ import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { getChildElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
  * Parses a PowerPoint presentation (.pptx) and extracts slides and notes.
@@ -456,7 +457,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
                 if (pPr) {
                     const lvlAttr = pPr.getAttribute("lvl");
-                    if (lvlAttr) lvl = parseInt(lvlAttr);
+                    // DrawingML's levels are 0 to 8.
+                    if (lvlAttr) { const value = parseInt(lvlAttr, 10); lvl = Number.isFinite(value) ? Math.max(0, Math.min(8, value)) : 0; }
 
                     const buAutoNum = getChildElements(pPr, "a:buAutoNum")[0];
                     const buChar = getChildElements(pPr, "a:buChar")[0];
@@ -725,7 +727,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
             // Case 1: Normal shape
             if (tag === "p:sp") {
-                nodes.push(...extractShapeNodes(element, slideNumber, xmlContentString));
+                appendAll(nodes, extractShapeNodes(element, slideNumber, xmlContentString));
             }
             // Case 2: Inline picture
             else if (tag === "p:pic") {
@@ -744,7 +746,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             // Case 4: Grouped shape (recursive!)
             else if (tag === "p:grpSp") {
                 // Recurse into the group element itself which holds the child shapes
-                nodes.push(...traverseSpTree(element, slideNumber, xmlContentString));
+                appendAll(nodes, traverseSpTree(element, slideNumber, xmlContentString));
             }
         }
         return nodes;
@@ -900,7 +902,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
         const spTree = getFirstElementByTagName(xml, "p:spTree");
         if (spTree) {
-            slideNode.children?.push(...traverseSpTree(spTree, nodeNumber, xmlContentString));
+            if (slideNode.children) appendAll(slideNode.children, traverseSpTree(spTree, nodeNumber, xmlContentString));
         }
 
         if (slideNode.children && slideNode.children.length > 0) {

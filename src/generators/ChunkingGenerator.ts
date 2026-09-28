@@ -23,6 +23,7 @@ import {
 } from '../types.js';
 import { getOfficeError, checkAbortSignal } from '../utils/errorUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /** Node types whose text is block-level, so a boundary between two of them is a real break. */
 const BLOCK_NODE_TYPES = new Set<string>([
@@ -886,7 +887,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 return call;
             });
             const batchResults = await Promise.all(batchPromises);
-            results.push(...batchResults);
+            appendAll(results, batchResults);
         }
         return results;
     }

@@ -12,6 +12,7 @@ import { ADMONITION_COLOR } from '../utils/officeGenUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 import { setOwn } from '../utils/lookupUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 // ── limits ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -1035,8 +1036,8 @@ class LatexReader {
         flow.inline = [];
         if (!this.hasContent(inline)) {
             // Anchors/comments met in an empty paragraph belong to whatever comes next.
-            flow.nextAnchors.push(...flow.anchors);
-            flow.nextComments.push(...flow.comments);
+            appendAll(flow.nextAnchors, flow.anchors);
+            appendAll(flow.nextComments, flow.comments);
             flow.anchors = [];
             flow.comments = [];
             return;
@@ -2297,8 +2298,8 @@ class LatexReader {
             case 'usepackage': case 'RequirePackage': {
                 const opts = sc.readRawOptional();
                 const pkgs = (sc.readRawGroup() ?? '').split(',').map(p => p.trim()).filter(Boolean);
-                (this.native.packages as string[]).push(...pkgs);
-                if (pkgs.includes('babel')) this.babelLanguages.push(...(opts ?? '').split(',').map(o => o.trim()).filter(Boolean));
+                appendAll(this.native.packages as string[], pkgs);
+                if (pkgs.includes('babel')) appendAll(this.babelLanguages, (opts ?? '').split(',').map(o => o.trim()).filter(Boolean));
                 return;
             }
             case 'graphicspath': {
@@ -3212,7 +3213,7 @@ class LatexReader {
             for (const b of inner) {
                 if (b === main) continue;
                 const a = (b.metadata as any)?.anchorIds as string[] | undefined;
-                if (a?.length && (b.metadata as any)?.style === 'Caption') { ids.push(...a); delete (b.metadata as any).anchorIds; }
+                if (a?.length && (b.metadata as any)?.style === 'Caption') { appendAll(ids, a); delete (b.metadata as any).anchorIds; }
             }
             if (ids.length) {
                 const meta = (main.metadata ??= {} as any) as any;
@@ -3281,7 +3282,7 @@ class LatexReader {
             const children: OfficeContentNode[] = [...prefix];
             paras.forEach((p, pi) => {
                 if (pi > 0) children.push({ type: 'break', metadata: { breakType: 'carriageReturn' } as any });
-                children.push(...(p.children ?? []));
+                appendAll(children, (p.children ?? []));
             });
             const anchorIds = paras.flatMap(p => ((p.metadata as any)?.anchorIds as string[] | undefined) ?? []);
             const comments = paras.flatMap(p => p.comments ?? []);
@@ -3514,7 +3515,7 @@ class LatexReader {
             // A caption row (longtable) is the table's caption, not a row.
             const cap = /^\s*\\caption\*?\s*(?:\[[^\]]*\]\s*)?\{([\s\S]*)\}\s*$/.exec(first);
             if (cellsNow.length === 1 && cap) {
-                caption.push(...this.parseBlocksOf(cap[1], f => { f.paragraphStyle = 'Caption'; }));
+                appendAll(caption, this.parseBlocksOf(cap[1], f => { f.paragraphStyle = 'Caption'; }));
                 continue;
             }
             rows.push({ cells: cellsNow, rowColor: rowColor ? this.resolveColor(rowColor[2], rowColor[1] ?? null) : undefined });

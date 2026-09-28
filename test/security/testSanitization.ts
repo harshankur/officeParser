@@ -3133,6 +3133,73 @@ async function parserHardeningTests() {
     const longDelimiter = { ...astWith(Array.from({ length: 1000 }, () => ({ type: 'paragraph', children: [{ type: 'text', text: 'x' }] }))), config: { newlineDelimiter: 'n'.repeat(100_000) } } as any;
     const delimited = (await OfficeGenerator.generate(longDelimiter, 'text', { onWarning: () => {} } as any)).value as string;
     check('text: a long newline delimiter in an AST\'s own config is not taken', delimited.length < 1_000_000, `${delimited.length}`);
+
+    // A list level far outside Word's nine (negative, or past a billion) is a level Word has.
+    const levelNumbering = `<?xml version="1.0"?><w:numbering ${W}><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>`;
+    for (const level of ['-2000000000', '2000000000', 'x']) {
+        await timed(`docx: a list level of ${level} is read and written`, async () => {
+            const levels = await parseQuiet(docxOf(`<w:p><w:pPr><w:numPr><w:ilvl w:val="${level}"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>`.repeat(20), { 'word/numbering.xml': levelNumbering }), 'docx');
+            for (const format of ['md', 'html', 'docx', 'odt', 'tex'] as const) await OfficeGenerator.generate(levels.ast!, format, { onWarning: () => {} } as any);
+        });
+    }
+    // A sheet naming one drawing many times places it once.
+    const drawingRels = Array.from({ length: 300 }, (_, i) => `<Relationship Id="i${i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>`).join('');
+    const drawingSheet = xlsxOf({
+        'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>v</t></is></c></row></sheetData>${'<drawing r:id="rId1"/>'.repeat(2000)}</worksheet>`,
+        'xl/worksheets/_rels/sheet1.xml.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>',
+        'xl/drawings/drawing1.xml': '<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>',
+        'xl/drawings/_rels/drawing1.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${drawingRels}</Relationships>`,
+        'xl/media/image1.png': 'png',
+    });
+    const drawingParse = await parseQuiet(drawingSheet, 'xlsx', { extractAttachments: true });
+    const drawingImages = JSON.stringify(drawingParse.ast?.content ?? []).split('"type":"image"').length - 1;
+    check('xlsx: a sheet naming one drawing 2,000 times places its pictures once', !drawingParse.error && drawingImages <= 300, `${drawingParse.error} ${drawingImages}`);
+    // Many sheets and references to them.
+    await timed('html: 40,000 sheets are written', () => OfficeGenerator.generate(astWith(Array.from({ length: 40000 }, () => ({ type: 'sheet', children: [], metadata: { sheetName: 's' } }))), 'html', { onWarning: () => {} } as any));
+    let chartRows = '<table:table-row><table:table-cell/><table:table-cell><text:p>s</text:p></table:table-cell></table:table-row>';
+    for (let i = 0; i < 40000; i++) chartRows += `<table:table-row><table:table-cell><text:p>[Q${i}.A1]</text:p></table:table-cell></table:table-row>`;
+    await timed('ods: a chart of 40,000 references beside 40,000 sheets parses', () => parseQuiet(odfOf('spreadsheet', '<table:table table:name="a"/>'.repeat(40000), { 'Object 1/content.xml': chartDoc(`<table:table>${chartRows}</table:table>`) }), 'ods', { extractAttachments: true }));
+    let objectFrames = '';
+    for (let i = 0; i < 80000; i++) objectFrames += `<draw:frame><draw:object xlink:href="./O${i}"/></draw:frame>`;
+    await timed('odt: 80,000 embedded objects beside 8,000 parts parse', () => parseQuiet(odfOf('text', `<text:p>${objectFrames}</text:p>`, Object.fromEntries(Array.from({ length: 8000 }, (_, i) => [`z${i}/xcontent.xml`, '']))), 'odt'));
+    // Hyperlinks nested in hyperlinks: the outermost gives the runs their link, once.
+    const linkStarted = Date.now();
+    const nestedLinks = await parseQuiet(docxOf(`<w:p>${'<w:hyperlink w:anchor="a">'.repeat(400)}${'<w:r><w:t>x</w:t></w:r>'.repeat(2000)}${'</w:hyperlink>'.repeat(400)}</w:p>`), 'docx');
+    check('docx: 2,000 runs in hyperlinks nested 400 deep parse in linear time', Date.now() - linkStarted < 5000, `${Date.now() - linkStarted}ms`);
+    let deepLinksError: any;
+    try { await OfficeParser.parseOffice(docxOf(`<w:p>${'<w:hyperlink w:anchor="a">'.repeat(5000)}<w:r><w:t>x</w:t></w:r>${'</w:hyperlink>'.repeat(5000)}</w:p>`), { fileType: 'docx', onWarning: () => {} } as any); } catch (e) { deepLinksError = e; }
+    check('docx: hyperlinks nested past what the stack holds are a nesting error', deepLinksError?.officeIssue?.code === 'MAX_NESTING_DEPTH_EXCEEDED', String(deepLinksError));
+    const linkedRuns = JSON.stringify(nestedLinks.ast?.content ?? []).split('"link":"#a"').length - 1;
+    check('docx: runs in nested hyperlinks keep the outermost link', !nestedLinks.error && linkedRuns === 2000, `${nestedLinks.error} ${linkedRuns}`);
+
+    // Long lists are appended item by item: a spread of more than about 120,000 arguments throws.
+    const longParagraph = astWith([{ type: 'paragraph', children: Array.from({ length: 200000 }, () => ({ type: 'text', text: 'x' })) }]);
+    let longError: any;
+    let longMarkdown = '';
+    try { longMarkdown = (await OfficeGenerator.generate(longParagraph, 'md', { onWarning: () => {} } as any)).value as string; } catch (e) { longError = e; }
+    check('md: a paragraph of 200,000 runs is written', !longError && longMarkdown.length >= 200000, `${longError?.officeIssue?.code ?? longError}`);
+    const longTextBox = await parseQuiet(docxOf(`<w:p><w:r><w:drawing><w:txbxContent><w:p>${'<w:r><w:t>x</w:t></w:r>'.repeat(130000)}</w:p></w:txbxContent></w:drawing></w:r></w:p>`), 'docx');
+    check('docx: a text box of 130,000 runs is read', !longTextBox.error && (longTextBox.ast?.content[0] as any)?.text?.length === 130000, longTextBox.error);
+
+    // Content Word wraps (content controls, custom XML, text boxes in runs) is read, not dropped.
+    const wrapped = await parseQuiet(docxOf(
+        '<w:sdt><w:sdtPr><w:alias w:val="toc"/></w:sdtPr><w:sdtContent><w:sdt><w:sdtContent><w:p><w:r><w:t>BODYCONTROL</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt>'
+        + '<w:customXml w:element="x"><w:p><w:r><w:t>CUSTOMXML</w:t></w:r></w:p></w:customXml>'
+        + '<w:tbl><w:sdt><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>ROWCONTROL</w:t></w:r></w:p></w:tc><w:customXml w:element="c"><w:tc><w:p><w:r><w:t>CELLCUSTOM</w:t></w:r></w:p></w:tc></w:customXml></w:tr></w:sdtContent></w:sdt></w:tbl>'
+        + '<w:p><w:r><w:t>before </w:t></w:r><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><w:txbxContent><w:p><w:r><w:t>RUNTEXTBOX</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>BOXTABLE</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:txbxContent></w:drawing></mc:Choice><mc:Fallback><w:pict><w:txbxContent><w:p><w:r><w:t>RUNTEXTBOX</w:t></w:r></w:p></w:txbxContent></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>',
+        { 'word/header1.xml': `<?xml version="1.0"?><w:hdr ${W}><w:sdt><w:sdtContent><w:sdt><w:sdtContent><w:p><w:r><w:t>HEADERCONTROL</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt></w:hdr>` },
+    ), 'docx');
+    const wrappedJson = JSON.stringify(wrapped.ast ?? {});
+    const missing = ['BODYCONTROL', 'CUSTOMXML', 'ROWCONTROL', 'CELLCUSTOM', 'RUNTEXTBOX', 'BOXTABLE', 'HEADERCONTROL'].filter(marker => !wrappedJson.includes(marker));
+    check('docx: content in content controls, custom XML and text boxes in runs is read', !wrapped.error && missing.length === 0, `${wrapped.error} missing ${missing}`);
+    const textBoxOnce = (JSON.stringify(wrapped.ast?.content ?? []).match(/"text":"RUNTEXTBOX"/g) ?? []).length;
+    check('docx: a text box in alternate content is read once', textBoxOnce === 1, `${textBoxOnce}`);
+    const boxedPicture = await parseQuiet(docxOf(
+        '<w:p><w:r><w:drawing><w:txbxContent><w:p><w:r><w:drawing><a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:embed="rId9"/></w:drawing></w:r></w:p></w:txbxContent></w:drawing></w:r></w:p>',
+        { 'word/_rels/document.xml.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/boxed.png"/></Relationships>', 'word/media/boxed.png': 'png' },
+    ), 'docx', { extractAttachments: true });
+    const boxedCount = JSON.stringify(boxedPicture.ast?.content ?? []).split('"attachmentName":"boxed.png"').length - 1;
+    check('docx: a picture in a text box is shown once', !boxedPicture.error && boxedCount === 1, `${boxedPicture.error} ${boxedCount}`);
 }
 
 async function main() {

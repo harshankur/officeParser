@@ -6,6 +6,7 @@ import { clampInt, clampRepeat } from '../utils/numberUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { TextBuilder, trimAsciiWhitespace, trimEndChars, trimStartChars } from '../utils/textUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
  * A fully-resolved dialect: every capability collapsed to its canonical syntax variant (or `'none'`).
@@ -434,7 +435,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
      * save.
      */
     private deferAnchors(metadata: any): string {
-        if (this.resolvedFallbackToHtml.anchors && !this.config.ignoreInternalLinks && metadata?.anchorIds?.length) this.pendingAnchorIds.push(...metadata.anchorIds);
+        if (this.resolvedFallbackToHtml.anchors && !this.config.ignoreInternalLinks && metadata?.anchorIds?.length) appendAll(this.pendingAnchorIds, metadata.anchorIds);
         return '';
     }
 
@@ -564,7 +565,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 if (!node || seen.has(node)) continue;
                 seen.add(node);
                 if (node.type === 'paragraph' || node.type === 'heading') for (const child of node.children ?? []) if (isSourceComment(child)) this.inlineComments.add(child);
-                for (const list of [node.children, node.notes, node.comments]) if (list) stack.push(...list);
+                for (const list of [node.children, node.notes, node.comments]) if (list) appendAll(stack, list);
             }
         }
 
@@ -808,7 +809,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // An empty paragraph (a bookmark on an empty line) keeps its anchors for the block
                     // that follows (see pendingAnchorIds).
                     if (!content) {
-                        if (meta?.anchorIds?.length && this.resolvedFallbackToHtml.anchors && !this.config.ignoreInternalLinks) this.pendingAnchorIds.push(...meta.anchorIds);
+                        if (meta?.anchorIds?.length && this.resolvedFallbackToHtml.anchors && !this.config.ignoreInternalLinks) appendAll(this.pendingAnchorIds, meta.anchorIds);
                         return '';
                     }
                     const anchors = this.inOneLine ? this.deferAnchors(meta) : this.renderAnchors(meta);
@@ -1455,7 +1456,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 if (current.rawContent && node.rawContent) current.rawContent += node.rawContent;
                 if (node.notes && node.notes.length > 0) {
                     if (!current.notes) current.notes = [];
-                    current.notes.push(...node.notes);
+                    appendAll(current.notes, node.notes);
                 }
             } else if (node.type === 'text') {
                 current = { ...node }; // Clone: the runs merged into it are appended to its text
@@ -1534,7 +1535,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             const meta = note.metadata as NoteMetadata;
             return (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') && this.resolvedDialect.footnotes === 'none';
         };
-        this.collectedNotes.push(...node.notes.filter(note => !isInlinedFootnote(note)));
+        appendAll(this.collectedNotes, node.notes.filter(note => !isInlinedFootnote(note)));
     }
 
     private async renderMarkdownTableInternal(node: OfficeContentNode, processor: any): Promise<string> {

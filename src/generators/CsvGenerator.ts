@@ -3,6 +3,7 @@ import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST, 
 import { parseRangeString } from '../utils/sheetUtils.js';
 import { csvSafeCell } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /** The most cells any of `rows` has (read in a loop: spread into Math.max, a large sheet overflowed the stack). */
 const widestRow = (rows: string[][]): number => {
@@ -158,7 +159,7 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
             if (node.type === 'sheet' || node.type === 'table') {
                 result.push(node);
             } else if (node.children) {
-                result.push(...(await this.collectSheetLikeNodes(node.children)));
+                appendAll(result, (await this.collectSheetLikeNodes(node.children)));
             }
         }
         return result;

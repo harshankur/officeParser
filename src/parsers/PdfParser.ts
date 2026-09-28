@@ -46,6 +46,7 @@ import { blockToNodes, buildLines, computeDocContext, detectTables, DocContext, 
 import { buildTaggedNodes } from './pdf/structTree.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { acquirePdfProcess, PdfProcess } from './pdf/pdfProcess.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /** Type guard for a pdf.js TextItem (marked-content items lack `str`/`transform`). */
 function isTextItem(item: any): item is { str: string; transform: number[]; width: number; height: number; fontName: string; dir?: string; hasEOL?: boolean } {
@@ -1554,8 +1555,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
             for (const node of geometricNodes(footerRuns, layoutCtx, docCtx, layoutCfg, false)) pageFooters.push(retypeAsHeaderFooter(node, 'footer'));
             finalizeBounds(pageHeaders, pageCtx, pdfCfg.includeBounds);
             finalizeBounds(pageFooters, pageCtx, pdfCfg.includeBounds);
-            auxHeaders.push(...pageHeaders);
-            auxFooters.push(...pageFooters);
+            appendAll(auxHeaders, pageHeaders);
+            appendAll(auxFooters, pageFooters);
         }
 
         finalizeBounds(pageContent, pageCtx, pdfCfg.includeBounds);
@@ -1611,7 +1612,7 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
     const remaining = consumed.size ? lines.filter(l => !consumed.has(l)) : lines;
 
     const out: OfficeContentNode[] = [];
-    for (const block of segmentIntoBlocks(remaining, pdfCfg)) out.push(...blockToNodes(block, pageCtx, docCtx));
+    for (const block of segmentIntoBlocks(remaining, pdfCfg)) appendAll(out, blockToNodes(block, pageCtx, docCtx));
     // Splice each detected table into the flow at its vertical position.
     for (const t of tables) {
         const ty = t.node.bounds?.y ?? Infinity;
@@ -1621,7 +1622,7 @@ function geometricNodes(runs: RawRun[], pageCtx: PageContext, docCtx: DocContext
     // Rescue rotated text (90/180/270), which the horizontal line builder skips, so it is not
     // silently dropped. It is appended after the main flow, in the source content order (which is
     // usually the correct reading order); precise visual ordering of rotated text is a limitation.
-    out.push(...rotatedTextNodes(runs, pageCtx, pdfCfg));
+    appendAll(out, rotatedTextNodes(runs, pageCtx, pdfCfg));
     return out;
 }
 
