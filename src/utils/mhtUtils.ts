@@ -17,20 +17,33 @@ export interface MhtPart {
     body: Buffer;
 }
 
-/** A header block's fields by lower-case name, continuation lines unfolded. */
-const readHeaders = (block: string): Map<string, string> => {
-    const headers = new Map<string, string>();
+/** How many lines `text` has. */
+const lineCount = (text: string): number => {
+    let count = 1;
+    for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) count++;
+    return count;
+};
+
+/**
+ * A header block's fields by lower-case name, continuation lines unfolded. Each line is charged to
+ * `charge` before any is split out; a field's continuation lines are joined once, at the end.
+ */
+const readHeaders = (block: string, charge: (count: number) => void): Map<string, string> => {
+    charge(lineCount(block));
+    const folded = new Map<string, string[]>();
     let name: string | undefined;
     for (const line of block.split(/\r?\n/)) {
         if ((line.startsWith(' ') || line.startsWith('\t')) && name) {
-            headers.set(name, headers.get(name) + ' ' + line.trim());
+            folded.get(name)!.push(line.trim());
             continue;
         }
         const colon = line.indexOf(':');
         if (colon <= 0) { name = undefined; continue; }
         name = line.slice(0, colon).trim().toLowerCase();
-        headers.set(name, line.slice(colon + 1).trim());
+        folded.set(name, [line.slice(colon + 1).trim()]);
     }
+    const headers = new Map<string, string>();
+    for (const [key, values] of folded) headers.set(key, values.join(' '));
     return headers;
 };
 
@@ -64,11 +77,11 @@ const decodeQuotedPrintable = (text: string): Buffer => {
 };
 
 /** A part: its headers, then a blank line, then its body. */
-const readPart = (text: string): MhtPart => {
+const readPart = (text: string, charge: (count: number) => void): MhtPart => {
     const blank = /\r?\n\r?\n/.exec(text);
     const headerBlock = blank ? text.slice(0, blank.index) : '';
     const rawBody = blank ? text.slice(blank.index + blank[0].length) : text;
-    const headers = readHeaders(headerBlock);
+    const headers = readHeaders(headerBlock, charge);
     const typeHeader = headers.get('content-type');
     const encoding = (headers.get('content-transfer-encoding') || '').trim().toLowerCase();
     const body = encoding === 'base64' ? Buffer.from(rawBody.replace(/[^A-Za-z0-9+/=]/g, ''), 'base64')
@@ -85,13 +98,15 @@ const readPart = (text: string): MhtPart => {
 /**
  * The parts of an MHT message, in order. A message that is not multipart is one part: its own headers
  * and body. The bytes are read as Latin-1, so each byte is one character and a body keeps its bytes.
+ * `charge` is given each part and header line before it is read (a node budget, which throws past it):
+ * 63 KB of DOCX held an MHT chunk of 16 million empty parts.
  */
-export const readMht = (buffer: Buffer): MhtPart[] => {
+export const readMht = (buffer: Buffer, charge: (count: number) => void = () => {}): MhtPart[] => {
     const text = buffer.toString('latin1');
     const blank = /\r?\n\r?\n/.exec(text);
-    const top = readHeaders(blank ? text.slice(0, blank.index) : '');
+    const top = readHeaders(blank ? text.slice(0, blank.index) : '', charge);
     const boundary = parameter(top.get('content-type'), 'boundary');
-    if (!boundary) return [readPart(text)];
+    if (!boundary) return [readPart(text, charge)];
     const delimiter = '--' + boundary;
     const parts: MhtPart[] = [];
     let at = text.indexOf(delimiter, blank ? blank.index : 0);
@@ -103,7 +118,8 @@ export const readMht = (buffer: Buffer): MhtPart[] => {
         const end = next === -1 ? text.length : next;
         // The line break before a delimiter belongs to the delimiter.
         const part = text.slice(start, end).replace(/^[ \t]*\r?\n/, '').replace(/\r?\n$/, '');
-        parts.push(readPart(part));
+        charge(1);
+        parts.push(readPart(part, charge));
         at = next;
     }
     return parts;

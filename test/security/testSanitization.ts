@@ -3302,6 +3302,33 @@ async function parserHardeningTests() {
     const tracked = await parseQuiet(docxOf('<w:p><w:r><w:t xml:space="preserve">keep </w:t></w:r><w:moveFrom w:id="1" w:author="a"><w:r><w:t>MOVED</w:t></w:r></w:moveFrom><w:del w:id="2" w:author="a"><w:r><w:delText>DELETED</w:delText></w:r></w:del><w:ins w:id="3" w:author="a"><w:r><w:t>INSERTED</w:t></w:r></w:ins></w:p><w:p><w:moveTo w:id="4" w:author="a"><w:r><w:t>MOVED</w:t></w:r></w:moveTo></w:p>'), 'docx');
     const trackedTexts = (tracked.ast?.content ?? []).map((n: any) => n.text);
     check('docx: tracked moves read once, where the text now stands', !tracked.error && JSON.stringify(trackedTexts) === JSON.stringify(['keep INSERTED', 'MOVED']), `${tracked.error} ${JSON.stringify(trackedTexts)}`);
+    // The element budget counts comments and processing instructions, and a DOCX chunk's lines, control
+    // words and parts, before they are read.
+    const budgetError = async (label: string, buffer: Buffer, fileType: string) => {
+        const started = Date.now();
+        const result = await parseQuiet(buffer, fileType);
+        check(`${label} is refused within the element budget`, /XML element limit/.test(result.error) && Date.now() - started < 10000, `${Date.now() - started}ms ${result.error || 'parsed'}`);
+    };
+    await budgetError('docx: 3 million processing instructions', docxOf(`<w:p><w:r><w:t>a${'<?x?>'.repeat(3_000_000)}</w:t></w:r></w:p>`), 'docx');
+    await budgetError('docx: 3 million comments', docxOf(`<w:p><w:r><w:t>a${'<!---->'.repeat(3_000_000)}</w:t></w:r></w:p>`), 'docx');
+    const chunkOf = (target: string, content: string) => docxOf('<w:altChunk r:id="c1"/>', { 'word/_rels/document.xml.rels': chunkRels(chunkRel('c1', target)), [`word/${target}`]: content });
+    await budgetError('docx: an RTF chunk of 3 million paragraphs', chunkOf('chunk.rtf', '{\\rtf1 ' + '\\par a'.repeat(3_000_000) + '}'), 'docx');
+    await budgetError('docx: a text chunk of 3 million lines', chunkOf('chunk.txt', 'a\n'.repeat(3_000_000)), 'docx');
+    await budgetError('docx: an MHT chunk of 3 million parts', chunkOf('chunk.mht', 'Content-Type: multipart/related; boundary="a"\r\n\r\n' + '--a\n'.repeat(3_000_000)), 'docx');
+    await budgetError('docx: an MHT chunk of 3 million header lines', chunkOf('chunk.mht', 'Content-Type: text/html\r\n' + ' x\r\n'.repeat(3_000_000) + '\r\n<p>x</p>'), 'docx');
+    // HTML text split by markup read as nothing (stray end tags, comments) is one text node.
+    const strayEnds = await parseQuiet(Buffer.from(zipSync({
+        'mimetype': enc('application/epub+zip'),
+        'META-INF/container.xml': enc('<?xml version="1.0"?><container><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>'),
+        'content.opf': enc('<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title></metadata><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>'),
+        'c.xhtml': enc(`<html><body><p>${'a</b>'.repeat(1_000_000)}</p></body></html>`),
+    })), 'epub');
+    let strayNodes = 0;
+    const countNodes = (ns: any[] | undefined) => ns?.forEach((n: any) => { strayNodes++; countNodes(n.children); });
+    countNodes(strayEnds.ast?.content);
+    check('epub: text split by a million stray end tags is one text node', !strayEnds.error && strayNodes < 10, `${strayEnds.error} ${strayNodes}`);
+    // The template renderer rebuilds a paragraph from slices, not a character at a time.
+    await heapBudget('template: one paragraph of 20 million characters around a placeholder renders', () => timed('template: one paragraph of 20 million characters renders', () => OfficeTemplate.render(docxOf(`<w:p><w:r><w:t>{{a}}${'x'.repeat(20_000_000)}</w:t></w:r></w:p>`), { data: { a: 'y' } })));
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';

@@ -344,19 +344,28 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
     let cursor = 0;
     // Where the next `</script>` and `</style>` start at or after the cursor (-1: nowhere).
     const closeTagAt = new Map<string, number>();
+    // Text joins the text node before it, when nothing but markup read as nothing (a comment, an end
+    // tag closing nothing, a declaration) stands between them, as a browser shows it: a node each, `a`
+    // and a comment repeated 7 million times (62 KB of EPUB) made 14 million nodes, which the element
+    // budget, counting markup, did not bound.
+    const pushText = (text: string): void => {
+        const last = current.children[current.children.length - 1];
+        if (last?.type === 'text') last.text += text;
+        else current.children.push({ type: 'text', text, children: [], parent: current });
+    };
 
     while (cursor < html.length) {
         const tagStart = html.indexOf('<', cursor);
 
         if (tagStart === -1) {
             const text = html.substring(cursor);
-            if (text) current.children.push({ type: 'text', text, children: [], parent: current });
+            if (text) pushText(text);
             break;
         }
 
         if (tagStart > cursor) {
             const text = html.substring(cursor, tagStart);
-            if (text) current.children.push({ type: 'text', text, children: [], parent: current });
+            if (text) pushText(text);
         }
 
         if (html.startsWith('<!--', tagStart)) {
@@ -401,8 +410,7 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
             tagEndIdx = html.indexOf('>', tagStart);
         }
         if (tagEndIdx === -1) {
-            const text = html.substring(tagStart);
-            current.children.push({ type: 'text', text, children: [], parent: current });
+            pushText(html.substring(tagStart));
             break;
         }
 
@@ -419,7 +427,7 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
 
         if (!tagName || !tagName.match(/^[a-z0-9\-]+$/)) {
             // Probably not a real tag, e.g., < 5
-            current.children.push({ type: 'text', text: `<${tagContent}>`, children: [], parent: current });
+            pushText(`<${tagContent}>`);
             continue;
         }
 

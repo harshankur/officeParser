@@ -309,7 +309,7 @@
                 <td><code>decompressionLimits.maxXmlElements</code></td>
                 <td><code>number</code></td>
                 <td><code>2000000</code></td>
-                <td><strong>XML Element Limit</strong>: Maximum number of XML elements read from one document's parts (DOCX, XLSX, PPTX and ODF parts, EPUB package XML and chapters, charts and metadata; XLSX sheets do not count). Each element takes several hundred bytes of memory to read, so a small zip of empty elements could fill the heap long before <code>maxUncompressedBytes</code>. Past it, the parse rejects with <code>XML_ELEMENT_LIMIT_EXCEEDED</code>.</td>
+                <td><strong>XML Element Limit</strong>: Maximum number of XML elements read from one document's parts (DOCX, XLSX, PPTX and ODF parts, EPUB package XML and chapters, charts and metadata; XLSX sheets do not count). Comments, CDATA sections and processing instructions count as elements, and a DOCX's alternative-format chunks count their lines (plain text), groups and control words (RTF) or parts and header lines (MHT). Each element takes several hundred bytes of memory to read, so a small zip of empty elements could fill the heap long before <code>maxUncompressedBytes</code>. Past it, the parse rejects with <code>XML_ELEMENT_LIMIT_EXCEEDED</code>.</td>
             </tr>
             <tr>
                 <td><code>decompressionLimits.maxRepeatedContent</code></td>

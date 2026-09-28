@@ -808,8 +808,10 @@ export interface DecompressionLimits {
     /**
      * Maximum number of XML elements read from one document's parts (DOCX, XLSX, PPTX, ODF and EPUB
      * package XML, charts and metadata; XLSX sheets are read without building elements and do not
-     * count). An XML reader holds several hundred bytes of memory for each element, so a small zip of
-     * empty elements (32 KB holding 8 million) filled a 4 GB heap, far below `maxUncompressedBytes`.
+     * count). Comments, CDATA sections and processing instructions count as elements, and a DOCX's
+     * alternative-format chunks count their lines (plain text), groups and control words (RTF) or parts
+     * and header lines (MHT). An XML reader holds several hundred bytes of memory for each element, so a
+     * small zip of empty elements (32 KB holding 8 million) filled a 4 GB heap, far below `maxUncompressedBytes`.
      * Past the limit the parse fails with `XML_ELEMENT_LIMIT_EXCEEDED`. Real documents are well below
      * it (a long, heavily formatted Word document holds a few hundred thousand); raise it for larger
      * ones, with memory to match.

@@ -67,7 +67,7 @@ import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { getAllElementsByTagName, getChildElements, getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeXmlElements } from '../utils/xmlUtils.js';
+import { getAllElementsByTagName, getChildElements, getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes, takeXmlElements, countByte } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart, maxUncompressedBytesOf } from '../utils/zipUtils.js';
 import { lookupTable, plainRecord, setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
@@ -468,15 +468,21 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             chunkBytesLeft -= nested.bytesUsed;
             return adoptChunk(ast);
         }
-        if (extension === 'rtf') return adoptChunk(await parseRtf(part.content, config));
+        // A chunk's content counts against the document's element budget before it is read, as its XML
+        // does (see takeNodes): an RTF chunk by its groups and control words, plain text by its lines.
+        if (extension === 'rtf') {
+            takeNodes(countByte(part.content, 0x5C) + countByte(part.content, 0x7B), config);
+            return adoptChunk(await parseRtf(part.content, config));
+        }
         if (extension === 'txt') {
+            takeNodes(countByte(part.content, 0x0A) + countByte(part.content, 0x0D) + 1, config);
             const lines = new TextDecoder('utf-8').decode(part.content).replace(/^\uFEFF/, '').split(/\r\n?|\n/);
             return lines.filter(line => line.trim()).map(line => ({ type: 'paragraph', text: line, children: [{ type: 'text', text: line }] }));
         }
         let html: string;
         let imageAttachment: ((src: string) => string | undefined) | undefined;
         if (extension === 'mht' || extension === 'mhtml') {
-            const messageParts = readMht(part.content);
+            const messageParts = readMht(part.content, count => takeNodes(count, config));
             const page = messageParts.find(p => p.contentType === 'text/html') ?? messageParts[0];
             html = page ? mhtPartText(page) : '';
             // A picture the page shows from the message: found by its Content-Location, else its file

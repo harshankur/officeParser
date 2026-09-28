@@ -93,11 +93,6 @@ function replaceInChunk(chunk: string, phRe: RegExp, resolve: (key: string) => s
     phRe.lastIndex = 0;
     if (!phRe.test(joined)) return chunk; // no placeholder here: leave it exactly as-is
 
-    // Map each character position in the joined text back to the <w:t> segment it came from.
-    const posSeg = new Int32Array(joined.length);
-    let ci = 0;
-    segs.forEach((s, si) => { for (let k = 0; k < s.inner.length; k++) posSeg[ci++] = si; });
-
     phRe.lastIndex = 0;
     const matches: { start: number; end: number; key: string }[] = [];
     let m: RegExpExecArray | null;
@@ -105,28 +100,40 @@ function replaceInChunk(chunk: string, phRe: RegExp, resolve: (key: string) => s
 
     // Rebuild each segment's inner text. Ordinary characters stay in their own segment; a resolved
     // placeholder's value is attributed wholesale to the segment where its opening delimiter began.
-    const newInner = segs.map(() => '');
-    let mi = 0;
-    for (let p = 0; p < joined.length;) {
-        if (mi < matches.length && p === matches[mi].start) {
-            const mt = matches[mi];
-            const val = resolve(mt.key);
-            mi++;
-            if (val === null) {
-                // 'keep': leave the placeholder text where it is, one character at a time, so a
-                // placeholder split across runs keeps each run's original formatting instead of
-                // collapsing the whole thing into the run where it started.
-                newInner[posSeg[p]] += joined[p];
-                p++;
-            } else {
-                newInner[posSeg[p]] += val;
-                p = mt.end;
-            }
-        } else {
-            newInner[posSeg[p]] += joined[p];
-            p++;
+    // Built from slices of the joined text, cut where segments end: a character at a time (with a
+    // segment index per character), one paragraph of 300 million characters ended the process out of
+    // memory.
+    const offsets: number[] = [0];
+    for (const seg of segs) offsets.push(offsets[offsets.length - 1] + seg.inner.length);
+    const pieces: string[][] = segs.map(() => []);
+    // The segment holding position `at` of the joined text; asked of positions that never decrease.
+    let segment = 0;
+    const segmentAt = (at: number): number => {
+        while (segment < segs.length - 1 && offsets[segment + 1] <= at) segment++;
+        return segment;
+    };
+    // The joined text from `from` to `to`, each part to the segment it came from.
+    const copy = (from: number, to: number): void => {
+        for (let at = from; at < to;) {
+            const si = segmentAt(at);
+            const end = Math.min(to, offsets[si + 1]);
+            pieces[si].push(joined.slice(at, end));
+            at = end;
         }
+    };
+    let copied = 0;
+    for (const mt of matches) {
+        const val = resolve(mt.key);
+        // 'keep': the placeholder's text stays where it is, copied with the text around it, so a
+        // placeholder split across runs keeps each run's original formatting instead of collapsing
+        // into the run where it started.
+        if (val === null) continue;
+        copy(copied, mt.start);
+        pieces[segmentAt(mt.start)].push(val);
+        copied = mt.end;
     }
+    copy(copied, joined.length);
+    const newInner = pieces.map(parts => parts.join(''));
 
     // Rebuild the chunk in a single forward pass: copy the text between `<w:t>` segments verbatim and
     // drop each rewritten segment in place. Splicing last-to-first would recopy the growing tail on

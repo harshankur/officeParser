@@ -126,14 +126,16 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
     const content: OfficeContentNode[] = [];
     const attachments: OfficeAttachment[] = [];
 
+    // The package's files by path: each image the manifest lists and each chapter the spine lists is
+    // found through it (a scan of every file per item took items x files).
+    const fileByPath = new Map<string, (typeof files)[number]>();
+    for (const f of files) if (!fileByPath.has(f.path)) fileByPath.set(f.path, f);
+
     // Map each in-zip image resource by its resolved path, so inline <img> references can
     // be resolved to real bytes (EPUB images are separate files referenced by relative
     // path, unlike DOCX's embedded parts).
     const imageByPath = new Map<string, { content: Buffer; mediaType: string }>();
     if (config.extractAttachments) {
-        // The book's files by path, found through an index: a scan per manifest item took items x files.
-        const fileByPath = new Map<string, (typeof files)[number]>();
-        for (const f of files) if (!fileByPath.has(f.path)) fileByPath.set(f.path, f);
         for (const [, item] of manifest) {
             if (!item.mediaType.startsWith('image/')) continue;
             const p = resolveOpfPath(opfDir, item.href);
@@ -168,7 +170,7 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
         const xhtmlPath = resolveOpfPath(opfDir, href.split('#')[0]);
         if (readChapters.has(xhtmlPath)) continue;
         readChapters.add(xhtmlPath);
-        const xhtmlFile = files.find(f => f.path === xhtmlPath);
+        const xhtmlFile = fileByPath.get(xhtmlPath);
         if (!xhtmlFile) continue;
 
         // A picture showing one of the book's images is linked to that image's attachment (made

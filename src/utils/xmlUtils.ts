@@ -37,18 +37,39 @@ const xmlElementBudgets = new WeakMap<object, { left: number }>();
 
 /**
  * Takes `xml`'s elements from its parse's budget (see DecompressionLimits.maxXmlElements), failing the
- * parse past it: counted before the XML is read, from each `<` that opens an element.
+ * parse past it: counted before the XML is read, from each `<` that opens an element, a comment, a CDATA
+ * section, a declaration or a processing instruction. Each of those is a node, and text between them
+ * another: counting elements alone, 40 million `<?x?>` (293 KB of DOCX) ended the process out of memory.
+ * An end tag is not counted: one closing nothing is fatal to the XML reader, and the HTML reader joins
+ * the text around it.
  */
 export const takeXmlElements = (xml: string, config: OfficeParserConfig): void => {
-    let budget = xmlElementBudgets.get(config);
-    if (!budget) xmlElementBudgets.set(config, budget = { left: config.decompressionLimits?.maxXmlElements ?? DEFAULT_MAX_XML_ELEMENTS });
     let count = 0;
     for (let i = xml.indexOf('<'); i !== -1; i = xml.indexOf('<', i + 1)) {
         const c = xml.charCodeAt(i + 1);
-        if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 58 || c > 127) count++;
+        if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 58 || c > 127 || c === 33 /* ! */ || c === 63 /* ? */) count++;
     }
+    takeNodes(count, config);
+};
+
+/**
+ * Takes `count` from the parse's element budget (see takeXmlElements): for content inside a package that
+ * is not XML (a DOCX chunk of plain text, RTF or MHT), whose lines, control words or parts become nodes
+ * as elements do. Counted before the content is read, since it inflates out of a zip: 105 KB of DOCX
+ * held an RTF chunk of 12 million paragraphs.
+ */
+export const takeNodes = (count: number, config: OfficeParserConfig): void => {
+    let budget = xmlElementBudgets.get(config);
+    if (!budget) xmlElementBudgets.set(config, budget = { left: config.decompressionLimits?.maxXmlElements ?? DEFAULT_MAX_XML_ELEMENTS });
     budget.left -= count;
     if (budget.left < 0) throw getOfficeError(OfficeErrorType.XML_ELEMENT_LIMIT_EXCEEDED, config, config.decompressionLimits?.maxXmlElements ?? DEFAULT_MAX_XML_ELEMENTS);
+};
+
+/** How many times `byte` occurs in `buffer`. */
+export const countByte = (buffer: Uint8Array, byte: number): number => {
+    let count = 0;
+    for (let i = buffer.indexOf(byte); i !== -1; i = buffer.indexOf(byte, i + 1)) count++;
+    return count;
 };
 const DEFAULT_MAX_XML_ELEMENTS = 2000000;
 
