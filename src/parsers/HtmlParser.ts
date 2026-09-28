@@ -348,6 +348,19 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
     // tag closing nothing, a declaration) stands between them, as a browser shows it: a node each, `a`
     // and a comment repeated 7 million times (62 KB of EPUB) made 14 million nodes, which the element
     // budget, counting markup, did not bound.
+    // How many elements of each name are open (between `current` and the root): an end tag closing none
+    // is passed over at once, where each one walked up to the root, 256 levels (16 million of them, 63 KB
+    // of EPUB, took 17 seconds). Every move of `current` goes through `closeTo` or `open`, so each element
+    // is counted once, open and closed.
+    const openCount = new Map<string, number>();
+    const closeTo = (ancestor: HtmlNode): void => {
+        for (let n: HtmlNode | undefined = current; n && n !== ancestor; n = n.parent) openCount.set(n.tagName!, (openCount.get(n.tagName!) ?? 1) - 1);
+        current = ancestor;
+    };
+    const open = (node: HtmlNode): void => {
+        openCount.set(node.tagName!, (openCount.get(node.tagName!) ?? 0) + 1);
+        current = node;
+    };
     const pushText = (text: string): void => {
         const last = current.children[current.children.length - 1];
         if (last?.type === 'text') last.text += text;
@@ -432,19 +445,20 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
         }
 
         if (isClosing) {
+            if (!openCount.get(tagName)) continue;
             let p: HtmlNode | undefined = current;
             while (p && p.tagName !== tagName) {
                 p = p.parent;
             }
             if (p && p.parent) {
-                current = p.parent;
+                closeTo(p.parent);
             }
         } else {
             // An omitted end tag, as a browser reads it: this tag closes the element it implies ends.
             const implied = IMPLIED_END[tagName];
             if (implied && 'under' in implied) {
                 for (let p: HtmlNode | undefined = current; p && p !== root; p = p.parent) {
-                    if (implied.under.has(p.tagName!)) { current = p; break; }
+                    if (implied.under.has(p.tagName!)) { closeTo(p); break; }
                 }
             } else if (implied) {
                 // The outermost element it closes before a `stop`: a new item closes the item before it
@@ -453,7 +467,7 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
                 for (let p: HtmlNode | undefined = current; p && p !== root && !implied.stop.has(p.tagName!); p = p.parent) {
                     if (implied.closes.has(p.tagName!)) closed = p;
                 }
-                if (closed) current = closed.parent!;
+                if (closed) closeTo(closed.parent!);
             }
             const node: HtmlNode = {
                 type: 'element',
@@ -470,7 +484,7 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
 
             const voidElements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr', '!doctype']);
             if (!isSelfClosing && !voidElements.has(tagName)) {
-                current = node;
+                open(node);
 
                 if (tagName === 'script' || tagName === 'style') {
                     // Case-insensitive search from `cursor` via a sticky-ish regex, instead of
@@ -494,7 +508,7 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
                             parent: node
                         });
                         cursor = closeAt + tagName.length + 3;
-                        current = node.parent!;
+                        closeTo(node.parent!);
                     }
                 }
             }

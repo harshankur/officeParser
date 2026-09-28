@@ -122,7 +122,10 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
                 <td><code>DecompressionLimits</code></td>
                 <td><code>(none)</code></td>
                 <td>Bounds unzipping of an untrusted template exactly as parsing does; a zip-bomb template rejects with a
-                    typed <code>ZIP_*</code> error rather than being mistaken for a non-DOCX file.</td>
+                    typed <code>ZIP_*</code> error rather than being mistaken for a non-DOCX file. Its
+                    <code>maxRepeatedContent</code> (16 MiB) bounds what values add by repetition: each use of a value
+                    after its first adds what the value outgrows its placeholder by, and past it the render rejects with
+                    <code>OUTPUT_TOO_LARGE</code>.</td>
             </tr>
         </tbody>
     </table>

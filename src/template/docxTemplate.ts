@@ -61,7 +61,7 @@ function valueToRunXml(value: TemplateValue): string {
  * tags). `resolve` returns the run-XML to substitute for a key, or `null` to leave the placeholder
  * text as-is (the `onMissing: 'keep'` case).
  */
-function replaceInChunk(chunk: string, phRe: RegExp, resolve: (key: string) => string | null): string {
+function replaceInChunk(chunk: string, phRe: RegExp, resolve: (key: string, placeholderLength: number) => string | null): string {
     // A `<w:t>` is either self-closing (`<w:t/>`, emitted by the OpenXML SDK / POI / docx4j for an
     // empty run) or a normal `<w:t ...>text</w:t>`; capture the inner text of the latter.
     //
@@ -123,7 +123,7 @@ function replaceInChunk(chunk: string, phRe: RegExp, resolve: (key: string) => s
     };
     let copied = 0;
     for (const mt of matches) {
-        const val = resolve(mt.key);
+        const val = resolve(mt.key, mt.end - mt.start);
         // 'keep': the placeholder's text stays where it is, copied with the text around it, so a
         // placeholder split across runs keeps each run's original formatting instead of collapsing
         // into the run where it started.
@@ -180,7 +180,7 @@ function paragraphPieces(xml: string): string[] {
  * paragraphs, e.g. text boxes, become their own pieces), so joining a piece's `<w:t>` never crosses a
  * paragraph boundary.
  */
-function replaceInPart(xml: string, phRe: RegExp, resolve: (key: string) => string | null): string {
+function replaceInPart(xml: string, phRe: RegExp, resolve: (key: string, placeholderLength: number) => string | null): string {
     const pieces = paragraphPieces(xml);
     for (let i = 0; i < pieces.length; i++) {
         // Boundary tags (odd indices) have no `<w:t>`, so processing them is a harmless no-op; process
@@ -197,7 +197,11 @@ function replaceInPart(xml: string, phRe: RegExp, resolve: (key: string) => stri
 export function renderDocxTemplate(
     entries: Record<string, Uint8Array>,
     data: TemplateData,
-    opts: { start: string; end: string; onMissing: 'keep' | 'empty' | 'error'; mtime: Date; onFieldMissing: (key: string) => never },
+    opts: {
+        start: string; end: string; onMissing: 'keep' | 'empty' | 'error'; mtime: Date; onFieldMissing: (key: string) => never;
+        /** What the document's values may add by repetition (see resolve), and what to throw past it. */
+        maxRepeatedContent: number; onRepeatLimit: () => never;
+    },
 ): Uint8Array {
     // Match delimiters against the raw XML inner text, where Word stores e.g. `<<` as `&lt;&lt;` but a
     // literal `"` as `"`; so build the pattern from the text-node escaping Word uses (& < > only).
@@ -205,11 +209,30 @@ export function renderDocxTemplate(
     const start = escapeRegex(escapeXmlText(opts.start));
     const end = escapeRegex(escapeXmlText(opts.end));
     const phRe = new RegExp(`${start}\\s*([\\p{L}\\p{N}_.\\-]+)\\s*${end}`, 'gu');
-    const resolve = (key: string): string | null => {
-        if (Object.prototype.hasOwnProperty.call(data, key)) return valueToRunXml(data[key]);
-        if (opts.onMissing === 'empty') return '';
-        if (opts.onMissing === 'error') opts.onFieldMissing(key);
-        return null; // 'keep'
+    // Each key's run-XML, made once; and what repeating values has added so far. A value's first use is
+    // the caller's own data; each later use adds what it outgrows its placeholder by, within
+    // `maxRepeatedContent`, as a parse repeats a document's shared content: 1,000,000 placeholders of one
+    // 100-character value (9.6 KB of template) made 450 MB of XML, and a longer value failed untyped.
+    const values = new Map<string, string | null>();
+    const used = new Set<string>();
+    let repeatLeft = opts.maxRepeatedContent;
+    const resolve = (key: string, placeholderLength: number): string | null => {
+        let value = values.get(key);
+        if (value === undefined && !values.has(key)) {
+            if (Object.prototype.hasOwnProperty.call(data, key)) value = valueToRunXml(data[key]);
+            else if (opts.onMissing === 'empty') value = '';
+            else if (opts.onMissing === 'error') opts.onFieldMissing(key);
+            else value = null; // 'keep'
+            values.set(key, value ?? null);
+        }
+        if (value == null) return null;
+        if (used.has(key)) {
+            const growth = value.length - placeholderLength;
+            if (growth > 0 && (repeatLeft -= growth) < 0) opts.onRepeatLimit();
+        } else {
+            used.add(key);
+        }
+        return value;
     };
 
     const out: Zippable = {};

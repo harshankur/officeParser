@@ -189,6 +189,16 @@ const IMAGE_MIME_MAP: Record<RtfImageFormat, OfficeMimeType> = lookupTable({
  */
 const MAX_RTF_GROUP_DEPTH = 256;
 
+/** Bytes as the characters of the same codes, in slices: spread whole, a long run is more arguments than a call takes. */
+const latin1Text = (bytes: Uint8Array): string => {
+    let text = '';
+    for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    return text;
+};
+
+/** The most characters a `\ucN` may ask a reader to skip after each `\uN` (see SimpleRtfParser.skip). */
+const MAX_UNICODE_FALLBACK = 16;
+
 export class SimpleRtfParser {
     /** Current position in the buffer */
     private index: number = 0;
@@ -203,7 +213,9 @@ export class SimpleRtfParser {
     private decoders: { [key: number]: TextDecoder } = {};
 
     /** Buffer for consecutive text bytes to handle multi-byte encodings and UTF-8 detection */
-    private pendingBytes: number[] = [];
+    private pendingBytes = new Uint8Array(1024);
+    /** How many of `pendingBytes` hold text (a byte buffer, grown as needed: an array of numbers took eight bytes a byte, and 200 MB of text inflated from 196 KB of DOCX outgrew what an array holds). */
+    private pendingLength = 0;
 
     /** Total length of the buffer */
     private length: number;
@@ -215,8 +227,9 @@ export class SimpleRtfParser {
      */
     private ucStack: number[] = [1];
     private skip = 0;
-    /** The `\u` whose fallback is being skipped. */
+    /** The `\u` whose fallback is being skipped, and where the fallback started (kept for rawContent). */
     private skippingFor?: RtfControl;
+    private fallbackStart = 0;
 
     /**
      * Creates a new RTF parser.
@@ -241,8 +254,10 @@ export class SimpleRtfParser {
             // The fallback after a `\uN`, within its group.
             if (this.skip > 0 && char !== 0x7B && char !== 0x7D) {
                 this.skipFallbackCharacter();
+                if (this.skip === 0) this.endFallback();
                 continue;
             }
+            if (this.skip > 0) this.endFallback();
 
             if (char === 0x7B) { // '{'
                 if (stack.length > MAX_RTF_GROUP_DEPTH) throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, this.config);
@@ -284,7 +299,7 @@ export class SimpleRtfParser {
 
         // Special control symbols
         if (char === 0x7B || char === 0x7D || char === 0x5C) { // \{ \} \\
-            this.pendingBytes.push(char);
+            this.pushBytes(this.index, this.index + 1);
             this.index++;
             return;
         }
@@ -295,7 +310,8 @@ export class SimpleRtfParser {
                 const hex = String.fromCharCode(this.buffer[this.index], this.buffer[this.index + 1]);
                 const code = parseInt(hex, 16);
                 if (!isNaN(code)) {
-                    this.pendingBytes.push(code);
+                    this.reservePending(1);
+                    this.pendingBytes[this.pendingLength++] = code;
                 }
                 this.index += 2;
             }
@@ -374,8 +390,14 @@ export class SimpleRtfParser {
 
         const control: RtfControl = { type: 'control', value: name, param };
         group.content.push(control);
-        if (name === 'uc' && param !== undefined && param >= 0) this.ucStack[this.ucStack.length - 1] = param;
-        else if (name === 'u' && param !== undefined) { this.skip = this.ucStack[this.ucStack.length - 1]; this.skippingFor = control; }
+        // A fallback is a few bytes (Word writes \uc0 to \uc2): a larger count is held to 16, so it cannot
+        // swallow the rest of its group as fallback.
+        if (name === 'uc' && param !== undefined && param >= 0) this.ucStack[this.ucStack.length - 1] = Math.min(param, MAX_UNICODE_FALLBACK);
+        else if (name === 'u' && param !== undefined) {
+            this.skip = this.ucStack[this.ucStack.length - 1];
+            this.skippingFor = control;
+            this.fallbackStart = this.index;
+        }
 
         // If this is the first control word in the group, it might be the destination
         if (group.content.length === 1 && group.type === 'group') {
@@ -392,7 +414,6 @@ export class SimpleRtfParser {
      * characters.
      */
     private skipFallbackCharacter() {
-        const start = this.index;
         const char = this.buffer[this.index];
         if (char === 0x0D || char === 0x0A) { this.index++; return; }
         this.skip--;
@@ -409,19 +430,43 @@ export class SimpleRtfParser {
             if (this.buffer[at] === 0x20) at++;
             this.index = at;
         }
-        if (this.skippingFor) this.skippingFor.fallback = (this.skippingFor.fallback ?? '') + this.buffer.toString('latin1', start, this.index);
+    }
+
+    /** Ends a `\uN`'s fallback, keeping its source on the `\u` token when raw content is asked for. */
+    private endFallback() {
+        if (this.skippingFor && this.config?.includeRawContent && this.index > this.fallbackStart) {
+            this.skippingFor.fallback = this.buffer.toString('latin1', this.fallbackStart, this.index);
+        }
+        this.skip = 0;
+        this.skippingFor = undefined;
     }
 
     private parseText(group: RtfGroup) {
+        const start = this.index;
         while (this.index < this.length) {
             const char = this.buffer[this.index];
-            if (char === undefined) break;
             if (char === 0x7B || char === 0x7D || char === 0x5C || char === 0x0D || char === 0x0A) {
                 break;
             }
-            this.pendingBytes.push(char);
             this.index++;
         }
+        this.pushBytes(start, this.index);
+    }
+
+    /** Room in `pendingBytes` for `count` more bytes. */
+    private reservePending(count: number) {
+        if (this.pendingLength + count <= this.pendingBytes.length) return;
+        const grown = new Uint8Array(Math.max(this.pendingBytes.length * 2, this.pendingLength + count));
+        grown.set(this.pendingBytes.subarray(0, this.pendingLength));
+        this.pendingBytes = grown;
+    }
+
+    /** Appends the buffer's bytes from `start` to `end` to the pending text. */
+    private pushBytes(start: number, end: number) {
+        if (end <= start) return;
+        this.reservePending(end - start);
+        this.pendingBytes.set(this.buffer.subarray(start, end), this.pendingLength);
+        this.pendingLength += end - start;
     }
 
     /**
@@ -429,9 +474,11 @@ export class SimpleRtfParser {
      * @param group The group to append the text node to
      */
     private flushPendingText(group: RtfGroup) {
-        if (this.pendingBytes.length > 0) {
-            group.content.push({ type: 'text', value: this.decodeBytes(this.pendingBytes, this.codePage) });
-            this.pendingBytes = [];
+        if (this.pendingLength > 0) {
+            group.content.push({ type: 'text', value: this.decodeBytes(this.pendingBytes.subarray(0, this.pendingLength), this.codePage) });
+            this.pendingLength = 0;
+            // A buffer grown for one long run is not kept for the rest of the document.
+            if (this.pendingBytes.length > 1 << 20) this.pendingBytes = new Uint8Array(1024);
         }
     }
 
@@ -443,8 +490,8 @@ export class SimpleRtfParser {
      * @param codePage The RTF code page ID
      * @returns The decoded string
      */
-    private decodeBytes(bytes: number[], codePage: number): string {
-        const uint8 = new Uint8Array(bytes);
+    private decodeBytes(bytes: Uint8Array, codePage: number): string {
+        const uint8 = bytes;
 
         // Try UTF-8 first if there are any non-ASCII bytes.
         // Many modern RTF generators (like calibre or web-based tools) dump UTF-8 bytes 
@@ -473,10 +520,10 @@ export class SimpleRtfParser {
                     try {
                         this.decoders[codePage] = new TextDecoder('windows-1252');
                     } catch (e2) {
-                        return String.fromCharCode(...bytes);
+                        return latin1Text(bytes);
                     }
                 } else {
-                    return String.fromCharCode(...bytes);
+                    return latin1Text(bytes);
                 }
             }
         }
@@ -962,7 +1009,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                         if (urlMatch && foundHyperlink) {
                             foundUrl = urlMatch[1];
                         }
-                    } else if (child.type === 'group') {
+                    } else if (child.type === 'group' && child.destination !== 'field') {
                         const nestedUrl = findUrl(child);
                         if (nestedUrl) {
                             foundUrl = nestedUrl;
@@ -979,9 +1026,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             return undefined;
         };
 
-        // Search the field group for fldinst
+        // Search the field's own instructions (`\fldinst`), not its result or a field nested in it: each
+        // of those is read on its own, and searching them here too read nested fields again at every
+        // level (250 levels around 20 MB of text took eight times as long).
         for (const child of group.content) {
-            if (child.type === 'group') {
+            if (child.type === 'group' && child.destination === 'fldinst') {
                 const foundUrl = findUrl(child);
                 if (foundUrl) return foundUrl;
             }

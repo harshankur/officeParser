@@ -2252,7 +2252,10 @@ export interface TemplateConfig {
     fileType?: 'docx';
     /**
      * Limits on decompressing the (untrusted) template zip, same shape and defaults as the parser's.
-     * Guards against zip-bomb templates. Defaults to 512 MiB / 10000 entries.
+     * Guards against zip-bomb templates. Defaults to 512 MiB / 10000 entries. `maxRepeatedContent`
+     * (16 MiB) bounds what a document's values add by repetition: each use of a value after its first
+     * adds what the value outgrows its placeholder by, and past the limit the render rejects with
+     * `OUTPUT_TOO_LARGE` (a million placeholders of one value would otherwise write a copy at each).
      */
     decompressionLimits?: DecompressionLimits;
     /**

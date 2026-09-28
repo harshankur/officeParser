@@ -3361,6 +3361,22 @@ async function parserHardeningTests() {
     }), 'pptx');
     const modernList = JSON.stringify((modernComments.ast?.content[0]?.comments ?? []).map((c: any) => [c.text, c.metadata?.author]));
     check('pptx: modern comments and replies are read with their authors', !modernComments.error && modernList === JSON.stringify([['MODERN', 'Ann'], ['REPLY', 'Rae']]) && modernComments.ast?.content.length === 1, `${modernComments.error} ${modernList}`);
+    // RTF: a \uc fallback is kept as one slice and held to 16 characters; nested fields are searched once.
+    await timed('rtf: a fallback of \\uc2000000000 before 20 MB of text is read', () => parseQuiet(Buffer.from('{\\rtf1\\uc2000000000\\u65 ' + 'a'.repeat(20_000_000) + '}'), 'rtf', { includeRawContent: true }));
+    const ucCapped = await parseQuiet(Buffer.from('{\\rtf1\\uc2000000000\\u65 ' + 'a'.repeat(40) + '}'), 'rtf');
+    check('rtf: a \\uc past 16 skips 16 characters', (ucCapped.ast?.content[0] as any)?.text === 'A' + 'a'.repeat(24), JSON.stringify((ucCapped.ast?.content[0] as any)?.text));
+    const nestedFields = '{\\rtf1 ' + '{\\field '.repeat(250) + '{' + 'a'.repeat(4_000_000) + '}' + '}'.repeat(251);
+    await timed('rtf: 4 MB of text in fields nested 250 deep is read', () => parseQuiet(Buffer.from(nestedFields), 'rtf'));
+    // HTML: an end tag closing nothing costs nothing, however deep the element it stands in.
+    await timed('html: 4 million stray end tags 250 elements deep parse', () => parseQuiet(Buffer.from('<html><body>' + '<b>'.repeat(250) + '</x>'.repeat(4_000_000) + 'z'), 'html'));
+    // Templates: a value repeated at many placeholders is charged past its first use.
+    const repeatedTemplate = docxOf(`<w:p><w:r><w:t>${'{{a}}'.repeat(200000)}</w:t></w:r></w:p>`);
+    let repeatError: any;
+    const repeatStarted = Date.now();
+    try { await OfficeTemplate.render(repeatedTemplate, { data: { a: 'x'.repeat(100) } }); } catch (e) { repeatError = e; }
+    check('template: a 100-character value at 200,000 placeholders is refused', repeatError?.officeIssue?.code === 'OUTPUT_TOO_LARGE' && Date.now() - repeatStarted < 5000, `${Date.now() - repeatStarted}ms ${repeatError}`);
+    const fewRepeats = await OfficeTemplate.render(docxOf(`<w:p><w:r><w:t>${'{{a}} '.repeat(10)}</w:t></w:r></w:p>`), { data: { a: 'x'.repeat(1000) } });
+    check('template: a long value at ten placeholders renders', fewRepeats instanceof Uint8Array && fewRepeats.length > 0, String(fewRepeats));
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';
