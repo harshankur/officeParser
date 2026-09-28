@@ -3467,6 +3467,8 @@ async function parserHardeningTests() {
     sparse.length = 4294967295;
     sparse[0] = { type: 'text', text: 'x' };
     await refusedQuickly('a sparse list of four billion slots', [{ type: 'paragraph', children: sparse }], 'csv');
+    const longText = 'x'.repeat(10_000_000);
+    await refusedQuickly('one 10 MB text held by 1,000 runs', [{ type: 'paragraph', children: Array.from({ length: 1000 }, () => ({ type: 'text', text: longText })) }], 'docx');
     // Values that JSON can hold are read in time linear in the JSON: a wrapper's thousands of unknown
     // formatting fields, a paragraph's thousands of metadata fields split around blocks, and a chart
     // whose labels are lists.

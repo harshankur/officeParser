@@ -55,6 +55,17 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number
     // A string past 64 characters (a value) or 0 (text) weighs a node for every 16 characters beyond.
     const stringWeight = (value: unknown, allowance: number): number =>
         typeof value === 'string' && value.length > allowance ? (value.length - allowance) >> 4 : 0;
+    // What the AST holds of a string: its weight the first time a node holds it. A long string is one
+    // value however many nodes hold it (an AST built in code gave one of 100 MB to a thousand nodes, and
+    // each counted as content of its own), so later holders count only as writing it again.
+    const seenStrings = new Set<string>();
+    const heldWeight = (value: unknown, allowance: number): number => {
+        const weight = stringWeight(value, allowance);
+        if (weight === 0 || (value as string).length <= 64) return weight;
+        if (seenStrings.has(value as string)) return 0;
+        seenStrings.add(value as string);
+        return weight;
+    };
     // What a record (formatting, metadata, attributes) or array in one weighs per node holding it; counted
     // once towards what the AST holds.
     const valueTotal = (value: object): number => {
@@ -68,7 +79,7 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number
             own = value.length;
             for (const item of value) {
                 if (item && typeof item === 'object') nested += valueTotal(item);
-                else own += stringWeight(item, 64);
+                else { own += stringWeight(item, 64); held += heldWeight(item, 64); }
             }
         } else {
             let keys = 0;
@@ -76,12 +87,13 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number
                 keys++;
                 const item = (value as Record<string, unknown>)[key];
                 if (item && typeof item === 'object') nested += valueTotal(item);
-                else own += stringWeight(item, 64);
+                else { own += stringWeight(item, 64); held += heldWeight(item, 64); }
             }
             // A record is a few fields: past 32, each weighs.
             own += Math.max(0, keys - 32);
+            held += Math.max(0, keys - 32);
         }
-        held += own;
+        if (Array.isArray(value)) held += value.length;
         valueTotals.set(value, own + nested);
         return own + nested;
     };
@@ -111,7 +123,7 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number
         along.set(node, 1);
         // The node itself: its text, and what its records and reference lists weigh.
         const own = 1 + stringWeight(node.text, 0);
-        held += own;
+        held += 1 + heldWeight(node.text, 0);
         let total = own;
         for (const record of [node.formatting, node.metadata, (node as { htmlAttributes?: unknown }).htmlAttributes]) {
             if (record && typeof record === 'object') total += valueTotal(record);
