@@ -21,7 +21,9 @@ const ownArrays = (value: any): any => {
         if (ArrayBuffer.isView(item)) return item.byteOffset || item.byteLength !== item.buffer.byteLength ? (item as any).slice() : item;
         if (depth > 64 || item === null || typeof item !== 'object') return item;
         if (Array.isArray(item)) { for (let i = 0; i < item.length; i++) item[i] = own(item[i], depth + 1); return item; }
-        if (Object.getPrototypeOf(item) === Object.prototype) for (const key of Object.keys(item)) item[key] = own(item[key], depth + 1);
+        // Only a changed value is written, as an own property: a key named `__proto__` in a message is
+        // data, never the prototype.
+        if (Object.getPrototypeOf(item) === Object.prototype) for (const key of Object.keys(item)) { const next = own(item[key], depth + 1); if (next !== item[key]) Object.defineProperty(item, key, { value: next, writable: true, enumerable: true, configurable: true }); }
         return item;
     };
     return own(value, 0);
@@ -32,7 +34,7 @@ const OWN_ARRAYS_SOURCE = `(value) => {
         if (ArrayBuffer.isView(item)) return item.byteOffset || item.byteLength !== item.buffer.byteLength ? item.slice() : item;
         if (depth > 64 || item === null || typeof item !== 'object') return item;
         if (Array.isArray(item)) { for (let i = 0; i < item.length; i++) item[i] = own(item[i], depth + 1); return item; }
-        if (Object.getPrototypeOf(item) === Object.prototype) for (const key of Object.keys(item)) item[key] = own(item[key], depth + 1);
+        if (Object.getPrototypeOf(item) === Object.prototype) for (const key of Object.keys(item)) { const next = own(item[key], depth + 1); if (next !== item[key]) Object.defineProperty(item, key, { value: next, writable: true, enumerable: true, configurable: true }); }
         return item;
     };
     return own(value, 0);
@@ -51,7 +53,7 @@ const capArrays = (value, depth) => {
         for (let i = 0; i < value.length; i++) value[i] = capArrays(value[i], depth + 1);
         return value;
     }
-    if (Object.getPrototypeOf(value) === Object.prototype) for (const key of Object.keys(value)) value[key] = capArrays(value[key], depth + 1);
+    if (Object.getPrototypeOf(value) === Object.prototype) for (const key of Object.keys(value)) { const next = capArrays(value[key], depth + 1); if (next !== value[key]) Object.defineProperty(value, key, { value: next, writable: true, enumerable: true, configurable: true }); }
     return value;
 };
 const listeners = new Set();
