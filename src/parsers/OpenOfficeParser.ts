@@ -131,16 +131,6 @@ const repeatCell = (c: OfficeContentNode, config: OfficeParserConfig): OfficeCon
 const createCellBudget = (config: OfficeParserConfig): CellBudget =>
     new CellBudget(config.decompressionLimits?.maxTableCells ?? 1000000, config);
 
-/** The characters of the string values an object holds directly (a node's formatting or metadata). */
-const valuesLength = (values: object | undefined): number => {
-    let length = 0;
-    if (values) for (const key in values) {
-        const value = (values as Record<string, unknown>)[key];
-        if (typeof value === 'string') length += value.length;
-    }
-    return length;
-};
-
 /**
  * Coerces a `table:number-*-repeated` attribute to a usable repeat count. A missing, zero,
  * negative or non-numeric value becomes 1 (the element renders once), so a garbage attribute
@@ -260,7 +250,7 @@ const toRepeatCount = (attr: string | null): number => {
 };
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { takeRepeats } from '../utils/repeatUtils.js';
+import { takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
@@ -572,7 +562,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      * @param paragraphStyleMap - Map of style names to alignments and props (needed for notes)
      * @param parentFormatting - Formatting inherited from parent (e.g. span inside span)
      * @param linkMetadata - Metadata inherited from parent link
-     * @param withFrames - Whether frames (pictures, formulas, text boxes) are read: a spreadsheet cell reads its frames itself
+     * @param withFrames - Whether frames' pictures and objects are read: a spreadsheet cell reads those itself (a text box's text is read either way)
      * @returns Object containing text and children
      */
     const parseInlineContent = (
@@ -785,7 +775,19 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     fullText += fieldContent.text;
                     appendAll(children, fieldContent.children);
                     appendAll(anchorIds, fieldContent.anchorIds);
-                } else if (tagName === 'draw:frame' && withFrames) {
+                } else if (tagName === 'draw:frame' && !withFrames) {
+                    // A spreadsheet cell reads its frames' pictures and objects itself; here, the text of
+                    // a frame's text box only (its own frames, nested, are the cell's too).
+                    const drawTextBox = frameChild(element, "draw:text-box");
+                    if (drawTextBox) {
+                        for (const boxParagraph of ownParagraphs(drawTextBox)) {
+                            const boxContent = parseInlineContent(boxParagraph, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, false);
+                            fullText += boxContent.text;
+                            appendAll(children, boxContent.children);
+                            appendAll(anchorIds, boxContent.anchorIds);
+                        }
+                    }
+                } else if (tagName === 'draw:frame') {
                     const frame = element;
                     const drawTextBox = frameChild(frame, "draw:text-box");
                     const drawObject = frameChild(frame, "draw:object");

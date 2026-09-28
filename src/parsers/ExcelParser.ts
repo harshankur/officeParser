@@ -28,7 +28,7 @@ import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { attachmentLookup, repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
+import { attachmentLookup, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
 import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
@@ -148,6 +148,11 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const richStringText = new Map<number, string>();
     // How many cells have shown each shared string so far.
     const sharedStringUses = new Map<number, number>();
+    // What each rich shared string's runs weigh beyond their text: 16 a run, and its formatting values.
+    // Cells showing the string share its runs, and every writer writes a run's font or colour again in
+    // each cell: counted by run alone, one run of a 64 KB font shown in 7,500 cells (1.8 KB of XLSX)
+    // made 492 MB of HTML.
+    const richStringRunWeight = new Map<number, number>();
 
     if (sharedStringsFile) {
         const xml = parseXmlString(sharedStringsFile.content.toString(), { config });
@@ -651,7 +656,13 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                         // 1 MB string in 400 cells made 400 MB of CSV. Past it a cell shows the string's start.
                         const shown = sharedStringUses.get(idx) ?? 0;
                         sharedStringUses.set(idx, shown + 1);
-                        const weight = (joined?.length ?? 0) + (Array.isArray(content) ? 16 * content.length : 0);
+                        let runWeight = Array.isArray(content) ? richStringRunWeight.get(idx) : 0;
+                        if (runWeight === undefined && Array.isArray(content)) {
+                            runWeight = 0;
+                            for (const run of content) runWeight += 16 + valuesLength(run.formatting) + valuesLength(run.metadata);
+                            richStringRunWeight.set(idx, runWeight);
+                        }
+                        const weight = (joined?.length ?? 0) + (runWeight ?? 0);
                         if (shown > 0 && takeRepeats(config, 1, weight) === 0) {
                             text = repeatPreview(joined ?? '');
                         } else if (Array.isArray(content)) {

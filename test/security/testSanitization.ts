@@ -3277,6 +3277,19 @@ async function parserHardeningTests() {
     const innerDocx = Buffer.from(zipSync({ '[Content_Types].xml': enc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'), 'word/document.xml': enc(`<?xml version="1.0"?><w:document ${W}><w:body><w:p><w:r><w:t>${'x'.repeat(3_000_000)}</w:t></w:r></w:p></w:body></w:document>`) }));
     const nestedBomb = await parseQuiet(docxOf('<w:altChunk r:id="c1"/>', { 'word/_rels/document.xml.rels': chunkRels(chunkRel('c1', 'inner.docx')), 'word/inner.docx': new Uint8Array(innerDocx) }), 'docx', { decompressionLimits: { maxUncompressedBytes: 2_000_000 } });
     check('docx: a DOCX chunk inflating past what the document left is refused', /size|limit/i.test(nestedBomb.error), nestedBomb.error || 'parsed');
+    // XLSX: a rich shared string's run formatting counts toward the repeated-content budget per cell.
+    const sharedFontRuns = await parseQuiet(xlsxOf({
+        'xl/sharedStrings.xml': `<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><r><rPr><rFont val="${'F'.repeat(65536)}"/></rPr><t>a</t></r></si></sst>`,
+        'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${Array.from({ length: 7500 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}" t="s"><v>0</v></c></row>`).join('')}</sheetData></worksheet>`,
+    }), 'xlsx');
+    const fontHtml = sharedFontRuns.ast ? ((await OfficeGenerator.generate(sharedFontRuns.ast, 'html', { onWarning: () => {} } as any)).value as string).length : -1;
+    check('xlsx: one run\'s 64 KB font shown in 7,500 cells stays within the repeated-content budget', !sharedFontRuns.error && fontHtml > 0 && fontHtml < 40_000_000, `${sharedFontRuns.error} ${fontHtml}`);
+    // ODS: a text box in a cell's paragraph keeps its text.
+    const cellBox = await parseQuiet(odfOf('spreadsheet', '<table:table table:name="S"><table:table-row><table:table-cell><text:p>A<draw:frame><draw:text-box><text:p>INNER</text:p></draw:text-box></draw:frame>B</text:p></table:table-cell></table:table-row></table:table>'), 'ods');
+    check('ods: a text box in a cell keeps its text', cellsOf(cellBox.ast)[0]?.text === 'AINNERB', JSON.stringify(cellsOf(cellBox.ast)[0]?.text));
+    // Markdown: a code block's language cannot open a tag.
+    const infoString = (await OfficeGenerator.generate(astWith([{ type: 'code', text: 'x', metadata: { language: 'js"><img src=x onerror=alert(1)>' } }]), 'md', { onWarning: () => {} } as any)).value as string;
+    check('md: a code block\'s language holds no < or >', !/[<>]/.test(infoString.split('\n').find(line => line.startsWith('```')) ?? ''), infoString);
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';

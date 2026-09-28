@@ -46,6 +46,16 @@ export const takeRepeats = (config: OfficeParserConfig, copies: number, weight: 
     return granted;
 };
 
+/** The characters of the string values an object holds directly (a node's formatting or metadata). */
+export const valuesLength = (values: object | undefined): number => {
+    let length = 0;
+    if (values) for (const key in values) {
+        const value = (values as Record<string, unknown>)[key];
+        if (typeof value === 'string') length += value.length;
+    }
+    return length;
+};
+
 /** The start of `text` a copy past the budget keeps: REPEAT_ALLOWANCE characters, not splitting a surrogate pair. */
 export const repeatPreview = (text: string): string => {
     if (text.length <= REPEAT_ALLOWANCE) return text;

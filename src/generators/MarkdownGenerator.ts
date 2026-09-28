@@ -997,7 +997,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         const mathInline = markdownEscapeTags(node.text || '').replace(/[$\r\n]+/g, '');
                         return anchors + (this.resolvedDialect.math === 'dollar' ? `$${mathInline}$` : mathInline);
                     }
-                    const lang = (meta?.language || '').replace(/[\r\n`]+/g, '');
+                    // No language name holds `<` or `>`: without them, an info string cannot open a tag
+                    // in a renderer that writes it into its HTML unescaped.
+                    const lang = (meta?.language || '').replace(/[\r\n`<>]+/g, '');
                     // A `code` node is always block-level: genuinely inline code is a monospace
                     // text node, never a `code` node. So it is a fenced block, whatever its length
                     // and whether or not it names a language: a one-line block (a shell command, a
