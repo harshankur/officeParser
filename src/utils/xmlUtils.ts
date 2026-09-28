@@ -11,8 +11,8 @@
  */
 
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
-import { OfficeErrorType, OfficeMetadata, OfficeParserConfig } from '../types';
-import { getOfficeError } from './errorUtils.js';
+import { OfficeErrorType, OfficeMetadata, OfficeParserConfig, OfficeWarningType } from '../types';
+import { getOfficeError, logWarning } from './errorUtils.js';
 import { parseOfficeDate } from './dateUtils.js';
 import { setOwn } from './lookupUtils.js';
 
@@ -39,7 +39,7 @@ const xmlElementBudgets = new WeakMap<object, { left: number }>();
  * Takes `xml`'s elements from its parse's budget (see DecompressionLimits.maxXmlElements), failing the
  * parse past it: counted before the XML is read, from each `<` that opens an element.
  */
-const takeXmlElements = (xml: string, config: OfficeParserConfig): void => {
+export const takeXmlElements = (xml: string, config: OfficeParserConfig): void => {
     let budget = xmlElementBudgets.get(config);
     if (!budget) xmlElementBudgets.set(config, budget = { left: config.decompressionLimits?.maxXmlElements ?? DEFAULT_MAX_XML_ELEMENTS });
     let count = 0;
@@ -81,12 +81,20 @@ export const parseXmlString = (xml: string, options: { locator?: boolean; config
  * ```
  */
 export const getElementsByTagName = (element: Element | Document, tagName: string): Element[] => {
-    const results = Array.from(element.getElementsByTagName(tagName)) as Element[];
+    // The outermost matches only (see getOutermostElements): a match nested in another is reached by
+    // reading that one, and returning it too read nested content again at every level (notes, comments
+    // or equations nested in their own kind grew with the square of the depth, or ran out of memory).
+    // getAllElementsByTagName keeps the nested ones, for a reader that handles each flatly.
+    const results = getOutermostElements(element, tagName);
     // Resilience: If prefixed tag (e.g., 'dc:title') not found, try local name (e.g., 'title')
-    if (results.length === 0 && tagName.includes(':')) {
-        const localName = tagName.split(':').pop()!;
-        return Array.from(element.getElementsByTagName(localName)) as Element[];
-    }
+    if (results.length === 0 && tagName.includes(':')) return getOutermostElements(element, tagName.split(':').pop()!);
+    return results;
+};
+
+/** Every descendant named `tagName`, nested ones included, for a reader that handles each on its own (reading none of the others again). */
+export const getAllElementsByTagName = (element: Element | Document, tagName: string): Element[] => {
+    const results = Array.from(element.getElementsByTagName(tagName)) as Element[];
+    if (results.length === 0 && tagName.includes(':')) return Array.from(element.getElementsByTagName(tagName.split(':').pop()!)) as Element[];
     return results;
 };
 
@@ -160,13 +168,44 @@ export const getSourceSubstring = (node: any, sourceXml: string): string | undef
  * @param config - The parser configuration
  * @returns The raw content string (serialized or original)
  */
-export const getRawContent = (node: Node, sourceXml: string, config: { serializeRawContent?: boolean; preserveXmlWhitespace?: boolean }): string => {
-    if (config.serializeRawContent === false) {
-        const original = getSourceSubstring(node, sourceXml);
-        if (original) return original;
-    }
+export const getRawContent = (node: Node, sourceXml: string, config: OfficeParserConfig): string | undefined => {
+    // A spent budget is checked before serializing: nested tables re-serialize every level below
+    // them, so skipping the work, not only the result, is what keeps it linear.
+    if (rawContentBudget(config).spent) return undefined;
+    let raw: string | undefined;
+    if (config.serializeRawContent === false) raw = getSourceSubstring(node, sourceXml);
+    if (!raw) raw = serializeXml(node, { preserveWhitespace: config.preserveXmlWhitespace });
+    return chargeRawContent(raw, config);
+};
 
-    return serializeXml(node, { preserveWhitespace: config.preserveXmlWhitespace });
+/** What each parse (its config object) may still attach as rawContent (see DecompressionLimits.maxRawContentLength). */
+const rawContentBudgets = new WeakMap<object, { left: number; spent: boolean }>();
+const DEFAULT_MAX_RAW_CONTENT_LENGTH = 64 * 1024 * 1024;
+const rawContentBudget = (config: OfficeParserConfig): { left: number; spent: boolean } => {
+    let budget = rawContentBudgets.get(config);
+    if (!budget) rawContentBudgets.set(config, budget = { left: config.decompressionLimits?.maxRawContentLength ?? DEFAULT_MAX_RAW_CONTENT_LENGTH, spent: false });
+    return budget;
+};
+
+/**
+ * Charges `raw` to its parse's rawContent budget and returns it, or undefined once the budget is spent
+ * (warning once): a node's rawContent holds the markup of everything nested in it, so nested tables and
+ * repeated ODF cells carry the same bytes many times over. A repeat that shares a string is charged
+ * again, since each node that carries it costs its length to anyone who serializes the AST.
+ */
+export const chargeRawContent = (raw: string | undefined, config: OfficeParserConfig): string | undefined => {
+    if (raw === undefined) return undefined;
+    const budget = rawContentBudget(config);
+    if (!budget.spent && raw.length <= budget.left) {
+        budget.left -= raw.length;
+        return raw;
+    }
+    budget.left = 0;
+    if (!budget.spent) {
+        budget.spent = true;
+        logWarning(OfficeWarningType.RAW_CONTENT_LIMIT_EXCEEDED, config, config.decompressionLimits?.maxRawContentLength ?? DEFAULT_MAX_RAW_CONTENT_LENGTH);
+    }
+    return undefined;
 };
 /**
  * Gets the first element with the specified tag name within a parent element.

@@ -100,7 +100,7 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Source Inspection</strong>: Adds a <code>rawContent</code> property to every node containing
-                    its original XML or RTF source. <em>Warning: Significantly increases AST memory footprint.</em></td>
+                    its original XML or RTF source, up to <code>decompressionLimits.maxRawContentLength</code> characters per document. <em>Warning: Significantly increases AST memory footprint.</em></td>
             </tr>
             <tr>
                 <td><code>serializeRawContent</code></td>
@@ -294,13 +294,25 @@
                 <td><code>decompressionLimits.maxTableCells</code></td>
                 <td><code>number</code></td>
                 <td><code>1000000</code></td>
-                <td><strong>Cell Expansion Limit</strong>: Maximum number of table cells materialized from <code>table:number-columns-repeated</code>/<code>table:number-rows-repeated</code> in any ODF table (spreadsheet grids and embedded tables in ODT/ODP/ODG alike). Beyond it, expansion clamps and warns instead of allocating without bound.</td>
+                <td><strong>Cell Limit</strong>: Maximum number of table cells a document yields: those materialized from <code>table:number-columns-repeated</code>/<code>table:number-rows-repeated</code> in any ODF table (spreadsheet grids and embedded tables in ODT/ODP/ODG alike), and an XLSX workbook's cells. Beyond it, the parse stops adding cells and warns with <code>TABLE_CELL_LIMIT_EXCEEDED</code> instead of allocating without bound.</td>
             </tr>
             <tr>
                 <td><code>decompressionLimits.maxXmlElements</code></td>
                 <td><code>number</code></td>
                 <td><code>2000000</code></td>
-                <td><strong>XML Element Limit</strong>: Maximum number of XML elements read from one document's parts (DOCX, XLSX, PPTX, ODF and EPUB package XML, charts and metadata; XLSX sheets do not count). Each element takes several hundred bytes of memory to read, so a small zip of empty elements could fill the heap long before <code>maxUncompressedBytes</code>. Past it, the parse rejects with <code>XML_ELEMENT_LIMIT_EXCEEDED</code>.</td>
+                <td><strong>XML Element Limit</strong>: Maximum number of XML elements read from one document's parts (DOCX, XLSX, PPTX and ODF parts, EPUB package XML and chapters, charts and metadata; XLSX sheets do not count). Each element takes several hundred bytes of memory to read, so a small zip of empty elements could fill the heap long before <code>maxUncompressedBytes</code>. Past it, the parse rejects with <code>XML_ELEMENT_LIMIT_EXCEEDED</code>.</td>
+            </tr>
+            <tr>
+                <td><code>decompressionLimits.maxRepeatedCellContent</code></td>
+                <td><code>number</code></td>
+                <td><code>16777216</code></td>
+                <td><strong>Repeated Content Limit</strong>: Maximum amount of content ODF repeated cells and rows may copy in one document, counted as characters of text plus 16 for each node. A repeat shares its content in the AST, but every generator writes it once per copy, so a few hundred bytes could ask for gigabytes of output. Empty cells cost nothing. Past it, the remaining repeats of content-bearing cells are not made and <code>REPEATED_CONTENT_LIMIT_EXCEEDED</code> is raised; later cells keep their row and column numbers.</td>
+            </tr>
+            <tr>
+                <td><code>decompressionLimits.maxRawContentLength</code></td>
+                <td><code>number</code></td>
+                <td><code>67108864</code></td>
+                <td><strong>Raw Content Limit</strong>: With <code>includeRawContent</code>, the maximum total length (in characters) of the <code>rawContent</code> one document's nodes carry. A node's raw content holds the markup of everything nested in it, so nested tables repeat it at every level. Past it, the remaining nodes carry no <code>rawContent</code> and <code>RAW_CONTENT_LIMIT_EXCEEDED</code> is raised; the content itself is unaffected.</td>
             </tr>
             <tr>
                 <td><code>htmlParserConfig</code></td>

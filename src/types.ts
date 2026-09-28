@@ -110,6 +110,10 @@ export enum OfficeWarningType {
     INVALID_CONTAINER_WIDTH = 'INVALID_CONTAINER_WIDTH',
     /** A document's repeated-cell expansion hit the configured cell limit and was truncated */
     TABLE_CELL_LIMIT_EXCEEDED = 'TABLE_CELL_LIMIT_EXCEEDED',
+    /** The document's rawContent reached `decompressionLimits.maxRawContentLength`; the remaining nodes carry none */
+    RAW_CONTENT_LIMIT_EXCEEDED = 'RAW_CONTENT_LIMIT_EXCEEDED',
+    /** ODF repeated cells or rows reached `decompressionLimits.maxRepeatedCellContent`; the remaining repeats were not made */
+    REPEATED_CONTENT_LIMIT_EXCEEDED = 'REPEATED_CONTENT_LIMIT_EXCEEDED',
     /** A metadata override could not be represented in the destination format's vocabulary */
     METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE',
     /** A content feature (e.g. math, an embedded object) has no faithful representation in the destination format and was downgraded or dropped */
@@ -360,7 +364,10 @@ export interface CommonOfficeParserConfig {
     extractAttachments?: boolean;
     /**
      * Flag to include raw content (XML for XML-based formats, RTF for RTF) in the AST.
-     * Default is false.
+     * Default is false. A document's nodes carry at most `decompressionLimits.maxRawContentLength`
+     * characters of it in all (a node's raw content holds everything nested in it, so nested tables
+     * repeat it at every level); past that the remaining nodes carry none, with a
+     * `RAW_CONTENT_LIMIT_EXCEEDED` warning.
      */
     includeRawContent?: boolean;
     /**
@@ -710,6 +717,9 @@ export interface DecompressionLimits {
      * (`number-rows-repeated="1048566"` is routine) but they sit on *empty* trailing runs, which
      * are skipped for spreadsheets; the bundled fixtures top out around 350 cells.
      *
+     * An XLSX workbook's cells count too: a sheet is read without building XML elements, so
+     * `maxXmlElements` does not bound it, and 854 KB of zip can hold 16 million cells.
+     *
      * On reaching the limit the parser stops materializing further cells, emits a
      * `TABLE_CELL_LIMIT_EXCEEDED` warning, and returns what it has rather than throwing, so a
      * genuinely enormous sheet still yields usable output. Raise it if you routinely process
@@ -730,6 +740,32 @@ export interface DecompressionLimits {
      * Default is 2000000.
      */
     maxXmlElements?: number;
+    /**
+     * Maximum total length (in characters) of the `rawContent` one document's nodes carry when
+     * `includeRawContent` is on. A node's rawContent holds the markup of everything nested in it, so
+     * nested tables repeat each level's markup at every level above it, and a repeated ODF cell or row
+     * carries its markup once per repeat: a small document could otherwise ask for gigabytes. Past the
+     * limit the remaining nodes carry no rawContent and a `RAW_CONTENT_LIMIT_EXCEEDED` warning is
+     * raised; the content itself is unaffected. Raise it for larger documents, with memory to match.
+     *
+     * Default is 67108864 (64M characters).
+     */
+    maxRawContentLength?: number;
+    /**
+     * Maximum amount of content that ODF repeated cells and rows (`table:number-columns-repeated`,
+     * `table:number-rows-repeated`) may copy in one document, counted as the characters of text plus
+     * 16 for each node a copy holds. A repeated cell shares its content with the first copy, so the
+     * AST stays small, but everything that reads the AST afterwards (each generator, `toText`) writes
+     * the content once per copy: 700 bytes asking for 100,000 copies of a 2,000-span cell made 200 MB
+     * of text. `maxTableCells` counts cells, not what they hold, so it cannot catch this. Empty cells
+     * cost nothing, and real documents repeat small values, far below it. Past it, the remaining
+     * repeats of content-bearing cells are not made and a `REPEATED_CONTENT_LIMIT_EXCEEDED` warning is
+     * raised; later cells keep their row and column numbers. Raise it for documents that legitimately
+     * repeat large cells.
+     *
+     * Default is 16777216.
+     */
+    maxRepeatedCellContent?: number;
 }
 
 /**

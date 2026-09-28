@@ -1,5 +1,5 @@
 import { ChartData, OfficeParserConfig } from "../types";
-import { parseXmlString, getElementsByTagName, getDirectChildren } from "./xmlUtils";
+import { parseXmlString, getElementsByTagName, getDirectChildren, getFirstElementByTagName, getChildElements } from "./xmlUtils";
 
 /**
  * Extracts a single text element located at:
@@ -9,18 +9,19 @@ import { parseXmlString, getElementsByTagName, getDirectChildren } from "./xmlUt
  * @param tagName The tag to search for (e.g., "c:title", "c:tx")
  */
 const extractOpenXmlRichText = (el: Element, tagName: string): string | undefined => {
-    const target = (el.localName === tagName || el.tagName === tagName) ? el : el.getElementsByTagName(tagName)[0];
+    const target = (el.localName === tagName || el.tagName === tagName) ? el : getFirstElementByTagName(el, tagName);
     if (!target) return undefined;
 
     // 1. Try c:rich or a:p (standard rich text)
-    const richNodes = target.getElementsByTagName("c:rich");
-    const pNodes = target.getElementsByTagName("a:p");
+    // (Through the helpers, which read nested content once: see getElementsByTagName.)
+    const richNodes = getElementsByTagName(target, "c:rich");
+    const pNodes = getElementsByTagName(target, "a:p");
     const textContainers = richNodes.length > 0 ? Array.from(richNodes) : Array.from(pNodes);
 
     if (textContainers.length > 0) {
         let acc = "";
         for (const container of textContainers) {
-            const tNodes = container.getElementsByTagName("a:t");
+            const tNodes = getElementsByTagName(container, "a:t");
             for (let i = 0; i < tNodes.length; i++) {
                 acc += (tNodes[i].textContent || "") + " ";
             }
@@ -29,7 +30,7 @@ const extractOpenXmlRichText = (el: Element, tagName: string): string | undefine
     }
 
     // 2. Try c:v (cached values/strings)
-    const vNode = target.getElementsByTagName("c:v")[0];
+    const vNode = getFirstElementByTagName(target, "c:v");
     if (vNode && vNode.textContent) {
         return vNode.textContent.trim() || undefined;
     }
@@ -83,14 +84,17 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
     let xAxisTitle: string | undefined = undefined;
     let yAxisTitle: string | undefined = undefined;
 
-    const catAxes = root.getElementsByTagName("c:catAx");
+    const catAxes = getElementsByTagName(root, "c:catAx");
     if (catAxes.length > 0) xAxisTitle = extractOpenXmlRichText(catAxes[0] as Element, "c:title");
 
-    const valAxes = root.getElementsByTagName("c:valAx");
+    const valAxes = getElementsByTagName(root, "c:valAx");
     if (valAxes.length > 0) yAxisTitle = extractOpenXmlRichText(valAxes[0] as Element, "c:title");
 
     // Extract Series (dataSets)
-    const seriesNodes = root.getElementsByTagName("c:ser");
+    // The outermost series, at most MAX_CHART_SERIES of them, holding at most MAX_CHART_VALUES values
+    // in all: series nested in series each read every value below them (22 KB, out of memory).
+    const seriesNodes = getElementsByTagName(root, "c:ser").slice(0, MAX_CHART_SERIES);
+    let valuesLeft = MAX_CHART_VALUES;
     const dataSets: ChartData['dataSets'] = [];
     const sharedLabels: string[] = [];
 
@@ -102,29 +106,29 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
 
         // Values (c:val)
         const values: string[] = [];
-        const valNode = ser.getElementsByTagName("c:val")[0] || ser.getElementsByTagName("c:yVal")[0];
+        const valNode = getChildElements(ser, "c:val")[0] || getChildElements(ser, "c:yVal")[0];
         if (valNode) {
-            const vNodes = valNode.getElementsByTagName("c:v");
-            for (let j = 0; j < vNodes.length; j++) {
+            const vNodes = getElementsByTagName(valNode, "c:v");
+            for (let j = 0; j < vNodes.length && valuesLeft > 0; j++) {
                 const v = vNodes[j].textContent?.trim();
-                if (v) values.push(v);
+                if (v) { values.push(v); valuesLeft--; }
             }
         }
 
         // Point Labels (data labels)
         const pointLabels: string[] = [];
-        const dLbls = ser.getElementsByTagName("c:dLbl");
+        const dLbls = getElementsByTagName(ser, "c:dLbl");
         for (let j = 0; j < dLbls.length; j++) {
             const lbl = extractOpenXmlRichText(dLbls[j], "c:tx");
             if (lbl) pointLabels.push(lbl);
         }
 
         // Categories (labels) - c:cat or c:xVal
-        const catNode = ser.getElementsByTagName("c:cat")[0] || ser.getElementsByTagName("c:xVal")[0];
+        const catNode = getChildElements(ser, "c:cat")[0] || getChildElements(ser, "c:xVal")[0];
         if (catNode) {
-            const vNodes = catNode.getElementsByTagName("c:v");
+            const vNodes = getElementsByTagName(catNode, "c:v");
             const localLabels: string[] = [];
-            for (let j = 0; j < vNodes.length; j++) {
+            for (let j = 0; j < vNodes.length && localLabels.length < MAX_CHART_VALUES; j++) {
                 const v = vNodes[j].textContent?.trim();
                 if (v) localLabels.push(v);
             }
@@ -207,7 +211,7 @@ const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): Ch
     } else {
         // Chart with cell references (common in ODS spreadsheets)
         // Extract series info from chart:series elements
-        const seriesNodes = getElementsByTagName(chart, "chart:series");
+        const seriesNodes = getElementsByTagName(chart, "chart:series").slice(0, MAX_CHART_SERIES);
         for (const series of seriesNodes) {
             // Series label is in chart:label-cell-address attribute
             const labelAddr = series.getAttribute("chart:label-cell-address");

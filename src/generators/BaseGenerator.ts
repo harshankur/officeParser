@@ -228,7 +228,7 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         if (typeof override === 'string') return override;
 
         let childrenOutput = '';
-        if (node.children) {
+        if (node.children && !this.walkedByProcessor(node)) {
             // The output of the child before, for what goes between it and the next (see childSeparator).
             let previous = '';
             for (const child of node.children) {
@@ -260,6 +260,15 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         }
 
         return result;
+    }
+
+    /**
+     * Whether the processor renders `node`'s children itself, so they are not rendered first for it
+     * (it is given '' as their output). Rendered twice, a table nested in a table nested in a table
+     * doubles the work at each level: 22 levels took seconds and 30 would take half an hour.
+     */
+    protected walkedByProcessor(_node: OfficeContentNode): boolean {
+        return false;
     }
 
     /**

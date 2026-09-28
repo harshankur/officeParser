@@ -28,7 +28,7 @@ import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
+import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
 /** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
@@ -138,6 +138,10 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const sharedStringsFile = files.find(f => f.path === stringsFilePath);
     // Updated to store structured content (rich text runs) or simple string
     const sharedStrings: (string | OfficeContentNode[])[] = [];
+    // Cells the document's sheets may still yield (see the sheet loop).
+    const cellLimit = config.decompressionLimits?.maxTableCells ?? 1000000;
+    let cellsLeft = cellLimit;
+    let cellLimitWarned = false;
     // The text of each rich shared string, joined once: joined per cell, a large string many cells
     // show was copied for each, and a small file filled the heap.
     const richStringText = new Map<number, string>();
@@ -215,33 +219,34 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         const fontsNode = getElementsByTagName(xml, "fonts")[0];
         const fonts: TextFormatting[] = [];
         if (fontsNode) {
-            const fontNodes = getElementsByTagName(fontsNode, "font");
+            // Each font, fill and format read from its own children (see getChildElements).
+            const fontNodes = getChildElements(fontsNode, "font");
             for (const font of fontNodes) {
                 const formatting: TextFormatting = {};
-                if (getElementsByTagName(font, "b").length > 0) formatting.bold = true;
-                if (getElementsByTagName(font, "i").length > 0) formatting.italic = true;
-                if (getElementsByTagName(font, "u").length > 0) formatting.underline = true;
-                if (getElementsByTagName(font, "strike").length > 0) formatting.strikethrough = true;
+                if (getChildElements(font, "b").length > 0) formatting.bold = true;
+                if (getChildElements(font, "i").length > 0) formatting.italic = true;
+                if (getChildElements(font, "u").length > 0) formatting.underline = true;
+                if (getChildElements(font, "strike").length > 0) formatting.strikethrough = true;
 
-                const szNode = getElementsByTagName(font, "sz")[0];
+                const szNode = getChildElements(font, "sz")[0];
                 if (szNode) {
                     const val = szNode.getAttribute("val");
                     if (val) formatting.size = val + 'pt';
                 }
 
-                const colorNode = getElementsByTagName(font, "color")[0];
+                const colorNode = getChildElements(font, "color")[0];
                 if (colorNode) {
                     const rgb = colorNode.getAttribute("rgb");
                     if (rgb) formatting.color = '#' + rgb.substring(2); // Remove alpha channel
                 }
 
-                const nameNode = getElementsByTagName(font, "name")[0];
+                const nameNode = getChildElements(font, "name")[0];
                 if (nameNode) {
                     const val = nameNode.getAttribute("val");
                     if (val) formatting.font = val;
                 }
 
-                const vertAlignNode = getElementsByTagName(font, "vertAlign")[0];
+                const vertAlignNode = getChildElements(font, "vertAlign")[0];
                 if (vertAlignNode) {
                     const val = vertAlignNode.getAttribute("val");
                     if (val === "subscript") formatting.subscript = true;
@@ -256,12 +261,12 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         const fillsNode = getElementsByTagName(xml, "fills")[0];
         const fills: TextFormatting[] = [];
         if (fillsNode) {
-            const fillNodes = getElementsByTagName(fillsNode, "fill");
+            const fillNodes = getChildElements(fillsNode, "fill");
             for (const fill of fillNodes) {
                 const formatting: TextFormatting = {};
-                const patternFill = getElementsByTagName(fill, "patternFill")[0];
+                const patternFill = getChildElements(fill, "patternFill")[0];
                 if (patternFill) {
-                    const fgColor = getElementsByTagName(patternFill, "fgColor")[0];
+                    const fgColor = getChildElements(patternFill, "fgColor")[0];
                     if (fgColor) {
                         const rgb = fgColor.getAttribute("rgb");
                         const theme = fgColor.getAttribute("theme");
@@ -286,7 +291,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         // Parse cellXfs (cell format definitions)
         const cellXfsNode = getElementsByTagName(xml, "cellXfs")[0];
         if (cellXfsNode) {
-            const xfNodes = getElementsByTagName(cellXfsNode, "xf");
+            const xfNodes = getChildElements(cellXfsNode, "xf");
             for (let i = 0; i < xfNodes.length; i++) {
                 const xf = xfNodes[i];
                 const formatting: TextFormatting = {};
@@ -307,7 +312,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     }
                 }
 
-                const alignmentNode = getElementsByTagName(xf, "alignment")[0];
+                const alignmentNode = getChildElements(xf, "alignment")[0];
                 if (alignmentNode) {
                     const horizontal = alignmentNode.getAttribute("horizontal");
                     if (horizontal === 'center' || horizontal === 'right' || horizontal === 'justify' || horizontal === 'left') {
@@ -573,6 +578,11 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             for (const rowElement of rowElements) {
                 checkAbortSignal(config.abortSignal);
+                if (cellsLeft <= 0) {
+                    // Spent exactly at the row before: this row's cells are the ones not read.
+                    if (!cellLimitWarned && /<(?:\w+:)?c[\s/>]/.test(rowElement.whole)) { cellLimitWarned = true; logWarning(OfficeWarningType.TABLE_CELL_LIMIT_EXCEEDED, config, cellLimit); }
+                    break;
+                }
                 const rowXml = rowElement.whole;
                 const rowAttrs = rowElement.attrs;
                 const isSelfClosing = rowElement.selfClosing;
@@ -591,6 +601,13 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 let lastColIndex = -1;
 
                 for (const cellElement of cellElements) {
+                    // The document's cells within maxTableCells, as ODF's are: a sheet is read without
+                    // building XML elements, so the element budget does not bound it, and 16 million
+                    // cells (854 KB of zip) ran the process out of memory.
+                    if (--cellsLeft < 0) {
+                        if (!cellLimitWarned) { cellLimitWarned = true; logWarning(OfficeWarningType.TABLE_CELL_LIMIT_EXCEEDED, config, cellLimit); }
+                        break;
+                    }
                     const cXml = cellElement.whole;
                     const cAttrs = cellElement.attrs;
                     const cContent = cellElement.content;
@@ -679,7 +696,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             metadata: { row: rowIndex, col: colIndex }
                         };
                         if (config.includeRawContent) {
-                            cellNode.rawContent = cXml;
+                            cellNode.rawContent = chargeRawContent(cXml, config);
                         }
                         cells.push(cellNode);
                     }
@@ -692,7 +709,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                         metadata: undefined
                     };
                     if (config.includeRawContent) {
-                        rowNode.rawContent = rowXml;
+                        rowNode.rawContent = chargeRawContent(rowXml, config);
                     }
                     rows.push(rowNode);
                 }
@@ -762,7 +779,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 type: 'sheet',
                 children: rows,
                 metadata: { sheetName },
-                rawContent: config.includeRawContent ? file.content.toString() : undefined
+                rawContent: config.includeRawContent ? chargeRawContent(file.content.toString(), config) : undefined
             });
         }
     }

@@ -386,6 +386,11 @@ export class TextGenerator extends BaseGenerator<'text'> {
     }
 
 
+    /** A laid-out table renders its own cells (see renderTable). */
+    protected override walkedByProcessor(node: OfficeContentNode): boolean {
+        return node.type === 'table' && this.config.textConfig.preserveLayout;
+    }
+
     private async renderTable(node: OfficeContentNode, processor: any, newline: string): Promise<string> {
         if (!node.children || node.children.length === 0) return '';
 

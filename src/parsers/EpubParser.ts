@@ -3,7 +3,7 @@ import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
-import { getAttribute, getElementsByTagName, getFirstElementByTagName, parseXmlString } from '../utils/xmlUtils.js';
+import { getAttribute, getElementsByTagName, getFirstElementByTagName, parseXmlString, takeXmlElements } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 import { parseHtml } from './HtmlParser.js';
 import { setOwn } from '../utils/lookupUtils.js';
@@ -179,6 +179,10 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
             return name;
         };
 
+        // A chapter's elements count against the document's budget, as its package XML does (see
+        // maxXmlElements): read by the HTML parser, they were not counted, and a chapter of 10 million
+        // empty elements (118 KB of EPUB) ran the process out of memory.
+        takeXmlElements(xhtmlFile.content.toString('utf8'), config);
         const chapterAst = await parseHtml(xhtmlFile.content, config, { imageAttachment });
         // A chapter's own inline pictures (data URIs) are numbered from 1 in each chapter: named
         // again, so no two of the book's attachments share a name.

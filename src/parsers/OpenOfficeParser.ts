@@ -49,8 +49,58 @@ import { lookupTable, plainRecord } from '../utils/lookupUtils.js';
 class CellBudget {
     private remaining: number;
     private warned = false;
-    constructor(private limit: number, private config: OfficeParserConfig) {
+    private contentLeft: number;
+    private contentWarned = false;
+    private readonly weights = new WeakMap<object, number>();
+    constructor(private limit: number, private contentLimit: number, private config: OfficeParserConfig) {
         this.remaining = limit;
+        this.contentLeft = contentLimit;
+    }
+    /**
+     * How many of `repeats` further copies of content weighing `weight` (see `weighCell`) may be
+     * made. A repeat shares its content with the first copy, so building it is cheap, but everything
+     * after the parse (each pass over the AST, each generator) meets that content once per copy: a
+     * 700-byte spreadsheet repeating a 2,000-span cell 100,000 times made 200 MB of text and ran the
+     * HTML and CSV generators out of memory. The cell count alone does not bound it, so the content
+     * copied is bounded too (`decompressionLimits.maxRepeatedCellContent`); empty cells cost nothing.
+     */
+    takeRepeats(repeats: number, weight: number): number {
+        if (!(repeats > 0)) return 0;
+        if (!(weight > 0)) return repeats;
+        const granted = Math.max(0, Math.min(repeats, Math.floor(this.contentLeft / weight)));
+        this.contentLeft -= granted * weight;
+        if (granted < repeats && !this.contentWarned) {
+            this.contentWarned = true;
+            logWarning(OfficeWarningType.REPEATED_CONTENT_LIMIT_EXCEEDED, this.config, this.contentLimit);
+        }
+        return granted;
+    }
+    /**
+     * What one copy of a cell writes: its text, and the text of each node it holds plus 16 for the node
+     * itself (a generator spends on a node what it spends on a dozen or two characters of text).
+     */
+    weighCell(text: string, children: OfficeContentNode[] | undefined, comments: OfficeContentNode[] | undefined): number {
+        return text.length + this.weigh(children) + this.weigh(comments);
+    }
+    /**
+     * Counted along every path, as a generator writes a shared node each time it meets it (a nested
+     * table's repeated cells share their content), and memoized so a shared subtree is summed once.
+     */
+    private weigh(nodes: OfficeContentNode[] | undefined): number {
+        if (!nodes || nodes.length === 0) return 0;
+        let total = this.weights.get(nodes);
+        if (total !== undefined) return total;
+        total = 0;
+        for (const node of nodes) {
+            let weight = this.weights.get(node);
+            if (weight === undefined) {
+                weight = 16 + (node.text?.length ?? 0) + this.weigh(node.children) + this.weigh(node.comments) + this.weigh(node.notes);
+                this.weights.set(node, weight);
+            }
+            total += weight;
+        }
+        this.weights.set(nodes, total);
+        return total;
     }
     /** How many of `wanted` may be created; 0 once exhausted. */
     take(wanted: number): number {
@@ -73,9 +123,23 @@ class CellBudget {
     }
 }
 
+/**
+ * A repeated row's copy of a cell: its own object and metadata (for the row index), sharing the
+ * read-only children, comments and text. Deep copies serialized every cell's content per row, a
+ * multi-hundred-MB string from a small row the cell-count budget did not bound. The shared rawContent
+ * is charged again, as every node that carries it is.
+ */
+const repeatCell = (c: OfficeContentNode, config: OfficeParserConfig): OfficeContentNode => ({
+    ...c,
+    metadata: c.metadata ? { ...c.metadata } : c.metadata,
+    children: c.children ? c.children.slice() : c.children,
+    comments: c.comments ? c.comments.slice() : c.comments,
+    ...(c.rawContent !== undefined ? { rawContent: chargeRawContent(c.rawContent, config) } : {}),
+}) as OfficeContentNode;
+
 /** Resolves the configured cell budget, falling back to the documented default. */
 const createCellBudget = (config: OfficeParserConfig): CellBudget =>
-    new CellBudget(config.decompressionLimits?.maxTableCells ?? 1000000, config);
+    new CellBudget(config.decompressionLimits?.maxTableCells ?? 1000000, config.decompressionLimits?.maxRepeatedCellContent ?? 16 * 1024 * 1024, config);
 
 /**
  * Coerces a `table:number-*-repeated` attribute to a usable repeat count. A missing, zero,
@@ -149,8 +213,10 @@ function buildAnnotationComment(
     config: OfficeParserConfig,
     sourceXml: string,
 ): OfficeContentNode {
-    const author = getFirstElementByTagName(element, "dc:creator")?.textContent || undefined;
-    const date = getFirstElementByTagName(element, "dc:date")?.textContent || undefined;
+    // The annotation's own author and date (children of it): looked up through its subtree, an
+    // annotation in a paragraph of an annotation, and so on, took minutes.
+    const author = getDirectChildren(element, "dc:creator")[0]?.textContent || undefined;
+    const date = getDirectChildren(element, "dc:date")[0]?.textContent || undefined;
     const children: OfficeContentNode[] = [];
     let text = '';
     for (const cp of ownParagraphs(element)) {
@@ -188,7 +254,7 @@ const toRepeatCount = (attr: string | null): number => {
 };
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
+import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
 /**
@@ -361,7 +427,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             const styleInfo: ParagraphStyleInfo = {};
 
             // Parse paragraph properties for alignment and drop caps
-            const paraProps = getFirstElementByTagName(style, "style:paragraph-properties");
+            // A style's own properties (children of it, as the schema has them): looked up through the
+            // whole subtree, styles nested in styles took time in the product of their depth and content.
+            const paraProps = getDirectChildren(style, "style:paragraph-properties")[0];
             if (paraProps) {
                 const textAlign = paraProps.getAttribute("fo:text-align");
                 if (textAlign) {
@@ -379,7 +447,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 }
 
                 // Detect Drop Caps
-                const dropCap = getFirstElementByTagName(paraProps, "style:drop-cap");
+                const dropCap = getDirectChildren(paraProps, "style:drop-cap")[0];
                 if (dropCap) {
                     styleInfo.dropCap = true;
                 }
@@ -400,9 +468,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
 
             // Parse text properties
-            const textProps = getFirstElementByTagName(style, "style:text-properties");
+            const textProps = getDirectChildren(style, "style:text-properties")[0];
             // Parse table cell properties (for ODS background)
-            const cellProps = getFirstElementByTagName(style, "style:table-cell-properties");
+            const cellProps = getDirectChildren(style, "style:table-cell-properties")[0];
 
             const formatting: TextFormatting = {};
 
@@ -930,6 +998,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             const rowsRepeated = toRepeatCount(row.getAttribute("table:number-rows-repeated"));
 
             let colIndex = 0;
+            // What one copy of this row writes, for its row repeats (see CellBudget.takeRepeats).
+            let rowWeight = 0;
 
             for (const cell of tableCells) {
                 const cellChildren: OfficeContentNode[] = [];
@@ -1019,7 +1089,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 // Add cell(s) for repeated columns
                 // Bounded by the document's cell budget, not by the attribute: the repeat count
                 // is attacker-influenced and this path materializes a node per iteration.
-                const allowedCols = cellBudget.take(colsRepeated);
+                const cellWeight = cellBudget.weighCell(cellText, cellChildren, cellComments);
+                const wantedCols = colsRepeated > 1 ? 1 + cellBudget.takeRepeats(colsRepeated - 1, cellWeight) : colsRepeated;
+                const allowedCols = cellBudget.take(wantedCols);
+                rowWeight += cellWeight * allowedCols;
+                // Serialized once for all the repeats, which share it.
+                const cellRaw = config.includeRawContent && allowedCols > 0 ? getRawContent(cell, sourceXml, config) : undefined;
                 for (let k = 0; k < allowedCols; k++) {
                     // Repeat expansion is the one place a small document produces a long loop,
                     // so it is also the one place a caller most needs to be able to cancel.
@@ -1052,7 +1127,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     if (isHeader) cellMetadata.style = 'header';
 
                     if (config.includeRawContent) {
-                        cellNode.rawContent = getRawContent(cell, sourceXml, config);
+                        cellNode.rawContent = k === 0 ? cellRaw : chargeRawContent(cellRaw, config);
                     }
 
                     // Share the (read-only) comment nodes across repeated columns via a shallow array
@@ -1066,6 +1141,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     cells.push(cellNode);
                     colIndex++;
                 }
+                // Repeats past the content budget keep their columns, so later cells keep theirs.
+                colIndex += colsRepeated - wantedCols;
             }
 
             // Add row(s) for repeated rows. rows x cols cells are materialized (charged against the
@@ -1073,15 +1150,18 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             // row-index fix below) and SHARES the read-only children/comments/text by reference; JSON
             // deep-copying instead serialized every cell's full content per row, so a row of content-
             // bearing cells built a multi-hundred-MB string (a RangeError / OOM the count budget missed).
+            // A row repeat copies every cell's content too (see CellBudget.takeRepeats).
+            const wantedRows = rowsRepeated > 1 ? 1 + cellBudget.takeRepeats(rowsRepeated - 1, rowWeight) : rowsRepeated;
             const allowedRows = cells.length === 0
-                ? (rowsRepeated > 0 ? 1 + cellBudget.take(rowsRepeated - 1) : 0)
-                : Math.min(rowsRepeated,
-                    1 + Math.floor(cellBudget.take(Math.max(0, (rowsRepeated - 1) * cells.length)) / cells.length));
+                ? (wantedRows > 0 ? 1 + cellBudget.take(wantedRows - 1) : 0)
+                : Math.min(wantedRows,
+                    1 + Math.floor(cellBudget.take(Math.max(0, (wantedRows - 1) * cells.length)) / cells.length));
+            const rowRaw = config.includeRawContent && allowedRows > 0 ? getRawContent(row, sourceXml, config) : undefined;
             for (let k = 0; k < allowedRows; k++) {
                 if ((k & 255) === 0) checkAbortSignal(config.abortSignal);
                 const rowNode: OfficeContentNode = {
                     type: 'row',
-                    children: k === 0 ? cells : cells.map(c => ({ ...c, metadata: c.metadata ? { ...c.metadata } : c.metadata, children: c.children ? c.children.slice() : c.children, comments: c.comments ? c.comments.slice() : c.comments }) as OfficeContentNode)
+                    children: k === 0 ? cells : cells.map(c => repeatCell(c, config))
                 };
 
                 // Fix row indices for repeated rows
@@ -1094,12 +1174,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 }
 
                 if (config.includeRawContent) {
-                    rowNode.rawContent = getRawContent(row, sourceXml, config);
+                    rowNode.rawContent = k === 0 ? rowRaw : chargeRawContent(rowRaw, config);
                 }
 
                 rows.push(rowNode);
                 rowIndex++;
             }
+            rowIndex += rowsRepeated - wantedRows;
         }
 
         return {
@@ -1574,6 +1655,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                         let colIndex = 0;
                         const rowsRepeated = toRepeatCount(row.getAttribute("table:number-rows-repeated"));
+                        // What one copy of this row writes, for its row repeats (see CellBudget.takeRepeats).
+                        let rowWeight = 0;
 
                         for (let c = 0; c < tableCells.length; c++) {
                             const cell = tableCells[c];
@@ -1632,7 +1715,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             }
 
                             // Check for embedded draw:frame (images) in cell
-                            const drawFrames = getElementsByTagName(cell, "draw:frame");
+                            // Each frame on its own (nested ones too), none reading another: all of them.
+                            const drawFrames = getAllElementsByTagName(cell, "draw:frame");
                             for (const frame of drawFrames) {
                                 // Extract alt text from svg:title or svg:desc
                                 let altText = '';
@@ -1728,7 +1812,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             if (!willMaterialize) {
                                 colIndex += colsRepeated;
                             } else {
-                                const allowedCols = cellBudget.take(colsRepeated);
+                                const cellWeight = cellBudget.weighCell(cellText, children, cellComments);
+                                const wantedCols = colsRepeated > 1 ? 1 + cellBudget.takeRepeats(colsRepeated - 1, cellWeight) : colsRepeated;
+                                const allowedCols = cellBudget.take(wantedCols);
+                                rowWeight += cellWeight * allowedCols;
+                                // Serialized once for all the repeats, which share it.
+                                const cellRaw = config.includeRawContent && allowedCols > 0 ? getRawContent(cell, xmlString, config) : undefined;
                                 for (let k = 0; k < allowedCols; k++) {
                                     if ((k & 1023) === 0) checkAbortSignal(config.abortSignal);
                                     const cellNode: OfficeContentNode = {
@@ -1738,7 +1827,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         metadata: { row: rowIndex, col: colIndex } as CellMetadata
                                     };
                                     if (config.includeRawContent) {
-                                        cellNode.rawContent = getRawContent(cell, xmlString, config);
+                                        cellNode.rawContent = k === 0 ? cellRaw : chargeRawContent(cellRaw, config);
                                     }
                                     // Share the (read-only) comment nodes across repeated columns via a
                                     // shallow array copy, rather than deep-copying: a huge
@@ -1751,6 +1840,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                     cells.push(cellNode);
                                     colIndex++;
                                 }
+                                // Repeats past the content budget keep their columns, so later cells keep theirs.
+                                colIndex += colsRepeated - wantedCols;
                             }
                         }
 
@@ -1758,12 +1849,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         // deep-copies the whole cell array, so rows x cols is what actually
                         // exhausts memory. Charge the copies against the same budget.
                         if (cells.length > 0) {
+                            // A row repeat copies every cell's content too (see CellBudget.takeRepeats).
+                            const wantedRows = rowsRepeated > 1 ? 1 + cellBudget.takeRepeats(rowsRepeated - 1, rowWeight) : rowsRepeated;
                             const allowedRows = Math.min(
-                                rowsRepeated,
+                                wantedRows,
                                 // The first row reuses `cells` rather than copying, so only the
                                 // repeats beyond it cost budget.
-                                1 + Math.floor(cellBudget.take(Math.max(0, (rowsRepeated - 1) * cells.length)) / cells.length)
+                                1 + Math.floor(cellBudget.take(Math.max(0, (wantedRows - 1) * cells.length)) / cells.length)
                             );
+                            const rowRaw = config.includeRawContent && allowedRows > 0 ? getRawContent(row, xmlString, config) : undefined;
                             for (let k = 0; k < allowedRows; k++) {
                                 if ((k & 255) === 0) checkAbortSignal(config.abortSignal);
                                 // First row reuses `cells`; a repeated row shallow-clones each cell (its
@@ -1774,7 +1868,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 // RangeError / OOM the cell-count budget did not bound).
                                 const rowCells = k === 0
                                     ? cells
-                                    : cells.map(c => ({ ...c, metadata: c.metadata ? { ...c.metadata } : c.metadata, children: c.children ? c.children.slice() : c.children, comments: c.comments ? c.comments.slice() : c.comments }) as OfficeContentNode);
+                                    : cells.map(c => repeatCell(c, config));
                                 const rowNode: OfficeContentNode = {
                                     type: 'row',
                                     children: rowCells,
@@ -1789,11 +1883,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                     });
                                 }
                                 if (config.includeRawContent) {
-                                    rowNode.rawContent = getRawContent(row, xmlString, config);
+                                    rowNode.rawContent = k === 0 ? rowRaw : chargeRawContent(rowRaw, config);
                                 }
                                 rows.push(rowNode);
                                 rowIndex++;
                             }
+                            rowIndex += rowsRepeated - wantedRows;
                         } else {
                             rowIndex += rowsRepeated;
                         }
@@ -2100,10 +2195,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     // Link OCR and Chart text to content nodes
     // Link OCR and Chart text to content nodes (with heuristic for unlinked images)
     const assignAttachmentData = (nodes: OfficeContentNode[]) => {
+        // Both walks visit a node once: repeated cells share their content nodes, so walking every
+        // path to them took repeats x content steps (a few hundred KB held minutes of CPU).
         // Step 1: Identify unused image attachments globally
         const usedAttachmentNames = new Set<string>();
+        const named = new Set<OfficeContentNode>();
         const traverseForNames = (ns: OfficeContentNode[]) => {
             for (const n of ns) {
+                if (named.has(n)) continue;
+                named.add(n);
                 if (n.metadata && 'attachmentName' in n.metadata) {
                     const name = (n.metadata as ImageMetadata).attachmentName;
                     if (name) usedAttachmentNames.add(name);
@@ -2112,11 +2212,16 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
         };
         traverseForNames(nodes);
+        const attachmentsByName = new Map<string, OfficeAttachment>();
+        for (const a of attachments) if (a.name && !attachmentsByName.has(a.name)) attachmentsByName.set(a.name, a);
 
         const unusedImages = attachments.filter(a => a.type === 'image' && a.name && !usedAttachmentNames.has(a.name));
         let unusedImageIndex = 0;
 
+        const processed = new Set<OfficeContentNode>();
         const processNode = (node: OfficeContentNode) => {
+            if (processed.has(node)) return;
+            processed.add(node);
             if ((node.type === 'image' || node.type === 'chart') && node.metadata && 'attachmentName' in node.metadata) {
                 let attachmentName = (node.metadata as ImageMetadata).attachmentName;
 
@@ -2128,7 +2233,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 }
 
                 if (attachmentName) {
-                    const attachment = attachments.find(a => a.name === attachmentName);
+                    const attachment = attachmentsByName.get(attachmentName);
 
                     if (attachment) {
                         if (attachment.ocrText) {

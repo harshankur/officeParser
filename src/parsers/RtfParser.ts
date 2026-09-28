@@ -45,6 +45,7 @@ import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
+import { chargeRawContent } from '../utils/xmlUtils.js';
 
 /**
  * Represents an RTF group (content enclosed in braces).
@@ -754,7 +755,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             };
 
             if (config.includeRawContent && currentParagraphRawChunks.length > 0) {
-                node.rawContent = currentParagraphRawChunks.join('');
+                node.rawContent = chargeRawContent(currentParagraphRawChunks.join(''), config);
             }
 
             // If we're building a table, add to current cell 

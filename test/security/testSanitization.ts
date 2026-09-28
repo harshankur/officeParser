@@ -2767,6 +2767,86 @@ async function parserHardeningTests() {
     check('epub: a picture shown 3000 times is one attachment every picture names', shownOften.ast?.attachments.length === 1 && pictures.length === 3000 && pictures.every(n => n === shownOften.ast!.attachments[0].name) && heapGrowth < 500_000_000, `${shownOften.ast?.attachments.length} ${pictures.length} ${heapGrowth}`);
     const listedOften = await parseQuiet(epub(0, 5000), 'epub');
     check('epub: a chapter the spine lists 5000 times is read once', listedOften.ast?.content.length === 1, `${listedOften.ast?.content.length} ${listedOften.error}`);
+
+    const warned = async (buffer: Buffer, fileType: string, extra: object = {}) => {
+        const codes: string[] = [];
+        const result = await parseQuiet(buffer, fileType, { ...extra, onWarning: (issue: any) => codes.push(issue.code) });
+        return { ...result, codes };
+    };
+    const epubPages = await parseQuiet(epub(3000, 1), 'epub', { decompressionLimits: { maxXmlElements: 1000 } });
+    check('epub: a chapter counts against maxXmlElements', /XML element limit exceeded/.test(epubPages.error), epubPages.error.slice(0, 120));
+
+    // Parts holding their own kind (notes in notes, comments in comments, fonts, styles, drawings and
+    // chart series in themselves, math in math) are read once per element, not once per level above it,
+    // and a numbering definition is shared by the lists naming it rather than copied into each.
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"';
+    const docxOf = (body: string, extra: Record<string, string> = {}) => Buffer.from(zipSync({
+        '[Content_Types].xml': enc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        'word/document.xml': enc(`<?xml version="1.0"?><w:document ${W}><w:body>${body}</w:body></w:document>`),
+        ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, enc(v)])),
+    }));
+    const xlsxOf = (extra: Record<string, string>) => Buffer.from(zipSync({
+        '[Content_Types].xml': enc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
+        'xl/workbook.xml': enc('<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>'),
+        'xl/_rels/workbook.xml.rels': enc('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': enc('<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>v</t></is></c></row></sheetData></worksheet>'),
+        ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, enc(v)])),
+    }));
+    const nest = (inner: string, depth: number, wrap: (s: string, i: number) => string) => { for (let i = 0; i < depth; i++) inner = wrap(inner, i); return inner; };
+    const empties = (n: number) => '<x/>'.repeat(n);
+    const bodyText = '<w:p><w:r><w:t>body</w:t></w:r></w:p>';
+    await timed('docx: footnotes nested 2,000 deep around 20,000 elements are read', () => parseQuiet(docxOf(bodyText, { 'word/footnotes.xml': `<?xml version="1.0"?><w:footnotes ${W}>${nest('<w:p><w:r><w:t>x</w:t></w:r></w:p>' + empties(20000), 2000, (s, i) => `<w:footnote w:id="${i + 5}">${s}</w:footnote>`)}</w:footnotes>` }), 'docx'));
+    await timed('docx: comments nested 2,000 deep around 20,000 elements are read', () => parseQuiet(docxOf(bodyText, { 'word/comments.xml': `<?xml version="1.0"?><w:comments ${W}>${nest('<w:p><w:r><w:t>x</w:t></w:r></w:p>' + empties(20000), 2000, (s, i) => `<w:comment w:id="${i + 5}">${s}</w:comment>`)}</w:comments>` }), 'docx'));
+    await timed('docx: drawings nested 2,000 deep in a run are read', () => parseQuiet(docxOf(`<w:p><w:r><w:t>x</w:t>${nest(empties(20000), 2000, s => `<w:drawing>${s}</w:drawing>`)}</w:r></w:p>`), 'docx', { extractAttachments: true }));
+    await timed('docx: 20,000 lists naming one numbering of 4,000 levels are read', () => parseQuiet(docxOf('<w:p><w:r><w:t>x</w:t></w:r></w:p>', { 'word/numbering.xml': `<?xml version="1.0"?><w:numbering ${W}><w:abstractNum w:abstractNumId="1">${'<w:lvl w:ilvl="0"/>'.repeat(4000)}</w:abstractNum>${Array.from({ length: 20000 }, (_, i) => `<w:num w:numId="${i}"><w:abstractNumId w:val="1"/></w:num>`).join('')}</w:numbering>` }), 'docx'));
+    const commentRels = (target: string) => `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="c1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="${target}"/></Relationships>`;
+    await heapBudget('xlsx: comments nested 2,000 deep around 200 KB of text are read', () => parseQuiet(xlsxOf({ 'xl/worksheets/_rels/sheet1.xml.rels': commentRels('../comments1.xml'), 'xl/comments1.xml': `<?xml version="1.0"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><commentList>${nest(`<text><t>${'A'.repeat(200000)}</t></text>`, 2000, s => `<comment ref="A1"><text><t>x</t></text>${s}</comment>`)}</commentList></comments>` }), 'xlsx'));
+    await timed('xlsx: fonts nested 2,000 deep around 20,000 elements are read', () => parseQuiet(xlsxOf({ 'xl/styles.xml': `<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts>${nest(empties(20000), 2000, s => `<font>${s}</font>`)}</fonts></styleSheet>` }), 'xlsx'));
+    await heapBudget('pptx: comments nested 2,000 deep around 200 KB of text are read', () => parseQuiet(pptxOf({ 'ppt/slides/_rels/slide1.xml.rels': commentRels('../comments/comment1.xml'), 'ppt/comments/comment1.xml': `<?xml version="1.0"?><p:cmLst ${pns}>${nest(`<p:text><a:t>${'A'.repeat(200000)}</a:t></p:text>`, 2000, s => `<p:cm authorId="0"><p:text><a:t>x</a:t></p:text>${s}</p:cm>`)}</p:cmLst>` }), 'pptx'));
+    const mns = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"';
+    await timed('pptx: 200 paragraphs of math nested 1,000 deep are read', () => parseQuiet(pptxOf({ 'ppt/slides/slide1.xml': `<?xml version="1.0"?><p:sld ${pns} ${mns}><p:cSld><p:spTree><p:sp><p:txBody>${`<a:p><x>${nest(`<m:r><m:t>${'A'.repeat(1000)}</m:t></m:r>`, 1000, s => `<m:oMath>${s}</m:oMath>`)}</x></a:p>`.repeat(200)}</p:txBody></p:sp></p:spTree></p:cSld></p:sld>` }), 'pptx'));
+    await timed('pptx: chart series nested 2,000 deep around 20,000 values are read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart>${nest('<c:v>1</c:v>'.repeat(20000), 2000, s => `<c:ser><c:val>${s}</c:val></c:ser>`)}</c:chart></c:chartSpace>` }), 'pptx', { extractAttachments: true }));
+    await timed('odt: styles nested 2,000 deep around 60,000 elements are read', () => parseQuiet(odfOf('text', '<text:p>hi</text:p>', {}, nest(empties(60000), 2000, (s, i) => `<style:style style:name="s${i}">${s}</style:style>`)), 'odt'));
+
+    // rawContent: a node's markup holds everything nested in it, so nested tables repeat it at every
+    // level and repeated cells once per copy; it is serialized once per cell and bounded in all.
+    const nestedTables = odfOf('text', nest('<text:p>x</text:p>' + '<text:span/>'.repeat(20000), 300, s => `<table:table><table:table-row><table:table-cell>${s}</table:table-cell></table:table-row></table:table>`));
+    await heapBudget('odt: rawContent of tables nested 300 deep around 20,000 elements is read', () => timed('odt: rawContent of tables nested 300 deep is read', () => parseQuiet(nestedTables, 'odt', { includeRawContent: true })));
+    const textBoxes = docxOf(nest('<w:p><w:r><w:t>x</w:t></w:r></w:p>' + empties(150000), 500, s => `<w:p><w:pict><w:txbxContent>${s}</w:txbxContent></w:pict></w:p>`));
+    const boundedRaw = await warned(textBoxes, 'docx', { includeRawContent: true, decompressionLimits: { maxRawContentLength: 4_000_000 } });
+    let rawTotal = 0;
+    const sumRaw = (ns: any[] | undefined, seen = new Set<any>()) => ns?.forEach((n: any) => { if (seen.has(n)) return; seen.add(n); rawTotal += n.rawContent?.length ?? 0; sumRaw(n.children, seen); });
+    sumRaw(boundedRaw.ast?.content);
+    check('docx: rawContent stops at maxRawContentLength with RAW_CONTENT_LIMIT_EXCEEDED', !boundedRaw.error && rawTotal > 0 && rawTotal <= 4_000_000 && boundedRaw.codes.includes('RAW_CONTENT_LIMIT_EXCEEDED'), `${rawTotal} ${boundedRaw.codes} ${boundedRaw.error}`);
+    const repeatedRaw = await warned(odfOf('text', `<table:table><table:table-row><table:table-cell table:number-columns-repeated="1000"><text:p>${'<text:span>y</text:span>'.repeat(2000)}</text:p></table:table-cell></table:table-row></table:table>`), 'odt', { includeRawContent: true, decompressionLimits: { maxRawContentLength: 1_000_000 } });
+    rawTotal = 0;
+    sumRaw(repeatedRaw.ast?.content);
+    check('odt: a repeated cell\'s rawContent counts once per copy', rawTotal <= 1_000_000 && repeatedRaw.codes.includes('RAW_CONTENT_LIMIT_EXCEEDED'), `${rawTotal} ${repeatedRaw.codes}`);
+
+    // Repeated ODF cells copy their content within a budget: 700 bytes asked for 100,000 copies of a
+    // 2,000-span cell, 200 MB of output that ran generators out of memory, and walking each copy's
+    // shared content made the parse itself take repeats x content.
+    const repeatedCell = (repeats: number, rowRepeats = 1) => odfOf('spreadsheet', `<table:table table:name="S"><table:table-row table:number-rows-repeated="${rowRepeats}"><table:table-cell table:number-columns-repeated="${repeats}"><text:p>${'<text:span>y</text:span>'.repeat(2000)}</text:p></table:table-cell><table:table-cell><text:p>after</text:p></table:table-cell></table:table-row></table:table>`);
+    for (const [label, doc] of [['a cell repeated 100,000 times', repeatedCell(100000)], ['a row of it repeated 1,000,000 times', repeatedCell(1000, 1000000)]] as const) {
+        let html = '';
+        const started = Date.now();
+        const repeated = await warned(doc, 'ods');
+        if (repeated.ast) html = (await OfficeGenerator.generate(repeated.ast, 'html', { onWarning: () => {} } as any)).value as string;
+        check(`ods: ${label} is copied within maxRepeatedCellContent, with REPEATED_CONTENT_LIMIT_EXCEEDED`, !repeated.error && html.length < 20_000_000 && Date.now() - started < 5000 && repeated.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && html.includes('after'), `${html.length} ${Date.now() - started}ms ${repeated.codes} ${repeated.error}`);
+    }
+    const cellsOf = (ast: any) => { const out: any[] = []; const walk = (ns: any[]) => ns?.forEach((n: any) => { if (n.type === 'cell') out.push(n); else walk(n.children); }); walk(ast?.content); return out; };
+    const small = await warned(repeatedCell(100), 'ods', { decompressionLimits: { maxRepeatedCellContent: 100_000 } });
+    const large = await warned(repeatedCell(100), 'ods', { decompressionLimits: { maxRepeatedCellContent: 100_000_000 } });
+    const smallCells = cellsOf(small.ast), largeCells = cellsOf(large.ast);
+    check('ods: maxRepeatedCellContent is the limit, and later cells keep their columns', smallCells.length < 10 && largeCells.length === 101 && smallCells[smallCells.length - 1]?.metadata?.col === 100 && !large.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${smallCells.length} ${largeCells.length} ${smallCells[smallCells.length - 1]?.metadata?.col}`);
+    const xlsxCells = await warned(xlsxOf({ 'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${'<row><c t="inlineStr"><is><t>x</t></is></c><c><v>1</v></c></row>'.repeat(2500)}</sheetData></worksheet>` }), 'xlsx', { decompressionLimits: { maxTableCells: 1000 } });
+    check('xlsx: a sheet holds maxTableCells cells, with TABLE_CELL_LIMIT_EXCEEDED', cellsOf(xlsxCells.ast).length === 1000 && xlsxCells.codes.includes('TABLE_CELL_LIMIT_EXCEEDED'), `${cellsOf(xlsxCells.ast).length} ${xlsxCells.codes}`);
+
+    // Plain text lays out a table from its cells once: rendered first and then again, each nested
+    // table doubled the work (26 levels took minutes).
+    let deepTable: any = { type: 'paragraph', children: [{ type: 'text', text: 'x' }] };
+    for (let d = 0; d < 26; d++) deepTable = { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [deepTable] }] }] };
+    await timed('text: tables nested 26 deep are written', () => OfficeGenerator.generate(astWith([deepTable]), 'text' as any, { onWarning: () => {} } as any));
 }
 
 async function main() {

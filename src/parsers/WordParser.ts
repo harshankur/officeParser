@@ -66,9 +66,9 @@ import { checkAbortSignal } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, serializeXml } from '../utils/xmlUtils.js';
+import { getChildElements, getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
-import { lookupTable, plainRecord } from '../utils/lookupUtils.js';
+import { lookupTable, plainRecord, setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
 
 /**
@@ -238,12 +238,15 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
      * or simply the first available valid child.
      */
     const resolveAlternateContent = (element: Element): Node[] => {
-        const choice = getFirstElementByTagName(element, "mc:Choice");
+        // Its own Choice and Fallback (children, as the schema has them): looked up through the whole
+        // subtree, AlternateContent nested in AlternateContent with neither took time in the product of
+        // the depth and the content (4.9 KB, a minute and a half).
+        const choice = getDirectChildren(element, "mc:Choice")[0];
         // In most cases, mc:Choice contains the modern version, but mc:Fallback is safer for legacy compatibility
         // Mammoth often skips Choice if it's not handled. We'll try Choice first.
         if (choice) return Array.from(choice.childNodes);
 
-        const fallback = getFirstElementByTagName(element, "mc:Fallback");
+        const fallback = getDirectChildren(element, "mc:Fallback")[0];
         if (fallback) return Array.from(fallback.childNodes);
 
         return Array.from(element.childNodes);
@@ -346,40 +349,46 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             }
         }
 
+        // Each abstract numbering's levels, read once.
+        const abstractLevelTables = new Map<string, { [key: string]: { numFmt: string, lvlText: string, start: number } }>();
+        const abstractLevels = (abstractNumId: string) => {
+            let table = abstractLevelTables.get(abstractNumId);
+            if (!table) {
+                table = Object.create(null) as { [key: string]: { numFmt: string, lvlText: string, start: number } };
+                for (const lvl of getChildElements(abstractNumMap[abstractNumId], "w:lvl")) {
+                    const ilvl = lvl.getAttribute("w:ilvl");
+                    if (!ilvl) continue;
+                    setOwn(table, ilvl, {
+                        numFmt: getChildElements(lvl, "w:numFmt")[0]?.getAttribute("w:val") || 'decimal',
+                        lvlText: getChildElements(lvl, "w:lvlText")[0]?.getAttribute("w:val") || '',
+                        start: parseInt(getChildElements(lvl, "w:start")[0]?.getAttribute("w:val") || '1', 10)
+                    });
+                }
+                abstractLevelTables.set(abstractNumId, table);
+            }
+            return table;
+        };
+
         for (const num of nums) {
             const numId = num.getAttribute("w:numId");
             const abstractNumIdNode = getFirstElementByTagName(num, "w:abstractNumId");
             const abstractNumId = abstractNumIdNode?.getAttribute("w:val");
 
             if (numId && abstractNumId && abstractNumMap[abstractNumId]) {
-                // Null-prototype too: a `w:lvlOverride` of `w:ilvl="__proto__"` found Object.prototype
-                // here, and its start value was written onto every object in the process.
-                numberingMap[numId] = Object.create(null);
-
-                // Inherit from abstractNum
-                const lvls = getElementsByTagName(abstractNumMap[abstractNumId], "w:lvl");
-                for (const lvl of lvls) {
-                    const ilvl = lvl.getAttribute("w:ilvl");
-                    const numFmtNode = getFirstElementByTagName(lvl, "w:numFmt");
-                    const lvlTextNode = getFirstElementByTagName(lvl, "w:lvlText");
-                    const startNode = getFirstElementByTagName(lvl, "w:start");
-                    if (ilvl) {
-                        numberingMap[numId][ilvl] = {
-                            numFmt: numFmtNode?.getAttribute("w:val") || 'decimal',
-                            lvlText: lvlTextNode?.getAttribute("w:val") || '',
-                            start: parseInt(startNode?.getAttribute("w:val") || '1', 10)
-                        };
-                    }
-                }
+                // Its levels are the abstract numbering's, read once and shared through the prototype
+                // (the root of which has none, so `w:ilvl="__proto__"` finds nothing inherited): read for
+                // each num naming it, 20,000 nums over 20,000 levels took minutes. An override is a copy
+                // of its level, own to this num.
+                numberingMap[numId] = Object.create(abstractLevels(abstractNumId));
 
                 // Apply instance overrides (w:lvlOverride)
-                const overrides = getElementsByTagName(num, "w:lvlOverride");
+                const overrides = getChildElements(num, "w:lvlOverride");
                 for (const override of overrides) {
                     const ilvl = override.getAttribute("w:ilvl");
                     if (ilvl && numberingMap[numId][ilvl]) {
-                        const startOverride = getFirstElementByTagName(override, "w:startOverride");
+                        const startOverride = getChildElements(override, "w:startOverride")[0];
                         if (startOverride) {
-                            numberingMap[numId][ilvl].start = parseInt(startOverride.getAttribute("w:val") || '1', 10);
+                            setOwn(numberingMap[numId], ilvl, { ...numberingMap[numId][ilvl], start: parseInt(startOverride.getAttribute("w:val") || '1', 10) });
                         }
                     }
                 }
@@ -665,8 +674,6 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                     const allImages = [...drawings, ...picts];
 
                     for (const imgNode of allImages) {
-                        const imgXml = serializeXml(imgNode);
-
                         // Extract Alt Text
                         let altText = '';
                         const docPr = getFirstElementByTagName(imgNode, "wp:docPr");
