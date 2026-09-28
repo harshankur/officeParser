@@ -4,6 +4,7 @@ import { checkAbortSignal, getWarningMessage } from '../utils/errorUtils.js';
 import { resolveImageMode } from '../utils/officeGenUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
 import { isSourceComment } from '../utils/commentUtils.js';
+import { MAX_SHEET_GRID_GAPS } from '../utils/sheetGridUtils.js';
 
 /**
  * Base class for all document generators.
@@ -21,6 +22,21 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     private readonly collectedNoteSet = new Set<OfficeContentNode>();
     private readonly writtenComments = new Set<OfficeContentNode>();
     private inlinedImageBytes = 0;
+    private paddingCellsLeft = MAX_SHEET_GRID_GAPS;
+
+    /**
+     * How many of `missing` empty cells a row may be padded with to reach its table's width, taken from
+     * the document's budget (the grid budget's size, see sheetGridUtils). Rows are padded to the widest:
+     * one row of 10,000 cells over 10,000 rows of one made 100 million positions from 4 KB, in a table
+     * the grid budget had already laid out as tightly as it could. Past the budget a row keeps the cells
+     * it has; Markdown, CSV and LaTeX read a short row as ending in empty cells.
+     */
+    protected padWithinBudget(missing: number): number {
+        if (!(missing > 0)) return 0;
+        const allowed = Math.min(missing, this.paddingCellsLeft);
+        this.paddingCellsLeft -= allowed;
+        return allowed;
+    }
 
     /**
      * Whether a picture of `bytes` may still be written inline (a `data:` URI, RTF picture data), taking

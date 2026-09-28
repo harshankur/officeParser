@@ -521,17 +521,26 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             isTableChunk: true,
         };
 
-        // Group data rows into chunks
-        let currentRows: OfficeContentNode[] = [];
-        let currentSize = headerText ? measure(headerText) : 0;
         // Whether a chunk holds the header: a table of one row (its header alone) made none, and its
         // text reached no chunk.
         let emitted = false;
+        // The header heads every chunk of the table only when it takes at most half a chunk: larger, each
+        // data row became a chunk of its own under the whole header, and one 100 KB header over 2,000
+        // rows made 213 MB of chunks from 1.6 KB. It is then a chunk (or chunks) of its own, once.
+        const repeatedHeader = headerText && measure(headerText) <= maxChunkSize / 2 ? headerText : '';
+        if (headerText.trim() && !repeatedHeader) {
+            for (const sub of this.splitTextRecursively(headerText, maxChunkSize, 0, ['\n', ' ', ''], measure)) chunks.push({ text: sub.text, metadata: { ...baseMetadata } });
+            emitted = true;
+        }
+
+        // Group data rows into chunks
+        let currentRows: OfficeContentNode[] = [];
+        let currentSize = repeatedHeader ? measure(repeatedHeader) : 0;
 
         const flushCurrentRows = async () => {
             if (currentRows.length === 0) return;
             const rowText = await this.renderRowsAsText(currentRows);
-            const chunkText = headerText ? `${headerText}\n${rowText}` : rowText;
+            const chunkText = repeatedHeader ? `${repeatedHeader}\n${rowText}` : rowText;
             if (chunkText.trim()) {
                 emitted = true;
                 if (measure(chunkText) > maxChunkSize) {
@@ -545,7 +554,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 }
             }
             currentRows = [];
-            currentSize = headerText ? measure(headerText) : 0;
+            currentSize = repeatedHeader ? measure(repeatedHeader) : 0;
         };
 
         for (const row of dataRows) {
@@ -560,7 +569,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             if (typeof override === 'string') {
                 // If row was overridden, we flush current, then add the override as a chunk.
                 await flushCurrentRows();
-                const chunkText = headerText ? `${headerText}\n${override}` : override;
+                const chunkText = repeatedHeader ? `${repeatedHeader}\n${override}` : override;
                 chunks.push({ text: chunkText, metadata: { ...baseMetadata } });
                 emitted = true;
                 continue;

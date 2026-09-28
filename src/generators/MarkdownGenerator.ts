@@ -1640,8 +1640,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         };
         for (let i = 0; i < processedRows.length; i++) {
             const row = processedRows[i];
-            // Pad row with empty cells if it has fewer than maxCols
-            while (row.length < maxCols) row.push('');
+            // Pad row with empty cells if it has fewer than maxCols: the header row always (its cells and
+            // the delimiter row's must match), the others within the document's budget (a short row
+            // reads as ending in empty cells).
+            const fill = i === 0 ? maxCols - row.length : this.padWithinBudget(maxCols - row.length);
+            for (let k = 0; k < fill; k++) row.push('');
 
             tableOutput += `| ${row.join(' | ')} |\n`;
 

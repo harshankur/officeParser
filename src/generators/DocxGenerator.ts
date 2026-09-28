@@ -1,4 +1,5 @@
 import { zipSync, Zippable } from 'fflate';
+import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
@@ -576,8 +577,9 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private async table(node: OfficeContentNode): Promise<string> {
         const rows = (node.children || []).filter(r => r.type === 'row');
         if (!rows.length) return '';
-        // Grid-occupancy pass: compute grid width and per-row rendered cells with synthesized merges.
-        const cols = this.gridWidth(rows);
+        // Each row's cells, merges and gaps laid out by occupancy, as the grid budget laid them out.
+        const layout = layoutTableRows(rows)!;
+        const cols = layout.cols;
         const contentWidth = this.contentWidthTwips();
         const colW = Math.max(1, Math.floor(contentWidth / Math.max(1, cols)));
         const tblGrid = `<w:tblGrid>${Array.from({ length: cols }, () => `<w:gridCol w:w="${colW}"/>`).join('')}</w:tblGrid>`;
@@ -587,53 +589,32 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             + (tableAlign ? `<w:jc w:val="${tableAlign}"/>` : '')
             + `<w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(s => `<w:${s} w:val="single" w:sz="4" w:space="0" w:color="auto"/>`).join('')}</w:tblBorders></w:tblPr>`;
 
-        // grid left-col -> a pending vertical merge (rows still to cover, and the merge's column span).
-        const active = new Map<number, { remaining: number; span: number }>();
         let trs = '';
         for (let ri = 0; ri < rows.length; ri++) {
             const row = rows[ri];
-            const cells = (row.children || []).filter(c => c.type === 'cell');
             const trPr = isHeaderRow(row, ri === 0) ? '<w:trPr><w:tblHeader/></w:trPr>' : '';
             let tcs = '';
-            let col = 0, ci = 0;
-            while (ci < cells.length || [...active.keys()].some(c => c >= col)) {
-                const act = active.get(col);
-                if (act) {
+            for (const slot of layout.rows[ri]) {
+                if (slot.kind === 'covered') {
                     // Continuation cell for an active vertical merge. Carry the origin's gridSpan so a cell
                     // merged BOTH across columns and down emits one spanning continuation, not one narrow
                     // vMerge per column (which made the merge cover only its first column in Word).
-                    const gs = act.span > 1 ? `<w:gridSpan w:val="${act.span}"/>` : '';
+                    const gs = slot.span > 1 ? `<w:gridSpan w:val="${slot.span}"/>` : '';
                     tcs += `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/>${gs}<w:vMerge/></w:tcPr><w:p/></w:tc>`;
-                    act.remaining--;
-                    if (act.remaining <= 0) active.delete(col);
-                    col += act.span;
                     continue;
                 }
-                if (ci >= cells.length) {
-                    // No explicit cells left. A vertical merge is still pending at a later column, so
-                    // fill this gap column with an empty cell and advance until the merges are placed;
-                    // breaking here would drop the continuation and shift the grid a row down.
-                    if (![...active.keys()].some(c => c > col)) break;
+                if (slot.kind === 'gap') {
+                    // A column the row skips: a sparse grid's (ExcelParser emits only non-empty cells, each
+                    // with its column), or one before a vertical merge still pending further right.
                     tcs += `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p/></w:tc>`;
-                    col++;
                     continue;
                 }
-                // Sparse source grid: ExcelParser emits only the non-empty cells, each carrying its own
-                // column index. Fill the skipped columns with empty cells so a value in D1 lands in
-                // column 4, rather than sliding left to whatever the running cursor happened to reach.
-                const nextCol = (cells[ci].metadata as any)?.col;
-                if (typeof nextCol === 'number' && nextCol > col && col < cols) {
-                    tcs += `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p/></w:tc>`;
-                    col++;
-                    continue;
-                }
-                const cell = cells[ci++];
+                const { cell, rowSpan } = slot;
                 const cmeta = cell.metadata as any;
-                const colSpan = Math.max(1, Math.min(cols, cmeta?.colSpan || 1));
-                const rowSpan = Math.max(1, Math.min(1000, cmeta?.rowSpan || 1));
+                const colSpan = Math.min(cols, slot.colSpan);
                 let tcPr = `<w:tcW w:w="0" w:type="auto"/>`;
                 if (colSpan > 1) tcPr += `<w:gridSpan w:val="${colSpan}"/>`;
-                if (rowSpan > 1) { tcPr += `<w:vMerge w:val="restart"/>`; active.set(col, { remaining: rowSpan - 1, span: colSpan }); }
+                if (rowSpan > 1) tcPr += `<w:vMerge w:val="restart"/>`;
                 const bg = hexColor(cmeta?.backgroundColor);
                 if (bg) tcPr += `<w:shd w:val="clear" w:color="auto" w:fill="${bg}"/>`;
                 let inner = await this.renderBlocks(cell.children);
@@ -642,41 +623,12 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
                 if (!trimmed) inner = '<w:p/>';
                 else if (trimmed.endsWith('</w:tbl>')) inner = trimmed + '<w:p/>';
                 tcs += `<w:tc><w:tcPr>${tcPr}</w:tcPr>${inner}</w:tc>`;
-                col += colSpan;
             }
             // A w:tr must contain at least one w:tc.
             if (!tcs) tcs = `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p/></w:tc>`;
             trs += `<w:tr>${trPr}${tcs}</w:tr>`;
         }
         return `<w:tbl>${tblPr}${tblGrid}${trs}</w:tbl>`;
-    }
-
-    private gridWidth(rows: OfficeContentNode[]): number {
-        let max = 1;
-        const active = new Map<number, number>();
-        for (const row of rows) {
-            let col = 0;
-            const cells = (row.children || []).filter(c => c.type === 'cell');
-            let ci = 0;
-            while (ci < cells.length || [...active.keys()].some(c => c >= col)) {
-                if ((active.get(col) || 0) > 0) { active.set(col, active.get(col)! - 1); if (active.get(col)! <= 0) active.delete(col); col++; continue; }
-                if (ci >= cells.length) {
-                    if (![...active.keys()].some(c => c > col)) break;
-                    col++; // gap column before a still-pending vertical merge
-                    continue;
-                }
-                // Mirror table()'s sparse-grid placement, or the grid would be narrower than the rows.
-                const nextCol = (cells[ci].metadata as any)?.col;
-                if (typeof nextCol === 'number' && nextCol > col && col < 1000) { col++; continue; }
-                const cmeta = cells[ci++].metadata as any;
-                const colSpan = Math.max(1, Math.min(1000, cmeta?.colSpan || 1));
-                const rowSpan = Math.max(1, Math.min(1000, cmeta?.rowSpan || 1));
-                if (rowSpan > 1) for (let k = 0; k < colSpan; k++) active.set(col + k, rowSpan - 1);
-                col += colSpan;
-            }
-            max = Math.max(max, col);
-        }
-        return Math.min(1000, max);
     }
 
     private async sheet(node: OfficeContentNode): Promise<string> {

@@ -3049,6 +3049,36 @@ async function parserHardeningTests() {
     started = Date.now();
     const outlined = await warned(deepOutline, 'pdf', { pdfParserConfig: { maxTimeMs: 200 } });
     check('pdf: bookmarks naming pages deep in a long page tree are resolved within maxTimeMs', !outlined.error && Date.now() - started < 12_000 && outlined.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${Date.now() - started}ms ${deepOutline.length} bytes ${outlined.codes} ${outlined.error}`);
+
+    // Tables write within bounds however ragged or spanned: rows padded to the widest (a 4 KB DOCX,
+    // 100 million positions), a staircase of rows each spanning a thousand below (a 1.5 KB EPUB, 500 MB
+    // of DOCX), a text layout padding every cell to the widest (1.6 KB, 200 MB), and a chunk header
+    // repeated before each row (213 MB); and an EPUB names its pictures in linear time.
+    const tableCell = (text: string) => `<w:tc><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:tc>`;
+    const ragged = await parseQuiet(docxOf(`<w:tbl><w:tr>${tableCell('h').repeat(10000)}</w:tr>${`<w:tr>${tableCell('x')}</w:tr>`.repeat(10000)}</w:tbl>`), 'docx');
+    const wideCell = await parseQuiet(docxOf(`<w:tbl><w:tr>${tableCell('A'.repeat(100_000))}</w:tr>${`<w:tr>${tableCell('x')}</w:tr>`.repeat(2000)}</w:tbl>`), 'docx');
+    const staircase = await parseQuiet(Buffer.from(`<html><body><table>${'<tr><td rowspan="1000">a</td></tr>'.repeat(9000)}</table></body></html>`), 'html');
+    for (const [label, result] of [['a row of 10,000 cells over 10,000 rows of one', ragged], ['one 100 KB cell over 2,000 rows', wideCell], ['9,000 rows each spanning 1,000', staircase]] as const) {
+        let longest = 0, slowest = 0;
+        for (const format of ['text', 'md', 'csv', 'chunks', 'tex', 'docx', 'odt', 'html', 'rtf'] as const) {
+            const t0 = Date.now();
+            const out = result.ast ? (await OfficeGenerator.generate(result.ast, format, { onWarning: () => {} } as any)).value as any : '';
+            slowest = Math.max(slowest, Date.now() - t0);
+            longest = Math.max(longest, typeof out === 'string' ? out.length : Array.isArray(out) ? JSON.stringify(out).length : out?.byteLength ?? 0);
+        }
+        check(`tables: ${label} is written within bounds in every format`, !result.error && longest < 25_000_000 && slowest < 5000, `${longest} ${slowest}ms ${result.error}`);
+    }
+    const texWide = await warned(docxOf(`<w:tbl><w:tr>${tableCell('h').repeat(1200)}</w:tr></w:tbl>`), 'docx');
+    const texWarnings: string[] = [];
+    if (texWide.ast) await OfficeGenerator.generate(texWide.ast, 'tex', { onWarning: (w: any) => texWarnings.push(w.code) } as any);
+    check('tex: cells past its widest table are reported, not dropped silently', texWarnings.includes('CONTENT_NOT_REPRESENTABLE'), `${texWarnings}`);
+    const pictureBook = Buffer.from(zipSync({
+        'mimetype': enc('application/epub+zip'),
+        'META-INF/container.xml': enc('<?xml version="1.0"?><container><rootfiles><rootfile full-path="o.opf"/></rootfiles></container>'),
+        'o.opf': enc(`<package><metadata/><manifest>${Array.from({ length: 2000 }, (_, i) => `<item id="i${i}" href="c${i}.xhtml" media-type="application/xhtml+xml"/>`).join('')}</manifest><spine>${Array.from({ length: 2000 }, (_, i) => `<itemref idref="i${i}"/>`).join('')}</spine></package>`),
+        ...Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`c${i}.xhtml`, enc(`<html><body>${'<img src="data:image/png;base64,AA==">'.repeat(50)}</body></html>`)])),
+    }));
+    await timed('epub: 2,000 chapters of 50 pictures each are named', () => parseQuiet(pictureBook, 'epub', { extractAttachments: true }));
 }
 
 async function main() {

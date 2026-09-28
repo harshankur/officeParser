@@ -4,6 +4,13 @@ import { parseRangeString } from '../utils/sheetUtils.js';
 import { csvSafeCell } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 
+/** The most cells any of `rows` has (read in a loop: spread into Math.max, a large sheet overflowed the stack). */
+const widestRow = (rows: string[][]): number => {
+    let widest = 0;
+    for (const row of rows) if (row.length > widest) widest = row.length;
+    return widest;
+};
+
 /**
  * Generates CSV files from an AST.
  */
@@ -58,7 +65,7 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
             const name = (node.metadata as any)?.sheetName || `Sheet${i + 1}`;
             const rows = await this.renderNodeToRows(node);
 
-            const maxCols = Math.max(...rows.map(r => r.length), 0);
+            const maxCols = widestRow(rows);
             if (mergeSheets) {
                 globalMaxCols = Math.max(globalMaxCols, maxCols);
             }
@@ -77,7 +84,7 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
                     const paddedRow = [...row];
                     // Don't pad comments
                     if (row.length > 1 || (row.length === 1 && !row[0].startsWith('#'))) {
-                        while (paddedRow.length < globalMaxCols) paddedRow.push('');
+                        for (let k = this.padWithinBudget(globalMaxCols - paddedRow.length); k > 0; k--) paddedRow.push('');
                     }
                     mergedLines.push(paddedRow.map(v => this.escapeCsvValue(v, delimiter)).join(delimiter));
                 }
@@ -92,7 +99,7 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
             // Create a ZIP archive for multiple sheets
             const zipFiles: Record<string, Uint8Array> = {};
             for (const sheet of sheetData) {
-                const sheetMaxCols = Math.max(...sheet.rows.map(r => r.length), 0);
+                const sheetMaxCols = widestRow(sheet.rows);
                 const csvLines: string[] = [];
                 if (metadataHeader) csvLines.push(metadataHeader.trim());
 
@@ -100,7 +107,7 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
                     const paddedRow = [...row];
                     // Don't pad comments
                     if (row.length > 1 || (row.length === 1 && !row[0].startsWith('#'))) {
-                        while (paddedRow.length < sheetMaxCols) paddedRow.push('');
+                        for (let k = this.padWithinBudget(sheetMaxCols - paddedRow.length); k > 0; k--) paddedRow.push('');
                     }
                     csvLines.push(paddedRow.map(v => this.escapeCsvValue(v, delimiter)).join(delimiter));
                 }
@@ -117,7 +124,7 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
         } else {
             // Single sheet: return as plain string
             const sheet = sheetData[0];
-            const sheetMaxCols = Math.max(...sheet.rows.map(r => r.length), 0);
+            const sheetMaxCols = widestRow(sheet.rows);
             const csvLines: string[] = [];
             if (metadataHeader) csvLines.push(metadataHeader.trim());
 
@@ -125,7 +132,7 @@ export class CsvGenerator extends BaseGenerator<'csv'> {
                 const paddedRow = [...row];
                 // Don't pad comments
                 if (row.length > 1 || (row.length === 1 && !row[0].startsWith('#'))) {
-                    while (paddedRow.length < sheetMaxCols) paddedRow.push('');
+                    for (let k = this.padWithinBudget(sheetMaxCols - paddedRow.length); k > 0; k--) paddedRow.push('');
                 }
                 csvLines.push(paddedRow.map(v => this.escapeCsvValue(v, delimiter)).join(delimiter));
             }

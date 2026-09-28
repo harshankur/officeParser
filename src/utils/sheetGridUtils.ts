@@ -1,4 +1,5 @@
 import { OfficeContentNode, OfficeParserAST } from '../types.js';
+import { layoutTableRows } from './tableLayout.js';
 
 /**
  * How many empty positions the grids of one document's tables and sheets may hold in all, beyond their
@@ -21,10 +22,11 @@ const span = (value: unknown): number =>
  * `node` (a table or sheet) with its cells' coordinates rewritten when the grid they make holds more
  * empty positions than `budget.left`; `node` itself when it does not (its empty positions are then
  * taken from the budget). Each cell is where its `row` and `col` put it, or, lacking them, next in
- * reading order; its spans count. A grid too large is laid out closer: first without the rows and
- * columns no cell starts or ends in (a far cell comes next to the others, a span covers the lines it
- * touches); if that is still too large (cells scattered along a diagonal), each row's cells follow one
- * another, without spans.
+ * reading order; its spans count, and so does the layout writers that place cells by occupancy make
+ * (see tableLayout). A grid too large is laid out closer: first without the rows and columns no cell
+ * starts or ends in (a far cell comes next to the others, a span covers the lines it touches); if that
+ * is still too large (cells scattered along a diagonal, rows each spanning many below), each row's
+ * cells follow one another, without spans.
  */
 function boundGrid(node: OfficeContentNode, budget: { left: number }): OfficeContentNode {
     const cells: Cell[] = [];
@@ -52,11 +54,20 @@ function boundGrid(node: OfficeContentNode, budget: { left: number }): OfficeCon
         maxCol = Math.max(maxCol, cell.c + cell.colSpan - 1);
     }
     const gaps = (rows: number, cols: number) => rows * cols - cells.length;
-    const full = gaps(maxRow + 1, maxCol + 1);
-    if (full <= budget.left) {
-        budget.left -= Math.max(0, full);
-        return node;
-    }
+    // A layout is taken when the positions its writers make fit the budget: the grid its cells' places
+    // fill (HTML, CSV and Markdown write every position), and the cells, merges and gaps writers that
+    // place cells by occupancy (DOCX, ODT) write, which a staircase of rows each spanning a thousand
+    // rows made a thousand times wider than the cells' own places said (a 1.5 KB EPUB, 500 MB of DOCX).
+    const rowsOf = (table: OfficeContentNode) => (table.children ?? []).filter(row => row.type === 'row');
+    const fits = (table: OfficeContentNode, fillGaps: number): boolean => {
+        if (fillGaps > budget.left) return false;
+        const laid = layoutTableRows(rowsOf(table), cells.length + budget.left);
+        const needed = Math.max(fillGaps, laid ? laid.positions - cells.length : Infinity);
+        if (needed > budget.left) return false;
+        budget.left -= Math.max(0, needed);
+        return true;
+    };
+    if (fits(node, gaps(maxRow + 1, maxCol + 1))) return node;
 
     // The lines a cell starts or ends in, in order, each mapped to its place among them.
     const linesOf = (ends: number[]): Map<number, number> => {
@@ -66,27 +77,32 @@ function boundGrid(node: OfficeContentNode, budget: { left: number }): OfficeCon
     const rowLines = linesOf(cells.flatMap(cell => [cell.r, cell.r + cell.rowSpan - 1]));
     const colLines = linesOf(cells.flatMap(cell => [cell.c, cell.c + cell.colSpan - 1]));
     const compactGaps = gaps(Math.max(rowLines.size, rowIndex), Math.max(colLines.size, 1));
-    const compact = compactGaps <= budget.left;
-
-    const rewritten = new Map<OfficeContentNode, Record<string, unknown>>();
-    if (compact) {
-        budget.left -= Math.max(0, compactGaps);
+    if (compactGaps <= budget.left) {
+        const compact = new Map<OfficeContentNode, Record<string, unknown>>();
         for (const cell of cells) {
             const meta: Record<string, unknown> = { row: rowLines.get(cell.r)!, col: colLines.get(cell.c)! };
             if (cell.rowSpan > 1) meta.rowSpan = rowLines.get(cell.r + cell.rowSpan - 1)! - rowLines.get(cell.r)! + 1;
             if (cell.colSpan > 1) meta.colSpan = colLines.get(cell.c + cell.colSpan - 1)! - colLines.get(cell.c)! + 1;
-            rewritten.set(cell.node, meta);
+            compact.set(cell.node, meta);
         }
-    } else {
-        // Each row's cells one after another, in the order of the rows.
-        let previousRow: OfficeContentNode | undefined;
-        let col = 0;
-        for (const cell of cells) {
-            if (cell.row !== previousRow) { previousRow = cell.row; col = 0; }
-            rewritten.set(cell.node, { row: cell.rowIndex, col, rowSpan: undefined, colSpan: undefined });
-            col++;
-        }
+        const compacted = rewrite(node, compact);
+        if (fits(compacted, compactGaps)) return compacted;
     }
+
+    // Each row's cells one after another, in the order of the rows, without spans.
+    const sequential = new Map<OfficeContentNode, Record<string, unknown>>();
+    let previousRow: OfficeContentNode | undefined;
+    let col = 0;
+    for (const cell of cells) {
+        if (cell.row !== previousRow) { previousRow = cell.row; col = 0; }
+        sequential.set(cell.node, { row: cell.rowIndex, col, rowSpan: undefined, colSpan: undefined });
+        col++;
+    }
+    return rewrite(node, sequential);
+}
+
+/** `node` with each cell `rewritten` names given those metadata values (and each row the row of its first). */
+function rewrite(node: OfficeContentNode, rewritten: Map<OfficeContentNode, Record<string, unknown>>): OfficeContentNode {
     return {
         ...node,
         children: (node.children ?? []).map(row => {

@@ -130,20 +130,29 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
     // path, unlike DOCX's embedded parts).
     const imageByPath = new Map<string, { content: Buffer; mediaType: string }>();
     if (config.extractAttachments) {
+        // The book's files by path, found through an index: a scan per manifest item took items x files.
+        const fileByPath = new Map<string, (typeof files)[number]>();
+        for (const f of files) if (!fileByPath.has(f.path)) fileByPath.set(f.path, f);
         for (const [, item] of manifest) {
             if (!item.mediaType.startsWith('image/')) continue;
             const p = resolveOpfPath(opfDir, item.href);
-            const f = files.find(ff => ff.path === p);
+            const f = fileByPath.get(p);
             if (f) imageByPath.set(p, { content: f.content, mediaType: item.mediaType });
         }
     }
-    // Attachment names, each used once in the book: a file's own name, else that name numbered.
+    // Attachment names, each used once in the book: a file's own name, else that name numbered. The
+    // numbering resumes where it left off for each name: tried from 2 each time, the pictures every
+    // chapter names image_1.png, image_2.png, ... took chapters squared (1.5 MB, seven minutes).
     const usedNames = new Set<string>();
+    const nextNumber = new Map<string, number>();
     const uniqueName = (name: string): string => {
+        if (!usedNames.has(name)) { usedNames.add(name); return name; }
         const dot = name.lastIndexOf('.');
         const [stem, extension] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
-        let candidate = name;
-        for (let n = 2; usedNames.has(candidate); n++) candidate = `${stem}-${n}${extension}`;
+        let n = nextNumber.get(name) ?? 2;
+        let candidate = `${stem}-${n}${extension}`;
+        while (usedNames.has(candidate)) candidate = `${stem}-${++n}${extension}`;
+        nextNumber.set(name, n + 1);
         usedNames.add(candidate);
         return candidate;
     };

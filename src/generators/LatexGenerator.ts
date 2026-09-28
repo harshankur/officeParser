@@ -1184,7 +1184,18 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                     col += span.colSpan;
                     continue;
                 }
-                if (ci >= cells.length) { slots.push({ kind: 'empty', col }); col++; continue; }
+                if (ci >= cells.length) {
+                    // The rest of a row no span reaches is padded within the document's budget (see
+                    // padWithinBudget); a tabular reads a short row as ending in empty cells.
+                    let pending = false;
+                    for (const start of active.keys()) if (start >= col) { pending = true; break; }
+                    if (!pending) {
+                        const fill = this.padWithinBudget(cols - col);
+                        for (let k = 0; k < fill; k++) slots.push({ kind: 'empty', col: col + k });
+                        break;
+                    }
+                    slots.push({ kind: 'empty', col }); col++; continue;
+                }
                 const m = cells[ci].metadata as any;
                 if (typeof m?.col === 'number' && m.col > col) { slots.push({ kind: 'empty', col }); col++; continue; }
                 const cell = cells[ci++];
@@ -1198,6 +1209,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 if (rowSpan > 1) active.set(col, { remaining: rowSpan - 1, colSpan, origin: cell });
                 col += colSpan;
             }
+            // Cells past the widest table LaTeX output lays out are not written: said, not dropped silently.
+            if (ci < cells.length) this.warnOnce('table:columns', OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: `table cells past column ${MAX_TABLE_COLUMNS}`, format: 'tex' });
             grid.push(slots);
         });
         return { cols, grid };
@@ -1243,8 +1256,19 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const bands: string[] = [];
         for (let start = 0; start < cols; start += MAX_TABLE_BAND_COLUMNS) {
             const end = Math.min(cols, start + MAX_TABLE_BAND_COLUMNS);
-            const bandGrid = grid.map(slots => this.sliceBand(slots, start, end));
-            const band = await this.tableBand(rows, rowOverrides, bandGrid, end - start, start === 0);
+            let bandGrid = grid.map(slots => this.sliceBand(slots, start, end));
+            let bandRows = rows, bandOverrides = rowOverrides;
+            if (start > 0) {
+                // A band after the first holds the rows with something in its columns: holding every
+                // row, one wide row over 100,000 narrow ones wrote 100,000 empty rows in each of 63 bands
+                // (72 MB from 18 KB). A row a span covers there is kept, so rules and spans still meet.
+                const kept = bandGrid.map((slots, ri) => typeof rowOverrides[ri] === 'string' || slots.some(slot => slot.kind !== 'empty'));
+                bandRows = rows.filter((_, ri) => kept[ri]);
+                bandOverrides = rowOverrides.filter((_, ri) => kept[ri]);
+                bandGrid = bandGrid.filter((_, ri) => kept[ri]);
+                if (!bandRows.length) continue;
+            }
+            const band = await this.tableBand(bandRows, bandOverrides, bandGrid, end - start, start === 0);
             // A table wider than one band continues below itself, a band at a time.
             bands.push(start === 0 ? band : `\\textit{(continued: columns ${start + 1}--${end})}\n\n${band}`);
         }

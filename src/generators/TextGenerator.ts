@@ -29,6 +29,11 @@ const TEXT_NODE_CLASS: Readonly<Record<OfficeContentNodeType, 'block' | 'inline'
     embed: 'inline',
 };
 
+/** The widest a laid-out table's column is padded to (see TextGenerator.renderTable). */
+const LAYOUT_COLUMN_WIDTH = 256;
+/** The spaces one document's laid-out tables may add in all to line their columns up. */
+const MAX_LAYOUT_PADDING = 16 * 1024 * 1024;
+
 /**
  * Generates plain text from an AST.
  */
@@ -386,6 +391,9 @@ export class TextGenerator extends BaseGenerator<'text'> {
     }
 
 
+    /** Spaces laid-out tables may still add to line their columns up (see renderTable). */
+    private layoutPaddingLeft = MAX_LAYOUT_PADDING;
+
     /** A laid-out table renders its own cells (see renderTable). */
     protected override walkedByProcessor(node: OfficeContentNode): boolean {
         return node.type === 'table' && this.config.textConfig.preserveLayout;
@@ -424,7 +432,14 @@ export class TextGenerator extends BaseGenerator<'text'> {
         for (const row of rows) {
             tableOutput += '| ';
             for (let i = 0; i < row.length; i++) {
-                tableOutput += (row[i] || '').padEnd(colWidths[i] || 0) + ' | ';
+                const cell = row[i] || '';
+                // Padded to its column's width, at most LAYOUT_COLUMN_WIDTH and within the document's
+                // budget of padding: padded to the widest cell, one 100 KB cell over 2,000 rows made
+                // 200 MB of spaces from 1.6 KB. A cell wider than that is written as it is.
+                const pad = Math.min(colWidths[i] || 0, LAYOUT_COLUMN_WIDTH) - cell.length;
+                const padding = pad > 0 && this.layoutPaddingLeft >= pad ? pad : 0;
+                this.layoutPaddingLeft -= padding;
+                tableOutput += cell + ' '.repeat(padding) + ' | ';
             }
             tableOutput += newline;
         }

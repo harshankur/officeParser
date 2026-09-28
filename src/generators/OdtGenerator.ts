@@ -1,4 +1,5 @@
 import { zipSync, Zippable } from 'fflate';
+import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, isSafeStyleMapTag, sanitizeOfficePackageUrl, stripInvalidXmlChars } from '../utils/sanitize.js';
@@ -578,57 +579,33 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private async table(node: OfficeContentNode): Promise<string> {
         const rows = (node.children || []).filter(r => r.type === 'row');
         if (!rows.length) return '';
-        const cols = this.gridWidth(rows);
+        // Each row's cells, merges and gaps laid out by occupancy, as the grid budget laid them out.
+        const layout = layoutTableRows(rows)!;
+        const cols = layout.cols;
         const tableName = `Table${++this.tableCounter}`;
         const tableStyle = this.ensureTableStyle(this.tableAlign((node.metadata as any)?.align));
         const colXml = `<table:table-column table:number-columns-repeated="${cols}"/>`;
 
-        const active = new Map<number, number>();
         const rendered: { xml: string; header: boolean }[] = [];
         for (let ri = 0; ri < rows.length; ri++) {
             const row = rows[ri];
-            const cells = (row.children || []).filter(c => c.type === 'cell');
             const header = isHeaderRow(row, ri === 0);
             let cellsXml = '';
-            let col = 0, ci = 0;
-            while (ci < cells.length || [...active.keys()].some(c => c >= col)) {
-                if ((active.get(col) || 0) > 0) {
-                    cellsXml += '<table:covered-table-cell/>';
-                    active.set(col, active.get(col)! - 1);
-                    if (active.get(col)! <= 0) active.delete(col);
-                    col++;
-                    continue;
-                }
-                if (ci >= cells.length) {
-                    // No explicit cells left, but a vertical merge is still pending at a later column:
-                    // fill this gap with an empty cell and advance, so the covered cell lands correctly.
-                    if (![...active.keys()].some(c => c > col)) break;
-                    cellsXml += '<table:table-cell><text:p/></table:table-cell>';
-                    col++;
-                    continue;
-                }
-                // Sparse source grid: ExcelParser emits only the non-empty cells, each carrying its own
-                // column index. Fill the skipped columns with empty cells so a value in D1 lands in
-                // column 4, rather than sliding left to whatever the running cursor happened to reach.
-                const nextCol = (cells[ci].metadata as any)?.col;
-                if (typeof nextCol === 'number' && nextCol > col && col < cols) {
-                    cellsXml += '<table:table-cell><text:p/></table:table-cell>';
-                    col++;
-                    continue;
-                }
-                const cell = cells[ci++];
+            for (const slot of layout.rows[ri]) {
+                if (slot.kind === 'covered') { cellsXml += '<table:covered-table-cell/>'.repeat(slot.span); continue; }
+                // A column the row skips (a sparse grid, or before a vertical merge still pending further right).
+                if (slot.kind === 'gap') { cellsXml += '<table:table-cell><text:p/></table:table-cell>'; continue; }
+                const { cell, rowSpan } = slot;
                 const cmeta = cell.metadata as any;
-                const colSpan = Math.max(1, Math.min(cols, cmeta?.colSpan || 1));
-                const rowSpan = Math.max(1, Math.min(1000, cmeta?.rowSpan || 1));
+                const colSpan = Math.min(cols, slot.colSpan);
                 const cellStyle = this.ensureCellStyle(hexColor(cmeta?.backgroundColor));
                 let spanAttr = '';
                 if (colSpan > 1) spanAttr += ` table:number-columns-spanned="${colSpan}"`;
-                if (rowSpan > 1) { spanAttr += ` table:number-rows-spanned="${rowSpan}"`; for (let k = 0; k < colSpan; k++) active.set(col + k, rowSpan - 1); }
+                if (rowSpan > 1) spanAttr += ` table:number-rows-spanned="${rowSpan}"`;
                 let inner = await this.renderBlocks(cell.children);
                 if (!inner.trim()) inner = '<text:p/>';
                 cellsXml += `<table:table-cell table:style-name="${cellStyle}"${spanAttr}>${inner}</table:table-cell>`;
                 for (let k = 1; k < colSpan; k++) cellsXml += '<table:covered-table-cell/>';
-                col += colSpan;
             }
             if (!cellsXml) cellsXml = '<table:table-cell><text:p/></table:table-cell>';
             rendered.push({ xml: `<table:table-row>${cellsXml}</table:table-row>`, header });
@@ -642,34 +619,6 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         }
         for (; i < rendered.length; i++) body += rendered[i].xml;
         return `<table:table table:name="${tableName}" table:style-name="${tableStyle}">${colXml}${body}</table:table>`;
-    }
-
-    private gridWidth(rows: OfficeContentNode[]): number {
-        let max = 1;
-        const active = new Map<number, number>();
-        for (const row of rows) {
-            let col = 0;
-            const cells = (row.children || []).filter(c => c.type === 'cell');
-            let ci = 0;
-            while (ci < cells.length || [...active.keys()].some(c => c >= col)) {
-                if ((active.get(col) || 0) > 0) { active.set(col, active.get(col)! - 1); if (active.get(col)! <= 0) active.delete(col); col++; continue; }
-                if (ci >= cells.length) {
-                    if (![...active.keys()].some(c => c > col)) break;
-                    col++; // gap column before a still-pending vertical merge
-                    continue;
-                }
-                // Mirror table()'s sparse-grid placement, or the grid would be narrower than the rows.
-                const nextCol = (cells[ci].metadata as any)?.col;
-                if (typeof nextCol === 'number' && nextCol > col && col < 1000) { col++; continue; }
-                const cmeta = cells[ci++].metadata as any;
-                const colSpan = Math.max(1, Math.min(1000, cmeta?.colSpan || 1));
-                const rowSpan = Math.max(1, Math.min(1000, cmeta?.rowSpan || 1));
-                if (rowSpan > 1) for (let k = 0; k < colSpan; k++) active.set(col + k, rowSpan - 1);
-                col += colSpan;
-            }
-            max = Math.max(max, col);
-        }
-        return Math.min(1000, max);
     }
 
     private tableAlign(alignment: string | undefined): string | null {
