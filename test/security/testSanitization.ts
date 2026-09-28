@@ -3352,6 +3352,15 @@ async function parserHardeningTests() {
         'word/diagrams/data1.xml': dgmData(dgmPoint('0', '', 'doc') + dgmPoint('1', 'ALPHA'), '<dgm:cxn modelId="a" srcId="0" destId="1"/>'),
     }), 'docx');
     check('docx: SmartArt text joins its paragraph', !smartArtDocx.error && smartArtDocx.ast?.content[0]?.text === 'Intro\nALPHA', JSON.stringify(smartArtDocx.ast?.content[0]?.text));
+    // PPTX: modern comments (PowerPoint 365) and their replies are read with their authors.
+    const p188Ns = 'xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+    const modernComments = await parseQuiet(pptxOf({
+        'ppt/slides/_rels/slide1.xml.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId3" Type="http://schemas.microsoft.com/office/2018/10/relationships/comments" Target="../comments/modernComment_100_ABC.xml"/></Relationships>',
+        'ppt/comments/modernComment_100_ABC.xml': `<?xml version="1.0"?><p188:cmLst ${p188Ns}><p188:cm id="{1}" authorId="{A1}"><p188:txBody><a:p><a:r><a:t>MODERN</a:t></a:r></a:p></p188:txBody><p188:replyLst><p188:reply id="{2}" authorId="{A2}"><p188:txBody><a:p><a:r><a:t>REPLY</a:t></a:r></a:p></p188:txBody></p188:reply></p188:replyLst></p188:cm></p188:cmLst>`,
+        'ppt/authors.xml': `<?xml version="1.0"?><p188:authorLst ${p188Ns}><p188:author id="{A1}" name="Ann" initials="A"/><p188:author id="{A2}" name="Rae" initials="R"/></p188:authorLst>`,
+    }), 'pptx');
+    const modernList = JSON.stringify((modernComments.ast?.content[0]?.comments ?? []).map((c: any) => [c.text, c.metadata?.author]));
+    check('pptx: modern comments and replies are read with their authors', !modernComments.error && modernList === JSON.stringify([['MODERN', 'Ann'], ['REPLY', 'Rae']]) && modernComments.ast?.content.length === 1, `${modernComments.error} ${modernList}`);
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';

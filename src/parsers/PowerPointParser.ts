@@ -59,8 +59,10 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     const customPropsFileRegex = /docProps\/custom\.xml/;
     const appPropsFileRegex = /docProps\/app\.xml/;
 
-    const commentsFileRegex = /ppt\/comments\/comment\d+\.xml/;
-    const commentAuthorsRegex = /ppt\/commentAuthors\.xml/;
+    // Comments as PowerPoint wrote them until 2019 (`comment1.xml`, authors in `commentAuthors.xml`) and
+    // since (`modernComment_*.xml`, `p188:cm`, authors in `authors.xml`), which newer versions write alone.
+    const commentsFileRegex = /ppt\/comments\/(?:comment\d+|modernComment_[^/]+)\.xml/;
+    const commentAuthorsRegex = /ppt\/(?:commentAuthors|authors)\.xml/;
     const slideMastersRegex = /ppt\/slideMasters\/slideMaster\d+\.xml/;
     const presentationFileRegex = /ppt\/presentation\.xml/;
     const diagramDataRegex = /ppt\/diagrams\/data\d+\.xml/;
@@ -134,6 +136,18 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                 }
             }
         }
+        const modernAuthorsFile = files.find(f => f.path === 'ppt/authors.xml');
+        if (modernAuthorsFile) {
+            for (const aNode of getElementsByTagName(parseXmlString(modernAuthorsFile.content.toString(), { config }), "p188:author")) {
+                const id = aNode.getAttribute("id");
+                if (id !== null && !(id in authorMap)) {
+                    authorMap[id] = {
+                        author: aNode.getAttribute("name") || undefined,
+                        initials: aNode.getAttribute("initials") || undefined
+                    };
+                }
+            }
+        }
     }
 
     // The comments of each comments part, read once and shared by every relationship naming it: read
@@ -150,17 +164,29 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         if (comments) return comments;
         comments = [];
         const cFile = fileByName.get(target);
+        const commentOf = (authorId: string | null, text: string): void => {
+            const authorData = authorId !== null ? authorMap[authorId] : undefined;
+            if (text) comments!.push({
+                type: 'comment',
+                text,
+                children: [{ type: 'text', text, formatting: {} }],
+                metadata: authorData && authorData.author ? { author: authorData.author } : undefined
+            });
+        };
         if (cFile) {
-            for (const cNode of getElementsByTagName(parseXmlString(cFile.content.toString(), { config }), "p:cm")) {
-                const authorId = cNode.getAttribute("authorId");
-                const authorData = authorId !== null ? authorMap[authorId] : undefined;
-                const text = getElementsByTagName(cNode, "a:t").map(t => t.textContent || '').join('');
-                if (text) comments.push({
-                    type: 'comment',
-                    text,
-                    children: [{ type: 'text', text, formatting: {} }],
-                    metadata: authorData && authorData.author ? { author: authorData.author } : undefined
-                });
+            const cXml = parseXmlString(cFile.content.toString(), { config });
+            for (const cNode of getElementsByTagName(cXml, "p:cm")) {
+                commentOf(cNode.getAttribute("authorId"), getElementsByTagName(cNode, "a:t").map(t => t.textContent || '').join(''));
+            }
+            // A modern comment's own text, then each reply's, a comment each.
+            const modernText = (holder: Element): string => {
+                const body = getChildElements(holder, "p188:txBody")[0];
+                return body ? getElementsByTagName(body, "a:t").map(t => t.textContent || '').join('') : '';
+            };
+            for (const cNode of getElementsByTagName(cXml, "p188:cm")) {
+                commentOf(cNode.getAttribute("authorId"), modernText(cNode));
+                const replies = getChildElements(cNode, "p188:replyLst")[0];
+                for (const reply of replies ? getChildElements(replies, "p188:reply") : []) commentOf(reply.getAttribute("authorId"), modernText(reply));
             }
         }
         commentsByPart.set(target, comments);
@@ -895,6 +921,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         if (file.path.match(appPropsFileRegex)) continue;
         if (file.path.match(customPropsFileRegex)) continue;
         if (file.path.includes("comment")) continue;
+        if (file.path.match(commentAuthorsRegex)) continue;
         // This loop treats every remaining file as a slide or note, so the presentation part
         // has to be skipped explicitly: it carries no slide number and would otherwise be
         // added to the deck as an empty slide.
