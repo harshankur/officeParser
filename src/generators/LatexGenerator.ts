@@ -1,4 +1,5 @@
 import { zipSync, Zippable } from 'fflate';
+import { UniqueNames } from '../utils/uniqueNames.js';
 import { trimEndChars } from '../utils/textUtils.js';
 import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -260,7 +261,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private readonly mediaByAttachment = new Map<string, MediaRef | null>();
     /** Images the source embedded as `data:` URIs, by URI: they carry their bytes, as attachments do. */
     private readonly mediaByDataUri = new Map<string, MediaRef | null>();
-    private readonly usedFileNames = new Set<string>();
+    private readonly usedFileNames = new UniqueNames(name => name.toLowerCase());
 
     private readonly linkTargets = new Set<string>();
     private readonly definedLabels = new Set<string>();
@@ -1415,12 +1416,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const data = this.getAttachment(meta?.attachmentName)?.chartData;
         if (!data) return escapeLatex(`[Chart: ${meta?.attachmentName || ''}]`);
         const cell = (text: string): OfficeContentNode => ({ type: 'cell', children: [{ type: 'text', text } as OfficeContentNode] } as OfficeContentNode);
-        const rows: OfficeContentNode[] = [{ type: 'row', children: [cell(''), ...data.dataSets.map(d => cell(d.name || ''))] } as OfficeContentNode];
-        (data.labels || []).forEach((label, i) => {
-            rows.push({ type: 'row', children: [cell(label), ...data.dataSets.map(d => cell(String(d.values?.[i] ?? '')))] } as OfficeContentNode);
-        });
         const caption = data.title ? `\\textbf{${escapeLatex(data.title, ' ')}}` : '';
-        return [caption, await this.table({ type: 'table', children: rows } as OfficeContentNode)].filter(Boolean).join(BLOCK_SEPARATOR);
+        return [caption, await this.table(this.chartTable(data, cell))].filter(Boolean).join(BLOCK_SEPARATOR);
     }
 
     // ── images ───────────────────────────────────────────────────────────────────────────────────
@@ -1434,10 +1431,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     /** A safe, unique file name for an attachment: its base name reduced to `[A-Za-z0-9-]`, with the MIME's extension. */
     private uniqueFileName(attachmentName: string, ext: string): string {
         const stem = this.fileStem(attachmentName);
-        let name = `${stem}.${ext}`;
-        for (let i = 2; this.usedFileNames.has(name.toLowerCase()); i++) name = `${stem}-${i}.${ext}`;
-        this.usedFileNames.add(name.toLowerCase());
-        return name;
+        return this.usedFileNames.claim(`${stem}.${ext}`, n => `${stem}-${n}.${ext}`);
     }
 
     /**
@@ -1462,9 +1456,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const known = sameHash.find(entry => entry.pdf === made.pdf);
         if (known) return known.ref;
         const stem = `${this.fileStem(attachmentName).replace(new RegExp(`-${hash}$`), '')}-${hash}`;
-        let name = `${stem}.pdf`;
-        for (let n = 2; this.usedFileNames.has(name.toLowerCase()); n++) name = `${stem}-${n}.pdf`;
-        this.usedFileNames.add(name.toLowerCase());
+        const name = this.usedFileNames.claim(`${stem}.pdf`, n => `${stem}-${n}.pdf`);
         const ref: MediaRef = { path: name, includable: true, mime, intrinsic: sniffImageSize(bytes), bb: made.bbox };
         this.carried.push({ name, pdf: made.pdf });
         this.carriedByHash.set(hash, [...sameHash, { pdf: made.pdf, ref }]);

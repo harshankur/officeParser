@@ -1,4 +1,5 @@
 import { zipSync, Zippable } from 'fflate';
+import { UniqueNames } from '../utils/uniqueNames.js';
 import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, DocxGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -50,7 +51,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private mediaByAttachment = new Map<string, string>();
     private usedExtensions = new Set<string>();
     private drawingCounter = 0;
-    private usedBookmarkNames = new Set<string>();
+    private usedBookmarkNames = new UniqueNames();
     private bookmarkCounter = 0;
     private footnotes: NoteEntry[] = [];
     private endnotes: NoteEntry[] = [];
@@ -96,9 +97,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
      */
     private mintBookmark(rawName: string): { id: number; name: string } {
         const base = toBookmarkNameRaw(rawName);
-        let name = base, i = 2;
-        while (this.usedBookmarkNames.has(name)) { const suffix = `_${i++}`; name = base.slice(0, 40 - suffix.length) + suffix; }
-        this.usedBookmarkNames.add(name);
+        const name = this.usedBookmarkNames.claim(base, n => base.slice(0, 40 - `_${n}`.length) + `_${n}`);
         return { id: this.bookmarkCounter++, name };
     }
 
@@ -525,7 +524,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             this.numByListId.set(listId, numId);
             this.needsNumbering = true;
         } else {
-            entry = this.numbering.find(n => n.numId === numId)!;
+            // numId is the entry's place in `numbering` plus one: a scan per item took items x lists.
+            entry = this.numbering[numId - 1];
         }
         const lvl = Math.max(0, Math.min(8, meta?.indentation | 0));
         if (!entry.levels.has(lvl)) {
@@ -549,22 +549,32 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     }
 
     private buildNumberingXml(): string {
+        // Lists with the same kind at every level share one definition, each list a numbering of its own
+        // that restarts its ordered levels (at 1, or where the list starts): a definition per list wrote
+        // all nine levels (2 KB) for each, and 200,000 two-line Markdown lists made 400 MB of XML.
+        const abstractIds = new Map<string, number>();
         let abstracts = '', nums = '';
         for (const entry of this.numbering) {
-            const aId = entry.numId - 1;
-            let levels = '';
-            for (let l = 0; l <= 8; l++) {
-                const type = entry.levels.get(l) ?? entry.levels.get(0) ?? 'unordered';
-                const fmt = type === 'ordered' ? 'decimal' : 'bullet';
-                const text = type === 'ordered' ? `%${l + 1}.` : '•';
-                levels += `<w:lvl w:ilvl="${l}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/>`
-                    + `<w:lvlText w:val="${escapeXml(text)}"/><w:lvlJc w:val="left"/>`
-                    + `<w:pPr><w:ind w:left="${720 * (l + 1)}" w:hanging="360"/></w:pPr></w:lvl>`;
+            const types = Array.from({ length: 9 }, (_, l) => entry.levels.get(l) ?? entry.levels.get(0) ?? 'unordered');
+            const signature = types.join(',');
+            let aId = abstractIds.get(signature);
+            if (aId === undefined) {
+                aId = abstractIds.size;
+                abstractIds.set(signature, aId);
+                let levels = '';
+                types.forEach((type, l) => {
+                    const fmt = type === 'ordered' ? 'decimal' : 'bullet';
+                    const text = type === 'ordered' ? `%${l + 1}.` : '•';
+                    levels += `<w:lvl w:ilvl="${l}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/>`
+                        + `<w:lvlText w:val="${escapeXml(text)}"/><w:lvlJc w:val="left"/>`
+                        + `<w:pPr><w:ind w:left="${720 * (l + 1)}" w:hanging="360"/></w:pPr></w:lvl>`;
+                });
+                abstracts += `<w:abstractNum w:abstractNumId="${aId}"><w:multiLevelType w:val="multilevel"/>${levels}</w:abstractNum>`;
             }
-            abstracts += `<w:abstractNum w:abstractNumId="${aId}"><w:multiLevelType w:val="multilevel"/>${levels}</w:abstractNum>`;
             let overrides = '';
-            for (const [lvl, start] of entry.startAt) {
-                if (start > 1) overrides += `<w:lvlOverride w:ilvl="${lvl}"><w:startOverride w:val="${start}"/></w:lvlOverride>`;
+            for (const lvl of [...entry.levels.keys()].sort((a, b) => a - b)) {
+                if (types[lvl] !== 'ordered') continue;
+                overrides += `<w:lvlOverride w:ilvl="${lvl}"><w:startOverride w:val="${Math.max(1, entry.startAt.get(lvl) ?? 1)}"/></w:lvlOverride>`;
             }
             nums += `<w:num w:numId="${entry.numId}"><w:abstractNumId w:val="${aId}"/>${overrides}</w:num>`;
         }
@@ -771,14 +781,8 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const data = att?.chartData;
         if (!data) return `<w:p><w:r><w:t xml:space="preserve">[Chart: ${xmlText(meta?.attachmentName || '')}]</w:t></w:r></w:p>`;
         const caption = data.title ? `<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">${xmlText(data.title)}</w:t></w:r></w:p>` : '';
-        // Build a table: header = series names, first col = labels.
-        const rows: OfficeContentNode[] = [];
-        const header: OfficeContentNode = { type: 'row', children: [cellOf(''), ...data.dataSets.map(d => cellOf(d.name || ''))] };
-        rows.push(header);
-        (data.labels || []).forEach((label, i) => {
-            rows.push({ type: 'row', children: [cellOf(label), ...data.dataSets.map(d => cellOf(String(d.values?.[i] ?? '')))] });
-        });
-        const table = await this.table({ type: 'table', children: rows } as OfficeContentNode);
+        // A table: header = series names, first col = labels (within the grid budget, see chartTable).
+        const table = await this.table(this.chartTable(data, cellOf));
         return caption + table;
     }
 

@@ -1,4 +1,5 @@
 import { zipSync, Zippable } from 'fflate';
+import { UniqueNames } from '../utils/uniqueNames.js';
 import { layoutTableRows } from '../utils/tableLayout.js';
 import { ConversionResult, GeneratorConfig, ImageMode, OdtGeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -142,7 +143,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private readonly writtenNotes = new Map<OfficeContentNode, { id: string; ord: number; cls: 'footnote' | 'endnote' }>();
     private endnoteOrd = 0;
 
-    private usedBookmarkNames = new Set<string>();
+    private usedBookmarkNames = new UniqueNames();
     private mathWarned = false;
 
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'odt'>) {
@@ -338,10 +339,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     /** Mints a unique bookmark name; the first claim of a base keeps it, later claims get `_2`. */
     private mintBookmark(rawName: string): string {
         const base = toBookmarkNameRaw(rawName);
-        let name = base, i = 2;
-        while (this.usedBookmarkNames.has(name)) { const suffix = `_${i++}`; name = base.slice(0, 40 - suffix.length) + suffix; }
-        this.usedBookmarkNames.add(name);
-        return name;
+        return this.usedBookmarkNames.claim(base, n => base.slice(0, 40 - `_${n}`.length) + `_${n}`);
     }
     private anchorName(rawName: string): string { return toBookmarkNameRaw(rawName); }
 
@@ -778,11 +776,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const data = att?.chartData;
         if (!data) return `<text:p>${encodeOdfText(`[Chart: ${meta?.attachmentName || ''}]`)}</text:p>`;
         const caption = data.title ? `<text:p><text:span text:style-name="${this.boldStyle()}">${encodeOdfText(data.title)}</text:span></text:p>` : '';
-        const rows: OfficeContentNode[] = [{ type: 'row', children: [cellOf(''), ...data.dataSets.map(d => cellOf(d.name || ''))] } as OfficeContentNode];
-        (data.labels || []).forEach((label, i) => {
-            rows.push({ type: 'row', children: [cellOf(label), ...data.dataSets.map(d => cellOf(String(d.values?.[i] ?? '')))] } as OfficeContentNode);
-        });
-        return caption + await this.table({ type: 'table', children: rows } as OfficeContentNode);
+        return caption + await this.table(this.chartTable(data, cellOf));
     }
 
     private async embed(node: OfficeContentNode): Promise<string> {

@@ -629,6 +629,7 @@ function resolveSectionLinks(
 
     // Assign a unique, stable anchor id to a heading the first time a link targets it.
     const usedIds = new Set<string>();
+    const nextSuffix = new Map<string, number>();
     const idFor = new Map<OfficeContentNode, string>();
     const anchorFor = (h: OfficeContentNode): string => {
         const existing = idFor.get(h);
@@ -638,9 +639,12 @@ function resolveSectionLinks(
         // The generator gives every same-text heading the bare slug, so when this base is shared (or
         // already taken) use a suffixed id the generator never emits, so the link lands on THIS one.
         if ((slugCount.get(base) || 0) > 1 || usedIds.has(base)) {
-            let i = 2;
+            // The numbering resumes where it left off for the base: from 2 each time, many same-text
+            // headings a link targets took time in the square of their number.
+            let i = nextSuffix.get(base) ?? 2;
             id = `${base}-${i}`;
             while (usedIds.has(id) || (slugCount.get(id) || 0) > 0) id = `${base}-${++i}`;
+            nextSuffix.set(base, i + 1);
         }
         usedIds.add(id);
         idFor.set(h, id);

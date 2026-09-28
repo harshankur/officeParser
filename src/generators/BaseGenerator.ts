@@ -1,18 +1,22 @@
-import { OfficeAttachment, OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
+import { ChartData, OfficeAttachment, OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
 import { resolveGeneratorConfig } from '../utils/configUtils.js';
 import { checkAbortSignal, getWarningMessage } from '../utils/errorUtils.js';
 import { resolveImageMode } from '../utils/officeGenUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { MAX_SHEET_GRID_GAPS } from '../utils/sheetGridUtils.js';
+import { MAX_LAYOUT_COLUMNS } from '../utils/tableLayout.js';
+
+/** The most cells one chart's data table holds in DOCX, ODT and LaTeX output (see BaseGenerator.chartTable). */
+const MAX_CHART_TABLE_CELLS = 100_000;
+
+/** The most picture bytes one document writes inline in all (see BaseGenerator.inlineWithinBudget). */
+export const MAX_INLINED_IMAGE_BYTES = 128 * 1024 * 1024;
 
 /**
  * Base class for all document generators.
  * Provides common traversal logic and configuration handling.
  */
-/** The most picture bytes one document writes inline in all (see BaseGenerator.inlineWithinBudget). */
-export const MAX_INLINED_IMAGE_BYTES = 128 * 1024 * 1024;
-
 export abstract class BaseGenerator<D extends UniversalGeneratorFormat = UniversalGeneratorFormat> {
     protected config: FullGeneratorConfig;
     protected ast: OfficeParserAST;
@@ -31,6 +35,31 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
      * the grid budget had already laid out as tightly as it could. Past the budget a row keeps the cells
      * it has; Markdown, CSV and LaTeX read a short row as ending in empty cells.
      */
+    /**
+     * A chart's data as DOCX, ODT and LaTeX write it: a header of series names, then a row per label.
+     * The table is labels x series, which a 9.6 KB PPTX made nine million cells (the process ran out of
+     * memory), and it is written at every chart showing the data; so it is built within the grid budget
+     * (see padWithinBudget) and at most MAX_CHART_TABLE_CELLS cells: at most MAX_LAYOUT_COLUMNS - 1 series,
+     * and the rows those hold. What is left out is reported (CONTENT_NOT_REPRESENTABLE).
+     */
+    protected chartTable(data: ChartData, cellOf: (text: string) => OfficeContentNode): OfficeContentNode {
+        const dataSets = Array.isArray(data.dataSets) ? data.dataSets : [];
+        const labels = Array.isArray(data.labels) ? data.labels : [];
+        const series = dataSets.slice(0, MAX_LAYOUT_COLUMNS - 1);
+        const width = series.length + 1;
+        const allowed = Math.min(labels.length + 1, Math.floor(Math.min(this.paddingCellsLeft, MAX_CHART_TABLE_CELLS) / width));
+        this.paddingCellsLeft -= allowed * width;
+        if (series.length < dataSets.length || allowed < labels.length + 1) {
+            this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'chart data past the table limit', format: this.destination });
+        }
+        const rows: OfficeContentNode[] = [];
+        if (allowed > 0) rows.push({ type: 'row', children: [cellOf(''), ...series.map(d => cellOf(d?.name || ''))] } as OfficeContentNode);
+        for (let i = 0; i < allowed - 1; i++) {
+            rows.push({ type: 'row', children: [cellOf(String(labels[i] ?? '')), ...series.map(d => cellOf(String(d?.values?.[i] ?? '')))] } as OfficeContentNode);
+        }
+        return { type: 'table', children: rows } as OfficeContentNode;
+    }
+
     /** Whether `positions` more grid positions (rows a sparse sheet fills back in) fit the same budget, all or none. */
     protected takeGridPositions(positions: number): boolean {
         if (!(positions >= 0) || positions > this.paddingCellsLeft) return false;

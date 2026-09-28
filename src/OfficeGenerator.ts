@@ -1,4 +1,5 @@
 import { BaseGenerator } from './generators/BaseGenerator.js';
+import { sharedNodeVisits } from './utils/nodeListUtils.js';
 import { ChunkingGenerator } from './generators/ChunkingGenerator.js';
 import { CsvGenerator } from './generators/CsvGenerator.js';
 import { DocxGenerator } from './generators/DocxGenerator.js';
@@ -16,6 +17,9 @@ import { withKnownNodeTypes } from './utils/nodeTypeUtils.js';
 import { withBoundedSheetGrids } from './utils/sheetGridUtils.js';
 import { withWellTypedValues } from './utils/valueTypeUtils.js';
 import { getOfficeError } from './utils/errorUtils.js';
+
+/** Nodes a writer may meet more than once along the AST's paths, beyond what repeated content allows (see sharedNodeVisits). */
+const MAX_SHARED_NODE_VISITS = 4_000_000;
 
 /**
  * Main generator class providing document conversion functionality.
@@ -72,6 +76,12 @@ export class OfficeGenerator {
         try {
             const known = withBoundedSheetGrids(withKnownNodeTypes(withWellTypedValues(ast)));
             input = keepsComments ? known : withoutSourceComments(known);
+            // Nodes shared along many paths (see sharedNodeVisits) past what the parsers' own sharing
+            // reaches are refused before any writer multiplies them.
+            const repeatedContent = input.config?.decompressionLimits?.maxRepeatedContent ?? 16 * 1024 * 1024;
+            if (sharedNodeVisits(input) > MAX_SHARED_NODE_VISITS + repeatedContent / 16) {
+                throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, config?.onWarning ? config : ast.config ?? config);
+            }
         } catch (error) {
             throw asNestingError(error);
         }

@@ -1,4 +1,5 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TextAlignment, TextFormatting, TextMetadata } from '../types.js';
+import { UniqueNames } from '../utils/uniqueNames.js';
 import { attachmentLookup, repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
 import { trimEndChars } from '../utils/textUtils.js';
 import { createAST } from '../utils/astUtils.js';
@@ -846,6 +847,8 @@ class LatexReader {
     inputEncoding: string | undefined;
     attachments: OfficeAttachment[] = [];
     private attachmentByPath = new Map<string, string>();
+    /** The attachments' names, for the names a picture read from a PDF takes (see its reader). */
+    private readonly attachmentNames = new UniqueNames();
     /** What decoding PDF pictures into images may cost this document, across all of them. */
     private readonly decodeBudget = newDecodeBudget();
     private headerFields = new Map<string, string>();
@@ -2708,8 +2711,9 @@ class LatexReader {
                 if (picture) {
                     // Named for what it now is, and apart from any attachment already holding that name.
                     const stem = resolved.replace(/\.pdf$/i, ''), ext = picture.mimeType === 'image/png' ? '.png' : '.jpg';
-                    name = stem + ext;
-                    for (let n = 2; this.attachments.some(a => a.name === name); n++) name = `${stem}-${n}${ext}`;
+                    name = this.attachmentNames.claim(stem + ext, n => `${stem}-${n}${ext}`);
+                } else {
+                    this.attachmentNames.add(name);
                 }
                 this.attachments.push(createAttachment(name, picture ? Buffer.from(picture.data) : bytes));
                 this.attachmentByPath.set(resolved, name);

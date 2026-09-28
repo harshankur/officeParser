@@ -3099,6 +3099,40 @@ async function parserHardeningTests() {
     const headerDocx = unzipSync(new Uint8Array((await OfficeGenerator.generate(commentedHeader, 'docx', { onWarning: () => {} } as any)).value as any));
     const headerXml = Object.entries(headerDocx).filter(([name]) => /header\d*\.xml$/.test(name)).map(([, data]) => strFromU8(data)).join('');
     check('docx: a source comment in a header is left out, as in the body', headerXml.includes('visible') && !headerXml.includes('HIDDEN-NOTE'), headerXml.slice(0, 300));
+
+    // A chart's table is built within the grid budget (a 9.6 KB PPTX, 3,000 labels by 3,000 series, ran
+    // DOCX, ODT and LaTeX out of memory); names made unique resume their numbering (60,000 bookmarks named
+    // `a` took two minutes); an AST sharing nodes along many paths is refused; lists share numbering
+    // definitions; and a delimiter an AST's own config names is taken only when short.
+    const bigChart = { ...astWith([{ type: 'chart', metadata: { attachmentName: 'c' } }]), attachments: [{ type: 'chart', name: 'c', mimeType: 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml', data: '', chartData: { title: 't', labels: Array.from({ length: 3000 }, () => 'a'), dataSets: Array.from({ length: 3000 }, () => ({ name: 's', values: [] })) } }] } as any;
+    for (const format of ['docx', 'odt', 'tex'] as const) {
+        const chartWarnings: string[] = [];
+        const t0 = Date.now();
+        let failure = '';
+        try { await OfficeGenerator.generate(bigChart, format, { onWarning: (w: any) => chartWarnings.push(w.code) } as any); } catch (e) { failure = String(e); }
+        check(`${format}: a chart of 3,000 labels by 3,000 series is written within the grid budget`, !failure && Date.now() - t0 < 5000 && chartWarnings.includes('CONTENT_NOT_REPRESENTABLE'), `${Date.now() - t0}ms ${failure} ${chartWarnings}`);
+    }
+    const manyBookmarks = await parseQuiet(docxOf(`<w:p>${'<w:bookmarkStart w:id="0" w:name="a"/>'.repeat(60000)}<w:r><w:t>x</w:t></w:r></w:p>`), 'docx');
+    await timed('docx, odt: a paragraph naming one bookmark 60,000 times is written', async () => { for (const format of ['docx', 'odt'] as const) await OfficeGenerator.generate(manyBookmarks.ast!, format, { onWarning: () => {} } as any); });
+    const sameHeadings = await parseQuiet(Buffer.from('# a\n\n'.repeat(20000)), 'md');
+    await timed('docx, odt: 20,000 headings of one text are written', async () => { for (const format of ['docx', 'odt'] as const) await OfficeGenerator.generate(sameHeadings.ast!, format, { onWarning: () => {} } as any); });
+    let doubled: any = { type: 'text', text: 'ab' };
+    for (let i = 0; i < 40; i++) doubled = { type: 'text', children: [doubled, doubled] };
+    let sharingError: any;
+    const t1 = Date.now();
+    try { await OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [doubled] }]), 'html', { onWarning: () => {} } as any); } catch (e) { sharingError = e; }
+    check('generators: an AST whose nodes each hold the next twice, 40 deep, is refused at once', sharingError?.officeIssue?.code === 'OUTPUT_TOO_LARGE' && Date.now() - t1 < 2000, `${Date.now() - t1}ms ${sharingError}`);
+    const manyLists = await parseQuiet(Buffer.from('1. a\n\nx\n\n'.repeat(20000)), 'md');
+    const listDocx = unzipSync(new Uint8Array((await OfficeGenerator.generate(manyLists.ast!, 'docx', { onWarning: () => {} } as any)).value as any));
+    const numberingSize = listDocx['word/numbering.xml']?.length ?? 0;
+    check('docx: 20,000 lists share their numbering definition', numberingSize > 0 && numberingSize < 5_000_000, `${numberingSize}`);
+    const twoLists = await parseQuiet(Buffer.from('1. one\n2. two\n\ntext\n\n1. again\n'), 'md');
+    const listsReread = await parseQuiet(Buffer.from((await OfficeGenerator.generate(twoLists.ast!, 'docx', { onWarning: () => {} } as any)).value as any), 'docx');
+    const markdownAgain = (await OfficeGenerator.generate(listsReread.ast!, 'md', { onWarning: () => {} } as any)).value as string;
+    check('docx: a list sharing a numbering definition still starts at its own number', /1\. again/.test(markdownAgain), markdownAgain);
+    const longDelimiter = { ...astWith(Array.from({ length: 1000 }, () => ({ type: 'paragraph', children: [{ type: 'text', text: 'x' }] }))), config: { newlineDelimiter: 'n'.repeat(100_000) } } as any;
+    const delimited = (await OfficeGenerator.generate(longDelimiter, 'text', { onWarning: () => {} } as any)).value as string;
+    check('text: a long newline delimiter in an AST\'s own config is not taken', delimited.length < 1_000_000, `${delimited.length}`);
 }
 
 async function main() {

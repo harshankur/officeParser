@@ -58,8 +58,10 @@ function normalizeRecord(record: Record<string, unknown>): Record<string, unknow
         const value = record[key];
         if (value === undefined || value === null) continue;
         if (key === 'anchorIds') {
-            if (Array.isArray(value) && value.every(id => typeof id === 'string')) continue;
-            const ids = (Array.isArray(value) ? value.flat(8) : [value]).filter(isPrimitive).map(String);
+            // Each id once: one node naming the same bookmark 60,000 times (a 7 KB DOCX) made a writer
+            // mint 60,000 bookmarks for it.
+            if (Array.isArray(value) && value.every(id => typeof id === 'string') && new Set(value).size === value.length) continue;
+            const ids = [...new Set((Array.isArray(value) ? value.flat(8) : [value]).filter(isPrimitive).map(String))];
             set(key, ids.length ? ids : undefined);
         } else if (key === 'paragraphIndentation') {
             if (typeof value !== 'object' || Array.isArray(value)) { set(key, undefined); continue; }

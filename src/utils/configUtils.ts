@@ -436,8 +436,11 @@ export function resolveGeneratorConfig<D extends string>(
             config.onWarning = astConfig.onWarning || config.onWarning;
         }
 
-        // Inherit newlineDelimiter for text-based generators
-        const astNewline = astConfig.newlineDelimiter;
+        // Inherit newlineDelimiter for text-based generators. Only a short one: an AST (from JSON, say)
+        // carries its own config, and a delimiter is written at every line, so a long one multiplied the
+        // output by the document's line count.
+        const shortDelimiter = (value: unknown): string | undefined => typeof value === 'string' && value.length <= MAX_INHERITED_DELIMITER ? value : undefined;
+        const astNewline = shortDelimiter(astConfig.newlineDelimiter);
         if (astNewline && ['text', 'md', 'rtf'].includes(destination)) {
             // If user didn't specify a newline delimiter in their specific config, use AST's
             if (destination === 'text' && (userConfig as any)?.textConfig?.newlineDelimiter === undefined) {
@@ -452,7 +455,7 @@ export function resolveGeneratorConfig<D extends string>(
         // generator's `csvConfig.columnDelimiter`, so `parseOffice(f, { csvDelimiter: ';' }).to('csv')`
         // matches the CLI's `--csvDelimiter=';'` (which wires the same propagation). Precedence:
         // csvConfig.columnDelimiter > csvDelimiter > ','.
-        const astCsvDelim = astConfig.csvDelimiter;
+        const astCsvDelim = shortDelimiter(astConfig.csvDelimiter);
         if (astCsvDelim && destination === 'csv' && (userConfig as any)?.csvConfig?.columnDelimiter === undefined) {
             config.csvConfig.columnDelimiter = astCsvDelim;
         }
@@ -464,6 +467,9 @@ export function resolveGeneratorConfig<D extends string>(
     validateGeneratorChoices(config, reporter);
     return config;
 }
+
+/** The longest line or column delimiter a generator takes from the AST's own config (see resolveGeneratorConfig). */
+const MAX_INHERITED_DELIMITER = 16;
 
 /**
  * Generator options that take one of a fixed set of named values, with the values each accepts.
