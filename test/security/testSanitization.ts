@@ -3079,6 +3079,26 @@ async function parserHardeningTests() {
         ...Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`c${i}.xhtml`, enc(`<html><body>${'<img src="data:image/png;base64,AA==">'.repeat(50)}</body></html>`)])),
     }));
     await timed('epub: 2,000 chapters of 50 pictures each are named', () => parseQuiet(pictureBook, 'epub', { extractAttachments: true }));
+
+    // Headers, footers and the like go through every pass the content does (the grid budget above
+    // all), and a sparse sheet's rows are filled back in within it: an empty row naming row 4,094, or a
+    // sparse sheet in a footer, made 270 MB of DOCX from a few hundred bytes of AST.
+    const unzippedSize = (value: any) => Object.values(unzipSync(new Uint8Array(value))).reduce((n, entry) => n + entry.length, 0);
+    const sparseSheet = (rowsOf: any[]) => ({ type: 'sheet', metadata: { sheetName: 'S' }, children: rowsOf });
+    const farCell = (row: number, col: number) => ({ type: 'cell', metadata: { row, col }, children: [{ type: 'text', text: 'a' }] });
+    const namedRow = astWith([sparseSheet([{ type: 'row', children: [farCell(0, 999)] }, { type: 'row', metadata: { row: 4094 }, children: [] }])]);
+    const footerSheet = { ...astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'body' }] }]), auxiliary: { footers: [sparseSheet([{ type: 'row', children: [farCell(0, 999)] }, { type: 'row', children: [farCell(4094, 0)] }])] } } as any;
+    const staircaseTable = () => ({ type: 'table', children: Array.from({ length: 2000 }, () => ({ type: 'row', children: [{ type: 'cell', metadata: { rowSpan: 1000 }, children: [{ type: 'text', text: 'z' }] }] })) });
+    const staircaseHeaders = { ...astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'body' }] }]), auxiliary: { headers: [staircaseTable(), staircaseTable()], footers: [staircaseTable(), staircaseTable()] } } as any;
+    for (const [label, ast] of [['an empty sheet row naming row 4,094', namedRow], ['a sparse sheet in a footer', footerSheet], ['tables of 2,000 rows each spanning 1,000 in headers and footers', staircaseHeaders]] as const) {
+        const sizes: number[] = [];
+        for (const format of ['docx', 'odt'] as const) sizes.push(unzippedSize((await OfficeGenerator.generate(ast, format, { onWarning: () => {} } as any)).value));
+        check(`docx, odt: ${label} is written within the grid budget`, sizes.every(n => n < 20_000_000), sizes.join(' '));
+    }
+    const commentedHeader = { ...astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'body' }] }]), auxiliary: { headers: [{ type: 'paragraph', children: [{ type: 'text', text: 'visible' }, { type: 'comment', text: 'HIDDEN-NOTE', metadata: { sourceSyntax: 'html' } }] }] } } as any;
+    const headerDocx = unzipSync(new Uint8Array((await OfficeGenerator.generate(commentedHeader, 'docx', { onWarning: () => {} } as any)).value as any));
+    const headerXml = Object.entries(headerDocx).filter(([name]) => /header\d*\.xml$/.test(name)).map(([, data]) => strFromU8(data)).join('');
+    check('docx: a source comment in a header is left out, as in the body', headerXml.includes('visible') && !headerXml.includes('HIDDEN-NOTE'), headerXml.slice(0, 300));
 }
 
 async function main() {

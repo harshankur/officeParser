@@ -63,6 +63,8 @@ export enum OfficeErrorType {
     MAX_NESTING_DEPTH_EXCEEDED = 'MAX_NESTING_DEPTH_EXCEEDED',
     /** The separate process reading a PDF with pdf.js ended while in use (it most likely needed more than `pdfParserConfig.processMemoryMb`) */
     PDF_PROCESS_FAILED = 'PDF_PROCESS_FAILED',
+    /** A generator's output grew past what a string or array can hold */
+    OUTPUT_TOO_LARGE = 'OUTPUT_TOO_LARGE',
     /** Embedding call timed out */
     EMBEDDING_TIMEOUT = 'EMBEDDING_TIMEOUT',
     /** OCR workers were terminated (`terminateOcr()`) before an image was recognized; the parse reports it as OCR_FAILED */

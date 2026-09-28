@@ -1,3 +1,4 @@
+import { mapNodeLists } from './nodeListUtils.js';
 import { OfficeContentNode, OfficeContentNodeType, OfficeParserAST } from '../types.js';
 
 /** Every node type the AST defines (a record, so a type added to the union must be added here). */
@@ -109,6 +110,6 @@ function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place, done: Map
 export function withKnownNodeTypes<T extends OfficeParserAST>(ast: T): T {
     // A node the AST shares (one note every reference to it holds) is read once, not once per path to
     // it: notes referring to each other twice each took time doubling per level.
-    const content = replaceUnknownNodes(ast.content, 'block', new Map());
-    return content === ast.content ? ast : { ...ast, content };
+    const seen = new Map();
+    return mapNodeLists(ast, nodes => replaceUnknownNodes(nodes, 'block', seen));
 }

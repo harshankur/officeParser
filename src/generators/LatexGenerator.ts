@@ -1403,7 +1403,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const name = (node.metadata as any)?.sheetName;
         const title = name ? (this.ctx.sections ? `\\${this.sectionCommand(1)}{${escapeLatex(String(name), ' ')}}` : `\\textbf{${escapeLatex(String(name), ' ')}}`) : '';
         const children = node.children || [];
-        const table = await this.table(node, fillSheetRowGaps(children.filter(c => c.type === 'row')));
+        const table = await this.table(node, fillSheetRowGaps(children.filter(c => c.type === 'row'), n => this.takeGridPositions(n)));
         // A sheet's drawings and charts follow its rows as non-row children; render them after the grid.
         const extras = await this.renderFlow(children.filter(c => c.type !== 'row'));
         return [this.anchorsFor(node, true) + title, table, extras].filter(Boolean).join(BLOCK_SEPARATOR);
@@ -1853,7 +1853,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private async sheetInFrame(node: OfficeContentNode): Promise<string> {
         const name = (node.metadata as any)?.sheetName;
         const children = node.children || [];
-        const table = await this.table(node, fillSheetRowGaps(children.filter(c => c.type === 'row')));
+        const table = await this.table(node, fillSheetRowGaps(children.filter(c => c.type === 'row'), n => this.takeGridPositions(n)));
         const extras = await this.renderFlow(children.filter(c => c.type !== 'row'));
         return [name ? `\\textbf{${escapeLatex(String(name), ' ')}}` : '', table, extras].filter(Boolean).join(BLOCK_SEPARATOR);
     }

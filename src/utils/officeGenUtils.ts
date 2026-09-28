@@ -73,7 +73,7 @@ const MAX_SHEET_GRID_ROWS = 4096;
  *
  * Rows whose cells carry no `row` index (an ordinary document table) are returned untouched.
  */
-export function fillSheetRowGaps(rows: OfficeContentNode[]): OfficeContentNode[] {
+export function fillSheetRowGaps(rows: OfficeContentNode[], take: (positions: number) => boolean = () => true): OfficeContentNode[] {
     const cellsOf = (row: OfficeContentNode) => (row.children || []).filter(c => c.type === 'cell');
     const rowIndex = (row: OfficeContentNode): number | null => {
         const own = (row.metadata as any)?.row;
@@ -98,7 +98,9 @@ export function fillSheetRowGaps(rows: OfficeContentNode[]): OfficeContentNode[]
     let expected = 0;
     for (const row of rows) {
         const idx = rowIndex(row);
-        if (idx !== null && idx > expected && idx - expected + out.length <= MAX_SHEET_GRID_ROWS) {
+        // Each filled row is as wide as the grid, so the rows are taken from the document's grid budget
+        // (`take`): an empty row naming row 4,094 in a sheet 1,000 columns wide made 270 MB of DOCX.
+        if (idx !== null && idx > expected && idx - expected + out.length <= MAX_SHEET_GRID_ROWS && take((idx - expected) * (maxCol + 1))) {
             for (let r = expected; r < idx; r++) {
                 out.push({ type: 'row', children: [{ type: 'cell', metadata: { row: r, col: maxCol } as any, children: [] }] });
             }

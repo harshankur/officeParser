@@ -1,3 +1,4 @@
+import { mapNodeLists } from './nodeListUtils.js';
 import { OfficeContentNode, OfficeParserAST } from '../types.js';
 import { layoutTableRows } from './tableLayout.js';
 
@@ -31,8 +32,11 @@ const span = (value: unknown): number =>
 function boundGrid(node: OfficeContentNode, budget: { left: number }): OfficeContentNode {
     const cells: Cell[] = [];
     let rowIndex = 0;
+    // The furthest row a row names itself (a sparse sheet's row with no cells), which a writer fills up to.
+    let namedRow = -1;
     for (const row of node.children ?? []) {
         if (row.type !== 'row') continue;
+        namedRow = Math.max(namedRow, coordinate((row.metadata as { row?: unknown } | undefined)?.row) ?? -1);
         let col = 0;
         for (const cell of row.children ?? []) {
             if (cell.type !== 'cell') continue;
@@ -47,7 +51,7 @@ function boundGrid(node: OfficeContentNode, budget: { left: number }): OfficeCon
     }
     if (!cells.length) return node;
 
-    let maxRow = rowIndex - 1;
+    let maxRow = Math.max(rowIndex - 1, namedRow);
     let maxCol = 0;
     for (const cell of cells) {
         maxRow = Math.max(maxRow, cell.r + cell.rowSpan - 1);
@@ -106,13 +110,17 @@ function rewrite(node: OfficeContentNode, rewritten: Map<OfficeContentNode, Reco
     return {
         ...node,
         children: (node.children ?? []).map(row => {
-            if (row.type !== 'row' || !row.children?.some(cell => rewritten.has(cell))) return row;
+            if (row.type !== 'row') return row;
+            const rowMeta = row.metadata as { row?: unknown } | undefined;
+            if (!row.children?.some(cell => rewritten.has(cell))) {
+                // A row without cells has no place in the new layout: it keeps none of its own.
+                return rowMeta && rowMeta.row !== undefined ? { ...row, metadata: { ...rowMeta, row: undefined } as any } : row;
+            }
             const children = row.children.map(cell => {
                 const meta = rewritten.get(cell);
                 return meta ? { ...cell, metadata: { ...(cell.metadata as object), ...meta } } as OfficeContentNode : cell;
             });
             const first = children.find(cell => rewritten.has(cell));
-            const rowMeta = row.metadata as { row?: unknown } | undefined;
             return {
                 ...row,
                 ...(rowMeta && typeof rowMeta.row === 'number' && { metadata: { ...rowMeta, row: (first?.metadata as { row?: number } | undefined)?.row ?? rowMeta.row } as any }),
@@ -155,6 +163,8 @@ function boundGrids(nodes: OfficeContentNode[], budget: { left: number }, done: 
  * the input is never mutated.
  */
 export function withBoundedSheetGrids<T extends OfficeParserAST>(ast: T): T {
-    const content = boundGrids(ast.content, { left: MAX_SHEET_GRID_GAPS }, new Map());
-    return content === ast.content ? ast : { ...ast, content };
+    // One budget for the document's content and its headers, footers, slide masters and outline.
+    const budget = { left: MAX_SHEET_GRID_GAPS };
+    const done = new Map<OfficeContentNode, OfficeContentNode>();
+    return mapNodeLists(ast, nodes => boundGrids(nodes, budget, done));
 }

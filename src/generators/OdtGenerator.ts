@@ -642,7 +642,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         const name = (node.metadata as any)?.sheetName;
         const heading = name ? `<text:h text:outline-level="2" text:style-name="Heading_20_2">${encodeOdfText(name)}</text:h>` : '';
         const children = node.children || [];
-        const table = await this.table({ type: 'table', children: fillSheetRowGaps(children.filter(c => c.type === 'row')) } as OfficeContentNode);
+        const table = await this.table({ type: 'table', children: fillSheetRowGaps(children.filter(c => c.type === 'row'), n => this.takeGridPositions(n)) } as OfficeContentNode);
         // A sheet's drawing images and charts are pushed as non-row children after the rows; render
         // them after the grid (the HTML generator does the same) rather than dropping them.
         const extras = await this.renderBlocks(children.filter(c => c.type !== 'row'));

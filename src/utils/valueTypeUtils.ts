@@ -1,3 +1,4 @@
+import { mapNodeLists } from './nodeListUtils.js';
 import { OfficeContentNode, OfficeParserAST } from '../types.js';
 
 /**
@@ -148,9 +149,10 @@ function normalizeNodes(nodes: OfficeContentNode[], done: Map<OfficeContentNode,
  * mutated.
  */
 export function withWellTypedValues<T extends OfficeParserAST>(ast: T): T {
-    const content = Array.isArray(ast.content) ? normalizeNodes(ast.content, new Map()) : [];
+    const seen = new Map();
+    const withNodes = mapNodeLists(ast, nodes => normalizeNodes(nodes, seen));
     const metadata = normalizeDocumentMetadata(ast.metadata);
-    return content === ast.content && metadata === ast.metadata ? ast : { ...ast, content, metadata };
+    return metadata === ast.metadata ? withNodes : { ...withNodes, metadata };
 }
 
 /** The document's own text fields (written into `<title>`, `<meta>`, core properties) as strings, and its custom properties as plain values or lists of them. */

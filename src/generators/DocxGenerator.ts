@@ -635,7 +635,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const name = (node.metadata as any)?.sheetName;
         const heading = name ? `<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t xml:space="preserve">${xmlText(name)}</w:t></w:r></w:p>` : '';
         const children = node.children || [];
-        const table = await this.table({ type: 'table', children: fillSheetRowGaps(children.filter(c => c.type === 'row')) } as OfficeContentNode);
+        const table = await this.table({ type: 'table', children: fillSheetRowGaps(children.filter(c => c.type === 'row'), n => this.takeGridPositions(n)) } as OfficeContentNode);
         // A sheet's drawing images and charts are pushed as non-row children after the rows; render
         // them after the grid (the HTML generator does the same) rather than dropping them.
         const extras = await this.renderBlocks(children.filter(c => c.type !== 'row'));

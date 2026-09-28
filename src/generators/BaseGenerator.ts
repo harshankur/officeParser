@@ -31,6 +31,13 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
      * the grid budget had already laid out as tightly as it could. Past the budget a row keeps the cells
      * it has; Markdown, CSV and LaTeX read a short row as ending in empty cells.
      */
+    /** Whether `positions` more grid positions (rows a sparse sheet fills back in) fit the same budget, all or none. */
+    protected takeGridPositions(positions: number): boolean {
+        if (!(positions >= 0) || positions > this.paddingCellsLeft) return false;
+        this.paddingCellsLeft -= positions;
+        return true;
+    }
+
     protected padWithinBudget(missing: number): number {
         if (!(missing > 0)) return 0;
         const allowed = Math.min(missing, this.paddingCellsLeft);

@@ -1,3 +1,4 @@
+import { mapNodeLists } from './nodeListUtils.js';
 import { CommentMetadata, OfficeContentNode, OfficeParserAST } from '../types.js';
 
 /**
@@ -46,6 +47,6 @@ function pruneSourceComments(nodes: OfficeContentNode[], done: Map<OfficeContent
  * `content`. The input is never mutated.
  */
 export function withoutSourceComments<T extends OfficeParserAST>(ast: T): T {
-    const content = pruneSourceComments(ast.content, new Map());
-    return content === ast.content ? ast : { ...ast, content };
+    const seen = new Map();
+    return mapNodeLists(ast, nodes => pruneSourceComments(nodes, seen));
 }
