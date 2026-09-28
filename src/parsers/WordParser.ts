@@ -1075,6 +1075,9 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         metadata: { math: isBlock ? 'block' : 'inline' } as CodeMetadata
                     });
                 }
+            } else if (isElement(node) && (node.nodeName === 'w:moveFrom' || node.nodeName === 'w:del')) {
+                // Content a tracked change removed, or moved to where a `w:moveTo` holds it: not the
+                // document's text (read, moved text came out twice). Insertions are read as text.
             } else if (node.childNodes.length > 0) {
                 // Generic fallback for unknown elements that might contain content
                 for (const child of Array.from(node.childNodes)) processChildNode(child);

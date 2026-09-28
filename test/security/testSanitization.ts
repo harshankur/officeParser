@@ -3298,6 +3298,10 @@ async function parserHardeningTests() {
     check('rtf: headers and footers are read into the auxiliary, not the body', !rtfParts.error && ['HEADERTEXT', 'LEFTHEADER', 'FIRSTFOOTER'].every(m => rtfAux.includes(m) && !rtfBody.includes(m)), `${rtfParts.error} ${rtfAux}`);
     check('rtf: an annotation is a comment with its author, and shape text is read', /"type":"comment"[^]*COMMENTTEXT/.test(rtfBody) && rtfBody.includes('"author":"ANN"') && rtfBody.includes('SHAPETEXT') && !rtfBody.includes('shapeType'), rtfBody.slice(0, 400));
     check('rtf: a Unicode character\'s fallback is skipped', rtfBody.includes('A€B') && rtfBody.includes('Пр') && !rtfBody.includes('П?'), rtfBody.slice(-300));
+    // DOCX tracked changes read as the document now stands: insertions in, deletions and moved-away text out.
+    const tracked = await parseQuiet(docxOf('<w:p><w:r><w:t xml:space="preserve">keep </w:t></w:r><w:moveFrom w:id="1" w:author="a"><w:r><w:t>MOVED</w:t></w:r></w:moveFrom><w:del w:id="2" w:author="a"><w:r><w:delText>DELETED</w:delText></w:r></w:del><w:ins w:id="3" w:author="a"><w:r><w:t>INSERTED</w:t></w:r></w:ins></w:p><w:p><w:moveTo w:id="4" w:author="a"><w:r><w:t>MOVED</w:t></w:r></w:moveTo></w:p>'), 'docx');
+    const trackedTexts = (tracked.ast?.content ?? []).map((n: any) => n.text);
+    check('docx: tracked moves read once, where the text now stands', !tracked.error && JSON.stringify(trackedTexts) === JSON.stringify(['keep INSERTED', 'MOVED']), `${tracked.error} ${JSON.stringify(trackedTexts)}`);
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';
