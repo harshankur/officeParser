@@ -44,7 +44,7 @@
                 <td><code>auxiliary</code></td>
                 <td><code>OfficeAuxiliaryContent</code> | <code>undefined</code></td>
                 <td>Out-of-band layout / template elements that are <em>not</em> part of the main content flow.
-                    Contains <code>headers</code>, <code>footers</code> (from DOCX, or LaTeX <code>fancyhdr</code>), <code>slideMasters</code> (from PPTX),
+                    Contains <code>headers</code>, <code>footers</code> (from DOCX, ODT master pages, RTF, a PDF's running bands, or LaTeX <code>fancyhdr</code>), <code>slideMasters</code> (from PPTX),
                     and <code>outline</code> (a PDF bookmark/TOC tree).
                     Only populated when the respective <code>ignoreHeadersAndFooters</code> / <code>ignoreSlideMasters</code> flags are <code>false</code>.
                 </td>
@@ -192,8 +192,8 @@
     <p>These nodes are <em>not</em> part of the main <code>content</code> tree. They live under
         <code>ast.auxiliary</code>:</p>
     <ul>
-        <li><strong><code>header</code></strong>: A running page header: DOCX headers, ODT master-page headers, a
-            PDF's top-band running header, or LaTeX <code>fancyhdr</code> fields. Carries
+        <li><strong><code>header</code></strong>: A running page header: DOCX headers, ODT master-page headers, RTF
+            <code>\header</code> groups, a PDF's top-band running header, or LaTeX <code>fancyhdr</code> fields. Carries
             <code>HeaderFooterMetadata.type</code> (<code>'default'</code>, <code>'first'</code>, <code>'even'</code>).
             Found in <code>ast.auxiliary.headers[]</code>.</li>
         <li><strong><code>footer</code></strong>: A running page footer, from the same sources. Same metadata. Found in

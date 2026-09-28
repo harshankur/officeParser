@@ -61,7 +61,7 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Comment Filtering</strong>: When <code>true</code>, inline comments and annotations are
-                    excluded from parsing. Affects DOCX, XLSX, PPTX, ODF (ODT/ODS/ODP) and LaTeX (a
+                    excluded from parsing. Affects DOCX, XLSX, PPTX, ODF (ODT/ODS/ODP), RTF (<code>\annotation</code>) and LaTeX (a
                     <code>% Comment (Author, date): text</code> line, the shape the LaTeX generator writes; other
                     <code>%</code> comments are always discarded). By default comments are attached to their
                     target node via <code>node.comments[]</code>. Source-level comments (CSV <code>#</code> rows, Markdown/HTML
@@ -72,7 +72,7 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Layout Element Filtering</strong>: When <code>true</code>, headers and footers are
-                    not parsed. Applies to DOCX, PDF, ODF (ODT master pages only) and LaTeX (<code>fancyhdr</code>). When <code>false</code> (default), they are extracted into
+                    not parsed. Applies to DOCX, PDF, ODF (ODT master pages only), RTF (<code>\header</code>, <code>\footer</code> and their left, right and first-page forms) and LaTeX (<code>fancyhdr</code>). When <code>false</code> (default), they are extracted into
                     <code>ast.auxiliary.headers</code> and <code>ast.auxiliary.footers</code>.</td>
             </tr>
             <tr>

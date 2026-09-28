@@ -346,8 +346,9 @@ export interface CommonOfficeParserConfig {
     ignoreNotes?: boolean;
     /**
      * Flag to ignore comments from parsing. Default is false (comments are extracted onto `node.comments`).
-     * Applies to: DOCX, XLSX, PPTX, every ODF type (ODT/ODS/ODP/ODG) and LaTeX (`% Comment (Author,
-     * date): text` lines). Not applicable to PDF, RTF or EPUB (no comments are parsed there). Source-level
+     * Applies to: DOCX, XLSX, PPTX, every ODF type (ODT/ODS/ODP/ODG), RTF (`\annotation`) and LaTeX
+     * (`% Comment (Author, date): text` lines). Not applicable to PDF or EPUB (no comments are parsed
+     * there). Source-level
      * comments are not governed by this flag: the CSV `#`-row convention produces top-level `comment`
      * nodes, and Markdown/HTML `<!-- ... -->` (and LaTeX `% <!-- ... -->` lines) produce `comment` nodes
      * with `metadata.sourceSyntax: 'html'` (HTML and EPUB only under `HtmlParserConfig.preserveComments`).
@@ -355,9 +356,10 @@ export interface CommonOfficeParserConfig {
     ignoreComments?: boolean;
     /**
      * Flag to ignore headers and footers from parsing. Default is false (they are extracted into
-     * `ast.auxiliary.headers`/`.footers`). Extracted for DOCX, PDF (the top/bottom running bands) and
-     * ODT (Writer master pages). It is a no-op for ODS/ODP/ODG, XLSX, PPTX and RTF, where running
-     * headers/footers are not extracted at all.
+     * `ast.auxiliary.headers`/`.footers`). Extracted for DOCX, PDF (the top/bottom running bands), ODT
+     * (Writer master pages), RTF (`\header`, `\footer` and their left, right and first-page forms) and
+     * LaTeX (`fancyhdr`). It is a no-op for ODS/ODP/ODG, XLSX and PPTX, where running headers/footers
+     * are not extracted at all.
      */
     ignoreHeadersAndFooters?: boolean;
     /**
