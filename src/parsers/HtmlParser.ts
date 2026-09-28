@@ -49,6 +49,9 @@ const IMPLIED_END: Record<string, ImpliedEnd> = (() => {
     rules.li = { closes: new Set(['li', 'p']), stop: new Set([...pScope, 'ul', 'ol', 'menu']) };
     rules.dt = rules.dd = { closes: new Set(['dt', 'dd', 'p']), stop: new Set([...pScope, 'dl']) };
     rules.option = { closes: new Set(['option']), stop: new Set(['select', 'datalist', 'optgroup']) };
+    // A link cannot hold a link: a browser ends an open one where another starts (so no text is given
+    // its links' metadata again at every level of nesting).
+    rules.a = { closes: new Set(['a']), stop: pScope };
     rules.optgroup = { closes: new Set(['option', 'optgroup']), stop: new Set(['select']) };
     // A row goes directly under its table or table section, a cell under its row, a section under its table.
     rules.tr = { under: new Set(['table', 'thead', 'tbody', 'tfoot']) };
@@ -208,6 +211,43 @@ const trimBlockEdges = (nodes: OfficeContentNode[]): OfficeContentNode[] => {
     return out.filter((node, i) => !trimmed.has(i) || node.text || node.notes?.length || node.comments?.length);
 };
 
+/** trimBlockEdges on `nodes` itself: its edges are all it touches, where a copy of the list costs its whole length. */
+const trimBlockEdgesInPlace = (nodes: OfficeContentNode[]): void => {
+    for (const [start, step, edge] of [[0, 1, /^ /], [-1, -1, / $/]] as const) {
+        for (let i = start < 0 ? nodes.length - 1 : start; i >= 0 && i < nodes.length; i += step) {
+            const node = nodes[i];
+            if (isAnchorMark(node)) continue;
+            if (node.type !== 'text') break;
+            if (!node.text) continue;
+            if (edge.test(node.text)) {
+                const trimmed = { ...node, text: node.text.replace(edge, '') };
+                if (trimmed.text || trimmed.notes?.length || trimmed.comments?.length) nodes[i] = trimmed;
+                else nodes.splice(i, 1);
+            }
+            break;
+        }
+    }
+};
+
+/**
+ * `nodes` with a named anchor for `ids` before them: `ids` joins a mark already first (an element
+ * inside marked it) rather than the whole list being copied behind a new one at every level.
+ */
+const markedBefore = (ids: string[], nodes: OfficeContentNode[]): OfficeContentNode[] => {
+    if (ids.length === 0) return nodes;
+    const first = nodes[0];
+    if (first && isAnchorMark(first)) {
+        const meta = first.metadata as { anchorIds?: string[] };
+        meta.anchorIds = [...ids, ...(meta.anchorIds ?? [])];
+        return nodes;
+    }
+    nodes.unshift(anchorMark(ids));
+    return nodes;
+};
+
+/** Holds a list item's place at the start of its nested lists until the item itself is built. */
+const selfNodePlaceholder: OfficeContentNode = { type: 'text', text: '' };
+
 const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
 
 /**
@@ -348,18 +388,64 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
     // tag closing nothing, a declaration) stands between them, as a browser shows it: a node each, `a`
     // and a comment repeated 7 million times (62 KB of EPUB) made 14 million nodes, which the element
     // budget, counting markup, did not bound.
-    // How many elements of each name are open (between `current` and the root): an end tag closing none
-    // is passed over at once, where each one walked up to the root, 256 levels (16 million of them, 63 KB
-    // of EPUB, took 17 seconds). Every move of `current` goes through `closeTo` or `open`, so each element
-    // is counted once, open and closed.
-    const openCount = new Map<string, number>();
+    // The open elements of each name (the ancestors of `current`, and it), outermost first. An end tag
+    // or an implied end finds the element it closes from these, where each walked up the open elements
+    // (up to 256): 16 million end tags closing nothing (63 KB of EPUB) took 17 seconds, and 2 million
+    // paragraphs under 250 divs, 55. Every move of `current` goes through `closeTo` or `open`, so each
+    // element is pushed and popped once.
+    const openByName = new Map<string, HtmlNode[]>();
     const closeTo = (ancestor: HtmlNode): void => {
-        for (let n: HtmlNode | undefined = current; n && n !== ancestor; n = n.parent) openCount.set(n.tagName!, (openCount.get(n.tagName!) ?? 1) - 1);
+        for (let n: HtmlNode | undefined = current; n && n !== ancestor; n = n.parent) openByName.get(n.tagName!)?.pop();
         current = ancestor;
     };
     const open = (node: HtmlNode): void => {
-        openCount.set(node.tagName!, (openCount.get(node.tagName!) ?? 0) + 1);
+        let stack = openByName.get(node.tagName!);
+        if (!stack) openByName.set(node.tagName!, stack = []);
+        stack.push(node);
         current = node;
+    };
+    /** The innermost open element named in `names`, if any. */
+    const innermostOf = (names: ReadonlySet<string>): HtmlNode | undefined => {
+        let found: HtmlNode | undefined;
+        for (const name of names) {
+            const stack = openByName.get(name);
+            const top = stack?.[stack.length - 1];
+            if (top && (!found || top.depth! > found.depth!)) found = top;
+        }
+        return found;
+    };
+    /** The outermost open element named in `names` that is deeper than `depth`, if any. */
+    const outermostBelow = (names: ReadonlySet<string>, depth: number): HtmlNode | undefined => {
+        let found: HtmlNode | undefined;
+        for (const name of names) {
+            const stack = openByName.get(name);
+            if (!stack?.length) continue;
+            // Depths grow along the stack: the first deeper than `depth`, by bisection.
+            let low = 0, high = stack.length;
+            while (low < high) { const mid = (low + high) >> 1; if (stack[mid].depth! > depth) high = mid; else low = mid + 1; }
+            const candidate = stack[low];
+            if (candidate && (!found || candidate.depth! < found.depth!)) found = candidate;
+        }
+        return found;
+    };
+    // A quote-aware scan that finds no '>' outside quotes runs to the end of the document. The quote
+    // state each failed scan was in (none, `"` or `'`), carried forward a character at a time, tells a
+    // later scan starting in the same state, at the same place, that it would fail too: two states never
+    // become one at a character, so at most three scans run to the end. Scanned again from each tag, a
+    // document of `<br ">"` (each '>' between quotes) took two minutes for 2 KB of EPUB.
+    let failingFrom = 0;
+    const failingStates: string[] = [];
+    const scanFailsFrom = (at: number): boolean => {
+        if (failingStates.length === 0) return false;
+        for (; failingFrom < at; failingFrom++) {
+            const ch = html[failingFrom];
+            for (let k = 0; k < failingStates.length; k++) {
+                const state = failingStates[k];
+                if (state) { if (ch === state) failingStates[k] = ''; }
+                else if (ch === '"' || ch === '\'') failingStates[k] = ch;
+            }
+        }
+        return failingStates.includes('');
     };
     const pushText = (text: string): void => {
         const last = current.children[current.children.length - 1];
@@ -401,16 +487,22 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
         // is linear in the tag's length and the cursor never rewinds, so the parse stays O(n) overall
         // (no substring().match allocation per '<').
         let tagEndIdx = -1;
-        let attrQuote = '';
-        for (let i = tagStart + 1; i < html.length; i++) {
-            const ch = html[i];
-            if (attrQuote) {
-                if (ch === attrQuote) attrQuote = '';
-            } else if (ch === '"' || ch === '\'') {
-                attrQuote = ch;
-            } else if (ch === '>') {
-                tagEndIdx = i;
-                break;
+        if (!scanFailsFrom(tagStart + 1)) {
+            let attrQuote = '';
+            for (let i = tagStart + 1; i < html.length; i++) {
+                const ch = html[i];
+                if (attrQuote) {
+                    if (ch === attrQuote) attrQuote = '';
+                } else if (ch === '"' || ch === '\'') {
+                    attrQuote = ch;
+                } else if (ch === '>') {
+                    tagEndIdx = i;
+                    break;
+                }
+            }
+            if (tagEndIdx === -1) {
+                if (failingStates.length === 0) failingFrom = tagStart + 1;
+                failingStates.push('');
             }
         }
         if (tagEndIdx === -1) {
@@ -445,28 +537,19 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
         }
 
         if (isClosing) {
-            if (!openCount.get(tagName)) continue;
-            let p: HtmlNode | undefined = current;
-            while (p && p.tagName !== tagName) {
-                p = p.parent;
-            }
-            if (p && p.parent) {
-                closeTo(p.parent);
-            }
+            const stack = openByName.get(tagName);
+            const p = stack?.[stack.length - 1];
+            if (p?.parent) closeTo(p.parent);
         } else {
             // An omitted end tag, as a browser reads it: this tag closes the element it implies ends.
             const implied = IMPLIED_END[tagName];
             if (implied && 'under' in implied) {
-                for (let p: HtmlNode | undefined = current; p && p !== root; p = p.parent) {
-                    if (implied.under.has(p.tagName!)) { closeTo(p); break; }
-                }
+                const under = innermostOf(implied.under);
+                if (under) closeTo(under);
             } else if (implied) {
                 // The outermost element it closes before a `stop`: a new item closes the item before it
                 // and the paragraph open inside that item (`<dt><p>a<dd>`), not only the paragraph.
-                let closed: HtmlNode | undefined;
-                for (let p: HtmlNode | undefined = current; p && p !== root && !implied.stop.has(p.tagName!); p = p.parent) {
-                    if (implied.closes.has(p.tagName!)) closed = p;
-                }
+                const closed = outermostBelow(implied.closes, innermostOf(implied.stop)?.depth ?? 0);
                 if (closed) closeTo(closed.parent!);
             }
             const node: HtmlNode = {
@@ -804,8 +887,46 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
             const anchorIds = node.attributes?.id ? [node.attributes.id] : [];
 
+            // An element's content: its text, and what each child element gives (a node, or a list it
+            // passes up, which is already collapsed as its own content). The spaces between pieces are
+            // collapsed where two pieces meet, and a block's edges trimmed in place: collapsed and trimmed
+            // again at every level, and copied up into each, a list under 250 wrappers was read 250
+            // times (2 million paragraphs, 6.7 KB of EPUB, took 55 seconds). The first list a child
+            // passes up is taken over rather than copied; later ones are appended in bulk.
             const parseChildren = (n: HtmlNode, fmt: TextFormatting, lCtx?: any): OfficeContentNode[] => {
-                const kids: OfficeContentNode[] = [];
+                let kids: OfficeContentNode[] = [];
+                const collapse = !config.preserveXmlWhitespace;
+                // The last node kept that takes room (a named anchor does not), for collapsing spaces.
+                let previous: OfficeContentNode | undefined;
+                // Adds one node, its leading space dropped when the node before ends in one (as
+                // collapseSpacesAcrossNodes does); false when it is dropped.
+                const add = (node: OfficeContentNode): boolean => {
+                    let current = node;
+                    if (collapse && current.type === 'text' && current.text?.startsWith(' ') && previous?.type === 'text' && previous.text?.endsWith(' ')) {
+                        current = { ...current, text: current.text.slice(1) };
+                        if (!current.text && !current.notes?.length && !current.comments?.length) return false;
+                    }
+                    kids.push(current);
+                    if (!isAnchorMark(current)) previous = current;
+                    return current === node;
+                };
+                const addList = (nodes: OfficeContentNode[]): void => {
+                    // The nodes taken as they are: all of them into an empty list, else those after the
+                    // first kept unchanged (only the ones before it can meet the space before them).
+                    let bulkFrom = 0;
+                    if (kids.length === 0) {
+                        kids = nodes;
+                    } else {
+                        while (bulkFrom < nodes.length) {
+                            const node = nodes[bulkFrom++];
+                            if (add(node) && !isAnchorMark(node)) break;
+                        }
+                        for (let from = bulkFrom; from < nodes.length; from += 32768) {
+                            Array.prototype.push.apply(kids, nodes.slice(from, from + 32768));
+                        }
+                    }
+                    for (let j = nodes.length - 1; j >= bulkFrom; j--) if (!isAnchorMark(nodes[j])) { previous = nodes[j]; break; }
+                };
                 for (let i = 0; i < n.children.length; i++) {
                     const child = n.children[i];
                     if (child.type === 'text' && !config.preserveXmlWhitespace) {
@@ -813,7 +934,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         if (text === null) continue;
                         const textNode: OfficeContentNode = { type: 'text', text, formatting: Object.keys(fmt).length > 0 ? { ...fmt } : undefined };
                         if (config.includeRawContent && child.text) textNode.rawContent = child.text;
-                        kids.push(textNode);
+                        add(textNode);
                         continue;
                     }
                     // Footnote/endnote reference: attach as .notes on the preceding node
@@ -840,20 +961,19 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                             if (!target.notes) target.notes = [];
                             target.notes.push(noteNode);
                         } else {
-                            kids.push({ type: 'text', text: '', notes: [noteNode] });
+                            add({ type: 'text', text: '', notes: [noteNode] });
                         }
                         continue;
                     }
 
                     const parsed = parseNode(child, fmt, lCtx, depth + 1);
                     if (parsed) {
-                        if (Array.isArray(parsed)) appendAll(kids, parsed);
-                        else kids.push(parsed);
+                        if (Array.isArray(parsed)) addList(parsed);
+                        else add(parsed);
                     }
                 }
-                if (config.preserveXmlWhitespace) return kids;
-                const collapsed = collapseSpacesAcrossNodes(kids);
-                return INLINE_ELEMENTS.has(n.tagName ?? '') ? collapsed : trimBlockEdges(collapsed);
+                if (collapse && !INLINE_ELEMENTS.has(n.tagName ?? '')) trimBlockEdgesInPlace(kids);
+                return kids;
             };
 
             // Source-comment element (HtmlGenerator's `sourceAttributes` shape, emitted for editors whose DOM
@@ -1065,11 +1185,12 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     return { type: 'paragraph', metadata: { style: 'Quote', ...(anchorIds.length > 0 && { anchorIds }) } as any, children: kids };
                 }
                 kids.forEach(k => {
-                    if (isBlock(k.type)) k.metadata = { ...(k.metadata as any), style: 'Quote' };
+                    // A block quoted already (a quote in a quote) is not given the style again.
+                    if (isBlock(k.type) && (k.metadata as any)?.style !== 'Quote') k.metadata = { ...(k.metadata as any), style: 'Quote' };
                 });
                 // The quote's id is the first of what it holds, where HtmlGenerator writes a quoted
                 // paragraph's id (on its <blockquote>).
-                return anchorIds.length > 0 ? [anchorMark(anchorIds), ...kids] : kids;
+                return markedBefore(anchorIds, kids);
             }
 
             // Mermaid diagrams. Attribute-driven producers render a
@@ -1152,7 +1273,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // A div of blocks is read through; its id marks its first block (HtmlGenerator puts a
                 // picture's there, and a page's section or sheet is linked to by it).
                 if (tagName === 'div' && hasBlockElements) {
-                    return anchorIds.length > 0 ? [anchorMark(anchorIds), ...children] : children;
+                    return markedBefore(anchorIds, children);
                 }
 
                 // Flatten nested paragraphs to avoid deep AST nesting (e.g. from notes)
@@ -1214,8 +1335,10 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const title = node.attributes?.title;
                 const children = parseChildren(node, newFormatting, listContext);
                 if (title) {
+                    // The innermost abbreviation's title is the one a reader sees on its text: an outer
+                    // one gives it only to text without one (and allocates nothing for the rest).
                     children.forEach(c => {
-                        if (c.type === 'text') {
+                        if (c.type === 'text' && !(c.metadata as TextMetadata | undefined)?.abbreviationTitle) {
                             c.metadata = { ...c.metadata, abbreviationTitle: title } as TextMetadata;
                         }
                     });
@@ -1277,8 +1400,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 }
 
                 const children = parseChildren(node, newFormatting, listContext);
-                const nestedLists = children.filter(c => c.type === 'list');
-                const selfChildren = children.filter(c => c.type !== 'list');
+                const nestedLists: OfficeContentNode[] = [selfNodePlaceholder];
+                const selfChildren: OfficeContentNode[] = [];
+                for (const c of children) (c.type === 'list' ? nestedLists : selfChildren).push(c);
 
                 let isTask: boolean | undefined;
                 let checked: boolean | undefined;
@@ -1304,7 +1428,10 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     children: selfChildren
                 };
 
-                return [selfNode, ...nestedLists];
+                // The item, then the lists nested in it, in the one list built for them (a copy of the nested
+                // lists at every level of nesting cost their whole length again).
+                nestedLists[0] = selfNode;
+                return nestedLists;
             }
             if (tagName === 'table') {
                 // Attribute-driven editors render data-align on the <table> itself.
@@ -1478,7 +1605,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // bookmark: its id goes to the node it stands at (see resolveAnchorMarks).
                 const anchorName = node.attributes?.id || node.attributes?.name;
                 if (!href && wikilinkPage === undefined && node.attributes?.['data-wikilink'] === undefined && anchorName) {
-                    return [anchorMark([anchorName]), ...children];
+                    return markedBefore([anchorName], children);
                 }
                 if (wikilinkPage !== undefined) {
                     children.forEach(c => {

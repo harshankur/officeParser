@@ -3377,6 +3377,25 @@ async function parserHardeningTests() {
     check('template: a 100-character value at 200,000 placeholders is refused', repeatError?.officeIssue?.code === 'OUTPUT_TOO_LARGE' && Date.now() - repeatStarted < 5000, `${Date.now() - repeatStarted}ms ${repeatError}`);
     const fewRepeats = await OfficeTemplate.render(docxOf(`<w:p><w:r><w:t>${'{{a}} '.repeat(10)}</w:t></w:r></w:p>`), { data: { a: 'x'.repeat(1000) } });
     check('template: a long value at ten placeholders renders', fewRepeats instanceof Uint8Array && fewRepeats.length > 0, String(fewRepeats));
+    // HTML: a tag whose '>' stands between quotes is scanned for to the end at most three times.
+    await timed('html: 120,000 tags each closed only inside quotes parse', () => parseQuiet(Buffer.from('<p>' + '<br ">"'.repeat(120000)), 'html'));
+    await timed('html: 120,000 end tags each closed only inside quotes parse', () => parseQuiet(Buffer.from('<p>' + '</b ">"'.repeat(120000)), 'html'));
+    // HTML: content under many wrappers is read once, not again at every level.
+    for (const [label, html] of [
+        ['paragraphs under 250 divs', '<div>'.repeat(250) + '<p>x</p>'.repeat(300000)],
+        ['paragraphs under 250 divs each holding a paragraph', '<div><p>a</p>'.repeat(250) + '<p>x</p>'.repeat(300000)],
+        ['items under 250 lists', '<ul>'.repeat(250) + '<li>x</li>'.repeat(300000)],
+        ['paragraphs under 250 quotes', '<blockquote>'.repeat(250) + '<p>x</p>'.repeat(300000)],
+        ['text under 250 links', '<p>' + '<a href="#a">'.repeat(250) + 'x <br>'.repeat(300000)],
+    ] as const) await timed(`html: ${label} parse`, () => parseQuiet(Buffer.from(html), 'html'));
+    const nestedMarks = await parseQuiet(Buffer.from('<div id="outer"><div id="inner"><p>x</p><p>y</p></div></div><p><abbr title="outer"><abbr title="inner">z</abbr></abbr></p>'), 'html');
+    const firstIds = (nestedMarks.ast?.content[0]?.metadata as any)?.anchorIds;
+    check('html: nested wrappers\' ids mark their first block, outermost first', JSON.stringify(firstIds) === JSON.stringify(['outer', 'inner']), JSON.stringify(firstIds));
+    const abbrText = JSON.stringify(nestedMarks.ast?.content ?? []);
+    check('html: nested abbreviations give their text the innermost title', abbrText.includes('"abbreviationTitle":"inner"') && !abbrText.includes('"abbreviationTitle":"outer"'), abbrText.slice(-300));
+    const htmlNestedLinks = await parseQuiet(Buffer.from('<p><a href="https://one.example/">one <a href="https://two.example/">two</a></a></p>'), 'html');
+    const linkJson = JSON.stringify(htmlNestedLinks.ast?.content ?? []);
+    check('html: a link started inside a link ends the first, as a browser reads it', /"text":"one ".*"link":"https:\/\/one\.example\/"/.test(linkJson) && /"text":"two".*"link":"https:\/\/two\.example\/"/.test(linkJson), linkJson);
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';
