@@ -3200,6 +3200,21 @@ async function parserHardeningTests() {
     ), 'docx', { extractAttachments: true });
     const boxedCount = JSON.stringify(boxedPicture.ast?.content ?? []).split('"attachmentName":"boxed.png"').length - 1;
     check('docx: a picture in a text box is shown once', !boxedPicture.error && boxedCount === 1, `${boxedPicture.error} ${boxedCount}`);
+    // ODF: fields, list headers, grouped rows and cell text around spans are read; deleted text is not.
+    const odtWrapped = await parseQuiet(odfOf('text',
+        '<text:list><text:list-header><text:p>LISTHEADER</text:p></text:list-header><text:list-item><text:p>item</text:p></text:list-item></text:list>'
+        + '<table:table><table:table-row-group><table:table-row><table:table-cell><text:p>ROWGROUP</text:p></table:table-cell></table:table-row></table:table-row-group><table:table-rows><table:table-row><table:table-cell><text:p>TABLEROWS</text:p></table:table-cell></table:table-row></table:table-rows></table:table>'
+        + '<text:p>Figure <text:sequence text:name="Figure">SEQUENCE</text:sequence>, <text:date>DATEFIELD</text:date>, <text:bookmark-ref text:ref-name="b">CROSSREF</text:bookmark-ref>, <text:meta>METATEXT</text:meta>, <text:ruby><text:ruby-base>RUBYBASE</text:ruby-base><text:ruby-text>RUBYTEXT</text:ruby-text></text:ruby></text:p>'
+        + '<text:tracked-changes><text:changed-region text:id="c1"><text:deletion><text:p>DELETEDTEXT</text:p></text:deletion></text:changed-region></text:tracked-changes>'), 'odt');
+    const odtJson = JSON.stringify(odtWrapped.ast?.content ?? []);
+    const odtMissing = ['LISTHEADER', 'ROWGROUP', 'TABLEROWS', 'SEQUENCE', 'DATEFIELD', 'CROSSREF', 'METATEXT', 'RUBYBASE', 'RUBYTEXT'].filter(marker => !odtJson.includes(marker));
+    check('odt: fields, list headers and grouped rows are read, deleted text is not', !odtWrapped.error && odtMissing.length === 0 && !odtJson.includes('DELETEDTEXT'), `${odtWrapped.error} missing ${odtMissing}`);
+    const odsSpans = await parseQuiet(odfOf('spreadsheet', '<table:table table:name="S"><table:table-row><table:table-cell><text:p>Total: <text:span>FIVE</text:span> units</text:p></table:table-cell></table:table-row><table:table-row-group><table:table-row><table:table-cell><text:p>GROUPED</text:p></table:table-cell></table:table-row></table:table-row-group></table:table>'), 'ods');
+    const odsCells = cellsOf(odsSpans.ast).map((c: any) => c.text);
+    check('ods: a cell keeps the text around its spans', !odsSpans.error && odsCells.includes('Total: FIVE units') && odsCells.includes('GROUPED'), `${odsSpans.error} ${JSON.stringify(odsCells)}`);
+    const alternateShape = await parseQuiet(pptxOf({ 'ppt/slides/slide1.xml': `<?xml version="1.0"?><p:sld ${pns} xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:cSld><p:spTree><mc:AlternateContent><mc:Choice Requires="a14"><p:sp><p:txBody><a:p><a:r><a:t>ALTSHAPE</a:t></a:r></a:p></p:txBody></p:sp></mc:Choice><mc:Fallback><p:sp><p:txBody><a:p><a:r><a:t>ALTSHAPE</a:t></a:r></a:p></p:txBody></p:sp></mc:Fallback></mc:AlternateContent></p:spTree></p:cSld></p:sld>` }), 'pptx');
+    const alternateCount = (JSON.stringify(alternateShape.ast?.content ?? []).match(/"text":"ALTSHAPE"/g) ?? []).length;
+    check('pptx: a shape in alternate content is read once', !alternateShape.error && alternateCount === 2, `${alternateShape.error} ${alternateCount}`);
 }
 
 async function main() {

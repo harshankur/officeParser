@@ -30,7 +30,7 @@ import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { getChildElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
+import { getChildElements, getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
@@ -716,8 +716,12 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
      */
     function traverseSpTree(treeNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode[] {
         const nodes: OfficeContentNode[] = [];
-        // Process children in XML order (this preserves Z-order)
-        for (const child of Array.from(treeNode?.childNodes || [])) {
+        // Process children in XML order (this preserves Z-order), a branch of mc:AlternateContent in its place
+        const pending: Node[] = [];
+        const pushChildren = (children: ArrayLike<Node>) => { for (let i = children.length - 1; i >= 0; i--) pending.push(children[i]); };
+        pushChildren(treeNode?.childNodes || []);
+        while (pending.length) {
+            const child = pending.pop()!;
             if (!isElement(child)) {
                 continue;
             }
@@ -747,6 +751,12 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             else if (tag === "p:grpSp") {
                 // Recurse into the group element itself which holds the child shapes
                 appendAll(nodes, traverseSpTree(element, slideNumber, xmlContentString));
+            }
+            // Case 5: Shapes written for newer readers (an equation, an SVG picture) beside a fallback
+            // for older ones: the first branch, read in place (the whole element was dropped).
+            else if (tag === "mc:AlternateContent") {
+                const branch = getDirectChildren(element, "mc:Choice")[0] ?? getDirectChildren(element, "mc:Fallback")[0];
+                if (branch) pushChildren(branch.childNodes);
             }
         }
         return nodes;

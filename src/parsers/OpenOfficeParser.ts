@@ -196,6 +196,12 @@ type ParseParaFn = (
 const NESTED_NOTES = new Set(['text:note', 'office:annotation']);
 const ownParagraphs = (container: Element): Element[] => getOutermostElements(container, 'text:p', NESTED_NOTES);
 /**
+ * Text elements in a paragraph that show nothing where they stand: a note (read by its own branch, or
+ * ignored), hidden text, a script, the list number the writers number lists with themselves, and blocks
+ * that a paragraph cannot hold.
+ */
+const INLINE_NOT_SHOWN: ReadonlySet<string> = new Set(['text:note', 'text:hidden-text', 'text:hidden-paragraph', 'text:script', 'text:number', 'text:p', 'text:h', 'text:list', 'text:section', 'text:tracked-changes']);
+/**
  * A frame's own text box, image, table, object, title or description (children of it, as the schema
  * has them): looked up through the frame's whole subtree, frames nested in text boxes took time in
  * the product of their depth and content (4.5 KB of ODT took 30 seconds), and a nested frame's image
@@ -562,6 +568,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      * @param paragraphStyleMap - Map of style names to alignments and props (needed for notes)
      * @param parentFormatting - Formatting inherited from parent (e.g. span inside span)
      * @param linkMetadata - Metadata inherited from parent link
+     * @param withFrames - Whether frames (pictures, formulas, text boxes) are read: a spreadsheet cell reads its frames itself
      * @returns Object containing text and children
      */
     const parseInlineContent = (
@@ -572,7 +579,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         paragraphStyleMap: Record<string, ParagraphStyleInfo>,
         parentFormatting: TextFormatting = {},
         linkMetadata?: { link?: string; linkType?: 'internal' | 'external' },
-        sourceXml: string = ''
+        sourceXml: string = '',
+        withFrames = true
     ): { text: string; children: OfficeContentNode[]; anchorIds: string[] } => {
         const children: OfficeContentNode[] = [];
         const anchorIds: string[] = [];
@@ -648,7 +656,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     const styleName = element.getAttribute("text:style-name");
                     const formatting = styleName ? mergeFormatting(parentFormatting, styleMap[styleName]) : parentFormatting;
 
-                    const spanContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, formatting, linkMetadata, sourceXml);
+                    const spanContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, formatting, linkMetadata, sourceXml, withFrames);
                     fullText += spanContent.text;
                     appendAll(children, spanContent.children);
                     appendAll(anchorIds, spanContent.anchorIds);
@@ -676,7 +684,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         newLinkMetadata = { link: href, linkType: linkType as 'internal' | 'external' };
                     }
 
-                    const linkContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, newLinkMetadata, sourceXml);
+                    const linkContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, newLinkMetadata, sourceXml, withFrames);
                     fullText += linkContent.text;
                     appendAll(children, linkContent.children);
                     appendAll(anchorIds, linkContent.anchorIds);
@@ -743,7 +751,37 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         emptyTextNode.comments = [commentNode];
                         children.push(emptyTextNode);
                     }
-                } else if (tagName === 'draw:frame') {
+                } else if (tagName === 'text:ruby') {
+                    // Ruby: the base text, then its annotation (a reading) in parentheses, as plain text
+                    // writes ruby.
+                    const base = getDirectChildren(element, 'text:ruby-base')[0];
+                    const annotation = getDirectChildren(element, 'text:ruby-text')[0];
+                    for (const part of [base, annotation]) {
+                        if (!part) continue;
+                        const partContent = parseInlineContent(part, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, withFrames);
+                        if (part === annotation) {
+                            if (!partContent.text) continue;
+                            fullText += '(';
+                            children.push({ type: 'text', text: '(', formatting: parentFormatting, metadata: linkMetadata ? { ...linkMetadata } : undefined });
+                        }
+                        fullText += partContent.text;
+                        appendAll(children, partContent.children);
+                        appendAll(anchorIds, partContent.anchorIds);
+                        if (part === annotation) {
+                            fullText += ')';
+                            children.push({ type: 'text', text: ')', formatting: parentFormatting, metadata: linkMetadata ? { ...linkMetadata } : undefined });
+                        }
+                    }
+                } else if (tagName.startsWith('text:') && !INLINE_NOT_SHOWN.has(tagName)) {
+                    // A field (a date, a page or sequence number, a cross-reference, an author's name, a
+                    // placeholder), `text:meta`, and any other text element: the text it shows, where it
+                    // stands. Each was dropped, so "Figure 3" read as "Figure " and a reference to a
+                    // heading as nothing.
+                    const fieldContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, withFrames);
+                    fullText += fieldContent.text;
+                    appendAll(children, fieldContent.children);
+                    appendAll(anchorIds, fieldContent.anchorIds);
+                } else if (tagName === 'draw:frame' && withFrames) {
                     const frame = element;
                     const drawTextBox = frameChild(frame, "draw:text-box");
                     const drawObject = frameChild(frame, "draw:object");
@@ -992,20 +1030,25 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         cellBudget: CellBudget
     ): OfficeContentNode => {
         const rows: OfficeContentNode[] = [];
-        // Rows sit directly under <table:table>, but a repeating header block is wrapped in
-        // <table:table-header-rows> - written by LibreOffice and by this library's own ODT generator.
-        // Reading only the direct <table:table-row> children dropped every header row on the floor, so
-        // walk the direct children in document order and descend into the wrapper, flagging its rows.
-        // (Nested tables are still excluded: only direct children are considered at each level.)
+        // Rows sit directly under <table:table> or in a wrapper: a repeating header block
+        // (<table:table-header-rows>, written by LibreOffice and by this library's own ODT generator),
+        // <table:table-rows>, or a group of rows (<table:table-row-group>, nested to any depth).
+        // Reading only the direct <table:table-row> children dropped every wrapped row, so walk the
+        // children in document order and descend into the wrappers, flagging header rows. (Nested
+        // tables are still excluded: a cell is never descended into.)
         const tableRows: { row: Element; isHeader: boolean }[] = [];
-        for (let i = 0; i < (tableNode.childNodes?.length || 0); i++) {
-            const child = tableNode.childNodes[i];
+        const pendingRows: { node: Node; isHeader: boolean }[] = [];
+        const pushRowChildren = (element: Element, isHeader: boolean) => {
+            for (let i = (element.childNodes?.length || 0) - 1; i >= 0; i--) pendingRows.push({ node: element.childNodes[i], isHeader });
+        };
+        pushRowChildren(tableNode, false);
+        while (pendingRows.length) {
+            const { node: child, isHeader } = pendingRows.pop()!;
             if (!isElement(child)) continue;
             const element = child as Element;
-            if (element.tagName === "table:table-row") tableRows.push({ row: element, isHeader: false });
-            else if (element.tagName === "table:table-header-rows") {
-                for (const headerRow of getDirectChildren(element, "table:table-row")) tableRows.push({ row: headerRow, isHeader: true });
-            }
+            if (element.tagName === "table:table-row") tableRows.push({ row: element, isHeader });
+            else if (element.tagName === "table:table-header-rows") pushRowChildren(element, true);
+            else if (element.tagName === "table:table-rows" || element.tagName === "table:table-row-group") pushRowChildren(element, isHeader);
         }
         let rowIndex = 0;
 
@@ -1361,8 +1404,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 targetArray.push(tableNode);
                 lastWasList = false;
             } else if (node.tagName === "text:list") {
-                // Parse list structure with proper listId tracking
-                const listItems = getDirectChildren(node, "text:list-item");
+                // Parse list structure with proper listId tracking. A list header (`text:list-header`)
+                // is a list entry without a number: its paragraphs are read as paragraphs, in place.
+                const listItems = Array.from(node.childNodes).filter(isElement).filter(e => e.tagName === "text:list-item" || e.tagName === "text:list-header");
 
                 // Determine list type by checking the list style definition
                 let listType: 'ordered' | 'unordered' = 'unordered';
@@ -1453,6 +1497,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 // Process each list item
                 for (let i = 0; i < listItems.length; i++) {
                     const item = listItems[i];
+                    if (item.tagName === "text:list-header") {
+                        for (const child of Array.from(item.childNodes).filter(isElement)) traverse(child, targetArray, forceHeading, sourceXml);
+                        lastWasList = true;
+                        continue;
+                    }
 
                     let hasIndexedThisItem = false;
 
@@ -1638,7 +1687,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     }
                 }
                 for (const child of linked) targetArray.push(child);
-            } else {
+            } else if (node.tagName !== "text:tracked-changes") {
+                // (Tracked changes hold what a deletion removed, which is not the document's text.)
                 if (node.childNodes) {
                     for (let i = 0; i < node.childNodes.length; i++) {
                         const child = node.childNodes[i];
@@ -1696,39 +1746,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             for (let p = 0; p < ps.length; p++) {
                                 const para = ps[p];
 
-                                // Parse text:span elements for formatted text
-                                const spans = getOutermostElements(para, "text:span");
-                                if (spans.length > 0) {
-                                    for (const span of spans) {
-                                        const styleName = span.getAttribute("text:style-name");
-                                        // Through `mergeFormatting` like every other span site, so
-                                        // an explicit `false` is dropped rather than written onto
-                                        // the node - and so the node gets its own object instead of
-                                        // aliasing the shared style-table entry.
-                                        const formatting = mergeFormatting({}, styleName ? styleMap[styleName] : undefined);
-                                        const text = span.textContent || '';
-                                        cellText += text;
-
-                                        const textNode: OfficeContentNode = {
-                                            type: 'text',
-                                            text: text,
-                                            formatting: formatting
-                                        };
-                                        children.push(textNode);
-                                    }
-                                } else {
-                                    // No spans - just direct text content
-                                    const text = para.textContent || '';
-                                    cellText += text;
-                                    if (text.trim()) {
-                                        const textNode: OfficeContentNode = {
-                                            type: 'text',
-                                            text: text,
-                                            formatting: {}
-                                        };
-                                        children.push(textNode);
-                                    }
-                                }
+                                // The paragraph's inline content as any paragraph's: text around a formatted
+                                // span, spaces, tabs, line breaks, links and fields. Taking only the spans'
+                                // text when there were any dropped the rest ("Total: " before a bold "5").
+                                // (Its frames are read with the cell's, below.)
+                                const inline = parseInlineContent(para, styleMap, config, notes, paragraphStyleMap, {}, undefined, xmlString, false);
+                                cellText += inline.text;
+                                const shown = inline.text.trim() !== '';
+                                for (const child of inline.children) if (shown || child.notes || child.comments) children.push(child);
 
                                 if (p < ps.length - 1) cellText += "\n";
                             }

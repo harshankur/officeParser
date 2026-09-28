@@ -458,6 +458,17 @@ function extractMetrics(ast: OfficeParserAST): FeatureMetrics {
     return metrics;
 }
 
+/** Cells whose only content is a picture or chart (the cell a spreadsheet anchors a drawing in). */
+function countDrawingOnlyCells(ast: OfficeParserAST): number {
+    let count = 0;
+    const walk = (nodes: OfficeContentNode[] | undefined) => nodes?.forEach(node => {
+        if (node.type === 'cell' && !(node.text || '').trim() && node.children?.length && node.children.every(c => c.type === 'image' || c.type === 'chart')) count++;
+        walk(node.children);
+    });
+    walk(ast.content);
+    return count;
+}
+
 /**
  * Count link nodes that are tabs or whitespace-only text nodes.
  * These represent Table of Contents entries in ODT that aren't separate links in DOCX.
@@ -1937,6 +1948,15 @@ async function testGroupParity(group: string[], groupName: string): Promise<Feat
                 const odpResult = applyOdpParityAdjustments(actualMetrics, actualAST, baselineMetrics);
                 adjustedMetrics = odpResult.adjusted;
                 adjustmentNotes = odpResult.notes;
+            }
+
+            // ODS anchors a picture or chart in a cell, which holds nothing else; XLSX draws it outside the grid
+            if (ext === 'ods') {
+                const drawingCells = countDrawingOnlyCells(actualAST) - countDrawingOnlyCells(baselineAST);
+                if (drawingCells > 0) {
+                    adjustedMetrics = { ...adjustedMetrics, tables: { ...adjustedMetrics.tables, cells: adjustedMetrics.tables.cells - drawingCells } };
+                    adjustmentNotes['Tables - Cells'] = `Adjusted for ${drawingCells} cells holding only a picture or chart`;
+                }
             }
 
             // ODT/RTF: Check if link count difference is due to tab-character link nodes (TOC entries)

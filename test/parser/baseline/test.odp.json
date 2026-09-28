@@ -11835,7 +11835,15 @@
               "children": [
                 {
                   "type": "text",
-                  "text": "1"
+                  "text": "1",
+                  "formatting": {
+                    "size": "0.16667in",
+                    "color": "#000000",
+                    "font": "Calibri"
+                  },
+                  "metadata": {
+                    "style": "a823"
+                  }
                 }
               ],
               "metadata": {
@@ -12707,7 +12715,15 @@
               "children": [
                 {
                   "type": "text",
-                  "text": "2"
+                  "text": "2",
+                  "formatting": {
+                    "size": "0.16667in",
+                    "color": "#000000",
+                    "font": "Calibri"
+                  },
+                  "metadata": {
+                    "style": "a906"
+                  }
                 }
               ],
               "metadata": {
@@ -14456,7 +14472,15 @@
               "children": [
                 {
                   "type": "text",
-                  "text": "3"
+                  "text": "3",
+                  "formatting": {
+                    "size": "0.16667in",
+                    "color": "#000000",
+                    "font": "Calibri"
+                  },
+                  "metadata": {
+                    "style": "a1134"
+                  }
                 }
               ],
               "metadata": {
@@ -21550,7 +21574,15 @@
               "children": [
                 {
                   "type": "text",
-                  "text": "5"
+                  "text": "5",
+                  "formatting": {
+                    "size": "0.16667in",
+                    "color": "#000000",
+                    "font": "Calibri"
+                  },
+                  "metadata": {
+                    "style": "a1891"
+                  }
                 }
               ],
               "metadata": {
