@@ -116,6 +116,9 @@ export interface RtfControl {
      * - For `\u1234`: param = 1234 (Unicode code point)
      */
     param?: number;
+
+    /** For `\u`, the fallback that follows it in the source (see SimpleRtfParser.skip), kept for raw content. */
+    fallback?: string;
 }
 
 /**
@@ -206,6 +209,16 @@ export class SimpleRtfParser {
     private length: number;
 
     /**
+     * The `\ucN` of each open group (the characters a reader that shows `\uN` skips after it, 1 unless
+     * set), and how many of them are still to skip. Not skipped, every character outside the code page
+     * came out twice: Word writes Cyrillic or Chinese as `\u1055\'3f`, which read as "п?р?и?".
+     */
+    private ucStack: number[] = [1];
+    private skip = 0;
+    /** The `\u` whose fallback is being skipped. */
+    private skippingFor?: RtfControl;
+
+    /**
      * Creates a new RTF parser.
      * @param buffer - The RTF file content as a Buffer
      */
@@ -225,6 +238,12 @@ export class SimpleRtfParser {
             const char = this.buffer[this.index];
             const currentGroup = stack[stack.length - 1];
 
+            // The fallback after a `\uN`, within its group.
+            if (this.skip > 0 && char !== 0x7B && char !== 0x7D) {
+                this.skipFallbackCharacter();
+                continue;
+            }
+
             if (char === 0x7B) { // '{'
                 if (stack.length > MAX_RTF_GROUP_DEPTH) throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, this.config);
                 this.index++;
@@ -232,12 +251,16 @@ export class SimpleRtfParser {
                 const newGroup: RtfGroup = { type: 'group', content: [] };
                 currentGroup.content.push(newGroup);
                 stack.push(newGroup);
+                this.ucStack.push(this.ucStack[this.ucStack.length - 1]);
+                this.skip = 0;
             } else if (char === 0x7D) { // '}'
                 this.index++;
                 this.flushPendingText(currentGroup);
                 if (stack.length > 1) {
                     stack.pop();
+                    this.ucStack.pop();
                 }
+                this.skip = 0;
                 // If stack is 1 (root), we ignore extra closing braces or just stop?
                 // RTF should be balanced, but let's be robust.
             } else if (char === 0x5C) { // '\'
@@ -349,7 +372,10 @@ export class SimpleRtfParser {
             this.codePage = 850;
         }
 
-        group.content.push({ type: 'control', value: name, param });
+        const control: RtfControl = { type: 'control', value: name, param };
+        group.content.push(control);
+        if (name === 'uc' && param !== undefined && param >= 0) this.ucStack[this.ucStack.length - 1] = param;
+        else if (name === 'u' && param !== undefined) { this.skip = this.ucStack[this.ucStack.length - 1]; this.skippingFor = control; }
 
         // If this is the first control word in the group, it might be the destination
         if (group.content.length === 1 && group.type === 'group') {
@@ -358,6 +384,32 @@ export class SimpleRtfParser {
             // If first was *, second is destination
             group.destination = name;
         }
+    }
+
+    /**
+     * Passes over one character of a `\uN`'s fallback: a byte, a `\'hh` escape, or a control word or
+     * symbol (each counts as one, as the specification has it). Line breaks in the source are not
+     * characters.
+     */
+    private skipFallbackCharacter() {
+        const start = this.index;
+        const char = this.buffer[this.index];
+        if (char === 0x0D || char === 0x0A) { this.index++; return; }
+        this.skip--;
+        const isLetter = (c: number | undefined) => c !== undefined && ((c >= 0x61 && c <= 0x7A) || (c >= 0x41 && c <= 0x5A));
+        const next = this.buffer[this.index + 1];
+        if (char !== 0x5C) this.index++;
+        else if (next === 0x27) this.index = Math.min(this.length, this.index + 4);
+        else if (!isLetter(next)) this.index = Math.min(this.length, this.index + 2);
+        else {
+            let at = this.index + 1;
+            while (isLetter(this.buffer[at])) at++;
+            if (this.buffer[at] === 0x2D) at++;
+            while (at < this.length && this.buffer[at] >= 0x30 && this.buffer[at] <= 0x39) at++;
+            if (this.buffer[at] === 0x20) at++;
+            this.index = at;
+        }
+        if (this.skippingFor) this.skippingFor.fallback = (this.skippingFor.fallback ?? '') + this.buffer.toString('latin1', start, this.index);
     }
 
     private parseText(group: RtfGroup) {
@@ -484,6 +536,13 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     const content: OfficeContentNode[] = [];
     const notes: OfficeContentNode[] = [];
+    // Headers and footers (`\header`, `\headerl`, `\footerf`, ...), for the AST's auxiliary: skipped,
+    // their text was lost, and the left, right and first-page ones were read into the body.
+    const headers: OfficeContentNode[] = [];
+    const footers: OfficeContentNode[] = [];
+    // Who wrote the next annotation (`\annotation`), given in the groups before it.
+    let annotationAuthor: string | undefined;
+    let annotationInitials: string | undefined;
     const attachments: OfficeAttachment[] = [];
     const attachmentsByName = attachmentLookup(attachments);
 
@@ -1065,7 +1124,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         }
         // Add space delimiter for safety
         res += ' ';
-        return res;
+        return node.fallback ? res + node.fallback : res;
     };
 
     // Helper to extract text from a group (for bookmark names, etc.)
@@ -1093,7 +1152,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             const ignoreList = [
                 'fonttbl', 'colortbl', 'stylesheet', 'info', 'macpict',
                 'pmmetafile', 'wmetafile', 'dibitmap', 'bitmap', 'object',
-                'nextGenerator', 'header', 'footer', 'nonshppict', 'xml', 'private',
+                'nextGenerator', 'nonshppict', 'xml', 'private',
                 'upnp', 'ud', 'filetbl', 'operator', 'author', 'creatim', 'revtim', 'printim', 'comment',
                 'fldinst', 'listtext', 'pntext' // Ignore list marker text (handled separately)
             ];
@@ -1102,6 +1161,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             let isFootnote = false;
             let isHyperlinkField = false;
             let isPict = false;
+            // Where a header's or footer's paragraphs go, and whether the group is an annotation (a
+            // comment) or a shape whose text box (`\shptxt`) alone is read.
+            let redirect: OfficeContentNode[] | undefined;
+            let isAnnotation = false;
+            let isShapeInstance = false;
 
             // Add group start to raw content
             // Note: We don't add ignored groups to rawContent to keep it clean
@@ -1157,6 +1221,18 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     } else {
                         isIgnored = true;
                     }
+                } else if (/^(?:header|footer)[lrf]?$/.test(node.destination)) {
+                    if (config.ignoreHeadersAndFooters) isIgnored = true;
+                    else redirect = node.destination.startsWith('header') ? headers : footers;
+                } else if (node.destination === 'annotation') {
+                    if (config.ignoreComments) isIgnored = true;
+                    else isAnnotation = true;
+                } else if (node.destination === 'atnauthor' || node.destination === 'atnid') {
+                    if (node.destination === 'atnauthor') annotationAuthor = extractGroupText(node) || undefined;
+                    else annotationInitials = extractGroupText(node) || undefined;
+                    isIgnored = true;
+                } else if (node.destination === 'shpinst') {
+                    isShapeInstance = true;
                 } else if (ignoreList.includes(node.destination)) {
                     isIgnored = true;
                 } else if (node.content.length > 0 && node.content[0].type === 'control' && node.content[0].value === '*') {
@@ -1361,10 +1437,37 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 currentParagraphRawChunks = [];
             }
 
+            // A header, footer or annotation: its paragraphs go to their own list, not the body's.
+            let redirectedComment: OfficeContentNode | undefined;
+            if (redirect || isAnnotation) {
+                flushRun();
+                if (isAnnotation) {
+                    redirectedComment = {
+                        type: 'comment',
+                        children: [],
+                        ...(annotationAuthor || annotationInitials ? { metadata: { ...(annotationAuthor ? { author: annotationAuthor } : {}), ...(annotationInitials ? { initials: annotationInitials } : {}) } } : {}),
+                    };
+                    annotationAuthor = annotationInitials = undefined;
+                    const holder = currentParagraphChildren.length > 0 ? currentParagraphChildren[currentParagraphChildren.length - 1] : undefined;
+                    if (holder) (holder.comments ??= []).push(redirectedComment);
+                    else currentParagraphChildren.push({ type: 'text', text: '', comments: [redirectedComment] });
+                    redirect = redirectedComment.children!;
+                }
+                currentTarget = redirect!;
+                savedParagraphTextChunks = currentParagraphTextChunks;
+                savedParagraphChildren = currentParagraphChildren;
+                savedParagraphRawChunks = currentParagraphRawChunks;
+                currentParagraphTextChunks = [];
+                currentParagraphChildren = [];
+                currentParagraphRawChunks = [];
+            }
+
             // Create a new formatting context for the group
             const groupFormatting = { ...formatting };
 
             for (const child of node.content) {
+                // A shape's properties (`\sp` name and value pairs) are not text; its text box is.
+                if (isShapeInstance && !(child.type === 'group' && child.destination === 'shptxt')) continue;
                 // Skip fldinst groups (we already extracted the URL)
                 if (child.type === 'group' && child.destination === 'fldinst') {
                     // We still want it in rawContent!
@@ -1413,7 +1516,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
             }
 
-            if (isFootnote) {
+            if (isFootnote || redirect) {
                 flushParagraph();
                 currentTarget = previousTarget;
                 
@@ -1422,6 +1525,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 currentParagraphChildren = savedParagraphChildren!;
                 currentParagraphRawChunks = savedParagraphRawChunks!;
             }
+            if (redirectedComment) redirectedComment.text = (redirectedComment.children ?? []).map(n => n.text ?? '').join(' ').trim();
 
             // Clear link URL after processing the field group
             if (isHyperlinkField) {
@@ -1918,7 +2022,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         content,
         attachments, // PNG and JPEG images extracted from \\pict groups
         config,
-        undefined,
+        headers.length > 0 || footers.length > 0 ? { ...(headers.length > 0 ? { headers } : {}), ...(footers.length > 0 ? { footers } : {}) } : undefined,
     );
 
     return result;

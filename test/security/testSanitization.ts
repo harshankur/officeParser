@@ -3290,6 +3290,14 @@ async function parserHardeningTests() {
     // Markdown: a code block's language cannot open a tag.
     const infoString = (await OfficeGenerator.generate(astWith([{ type: 'code', text: 'x', metadata: { language: 'js"><img src=x onerror=alert(1)>' } }]), 'md', { onWarning: () => {} } as any)).value as string;
     check('md: a code block\'s language holds no < or >', !/[<>]/.test(infoString.split('\n').find(line => line.startsWith('```')) ?? ''), infoString);
+    // RTF: headers and footers go to the auxiliary, annotations are comments, shape text is read, and a
+    // Unicode character's fallback is skipped.
+    const rtfParts = await parseQuiet(Buffer.from(String.raw`{\rtf1\ansi {\header HEADERTEXT\par}{\headerl LEFTHEADER\par}{\footerf FIRSTFOOTER\par}Body{\*\atnauthor ANN}\chatn{\*\annotation COMMENTTEXT}\par{\shp{\*\shpinst{\sp{\sn shapeType}{\sv 202}}{\shptxt SHAPETEXT\par}}}\par A\u8364\'80B \u1055\'3f\u1088\'3f\par}`), 'rtf');
+    const rtfBody = JSON.stringify(rtfParts.ast?.content ?? []);
+    const rtfAux = JSON.stringify(rtfParts.ast?.auxiliary ?? {});
+    check('rtf: headers and footers are read into the auxiliary, not the body', !rtfParts.error && ['HEADERTEXT', 'LEFTHEADER', 'FIRSTFOOTER'].every(m => rtfAux.includes(m) && !rtfBody.includes(m)), `${rtfParts.error} ${rtfAux}`);
+    check('rtf: an annotation is a comment with its author, and shape text is read', /"type":"comment"[^]*COMMENTTEXT/.test(rtfBody) && rtfBody.includes('"author":"ANN"') && rtfBody.includes('SHAPETEXT') && !rtfBody.includes('shapeType'), rtfBody.slice(0, 400));
+    check('rtf: a Unicode character\'s fallback is skipped', rtfBody.includes('A€B') && rtfBody.includes('Пр') && !rtfBody.includes('П?'), rtfBody.slice(-300));
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';
