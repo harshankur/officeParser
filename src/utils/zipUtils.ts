@@ -100,15 +100,19 @@ export interface ZipFileContent {
  * 
  * @see https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT ZIP file format specification
  */
+/** The bytes one archive may inflate to: `limits.maxUncompressedBytes` when it is a valid limit, else 512 MB. */
+export const maxUncompressedBytesOf = (limits: DecompressionLimits | undefined): number =>
+    limits?.maxUncompressedBytes !== undefined && Number.isFinite(limits.maxUncompressedBytes) && limits.maxUncompressedBytes >= 0
+        ? limits.maxUncompressedBytes
+        : 512 * 1024 * 1024;
+
 export const extractFiles = (
     zipInput: Buffer,
     filterFn: (fileName: string) => boolean,
     limits: DecompressionLimits,
     config?: OfficeParserConfig
 ): Promise<ZipFileContent[]> => {
-    const maxUncompressedBytes = limits?.maxUncompressedBytes !== undefined && Number.isFinite(limits.maxUncompressedBytes) && limits.maxUncompressedBytes >= 0
-        ? limits.maxUncompressedBytes
-        : 512 * 1024 * 1024;
+    const maxUncompressedBytes = maxUncompressedBytesOf(limits);
 
     const maxZipEntries = limits?.maxZipEntries !== undefined && Number.isFinite(limits.maxZipEntries) && limits.maxZipEntries >= 0
         ? limits.maxZipEntries

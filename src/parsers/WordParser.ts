@@ -61,17 +61,43 @@
  */
 
 import { attachmentLookup } from '../utils/repeatUtils.js';
-import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
-import { checkAbortSignal } from '../utils/errorUtils.js';
-import { createAttachment } from '../utils/imageUtils.js';
+import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
+import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
-import { getChildElements, getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
-import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
+import { getAllElementsByTagName, getChildElements, getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeXmlElements } from '../utils/xmlUtils.js';
+import { extractFiles, findRequiredPart, maxUncompressedBytesOf } from '../utils/zipUtils.js';
 import { lookupTable, plainRecord, setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
+import { UniqueNames } from '../utils/uniqueNames.js';
+import { mhtPartText, MhtPart, readMht } from '../utils/mhtUtils.js';
+import { parseHtml } from './HtmlParser.js';
+import { parseRtf } from './RtfParser.js';
+
+/**
+ * A DOCX read as another DOCX's alternative-format chunk (see readChunk): the bytes it may inflate, what
+ * the enclosing document left of `decompressionLimits.maxUncompressedBytes`, and the bytes it did.
+ */
+interface WordChunk {
+    bytesLeft: number;
+    bytesUsed: number;
+}
+
+/** The parts an alternative-format chunk (`w:altChunk`) is read from: HTML, MHT, RTF, plain text or a DOCX. */
+const altChunkFileRegex = /^word\/.+\.(?:html?|xht(?:ml)?|mht(?:ml)?|rtf|txt|docx)$/i;
+
+/** A relationship's target as a package path, resolved against the folder of the part naming it. */
+const resolvePartPath = (folder: string, target: string): string => {
+    const segments: string[] = [];
+    for (const segment of (target.startsWith('/') ? target.slice(1) : folder + target).split('/')) {
+        if (segment === '..') segments.pop();
+        else if (segment && segment !== '.') segments.push(segment);
+    }
+    return segments.join('/');
+};
 
 /** Where a text box's paragraph is read into: the paragraph drawing the text box (see parseParagraph). */
 interface ParagraphSink {
@@ -101,7 +127,7 @@ const TEXT_BOX: ReadonlySet<string> = new Set(['w:txbxContent', 'txbxContent']);
  * @param config - Parser configuration options
  * @returns A promise resolving to the parsed AST
  */
-export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
+export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, chunk?: WordChunk): Promise<OfficeParserAST> => {
     // Honour cancellation requests immediately, before opening the ZIP archive, loading XML
     // files, or kicking off any OCR work.  DOCX files can be large and the inflate + XML-parse
     // steps are synchronous-heavy, so failing fast here avoids wasted CPU time.
@@ -312,10 +338,14 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             !!x.match(stylesFileRegex) ||
             (!config.ignoreComments && !!x.match(commentsFileRegex)) ||
             (!config.ignoreHeadersAndFooters && (!!x.match(headerFileRegex) || !!x.match(footerFileRegex))) ||
-            (!!config.extractAttachments && !!x.match(mediaFileRegex)),
-        config.decompressionLimits,
+            (!!config.extractAttachments && !!x.match(mediaFileRegex)) ||
+            altChunkFileRegex.test(x),
+        // A DOCX read as a chunk inflates within what the enclosing document left.
+        chunk ? { ...config.decompressionLimits, maxUncompressedBytes: chunk.bytesLeft } : config.decompressionLimits,
         config
     );
+    const inflatedBytes = files.reduce((total, f) => total + f.content.length, 0);
+    if (chunk) chunk.bytesUsed = inflatedBytes;
 
     // A DOCX without its main document part is not a DOCX. Checked with the same regex the
     // parse loop below uses to recognize it, so the two cannot fall out of step.
@@ -373,6 +403,117 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             }
         }
     }
+
+    // Alternative-format chunks (`w:altChunk`): content in another format (HTML, MHT, RTF, plain text or
+    // a DOCX) that Word merges into the document where the chunk stands; html-docx-js writes a document's
+    // whole body that way, and it was dropped. Each chunk's content by its element, read before the body
+    // (whose tables are read synchronously); each part once, at the first chunk naming it.
+    const chunkParts = new Map<string, (typeof files)[number]>();
+    for (const f of files) if (altChunkFileRegex.test(f.path) && !chunkParts.has(f.path)) chunkParts.set(f.path, f);
+    const chunkNodes = new Map<Element, OfficeContentNode[]>();
+    const placedChunks = new Set<Element>();
+    // Once per kind of chunk not read: a document of a million chunks naming nothing is one warning.
+    const unreadChunkKinds = new Set<string>();
+    const chunkNotRead = (kind: string, reason: string): void => {
+        if (unreadChunkKinds.has(kind)) return;
+        unreadChunkKinds.add(kind);
+        logWarning(OfficeWarningType.ALT_CHUNK_NOT_READ, config, reason);
+    };
+    const readChunkParts = new Set<string>();
+    // A chunk's pictures take names none of the document's own media, or other chunks' pictures, take.
+    const attachmentNames = new UniqueNames();
+    for (const media of mediaFiles) attachmentNames.add(media.path.split('/').pop() || '');
+    const claimAttachmentName = (name: string): string => {
+        const dot = name.lastIndexOf('.');
+        const stem = dot > 0 ? name.slice(0, dot) : name;
+        const extension = dot > 0 ? name.slice(dot) : '';
+        return attachmentNames.claim(name, n => `${stem}-${n}${extension}`);
+    };
+    // What a DOCX chunk may inflate: what this document left of the limit, shared by all its chunks.
+    let chunkBytesLeft = (chunk ? chunk.bytesLeft : maxUncompressedBytesOf(config.decompressionLimits)) - inflatedBytes;
+    const adoptChunk = (ast: OfficeParserAST): OfficeContentNode[] => {
+        const renamed = new Map<string, string>();
+        for (const attachment of ast.attachments) {
+            const name = claimAttachmentName(attachment.name);
+            if (name !== attachment.name) renamed.set(attachment.name, name);
+            attachments.push({ ...attachment, name });
+        }
+        renameAttachments(ast.content, renamed);
+        return ast.content;
+    };
+    const readChunk = async (element: Element): Promise<OfficeContentNode[]> => {
+        const rId = element.getAttribute("r:id");
+        const target = rId ? relsMap[rId] : undefined;
+        if (!target) {
+            chunkNotRead('relationship', `its relationship (${rId ?? 'none'}) names no part`);
+            return [];
+        }
+        const path = resolvePartPath('word/', target);
+        if (readChunkParts.has(path)) return [];
+        readChunkParts.add(path);
+        const part = chunkParts.get(path);
+        if (!part) {
+            chunkNotRead('part', `its part (${path}) is missing, or not HTML, MHT, RTF, plain text or DOCX`);
+            return [];
+        }
+        const extension = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+        if (extension === 'docx') {
+            // One level: a DOCX chunk's own DOCX chunks are not read.
+            if (chunk) {
+                chunkNotRead('nested', `it is a DOCX (${path}) inside a DOCX chunk`);
+                return [];
+            }
+            const nested: WordChunk = { bytesLeft: Math.max(0, chunkBytesLeft), bytesUsed: 0 };
+            const ast = await parseWord(part.content, config, nested);
+            chunkBytesLeft -= nested.bytesUsed;
+            return adoptChunk(ast);
+        }
+        if (extension === 'rtf') return adoptChunk(await parseRtf(part.content, config));
+        if (extension === 'txt') {
+            const lines = new TextDecoder('utf-8').decode(part.content).replace(/^\uFEFF/, '').split(/\r\n?|\n/);
+            return lines.filter(line => line.trim()).map(line => ({ type: 'paragraph', text: line, children: [{ type: 'text', text: line }] }));
+        }
+        let html: string;
+        let imageAttachment: ((src: string) => string | undefined) | undefined;
+        if (extension === 'mht' || extension === 'mhtml') {
+            const messageParts = readMht(part.content);
+            const page = messageParts.find(p => p.contentType === 'text/html') ?? messageParts[0];
+            html = page ? mhtPartText(page) : '';
+            // A picture the page shows from the message: found by its Content-Location, else its file
+            // name; an attachment once however many pictures show it.
+            const byLocation = new Map<string, MhtPart>();
+            const byName = new Map<string, MhtPart>();
+            for (const p of messageParts) {
+                if (p === page || !p.location || !p.contentType.startsWith('image/')) continue;
+                if (!byLocation.has(p.location)) byLocation.set(p.location, p);
+                const name = p.location.slice(p.location.lastIndexOf('/') + 1);
+                if (name && !byName.has(name)) byName.set(name, p);
+            }
+            const shown = new Map<MhtPart, string>();
+            imageAttachment = src => {
+                if (!config.extractAttachments) return undefined;
+                const found = byLocation.get(src) ?? byName.get(src.slice(src.lastIndexOf('/') + 1));
+                if (!found) return undefined;
+                let name = shown.get(found);
+                if (name === undefined) {
+                    const attachment = createAttachment(claimAttachmentName(found.location!.slice(found.location!.lastIndexOf('/') + 1) || 'image'), found.body);
+                    attachments.push(attachment);
+                    shown.set(found, name = attachment.name);
+                }
+                return name;
+            };
+        } else {
+            html = new TextDecoder('utf-8').decode(part.content);
+        }
+        // Its elements count against the document's budget, as an EPUB chapter's do (see maxXmlElements).
+        takeXmlElements(html, config);
+        return adoptChunk(await parseHtml(Buffer.from(html, 'utf8'), config, { imageAttachment }));
+    };
+    /** A chunk's content where it stands, read by readChunk before the body. */
+    const placeChunk = (element: Element): OfficeContentNode[] => {
+        placedChunks.add(element);
+        return chunkNodes.get(element) ?? [];
+    };
 
     const numberingFile = files.find(f => f.path.match(numberingFileRegex));
     // Null-prototype: `numId` is the raw document `w:numId/@w:val`, so a plain `{}` here lets a
@@ -1091,6 +1232,11 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                     } else if (isElement(child) && child.nodeName === 'w:tbl') {
                         const nestedTable = parseTable(child, documentContent);
                         cellChildren.push(nestedTable);
+                    } else if (isElement(child) && child.nodeName === 'w:altChunk') {
+                        for (const chunkNode of placeChunk(child)) {
+                            cellChildren.push(chunkNode);
+                            cellText += chunkNode.text ?? '';
+                        }
                     }
                 }
 
@@ -1232,6 +1378,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             for (const child of layoutChildren(hDoc.documentElement)) {
                 if (child.nodeName === 'w:p') headers.push(parseParagraph(child, hXml));
                 else if (child.nodeName === 'w:tbl') headers.push(parseTable(child, hXml));
+                else if (child.nodeName === 'w:altChunk') chunkNotRead('header', 'it stands in a header or footer');
             }
         }
 
@@ -1242,6 +1389,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             for (const child of layoutChildren(fDoc.documentElement)) {
                 if (child.nodeName === 'w:p') footers.push(parseParagraph(child, fXml));
                 else if (child.nodeName === 'w:tbl') footers.push(parseTable(child, fXml));
+                else if (child.nodeName === 'w:altChunk') chunkNotRead('header', 'it stands in a header or footer');
             }
         }
     }
@@ -1256,11 +1404,13 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
         if (file.path.match(commentsFileRegex)) continue;
         if (file.path.match(headerFileRegex)) continue;
         if (file.path.match(footerFileRegex)) continue;
+        if (altChunkFileRegex.test(file.path)) continue;
 
         const documentContent = file.content.toString();
         const doc = parseXmlString(documentContent, { config, locator: config.includeRawContent });
         const body = getFirstElementByTagName(doc, "w:body");
         if (body) {
+            for (const element of getAllElementsByTagName(body, "w:altChunk")) chunkNodes.set(element, await readChunk(element));
             const bodyChildren = layoutChildren(body);
             let pendingAnchorIds: string[] = [];
 
@@ -1278,10 +1428,16 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                         if (bookmarkName && !bookmarkName.startsWith('_GoBack') && !config.ignoreInternalLinks) {
                             pendingAnchorIds.push(bookmarkName);
                         }
+                    } else if (child.nodeName === 'w:altChunk') {
+                        appendAll(content, placeChunk(child));
                     }
                 }
             }
         }
+    }
+    // A chunk standing where no content is read from (a text box's own blocks) would be lost unseen.
+    for (const [element, nodes] of chunkNodes) {
+        if (!placedChunks.has(element) && nodes.length > 0) chunkNotRead('unplaced', 'it stands where the document\'s blocks are not read (a text box)');
     }
 
 

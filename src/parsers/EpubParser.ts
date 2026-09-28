@@ -2,7 +2,7 @@ import { EmbedMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment,
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
-import { createAttachment } from '../utils/imageUtils.js';
+import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
 import { getAttribute, getElementsByTagName, getFirstElementByTagName, parseXmlString, takeXmlElements } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 import { parseHtml } from './HtmlParser.js';
@@ -202,7 +202,7 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
             if (name !== attachment.name) renamed.set(attachment.name, name);
             attachments.push({ ...attachment, name });
         }
-        if (renamed.size) renameImageAttachments(chapterAst.content, renamed);
+        renameAttachments(chapterAst.content, renamed);
         appendAll(content, chapterAst.content);
     }
 
@@ -232,12 +232,3 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
 
     return createAST('epub', metadata, content, attachments, config, undefined);
 };
-
-/** Points each picture in `nodes` (and in their notes and comments) that names a renamed attachment at its new name. */
-function renameImageAttachments(nodes: OfficeContentNode[], renamed: Map<string, string>): void {
-    for (const node of nodes) {
-        const meta = node.type === 'image' ? node.metadata as ImageMetadata | undefined : undefined;
-        if (meta?.attachmentName && renamed.has(meta.attachmentName)) meta.attachmentName = renamed.get(meta.attachmentName)!;
-        for (const list of [node.children, node.notes, node.comments]) if (list?.length) renameImageAttachments(list, renamed);
-    }
-}

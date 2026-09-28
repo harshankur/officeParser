@@ -118,6 +118,8 @@ export enum OfficeWarningType {
     RAW_CONTENT_LIMIT_EXCEEDED = 'RAW_CONTENT_LIMIT_EXCEEDED',
     /** The content a document repeats by reference reached `decompressionLimits.maxRepeatedContent`; later repeats were not made, shortened, or went without the value */
     REPEATED_CONTENT_LIMIT_EXCEEDED = 'REPEATED_CONTENT_LIMIT_EXCEEDED',
+    /** A DOCX alternative-format chunk (`w:altChunk`) could not be read (its part is missing, of a format not read, or a DOCX inside a DOCX chunk); its content is not in the AST */
+    ALT_CHUNK_NOT_READ = 'ALT_CHUNK_NOT_READ',
     /** A metadata override could not be represented in the destination format's vocabulary */
     METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE',
     /** A content feature (e.g. math, an embedded object) has no faithful representation in the destination format and was downgraded or dropped */
@@ -767,6 +769,8 @@ export interface DecompressionLimits {
     /**
      * Maximum allowed total uncompressed size (in bytes) of files extracted from a ZIP archive.
      * Applies to every ZIP-backed input: OOXML (DOCX, XLSX, PPTX), ODF (ODT, ODS, ODP, ODG), EPUB and LaTeX project zips.
+     * A DOCX embedded in a DOCX as an alternative-format chunk (`w:altChunk`) inflates within what the
+     * document around it left.
      * Default is 536870912 (512 MB).
      */
     maxUncompressedBytes?: number;

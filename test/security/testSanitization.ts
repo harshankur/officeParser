@@ -2781,10 +2781,10 @@ async function parserHardeningTests() {
     // chart series in themselves, math in math) are read once per element, not once per level above it,
     // and a numbering definition is shared by the lists naming it rather than copied into each.
     const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"';
-    const docxOf = (body: string, extra: Record<string, string> = {}) => Buffer.from(zipSync({
+    const docxOf = (body: string, extra: Record<string, string | Uint8Array> = {}) => Buffer.from(zipSync({
         '[Content_Types].xml': enc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
         'word/document.xml': enc(`<?xml version="1.0"?><w:document ${W}><w:body>${body}</w:body></w:document>`),
-        ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, enc(v)])),
+        ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, typeof v === 'string' ? enc(v) : v])),
     }));
     const xlsxOf = (extra: Record<string, string>) => Buffer.from(zipSync({
         '[Content_Types].xml': enc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
@@ -3247,6 +3247,36 @@ async function parserHardeningTests() {
     const inlineRuns = await parseQuiet(xlsxOf({ 'xl/worksheets/sheet1.xml': '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><r><t>ONE </t></r><r><t>TWO</t></r><rPh sb="0" eb="1"><t>READING</t></rPh></is></c><c r="B1" t="b"><v>1</v></c><c r="C1" t="b"><v>0</v></c></row></sheetData></worksheet>' }), 'xlsx');
     const inlineCells = cellsOf(inlineRuns.ast).map((c: any) => c.text);
     check('xlsx: an inline string keeps every run, and booleans read TRUE and FALSE', !inlineRuns.error && JSON.stringify(inlineCells) === JSON.stringify(['ONE TWO', 'TRUE', 'FALSE']), `${inlineRuns.error} ${JSON.stringify(inlineCells)}`);
+    // DOCX alternative-format chunks: read once each, within the document's budgets.
+    const chunkRel = (id: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="${target}"/>`;
+    const chunkRels = (rels: string) => `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`;
+    const mhtOf = (parts: string[]) => `MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary="B"\r\n\r\n${parts.map(p => `--B\r\n${p}\r\n`).join('')}--B--\r\n`;
+    const altChunked = await parseQuiet(docxOf('<w:altChunk r:id="c1"/><w:altChunk r:id="c2"/><w:altChunk r:id="c3"/><w:tbl><w:tr><w:tc><w:altChunk r:id="c4"/></w:tc></w:tr></w:tbl>', {
+        'word/_rels/document.xml.rels': chunkRels(chunkRel('c1', 'afchunk.mht') + chunkRel('c2', 'chunk.htm') + chunkRel('c3', 'chunk.rtf') + chunkRel('c4', 'cell.txt')),
+        'word/afchunk.mht': mhtOf(['Content-Type: text/html; charset="utf-8"\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n<p>MHT=20CHUNK caf=C3=A9 <a href=3D"javascript:alert(1)">x</a></p>']),
+        'word/chunk.htm': '<p>HTML CHUNK<script>alert(2)</script></p>',
+        'word/chunk.rtf': '{\\rtf1\\ansi RTF CHUNK\\par}',
+        'word/cell.txt': 'CELL CHUNK',
+    }), 'docx');
+    const chunkJson = JSON.stringify(altChunked.ast?.content ?? []);
+    const chunkMissing = ['MHT CHUNK café', 'HTML CHUNK', 'RTF CHUNK', 'CELL CHUNK'].filter(marker => !chunkJson.includes(marker));
+    check('docx: alternative-format chunks (MHT, HTML, RTF, text) are read where they stand', !altChunked.error && chunkMissing.length === 0, `${altChunked.error} missing ${chunkMissing}`);
+    const chunkHtml = altChunked.ast ? (await OfficeGenerator.generate(altChunked.ast, 'html', { onWarning: () => {} } as any)).value as string : '';
+    const chunkBody = chunkHtml.match(/<body[\s\S]*<\/body>/)?.[0] ?? '';
+    check('docx: a chunk\'s scripts and script links do not reach HTML output', !!chunkBody && !/javascript:|<script|alert\(/i.test(chunkBody), chunkBody.slice(0, 300));
+    const sameChunk = await parseQuiet(docxOf('<w:altChunk r:id="c1"/>'.repeat(100000), { 'word/_rels/document.xml.rels': chunkRels(chunkRel('c1', 'chunk.htm')), 'word/chunk.htm': `<p>${'x'.repeat(100000)}</p>` }), 'docx');
+    await timed('docx: one chunk part named 100,000 times is read', async () => sameChunk);
+    check('docx: one chunk part named 100,000 times is read once', !sameChunk.error && JSON.stringify(sameChunk.ast?.content ?? []).length < 300000, sameChunk.error);
+    const missingChunks = await warned(docxOf('<w:altChunk r:id="none"/>'.repeat(50000)), 'docx');
+    check('docx: 50,000 chunks naming nothing warn once', !missingChunks.error && missingChunks.codes.filter((c: string) => c === 'ALT_CHUNK_NOT_READ').length === 1, `${missingChunks.error} ${missingChunks.codes.length}`);
+    await timed('docx: an MHT chunk of 100,000 parts and 1 MB of = is read', () => parseQuiet(docxOf('<w:altChunk r:id="c1"/>', {
+        'word/_rels/document.xml.rels': chunkRels(chunkRel('c1', 'afchunk.mht')),
+        'word/afchunk.mht': mhtOf(['Content-Type: text/html\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n<p>' + '='.repeat(1_000_000) + '</p>', ...Array.from({ length: 100000 }, (_, i) => `Content-Type: image/png\r\nContent-Location: ${i}.png\r\nContent-Transfer-Encoding: base64\r\n\r\nAAAA`)]),
+    }), 'docx', { extractAttachments: true }));
+    // A DOCX chunk inflates within what the document around it left of maxUncompressedBytes.
+    const innerDocx = Buffer.from(zipSync({ '[Content_Types].xml': enc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'), 'word/document.xml': enc(`<?xml version="1.0"?><w:document ${W}><w:body><w:p><w:r><w:t>${'x'.repeat(3_000_000)}</w:t></w:r></w:p></w:body></w:document>`) }));
+    const nestedBomb = await parseQuiet(docxOf('<w:altChunk r:id="c1"/>', { 'word/_rels/document.xml.rels': chunkRels(chunkRel('c1', 'inner.docx')), 'word/inner.docx': new Uint8Array(innerDocx) }), 'docx', { decompressionLimits: { maxUncompressedBytes: 2_000_000 } });
+    check('docx: a DOCX chunk inflating past what the document left is refused', /size|limit/i.test(nestedBomb.error), nestedBomb.error || 'parsed');
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';

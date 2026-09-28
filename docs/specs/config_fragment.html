@@ -291,7 +291,7 @@
                 <td><code>decompressionLimits.maxUncompressedBytes</code></td>
                 <td><code>number</code></td>
                 <td><code>536870912</code> (512MB)</td>
-                <td><strong>Decompression Limit</strong>: Maximum allowable uncompressed size in bytes for the ZIP archive contents. Any value <code>&gt;= 0</code> is taken literally, so <code>0</code> rejects all content; there is no unlimited/disable sentinel. Only a negative or non-finite value falls back to the 512MB default.</td>
+                <td><strong>Decompression Limit</strong>: Maximum allowable uncompressed size in bytes for the ZIP archive contents. Any value <code>&gt;= 0</code> is taken literally, so <code>0</code> rejects all content; there is no unlimited/disable sentinel. Only a negative or non-finite value falls back to the 512MB default. A DOCX embedded in a DOCX as an alternative-format chunk (<code>w:altChunk</code>) inflates within what the document around it left.</td>
             </tr>
             <tr>
                 <td><code>decompressionLimits.maxZipEntries</code></td>
