@@ -126,4 +126,7 @@ export interface PdfLayoutConfig {
     extractTextColor: boolean;
     /** When false, geometry is not written onto emitted nodes. */
     includeBounds: boolean;
+    /** Run pdf.js's worker in a separate process (Node), under `processMemoryMb` of heap. */
+    separateProcess: boolean;
+    processMemoryMb: number;
 }

@@ -2967,6 +2967,57 @@ async function parserHardeningTests() {
         const texText = await outputOf(repeatedTex.ast, 'text');
         check(`latex: ${label} repeats within maxRepeatedContent`, !repeatedTex.error && texText.length < 20_000_000 && Date.now() - started < 5000 && repeatedTex.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${texText.length} ${Date.now() - started}ms ${repeatedTex.codes} ${repeatedTex.error}`);
     }
+
+    // PDF: pdf.js's own work is bounded. It runs in a separate process under a memory limit (a stream
+    // inflating to a string of tens of millions of characters ended the host out of memory), within a
+    // time budget (a form drawing a 1 MB string off the page hundreds of times gave nothing to count),
+    // and annotations a page tree shares are charged per page (58 KB ran the process out of memory).
+    const pdfFrom = (objects: (string | Buffer)[]) => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objects.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o, 'latin1') : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    const { deflateSync } = require('zlib') as typeof import('zlib');
+    const flate = (content: Buffer, dict = '') => { const data = deflateSync(content, { level: 9 }); return Buffer.concat([Buffer.from(`<< /Length ${data.length} /Filter /FlateDecode ${dict} >>\nstream\n`), data, Buffer.from('\nendstream')]); };
+    const pagesSharingAnnots = (pages: number, annots: number) => pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', `<< /Type /Pages /Kids [${Array.from({ length: pages }, (_, i) => `${5 + i} 0 R`).join(' ')}] /Count ${pages} >>`,
+        '<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (https://e.com/) >> >>', `[${'3 0 R '.repeat(annots)}]`,
+        ...Array.from({ length: pages }, () => '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots 4 0 R >>'),
+    ]);
+    let started = Date.now();
+    const sharedAnnots = await warned(pagesSharingAnnots(300, 3000), 'pdf');
+    check('pdf: 300 pages sharing 3,000 annotations stop at maxAnnotations and maxTimeMs', !sharedAnnots.error && Date.now() - started < 15_000 && sharedAnnots.codes.includes('ANNOTATION_EXTRACTION_FAILED'), `${Date.now() - started}ms ${sharedAnnots.codes} ${sharedAnnots.error}`);
+    const roomyAnnots = await warned(pagesSharingAnnots(10, 100), 'pdf', { pdfParserConfig: { maxAnnotations: 100_000 } });
+    check('pdf: maxAnnotations is the base of the limit', !roomyAnnots.codes.includes('ANNOTATION_EXTRACTION_FAILED'), `${roomyAnnots.codes}`);
+    const bigString = (length: number) => Buffer.concat([Buffer.from('BT /F1 10 Tf 0 50 Td ('), Buffer.alloc(length, 'a'), Buffer.from(') Tj ET\n')]);
+    const drawnOften = pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> /XObject << /X 6 0 R >> >> /Contents 4 0 R >>',
+        flate(Buffer.from('q /X Do Q\n'.repeat(300))), '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        flate(bigString(1_000_000), '/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> >>'),
+    ]);
+    started = Date.now();
+    const drawn = await warned(drawnOften, 'pdf');
+    check('pdf: a form drawing a 1 MB string 300 times stops at maxTimeMs', !drawn.error && Date.now() - started < 15_000 && drawn.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${Date.now() - started}ms ${drawn.codes} ${drawn.error}`);
+    started = Date.now();
+    const quickly = await warned(drawnOften, 'pdf', { pdfParserConfig: { maxTimeMs: 200 } });
+    check('pdf: maxTimeMs is the base of the limit', !quickly.error && Date.now() - started < 4000 && quickly.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${Date.now() - started}ms ${quickly.codes}`);
+    started = Date.now();
+    const abortedPdf = await parseQuiet(drawnOften, 'pdf', { abortSignal: AbortSignal.timeout(500), pdfParserConfig: { maxTimeMs: 60_000 } });
+    check('pdf: abortSignal stops pdf.js in the middle of a stream', /abort/i.test(abortedPdf.error) && Date.now() - started < 4000, `${Date.now() - started}ms ${abortedPdf.error}`);
+    const inflating = pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+        flate(bigString(30_000_000)), '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ]);
+    let processError: any;
+    try { await OfficeParser.parseOffice(inflating, { fileType: 'pdf', onWarning: () => {}, pdfParserConfig: { processMemoryMb: 128 } } as any); } catch (e) { processError = e; }
+    check('pdf: a stream pdf.js cannot hold in its memory limit fails the parse, not the process', processError?.officeIssue?.code === 'PDF_PROCESS_FAILED', String(processError));
+    const afterwards = await parseQuiet(fs.readFileSync(path.join(files, 'test.pdf')), 'pdf');
+    check('pdf: the next parse reads normally', !afterwards.error && (afterwards.ast?.content.length ?? 0) > 0, afterwards.error);
 }
 
 async function main() {

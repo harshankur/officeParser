@@ -240,6 +240,30 @@
                 <td>Base of the drawing operators read from one PDF, plus four per byte of the file. Past it the rest of the document is not read.</td>
             </tr>
             <tr>
+                <td><code>--pdfParserConfig.maxAnnotations</code></td>
+                <td>number</td>
+                <td><code>10000</code></td>
+                <td>Base of the annotations read from one PDF, plus one per 32 bytes of the file.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfParserConfig.maxTimeMs</code></td>
+                <td>number</td>
+                <td><code>5000</code></td>
+                <td>Base of the time pdf.js may spend on one PDF, plus 20 ms per KB of the file. Past it the rest of the document is not read.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfParserConfig.separateProcess</code></td>
+                <td>boolean</td>
+                <td><code>true</code></td>
+                <td>Run pdf.js in a separate process under a memory limit, so a PDF that inflates into gigabytes fails the parse instead of the process.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfParserConfig.processMemoryMb</code></td>
+                <td>number</td>
+                <td><code>1024</code></td>
+                <td>Heap, in MB, the separate pdf.js process may use.</td>
+            </tr>
+            <tr>
                 <td><code>--ocrConfig.preserveLayout</code></td>
                 <td>boolean</td>
                 <td><code>true</code></td>

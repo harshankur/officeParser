@@ -251,10 +251,15 @@
                     <code>pageRange</code> (e.g. <code>1-3,7</code>), <code>normalizeText</code>, and
                     <code>extractTextColor</code> (per-run fill color into <code>formatting.color</code>; on by default,
                     set <code>false</code> to skip the per-page operator-list fetch on a throughput-focused text path),
-                    <code>maxTextItems</code> (default <code>20000</code>) and <code>maxOperators</code> (default <code>250000</code>): the bases of the
-                    text items and drawing operators one PDF may produce, each plus an allowance per byte of the file (one item, four operators).
-                    Nested form XObjects can multiply a few KB into millions; past either, the rest of the document is not read and
-                    <code>PDF_CONTENT_LIMIT_EXCEEDED</code> is raised.</td>
+                    <code>maxTextItems</code> (default <code>20000</code>; an item counts once more per 64 characters), <code>maxOperators</code>
+                    (default <code>250000</code>) and <code>maxTimeMs</code> (default <code>5000</code>): the bases of the text items, drawing operators
+                    and pdf.js time one PDF may take, each plus an allowance for the file's size (one item and four operators per byte, 20 ms per KB).
+                    Nested form XObjects can multiply a few KB into millions of items or minutes of work; past any, the rest of the document is not read
+                    and <code>PDF_CONTENT_LIMIT_EXCEEDED</code> is raised. <code>maxAnnotations</code> (default <code>10000</code>, plus one per 32 bytes)
+                    bounds the links and highlights read. <code>separateProcess</code> (default <code>true</code>) runs pdf.js in a separate Node process
+                    under <code>processMemoryMb</code> (default <code>1024</code>), so a PDF that inflates into gigabytes inside pdf.js rejects with
+                    <code>PDF_PROCESS_FAILED</code> instead of ending the host, and <code>abortSignal</code> can stop it mid-stream; where it cannot start,
+                    pdf.js runs in the host with <code>PDF_SEPARATE_PROCESS_UNAVAILABLE</code>.</td>
             </tr>
             <tr>
                 <td><code>fileType</code></td>

@@ -61,6 +61,8 @@ export enum OfficeErrorType {
     REQUIRED_PART_MISSING = 'REQUIRED_PART_MISSING',
     /** Document element/structure nesting exceeded the safe recursion depth */
     MAX_NESTING_DEPTH_EXCEEDED = 'MAX_NESTING_DEPTH_EXCEEDED',
+    /** The separate process reading a PDF with pdf.js ended while in use (it most likely needed more than `pdfParserConfig.processMemoryMb`) */
+    PDF_PROCESS_FAILED = 'PDF_PROCESS_FAILED',
     /** Embedding call timed out */
     EMBEDDING_TIMEOUT = 'EMBEDDING_TIMEOUT',
     /** OCR workers were terminated (`terminateOcr()`) before an image was recognized; the parse reports it as OCR_FAILED */
@@ -134,6 +136,8 @@ export enum OfficeWarningType {
     PDF_OUTLINE_TRUNCATED = 'PDF_OUTLINE_TRUNCATED',
     /** A PDF produced more text items or drawing operators than `pdfParserConfig.maxTextItems` / `maxOperators` allow; the rest of it was not read */
     PDF_CONTENT_LIMIT_EXCEEDED = 'PDF_CONTENT_LIMIT_EXCEEDED',
+    /** pdf.js could not start in a separate process (see `pdfParserConfig.separateProcess`), so it runs in this one */
+    PDF_SEPARATE_PROCESS_UNAVAILABLE = 'PDF_SEPARATE_PROCESS_UNAVAILABLE',
     /** `ocr: true` was set without `extractAttachments: true`; OCR runs over extracted images (in every format), so no OCR was performed */
     OCR_REQUIRES_ATTACHMENTS = 'OCR_REQUIRES_ATTACHMENTS',
     /** A config option was passed that this version does not recognize (e.g. a key renamed in a major release); it had no effect */
@@ -594,7 +598,9 @@ export interface PdfParserConfig {
      */
     extractTextColor?: boolean;
     /**
-     * Base of the text items one PDF may yield; the limit is this plus one per byte of the file. A form
+     * Base of the text items one PDF may yield; the limit is this plus one per byte of the file, and an
+     * item counts once more for each 64 characters it holds (a form drawing one 1 MB string a hundred
+     * times took 13 seconds as a hundred items). A form
      * XObject can draw another many times, and pdf.js reads a form again at each use, so a few KB of
      * nested forms can ask for millions of text items (2.5 KB, seven forms deep, ended the process out
      * of memory). Past the limit, the page keeps the text read so far, the rest of the document is not
@@ -613,6 +619,48 @@ export interface PdfParserConfig {
      * Default is 250000.
      */
     maxOperators?: number;
+    /**
+     * Base of the annotations (links, highlights, notes) one PDF may have read; the limit is this plus
+     * one per 32 bytes of the file. pdf.js builds every annotation a page lists, and pages may all list
+     * one shared array: 58 KB of 300 pages sharing 3,000 annotations ran the process out of memory.
+     * Past the limit the rest of the document's links and highlights are not read (its text is), with
+     * an `ANNOTATION_EXTRACTION_FAILED` warning.
+     *
+     * Default is 10000.
+     */
+    maxAnnotations?: number;
+    /**
+     * Base of the time, in ms, pdf.js may spend reading one PDF; the limit is this plus 20 ms per KB of
+     * the file. pdf.js reads a form XObject again at every use and drops text it places off the page,
+     * so 1.8 KB drawing one 1 MB string off the page a few hundred times kept pdf.js working for minutes
+     * with nothing for the other limits to count. Past the limit, the rest of the document is not read,
+     * with a `PDF_CONTENT_LIMIT_EXCEEDED` warning. pdf.js in a separate process (see `separateProcess`)
+     * is stopped when the time runs out; pdf.js in this process finishes the request it is on.
+     *
+     * Default is 5000.
+     */
+    maxTimeMs?: number;
+    /**
+     * Run pdf.js in a separate process (Node only). pdf.js reads a PDF's content streams itself, and a
+     * 100 KB file can hold a stream that inflates to a string pdf.js turns into gigabytes before any of
+     * it reaches the parser: in this process that ends the host with a fatal out-of-memory error no
+     * caller can catch. In its own process, under `processMemoryMb`, it ends that process instead and
+     * the parse rejects with `PDF_PROCESS_FAILED`. Starting the process costs about a tenth of a second
+     * (it is kept for the next parse). When a process cannot start (a runtime that cannot run its own
+     * executable as Node), pdf.js runs in this one with a `PDF_SEPARATE_PROCESS_UNAVAILABLE` warning; it also
+     * runs here, without one, when this is false or a worker is preloaded as `globalThis.pdfjsWorker`. The browser runs
+     * pdf.js in a Web Worker regardless.
+     *
+     * Default is true.
+     */
+    separateProcess?: boolean;
+    /**
+     * The heap, in MB, the separate pdf.js process may use (see `separateProcess`). Past it the parse
+     * rejects with `PDF_PROCESS_FAILED`; raise it for PDFs that legitimately need more.
+     *
+     * Default is 1024.
+     */
+    processMemoryMb?: number;
 }
 
 /**

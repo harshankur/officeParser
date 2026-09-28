@@ -63,6 +63,10 @@ const DEFAULT_PDF_PARSER_CONFIG: DeepRequired<PdfParserConfig> = {
     extractTextColor: true,
     maxTextItems: 20_000,
     maxOperators: 250_000,
+    maxAnnotations: 10_000,
+    maxTimeMs: 5_000,
+    separateProcess: true,
+    processMemoryMb: 1024,
 };
 
 /**

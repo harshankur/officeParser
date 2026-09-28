@@ -67,7 +67,7 @@ const knownParserBooleans = new Set([
     'htmlParserConfig.preserveAttributes', 'htmlParserConfig.preserveIframes', 'htmlParserConfig.embedFolkForms',
     'htmlParserConfig.preserveComments',
     'pdfParserConfig.useTags', 'pdfParserConfig.detectColumns',
-    'pdfParserConfig.mergeHyphenatedWords', 'pdfParserConfig.normalizeText', 'pdfParserConfig.extractTextColor',
+    'pdfParserConfig.mergeHyphenatedWords', 'pdfParserConfig.normalizeText', 'pdfParserConfig.extractTextColor', 'pdfParserConfig.separateProcess',
     'ocrConfig.preserveLayout',
 ]);
 
@@ -374,6 +374,10 @@ if (fileArg && !showHelp) {
     console.log('  --pdfParserConfig.extractTextColor          Record each PDF run\'s fill colour in formatting.color (default: true; set false to skip)');
     console.log('  --pdfParserConfig.maxTextItems=20000        Base of the text items a PDF may yield, plus one per byte (default: 20000)');
     console.log('  --pdfParserConfig.maxOperators=250000       Base of the drawing operators read, plus four per byte (default: 250000)');
+    console.log('  --pdfParserConfig.maxAnnotations=10000      Base of the annotations read, plus one per 32 bytes (default: 10000)');
+    console.log('  --pdfParserConfig.maxTimeMs=5000            Base of the time pdf.js may spend, plus 20 ms per KB (default: 5000)');
+    console.log('  --pdfParserConfig.separateProcess=false     Run pdf.js in this process, not a separate one (default: true)');
+    console.log('  --pdfParserConfig.processMemoryMb=1024      Heap of the separate pdf.js process (default: 1024)');
     console.log('');
     console.log('High-Value Generator Options:');
     console.log('  --includeFormatting                         Include font formatting like bold/italic (default: true)');
