@@ -634,7 +634,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     const type = typeMatch ? typeMatch[1] : 'n'; // n = number (default)
 
                     const vContent = firstElementContent(cContent, 'v');
-                    const tContent = firstElementContent(cContent, 't');
+                    const isContent = type === 'inlineStr' ? firstElementContent(cContent, 'is') : undefined;
 
                     let text = '';
                     let cellNodes: OfficeContentNode[] = [];
@@ -660,8 +660,17 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                         } else {
                             text = content || '';
                         }
-                    } else if (type === 'inlineStr' && tContent !== undefined) {
-                        text = decodeXmlEntities(tContent.trim());
+                    } else if (isContent !== undefined) {
+                        // Its text and each rich run's, in order (the first alone dropped every later
+                        // run), up to its phonetic readings (`rPh`, which follow the runs).
+                        const phonetic = nextElement(isContent, 'rPh', 0);
+                        const body = phonetic === -1 ? isContent : isContent.slice(0, phonetic);
+                        let joined = '';
+                        for (const t of xmlElements(body, 't')) joined += t.content;
+                        text = decodeXmlEntities(joined.trim());
+                    } else if (type === 'b' && vContent !== undefined) {
+                        // A boolean is stored as 1 or 0 and shown as TRUE or FALSE.
+                        text = vContent.trim() === '1' ? 'TRUE' : vContent.trim() === '0' ? 'FALSE' : vContent.trim();
                     } else if (vContent !== undefined) {
                         text = vContent.trim();
                     }

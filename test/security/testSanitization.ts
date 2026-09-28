@@ -3243,6 +3243,10 @@ async function parserHardeningTests() {
     await timed('docx: text boxes nested 1,000 deep, each of 400 runs, parse', () => parseQuiet(docxOf(`${`<w:p><w:r>${boxRuns}</w:r><w:r><w:pict><w:txbxContent>`.repeat(1000)}${'</w:txbxContent></w:pict></w:r></w:p>'.repeat(1000)}`), 'docx'));
     const boxedNote = await parseQuiet(docxOf('<w:p><w:r><w:t>outer</w:t></w:r><w:r><w:pict><w:txbxContent><w:p><w:bookmarkStart w:id="1" w:name="inbox"/><w:r><w:t>inner</w:t></w:r></w:p></w:txbxContent></w:pict></w:r></w:p>'), 'docx');
     check('docx: a bookmark in a text box reaches the paragraph around it', !boxedNote.error && JSON.stringify(boxedNote.ast?.content[0]?.metadata ?? {}).includes('inbox'), JSON.stringify(boxedNote.ast?.content[0]?.metadata));
+    // XLSX: an inline string keeps every rich run (not its phonetic reading), and a boolean shows as TRUE or FALSE.
+    const inlineRuns = await parseQuiet(xlsxOf({ 'xl/worksheets/sheet1.xml': '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><r><t>ONE </t></r><r><t>TWO</t></r><rPh sb="0" eb="1"><t>READING</t></rPh></is></c><c r="B1" t="b"><v>1</v></c><c r="C1" t="b"><v>0</v></c></row></sheetData></worksheet>' }), 'xlsx');
+    const inlineCells = cellsOf(inlineRuns.ast).map((c: any) => c.text);
+    check('xlsx: an inline string keeps every run, and booleans read TRUE and FALSE', !inlineRuns.error && JSON.stringify(inlineCells) === JSON.stringify(['ONE TWO', 'TRUE', 'FALSE']), `${inlineRuns.error} ${JSON.stringify(inlineCells)}`);
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';
