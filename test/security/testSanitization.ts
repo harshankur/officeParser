@@ -3018,6 +3018,37 @@ async function parserHardeningTests() {
     check('pdf: a stream pdf.js cannot hold in its memory limit fails the parse, not the process', processError?.officeIssue?.code === 'PDF_PROCESS_FAILED', String(processError));
     const afterwards = await parseQuiet(fs.readFileSync(path.join(files, 'test.pdf')), 'pdf');
     check('pdf: the next parse reads normally', !afterwards.error && (afterwards.ast?.content.length ?? 0) > 0, afterwards.error);
+
+    // Destinations are resolved within the time budget: bookmarks each naming a page deep in a long
+    // page tree walked the tree per bookmark outside it (500 KB, two minutes).
+    const pdfObjectStream = (objects: string[]) => {
+        let header = '', body = '', offset = 0;
+        objects.forEach((o, i) => { header += `${i + 1} ${offset} `; body += o + '\n'; offset += Buffer.byteLength(o + '\n', 'latin1'); });
+        const n = objects.length, streamNum = n + 1, xrefNum = n + 2;
+        const packed = deflateSync(Buffer.from(header + body, 'latin1'), { level: 9 });
+        const start = Buffer.from('%PDF-1.7\n', 'latin1');
+        const streamObj = Buffer.concat([Buffer.from(`${streamNum} 0 obj\n<</Type/ObjStm/N ${n}/First ${Buffer.byteLength(header, 'latin1')}/Length ${packed.length}/Filter/FlateDecode>>\nstream\n`, 'latin1'), packed, Buffer.from('\nendstream\nendobj\n')]);
+        const xrefAt = start.length + streamObj.length;
+        const rows = Buffer.alloc((n + 3) * 7);
+        const put = (i: number, t: number, a: number, b: number) => { rows[i * 7] = t; rows.writeUInt32BE(a, i * 7 + 1); rows.writeUInt16BE(b, i * 7 + 5); };
+        put(0, 0, 0, 65535);
+        for (let i = 1; i <= n; i++) put(i, 2, streamNum, i - 1);
+        put(streamNum, 1, start.length, 0); put(xrefNum, 1, xrefAt, 0);
+        const xrefData = deflateSync(rows, { level: 9 });
+        return Buffer.concat([start, streamObj, Buffer.from(`${xrefNum} 0 obj\n<</Type/XRef/Size ${n + 3}/W[1 4 2]/Root 1 0 R/Length ${xrefData.length}/Filter/FlateDecode>>\nstream\n`, 'latin1'), xrefData, Buffer.from(`\nendstream\nendobj\nstartxref\n${xrefAt}\n%%EOF\n`, 'latin1')]);
+    };
+    const depth = 10000, bookmarks = 3000;
+    const chainAt = (k: number) => 6 + k, targetAt = (i: number) => 6 + depth + i, itemAt = (i: number) => 6 + depth + bookmarks + i;
+    const deepOutline = pdfObjectStream([
+        '<</Type/Catalog/Pages 2 0 R/Outlines 5 0 R>>', `<</Type/Pages/Kids[3 0 R ${chainAt(0)} 0 R]/Count 1>>`, '<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>', '<</Dummy 0>>',
+        `<</Type/Outlines/First ${itemAt(0)} 0 R/Last ${itemAt(bookmarks - 1)} 0 R/Count ${bookmarks}>>`,
+        ...Array.from({ length: depth }, (_, k) => `<</Type/Pages/Parent ${k === 0 ? 2 : chainAt(k - 1)} 0 R/Kids[${k === depth - 1 ? Array.from({ length: bookmarks }, (_, i) => `${targetAt(i)} 0 R`).join(' ') : `${chainAt(k + 1)} 0 R`}]/Count 0>>`),
+        ...Array.from({ length: bookmarks }, () => `<</Type/Page/Parent ${chainAt(depth - 1)} 0 R>>`),
+        ...Array.from({ length: bookmarks }, (_, i) => `<</Title(b${i})/Parent 5 0 R${i > 0 ? `/Prev ${itemAt(i - 1)} 0 R` : ''}${i < bookmarks - 1 ? `/Next ${itemAt(i + 1)} 0 R` : ''}/Dest[${targetAt(i)} 0 R/XYZ 0 0 0]>>`),
+    ]);
+    started = Date.now();
+    const outlined = await warned(deepOutline, 'pdf', { pdfParserConfig: { maxTimeMs: 200 } });
+    check('pdf: bookmarks naming pages deep in a long page tree are resolved within maxTimeMs', !outlined.error && Date.now() - started < 12_000 && outlined.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${Date.now() - started}ms ${deepOutline.length} bytes ${outlined.codes} ${outlined.error}`);
 }
 
 async function main() {

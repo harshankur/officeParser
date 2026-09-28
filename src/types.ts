@@ -631,7 +631,8 @@ export interface PdfParserConfig {
     maxAnnotations?: number;
     /**
      * Base of the time, in ms, pdf.js may spend reading one PDF; the limit is this plus 20 ms per KB of
-     * the file. pdf.js reads a form XObject again at every use and drops text it places off the page,
+     * the file. Every request counts: text, operators, annotations, the outline, metadata, form fields,
+     * and each link's and bookmark's destination. pdf.js reads a form XObject again at every use and drops text it places off the page,
      * so 1.8 KB drawing one 1 MB string off the page a few hundred times kept pdf.js working for minutes
      * with nothing for the other limits to count. Past the limit, the rest of the document is not read,
      * with a `PDF_CONTENT_LIMIT_EXCEEDED` warning. pdf.js in a separate process (see `separateProcess`)

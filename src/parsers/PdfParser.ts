@@ -352,7 +352,7 @@ async function resolveAnnotations(
             meta = { link: url, linkType: internal ? 'internal' : 'external' };
         } else if (annot.dest) {
             if (config.ignoreInternalLinks) continue;
-            const target = await resolveDestFull(annot.dest, pdfDocument, destCache);
+            const target = await resolveDestFull(annot.dest, pdfDocument, destCache, work);
             meta = { link: target ? sectionLinks.register(target) : '#internal', linkType: 'internal' };
         }
         if (meta) {
@@ -403,18 +403,20 @@ const MAX_DEST_CACHE = 50000;
  * resolved cheaply. Named destinations are resolved via `getDestination` and cached.
  */
 async function resolveDestFull(
-    dest: string | unknown[], pdfDocument: any, cache: Map<string, SectionTarget | null>,
+    dest: string | unknown[], pdfDocument: any, cache: Map<string, SectionTarget | null>, work: PdfWorkBudget,
 ): Promise<SectionTarget | null> {
+    if (work.spent) return null;
     try {
         let explicit = dest;
         if (typeof dest === 'string') {
             if (cache.has(dest)) return cache.get(dest) ?? null;
             if (cache.size >= MAX_DEST_CACHE) return null;
-            explicit = await pdfDocument.getDestination(dest);
-            if (!explicit) { cache.set(dest, null); return null; }
+            explicit = await work.within(pdfDocument.getDestination(dest) as Promise<unknown[] | null>) as unknown[];
+            if (!explicit) { if (!work.spent) cache.set(dest, null); return null; }
         }
         if (Array.isArray(explicit) && explicit[0]) {
-            const pageIndex = await pdfDocument.getPageIndex(explicit[0]);
+            const pageIndex = await work.pageIndex(pdfDocument, explicit[0]);
+            if (pageIndex === undefined) return null;
             const target: SectionTarget = { pageIndex, pdfY: destTopY(explicit) };
             if (typeof dest === 'string') cache.set(dest, target);
             return target;
@@ -534,10 +536,10 @@ const MAX_OUTLINE_ITEMS = 10000;
  * destinations. A truncated outline is reported as a warning; the rest of the document is unaffected.
  */
 async function buildOutline(
-    pdfDocument: any, destCache: Map<string, SectionTarget | null>, sectionLinks: SectionLinks, config: FullOfficeParserConfig,
+    pdfDocument: any, destCache: Map<string, SectionTarget | null>, sectionLinks: SectionLinks, config: FullOfficeParserConfig, work: PdfWorkBudget,
 ): Promise<OfficeContentNode[] | undefined> {
-    let outline: any[] | null;
-    try { outline = await pdfDocument.getOutline(); } catch { return undefined; }
+    let outline: any[] | null | undefined;
+    try { outline = await work.within(pdfDocument.getOutline() as Promise<any[] | null>); } catch { return undefined; }
     if (!Array.isArray(outline) || !outline.length) return undefined;
 
     const roots: OfficeContentNode[] = [];
@@ -557,7 +559,7 @@ async function buildOutline(
         let linkType: 'internal' | 'external' | undefined;
         if (item?.url) { link = item.url; linkType = 'external'; }
         else if (item?.dest != null) {
-            const target = await resolveDestFull(item.dest, pdfDocument, destCache);
+            const target = await resolveDestFull(item.dest, pdfDocument, destCache, work);
             link = target ? sectionLinks.register(target) : '#internal';
             linkType = 'internal';
         }
@@ -773,6 +775,21 @@ class PdfWorkBudget {
             if (this.timeLeft <= 0) this.spend();
         }
     }
+    /**
+     * The index of the page `ref` names, through the time budget and asked of pdf.js once per page: it
+     * walks the page tree to the root for each, so links and bookmarks each naming a page deep in a
+     * long tree took minutes outside the budget (630 KB, 89 seconds). A page it could not find is
+     * remembered too. Undefined once the budget is spent.
+     */
+    async pageIndex(pdfDocument: any, ref: unknown): Promise<number | undefined> {
+        const key = ref && typeof ref === 'object' && 'num' in ref ? `${(ref as any).num} ${(ref as any).gen}` : undefined;
+        if (key !== undefined && this.pageIndexes.has(key)) return this.pageIndexes.get(key) ?? undefined;
+        let index: number | undefined;
+        try { index = await this.within(pdfDocument.getPageIndex(ref) as Promise<number>); } catch { index = undefined; }
+        if (key !== undefined && !this.spent) this.pageIndexes.set(key, index ?? null);
+        return index;
+    }
+    private readonly pageIndexes = new Map<string, number | null>();
     /** Whether `count` more operators may be read. */
     takeOperators(count: number): boolean {
         this.operatorsLeft -= count;
@@ -1272,9 +1289,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const content: OfficeContentNode[] = [];
     const attachments: OfficeAttachment[] = [];
     const numPages = pdfDocument.numPages;
+    // Every request to pdf.js goes through the document's budget, from the first (see PdfWorkBudget).
+    const work = new PdfWorkBudget(pdfDocument, config, fileBytes, pdfProcess);
 
     // --- Metadata ---
-    const meta = await pdfDocument.getMetadata().catch(() => ({ info: {} }));
+    const meta = (await work.within(pdfDocument.getMetadata().catch(() => ({ info: {} })) as Promise<any>)) ?? { info: {} };
     const info = (meta.info || {}) as Record<string, unknown>;
     const metadata: OfficeMetadata = {
         pages: numPages,
@@ -1328,7 +1347,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
 
     // Tagged flag for consumers.
     let markInfo: any = null;
-    try { markInfo = await pdfDocument.getMarkInfo(); } catch { markInfo = null; }
+    try { markInfo = (await work.within(pdfDocument.getMarkInfo())) ?? null; } catch { markInfo = null; }
     if (!metadata.nativeProperties) metadata.nativeProperties = {};
     metadata.nativeProperties['tagged'] = !!(markInfo && markInfo.Marked);
     if (markInfo) metadata.nativeProperties['markInfo'] = markInfo;
@@ -1336,14 +1355,14 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // Document permissions (which user actions the file allows). `null` means all actions allowed;
     // pdf.js cannot validate signatures, so we only report presence, never validity.
     try {
-        const perms: number[] | null = await pdfDocument.getPermissions();
+        const perms: number[] | null = (await work.within(pdfDocument.getPermissions() as Promise<number[] | null>)) ?? null;
         metadata.nativeProperties['permissions'] = perms ? permissionNames(pdfjs, perms) : 'all';
     } catch { /* not available */ }
 
     // Optional-content group (layer) names and default visibility, for consumers that care which
     // layers exist. Text inside hidden layers is still extracted (getTextContent ignores visibility).
     try {
-        const oc = await pdfDocument.getOptionalContentConfig();
+        const oc = await work.within(pdfDocument.getOptionalContentConfig());
         const layers = listOptionalContentLayers(oc);
         if (layers.length) metadata.nativeProperties['layers'] = layers;
     } catch { /* no optional content */ }
@@ -1351,7 +1370,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     // AcroForm field values (filled form data). Many real-world PDFs (applications, invoices) carry
     // their content here rather than as page text. Reported structurally; extraction, not validation.
     try {
-        const fieldObjects = await pdfDocument.getFieldObjects();
+        const fieldObjects = await work.within(pdfDocument.getFieldObjects());
         if (fieldObjects) {
             const fields: Record<string, unknown> = {};
             for (const name of Object.keys(fieldObjects)) {
@@ -1368,11 +1387,11 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
 
     // Printed page labels (e.g. roman-numeral front matter), distinct from the physical page index.
     let pageLabels: (string | null)[] | null = null;
-    try { pageLabels = await pdfDocument.getPageLabels(); } catch { pageLabels = null; }
+    try { pageLabels = (await work.within(pdfDocument.getPageLabels() as Promise<(string | null)[] | null>)) ?? null; } catch { pageLabels = null; }
 
     // --- Embedded file attachments ---
     try {
-        const embeddedFiles = await pdfDocument.getAttachments();
+        const embeddedFiles: Record<string, any> | null | undefined = await work.within(pdfDocument.getAttachments());
         if (embeddedFiles && config.extractAttachments) {
             for (const name in embeddedFiles) {
                 const file = embeddedFiles[name];
@@ -1389,7 +1408,6 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const destCache = new Map<string, SectionTarget | null>();
     const sectionLinks = new SectionLinks();
     const extracts: PageExtract[] = [];
-    const work = new PdfWorkBudget(pdfDocument, config, fileBytes, pdfProcess);
     for (const pageNum of pageNumbers) {
         checkAbortSignal(config.abortSignal);
         if (work.spent) break;
@@ -1561,7 +1579,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     let outline: OfficeContentNode[] | undefined;
     // Past the budget the document is closed (its process ended): nothing more is asked of pdf.js.
     if (!config.ignoreInternalLinks && !work.spent) {
-        try { outline = await buildOutline(pdfDocument, destCache, sectionLinks, config); }
+        try { outline = await buildOutline(pdfDocument, destCache, sectionLinks, config, work); }
         catch { logWarning(OfficeWarningType.PDF_OUTLINE_TRUNCATED, config, 'it could not be read'); }
     }
 
