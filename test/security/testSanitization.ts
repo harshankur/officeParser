@@ -2661,6 +2661,47 @@ async function parserHardeningTests() {
     check('rtf: a picture of 8,000 groups is read without error', !(pictRtf as any).error, (pictRtf as any).error);
     await timed('rtf: a paragraph of 80,000 footnotes is read', () => parseQuiet(Buffer.from('{\\rtf1\\ansi ' + 'word {\\super\\chftn}{\\footnote\\pard {\\super\\chftn} note}'.repeat(80000) + '\\par}'), 'rtf'));
 
+    // ODF, PPTX and charts: a repeated chart cell, labels per series, an object or comments part named
+    // many times, list-style lookups, chart ranges and runs of spaces are all bounded (each took
+    // minutes or gigabytes, or crashed the process, from a few KB).
+    const odfNs = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"';
+    const odfOf = (kind: 'text' | 'spreadsheet', body: string, extra: Record<string, string> = {}, automatic = '') => {
+        const mime = `application/vnd.oasis.opendocument.${kind}`;
+        const files: Record<string, Uint8Array> = {
+            mimetype: enc(mime),
+            'META-INF/manifest.xml': enc(`<?xml version="1.0"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="${mime}"/></manifest:manifest>`),
+            'content.xml': enc(`<?xml version="1.0" encoding="UTF-8"?><office:document-content ${odfNs}><office:automatic-styles>${automatic}</office:automatic-styles><office:body><office:${kind}>${body}</office:${kind}></office:body></office:document-content>`),
+        };
+        for (const [k, v] of Object.entries(extra)) files[k] = enc(v);
+        return Buffer.from(zipSync(files));
+    };
+    const chartDoc = (inner: string) => `<?xml version="1.0" encoding="UTF-8"?><office:document-content ${odfNs}><office:body><office:chart><chart:chart>${inner}</chart:chart></office:chart></office:body></office:document-content>`;
+    await heapBudget('odt: a chart cell repeated 100,000,000 times is read', () => parseQuiet(odfOf('text', '<text:p>hi</text:p><draw:frame><draw:object xlink:href="./Object 1"/></draw:frame>',
+        { 'Object 1/content.xml': chartDoc('<table:table><table:table-header-rows><table:table-row><table:table-cell/><table:table-cell table:number-columns-repeated="100000000"><text:p>S</text:p></table:table-cell></table:table-row></table:table-header-rows><table:table-row><table:table-cell><text:p>L</text:p></table:table-cell><table:table-cell table:number-columns-repeated="100000000" office:value="1"/></table:table-row></table:table>') }), 'odt'));
+    const rows = '<table:table-row><table:table-cell><text:p>L</text:p></table:table-cell><table:table-cell office:value="1"/></table:table-row>'.repeat(2000);
+    await timed('odt: one chart object named by 20,000 frames is read', () => parseQuiet(odfOf('text', `<text:p>${'<draw:frame><draw:object xlink:href="./Object 1"/></draw:frame>'.repeat(20000)}</text:p>`,
+        { 'Object 1/content.xml': chartDoc(`<table:table><table:table-header-rows><table:table-row><table:table-cell/><table:table-cell><text:p>S</text:p></table:table-cell></table:table-row></table:table-header-rows>${rows}</table:table>`) }), 'odt'));
+    await timed('odt: 20,000 lists among 20,000 list styles are read', () => parseQuiet(odfOf('text', '<text:list text:style-name="X"/>'.repeat(20000), {}, '<text:list-style style:name="s"/>'.repeat(20000)), 'odt'));
+    await heapBudget('ods: 2,000 chart series over a range of 50,000 cells are resolved', () => parseQuiet(odfOf('spreadsheet', '<table:table table:name="Sheet1"><table:table-row><table:table-cell table:number-columns-repeated="50000" office:value-type="string"><text:p>x</text:p></table:table-cell></table:table-row></table:table>',
+        { 'Object 1/content.xml': chartDoc(`<chart:plot-area>${'<chart:series chart:values-cell-range-address="Sheet1.A1:.ZZZZ9"/>'.repeat(2000)}<chart:categories table:cell-range-address="Sheet1.A1:.ZZZZ9"/></chart:plot-area>`) }), 'ods', { extractAttachments: true }));
+    const spaced = await parseQuiet(odfOf('text', `<text:p>${'<text:s text:c="10000"/>'.repeat(50000)}</text:p>`), 'odt');
+    const spacedText = (await OfficeGenerator.generate(spaced.ast!, 'text', { onWarning: () => {} } as any)).value as string;
+    check('odt: runs of spaces are bounded in all', spacedText.length < 20_000_000, `${spacedText.length}`);
+    const pns = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"';
+    const pptxOf = (extra: Record<string, string>) => Buffer.from(zipSync({
+        '[Content_Types].xml': enc('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>'),
+        '_rels/.rels': enc('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>'),
+        'ppt/presentation.xml': enc(`<?xml version="1.0"?><p:presentation ${pns}><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst></p:presentation>`),
+        'ppt/slides/slide1.xml': enc(`<?xml version="1.0"?><p:sld ${pns}><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>hi</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`),
+        ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, enc(v)])),
+    }));
+    await heapBudget('pptx: a chart of 20,000 series and 30,000 labels is read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart><c:plotArea><c:barChart><c:ser><c:cat>${'<c:v>1</c:v>'.repeat(30000)}</c:cat></c:ser>${'<c:ser/>'.repeat(20000)}</c:barChart></c:plotArea></c:chart></c:chartSpace>` }), 'pptx', { extractAttachments: true }));
+    const sharedComments = await heapBudget('pptx: one comments part named 2,000 times is read', () => parseQuiet(pptxOf({
+        'ppt/slides/_rels/slide1.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${Array.from({ length: 2000 }, (_, i) => `<Relationship Id="rId${i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments/comment1.xml"/>`).join('')}</Relationships>`,
+        'ppt/comments/comment1.xml': `<?xml version="1.0"?><p:cmLst ${pns}>${'<p:cm authorId="0"><a:t>c</a:t></p:cm>'.repeat(20000)}</p:cmLst>`,
+    }), 'pptx')) as any;
+    check('pptx: a comments part named 2,000 times is attached once', sharedComments.ast?.content[0]?.comments?.length === 20000, `${sharedComments.ast?.content[0]?.comments?.length} ${sharedComments.error}`);
+
     // Spans are held to what a browser allows, and never below 1.
     const gridSpan = await parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/<w:body>/, '<w:body><w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2147483647"/></w:tcPr><w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:gridSpan w:val="-5"/></w:tcPr><w:p><w:r><w:t>neg</w:t></w:r></w:p></w:tc></w:tr></w:tbl>')); }), 'docx');
     const spans = (ast: any) => { const out: any[] = []; const walk = (ns: any[]) => ns?.forEach((n: any) => { if (n.type === 'cell') out.push([n.metadata?.colSpan, n.metadata?.rowSpan, n.metadata?.col]); walk(n.children); }); walk(ast?.content); return out; };

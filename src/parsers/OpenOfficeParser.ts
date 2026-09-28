@@ -23,7 +23,7 @@
 
 import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
-import { extractChartData } from '../utils/chartUtils.js';
+import { chartRawTexts, extractChartData, MAX_CHART_VALUES } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { mathmlToLatex } from '../utils/mathUtils.js';
 import { cellSpan, clampRepeat, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
@@ -223,6 +223,71 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         config.decompressionLimits,
         config
     );
+
+    // Each embedded object (a formula or chart in `Object N/content.xml`) read once, whatever refers
+    // to it: read again for each frame naming it, a 10 KB document naming one object 20,000 times
+    // took a minute and a gigabyte. Its text is written at every reference, so references after the
+    // first repeat at most REPEATED_OBJECT_TEXT characters of it in all; past that, a reference to a
+    // chart is the chart without its text (its data stays in chartData), and to a formula, the
+    // formula's first reference is its only copy.
+    const REPEATED_OBJECT_TEXT = 16 * 1024 * 1024;
+    // Spaces `text:s` elements may make in all (see its reader).
+    let spaceBudget = 16 * 1024 * 1024;
+    let repeatedObjectText = REPEATED_OBJECT_TEXT;
+    const embeddedObjects = new Map<string, { formula?: string; chartData?: ChartData; chartText?: string; uses: number } | null>();
+    const readEmbeddedObject = (attachmentName: string): { formula?: string; chartData?: ChartData; chartText?: string } | null => {
+        let entry = embeddedObjects.get(attachmentName);
+        if (entry === undefined) {
+            const objectPath = `${attachmentName}/content.xml`;
+            const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
+            entry = null;
+            if (objectFile) {
+                const mathNode = getFirstElementByTagName(parseXmlString(objectFile.content.toString()), "math");
+                if (mathNode) entry = { formula: mathmlToLatex(mathNode).trim(), uses: 0 };
+                else {
+                    const chartData = extractChartData(objectFile.content);
+                    entry = { chartData, chartText: chartData.rawTexts.join(" "), uses: 0 };
+                }
+            }
+            embeddedObjects.set(attachmentName, entry);
+        }
+        if (!entry) return null;
+        if (entry.uses++ === 0) return entry;
+        const size = (entry.formula ?? entry.chartText ?? '').length;
+        if (size <= repeatedObjectText) { repeatedObjectText -= size; return entry; }
+        return { chartData: entry.chartData, chartText: entry.chartData ? '' : undefined, formula: entry.formula === undefined ? undefined : '' };
+    };
+
+    // What a list style makes a list (ordered or not, and whether its marks show), from each styles
+    // element's list styles indexed by name once: looked up by scanning every list style for each
+    // list, a 5 KB document of many lists and list styles took two minutes. (`withImages`: a picture
+    // bullet counts, as the automatic styles read it.)
+    const listStyleIndex = new Map<Element, Map<string, Element>>();
+    const listStyleKinds = new Map<Element, { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined>();
+    let officeStylesElement: Element | null | undefined;
+    const listStyleKind = (styles: Element, name: string, withImages: boolean): { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined => {
+        let index = listStyleIndex.get(styles);
+        if (!index) {
+            index = new Map();
+            for (const listStyle of getElementsByTagName(styles, "text:list-style")) {
+                const styleName = listStyle.getAttribute("style:name");
+                if (styleName && !index.has(styleName)) index.set(styleName, listStyle);
+            }
+            listStyleIndex.set(styles, index);
+        }
+        const listStyle = index.get(name);
+        if (!listStyle) return undefined;
+        // (A style is read by one of the two lookups only: automatic styles with pictures, office styles without.)
+        if (listStyleKinds.has(listStyle)) return listStyleKinds.get(listStyle);
+        const bulletLevels = getElementsByTagName(listStyle, "text:list-level-style-bullet");
+        const numberLevels = getElementsByTagName(listStyle, "text:list-level-style-number");
+        let kind: { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined;
+        if (numberLevels.length > 0) kind = { listType: 'ordered', isVisible: numberLevels.some(l => !!l.getAttribute("style:num-format")) };
+        else if (bulletLevels.length > 0) kind = { listType: 'unordered', isVisible: bulletLevels.some(l => !!l.getAttribute("text:bullet-char")) };
+        else if (withImages && getElementsByTagName(listStyle, "text:list-level-style-image").length > 0) kind = { listType: 'unordered', isVisible: true };
+        listStyleKinds.set(listStyle, kind);
+        return kind;
+    };
 
     // 1. Determine File Type
     const mimetypeFile = files.find(f => f.path === 'mimetype');
@@ -440,8 +505,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // Space. `text:c` is attacker-controlled: clamp it so a tiny `<text:s text:c="5e8"/>`
                     // cannot allocate a multi-GB string (a memory DoS the zip cap does not stop, since the
                     // blow-up is in repeat, after inflation).
-                    const count = parseInt(element.getAttribute('text:c') || '1');
-                    const spaces = ' '.repeat(clampRepeat(count));
+                    // The document's runs of spaces are bounded in all too: each clamped run is 10,000 at
+                    // most, and 50,000 of them (4 KB of ODT) made 500 million characters. Past the
+                    // budget a run is one space (the spacing, never text, is what is lost).
+                    const count = Math.min(clampRepeat(parseInt(element.getAttribute('text:c') || '1')), Math.max(1, spaceBudget));
+                    spaceBudget -= count;
+                    const spaces = ' '.repeat(count);
                     fullText += spaces;
                     children.push({
                         type: 'text',
@@ -592,15 +661,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         let attachmentName = '';
                         if (href) {
                             attachmentName = cleanAttachmentName(href);
-                            const objectPath = `${attachmentName}/content.xml`;
-                            const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
-                            if (objectFile) {
-                                const objXml = parseXmlString(objectFile.content.toString());
-                                const mathNode = getFirstElementByTagName(objXml, "math");
-                                if (mathNode) {
-                                    isFormula = true;
-                                    formulaText = mathmlToLatex(mathNode).trim();
-                                }
+                            const object = readEmbeddedObject(attachmentName);
+                            if (object?.formula !== undefined) {
+                                isFormula = true;
+                                formulaText = object.formula;
                             }
                         }
 
@@ -1207,49 +1271,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                 // Try to find list style in automatic styles or styles.xml to determine type and visibility
                 if (styleNameToCheck) {
-                    if (automaticStyles) {
-                        const listStyles = getElementsByTagName(automaticStyles, "text:list-style");
-                        for (const listStyle of listStyles) {
-                            if (listStyle.getAttribute("style:name") === styleNameToCheck) {
-                                // Check if it has bullet or number level styles
-                                const bulletLevels = getElementsByTagName(listStyle, "text:list-level-style-bullet");
-                                const numberLevels = getElementsByTagName(listStyle, "text:list-level-style-number");
-                                const imageLevels = getElementsByTagName(listStyle, "text:list-level-style-image");
-
-                                if (numberLevels.length > 0) {
-                                    listType = 'ordered';
-                                    isVisible = numberLevels.some(l => !!l.getAttribute("style:num-format"));
-                                } else if (bulletLevels.length > 0) {
-                                    listType = 'unordered';
-                                    isVisible = bulletLevels.some(l => !!l.getAttribute("text:bullet-char"));
-                                } else if (imageLevels.length > 0) {
-                                    listType = 'unordered';
-                                    isVisible = true;
-                                }
-                                break;
-                            }
-                        }
-                    }
+                    const automatic = automaticStyles ? listStyleKind(automaticStyles, styleNameToCheck, true) : undefined;
+                    if (automatic) ({ listType, isVisible } = automatic);
 
                     if (!isVisible && stylesDom) {
-                        const officeStyles = getFirstElementByTagName(stylesDom, "office:styles");
-                        if (officeStyles) {
-                            const listStyles = getElementsByTagName(officeStyles, "text:list-style");
-                            for (const listStyle of listStyles) {
-                                if (listStyle.getAttribute("style:name") === styleNameToCheck) {
-                                    const bulletLevels = getElementsByTagName(listStyle, "text:list-level-style-bullet");
-                                    const numberLevels = getElementsByTagName(listStyle, "text:list-level-style-number");
-                                    if (numberLevels.length > 0) {
-                                        listType = 'ordered';
-                                        isVisible = numberLevels.some(l => !!l.getAttribute("style:num-format"));
-                                    } else if (bulletLevels.length > 0) {
-                                        listType = 'unordered';
-                                        isVisible = bulletLevels.some(l => !!l.getAttribute("text:bullet-char"));
-                                    }
-                                    break;
-                                }
-                            }
-                        }
+                        officeStylesElement ??= getFirstElementByTagName(stylesDom, "office:styles") ?? null;
+                        const office = officeStylesElement ? listStyleKind(officeStylesElement, styleNameToCheck, false) : undefined;
+                        if (office) ({ listType, isVisible } = office);
                     }
                 }
 
@@ -1435,18 +1463,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     const href = object.getAttribute("xlink:href");
                     if (href) {
                         const attachmentName = cleanAttachmentName(href);
-                        const objectPath = `${attachmentName}/content.xml`;
-                        const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
+                        const embedded = readEmbeddedObject(attachmentName);
 
-                        if (objectFile) {
-                            const objXml = parseXmlString(objectFile.content.toString());
-                            const mathNode = getFirstElementByTagName(objXml, "math");
-
-                            if (mathNode) {
+                        if (embedded) {
+                            if (embedded.formula !== undefined) {
                                 // Math formula object at block level - a display equation, so the
                                 // inner node is `math: 'block'` where the inline site above emits
                                 // `math: 'inline'`.
-                                const formulaText = mathmlToLatex(mathNode).trim();
+                                const formulaText = embedded.formula;
                                 const formulaNode: OfficeContentNode = {
                                     type: 'paragraph',
                                     text: formulaText,
@@ -1463,11 +1487,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 }
                                 targetArray.push(formulaNode);
                             } else {
-                                const chartData = extractChartData(objectFile.content);
+                                const chartData = embedded.chartData!;
 
                                 const chartNode: OfficeContentNode = {
                                     type: 'chart',
-                                    text: chartData.rawTexts.join(" "),
+                                    text: embedded.chartText ?? '',
                                     metadata: {
                                         attachmentName: attachmentName,
                                         chartData
@@ -1632,15 +1656,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                     const href = drawObjects[0].getAttribute("xlink:href");
                                     if (href) {
                                         chartHref = cleanAttachmentName(href);
-                                        const objectPath = `${chartHref}/content.xml`;
-                                        const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
-                                        if (objectFile) {
-                                            const objXml = parseXmlString(objectFile.content.toString());
-                                            const mathNode = getFirstElementByTagName(objXml, "math");
-                                            if (mathNode) {
-                                                isFormula = true;
-                                                formulaText = mathmlToLatex(mathNode).trim();
-                                            }
+                                        const embedded = readEmbeddedObject(chartHref);
+                                        if (embedded?.formula !== undefined) {
+                                            isFormula = true;
+                                            formulaText = embedded.formula;
                                         }
                                     }
                                 }
@@ -1959,8 +1978,38 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
     // Helper: Resolve ODS chart cell references to actual values
     // ODS charts often link to cell ranges (e.g., [Sheet1.$A$1:.$A$5]) instead of embedding values
+    // Each sheet's cells by row (built once), the references already resolved, and a budget of cells
+    // read and values made for all the document's charts: every series scanned the whole sheet and
+    // copied what it matched, so a chart of many series over one range (1.8 KB of ODS) took gigabytes.
+    // Past the budget, a reference stays its `[range]` text, as one that resolves to nothing does.
+    const sheetRows = new Map<OfficeContentNode, { rows: number[]; cells: Map<number, OfficeContentNode[]> }>();
+    const resolvedReferences = new Map<string, string[]>();
+    let resolutionBudget = 5 * MAX_CHART_VALUES;
+    const rowsOf = (sheet: OfficeContentNode) => {
+        let index = sheetRows.get(sheet);
+        if (!index) {
+            const cells = new Map<number, OfficeContentNode[]>();
+            for (const row of sheet.children ?? []) for (const cell of row.children ?? []) {
+                const r = (cell.metadata as CellMetadata | undefined)?.row;
+                if (typeof r !== 'number') continue;
+                let list = cells.get(r);
+                if (!list) cells.set(r, list = []);
+                list.push(cell);
+            }
+            index = { rows: [...cells.keys()].sort((a, b) => a - b), cells };
+            sheetRows.set(sheet, index);
+        }
+        return index;
+    };
     const resolveChartReferences = (chartData: ChartData, nodes: OfficeContentNode[]) => {
         const getValuesFromReference = (ref: string): string[] => {
+            const known = resolvedReferences.get(ref);
+            if (known) return known;
+            const values = resolveReference(ref);
+            resolvedReferences.set(ref, values);
+            return values;
+        };
+        const resolveReference = (ref: string): string[] => {
             // Remove brackets: [Sheet.$A$1:.$A$5] -> Sheet.$A$1:.$A$5
             const cleanRef = ref.replace(/^\[|\]$/g, '');
             const [startPart, endPart] = cleanRef.split(':');
@@ -2005,46 +2054,33 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             if (!sheet || !sheet.children) return [ref];
 
             const values: string[] = [];
-            // Collect all matching cells
-            for (const row of sheet.children) {
-                if (row.children) {
-                    for (const cell of row.children) {
-                        const meta = cell.metadata as CellMetadata;
-                        if (meta && meta.row >= start.r && meta.row <= end.r && meta.col >= start.c && meta.col <= end.c) {
-                            values.push(cell.text || '');
-                        }
-                    }
+            // The cells of the rows in range, found through the sheet's row index.
+            const { rows, cells } = rowsOf(sheet);
+            let lo = 0, hi = rows.length;
+            while (lo < hi) { const mid = (lo + hi) >> 1; if (rows[mid] < start.r) lo = mid + 1; else hi = mid; }
+            for (let i = lo; i < rows.length && rows[i] <= end.r; i++) {
+                for (const cell of cells.get(rows[i])!) {
+                    if (--resolutionBudget < 0) return [ref];
+                    const col = (cell.metadata as CellMetadata).col;
+                    if (col >= start.c && col <= end.c) values.push(cell.text || '');
                 }
             }
-            return values.length > 0 ? values : [];
+            return values;
         };
 
-        // Resolve DataSets
-        for (const ds of chartData.dataSets) {
-            const newValues: string[] = [];
-            for (const val of ds.values) {
-                if (val.startsWith('[')) newValues.push(...getValuesFromReference(val));
-                else newValues.push(val);
+        // Resolve DataSets and labels: a resolved range is shared, and each value counts against the budget.
+        const resolve = (list: string[]): string[] => {
+            const out: string[] = [];
+            for (const val of list) {
+                const values = val.startsWith('[') ? getValuesFromReference(val) : [val];
+                if (values.length > 1 && (resolutionBudget -= values.length) < 0) { out.push(val); continue; }
+                for (const v of values) out.push(v);
             }
-            ds.values = newValues;
-        }
-
-        // Resolve Labels
-        const newLabels: string[] = [];
-        for (const label of chartData.labels) {
-            if (label.startsWith('[')) newLabels.push(...getValuesFromReference(label));
-            else newLabels.push(label);
-        }
-        chartData.labels = newLabels;
-
-        // Rebuild rawTexts
-        chartData.rawTexts = [];
-        if (chartData.title) chartData.rawTexts.push(chartData.title);
-        for (const ds of chartData.dataSets) {
-            if (ds.name) chartData.rawTexts.push(ds.name);
-            chartData.rawTexts.push(...chartData.labels);
-            chartData.rawTexts.push(...ds.values);
-        }
+            return out;
+        };
+        for (const ds of chartData.dataSets) ds.values = resolve(ds.values);
+        chartData.labels = resolve(chartData.labels);
+        chartData.rawTexts = chartRawTexts(chartData.title, chartData.dataSets, chartData.labels);
     };
 
     // Apply resolution to all chart attachments

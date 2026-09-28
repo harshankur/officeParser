@@ -38,6 +38,36 @@ const extractOpenXmlRichText = (el: Element, tagName: string): string | undefine
 };
 
 /**
+ * The most series one chart's table makes, and values it holds in all. A chart's table can repeat a
+ * cell any number of times (`table:number-columns-repeated`), and a chart of 1 KB asking for a hundred
+ * million ran the process out of memory.
+ */
+const MAX_CHART_SERIES = 10_000;
+export const MAX_CHART_VALUES = 1_000_000;
+
+/**
+ * A chart's text: its title (when given), its category labels once, then each series' name and values.
+ * The labels were written again for every series, so a small chart of many series and many labels
+ * made text of their product (gigabytes from a few KB).
+ */
+export function chartRawTexts(title: string | undefined, dataSets: ChartData['dataSets'], labels: string[]): string[] {
+    const raw: string[] = [];
+    if (title) raw.push(title);
+    for (const label of labels) raw.push(label);
+    for (const ds of dataSets) {
+        if (ds.name) raw.push(ds.name);
+        for (const value of ds.values) raw.push(value);
+    }
+    return raw;
+}
+
+/** A repeat count as a document states it: at least 1, NaN as 1. */
+const repeats = (value: string | null): number => {
+    const n = parseInt(value || '1', 10);
+    return Number.isFinite(n) && n > 1 ? n : 1;
+};
+
+/**
  * Extracts fully structured chart data from OpenXML (PPTX, XLSX) chart XML.
  * @param xmlBuffer Chart XML buffer
  */
@@ -99,20 +129,14 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer): ChartData => {
                 if (v) localLabels.push(v);
             }
             if (localLabels.length > 0 && sharedLabels.length === 0) {
-                sharedLabels.push(...localLabels);
+                for (const label of localLabels) sharedLabels.push(label);
             }
         }
 
         dataSets.push({ name, values, pointLabels });
     }
 
-    // Structured rawTexts: for each dataset: Name -> Labels -> Values
-    const rawTexts: string[] = [];
-    for (const ds of dataSets) {
-        if (ds.name) rawTexts.push(ds.name);
-        rawTexts.push(...sharedLabels);
-        rawTexts.push(...ds.values);
-    }
+    const rawTexts = chartRawTexts(undefined, dataSets, sharedLabels);
 
     return {
         title,
@@ -139,7 +163,6 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
     const table = getElementsByTagName(chart, "table:table")[0];
     const dataSets: ChartData['dataSets'] = [];
     const labels: string[] = [];
-    const rawTexts: string[] = [];
 
     if (table) {
         // Chart with embedded data table (common in ODP presentations)
@@ -153,31 +176,30 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
         if (rows.length > 0) {
             // Header row for series names
             const headerCells = getDirectChildren(rows[0], "table:table-cell");
-            for (let j = 1; j < headerCells.length; j++) {
-                const colsRepeated = parseInt(headerCells[j].getAttribute("table:number-columns-repeated") || "1");
+            for (let j = 1; j < headerCells.length && dataSets.length < MAX_CHART_SERIES; j++) {
+                // A repeated cell is as many series as it repeats, up to the chart's limit.
+                const colsRepeated = Math.min(repeats(headerCells[j].getAttribute("table:number-columns-repeated")), MAX_CHART_SERIES - dataSets.length);
                 const name = getDirectChildren(headerCells[j], "text:p")[0]?.textContent || undefined;
                 for (let k = 0; k < colsRepeated; k++) {
                     dataSets.push({ name, values: [], pointLabels: [] });
                 }
             }
 
-            // Data rows
-            for (let i = 1; i < rows.length; i++) {
+            // Data rows: a repeated cell fills as many series as remain in its row, and the chart
+            // holds at most MAX_CHART_VALUES values.
+            let valuesLeft = MAX_CHART_VALUES;
+            for (let i = 1; i < rows.length && valuesLeft > 0; i++) {
                 const dataCells = getDirectChildren(rows[i], "table:table-cell");
                 if (dataCells.length > 0) {
                     const label = getDirectChildren(dataCells[0], "text:p")[0]?.textContent || undefined;
                     if (label) labels.push(label);
 
                     let dsIdx = 0;
-                    for (let j = 1; j < dataCells.length; j++) {
-                        const colsRepeated = parseInt(dataCells[j].getAttribute("table:number-columns-repeated") || "1");
+                    for (let j = 1; j < dataCells.length && dsIdx < dataSets.length; j++) {
+                        const colsRepeated = Math.min(repeats(dataCells[j].getAttribute("table:number-columns-repeated")), dataSets.length - dsIdx, valuesLeft);
                         const val = dataCells[j].getAttribute("office:value") || getDirectChildren(dataCells[j], "text:p")[0]?.textContent || "";
-                        for (let k = 0; k < colsRepeated; k++) {
-                            if (dataSets[dsIdx]) {
-                                dataSets[dsIdx].values.push(val);
-                            }
-                            dsIdx++;
-                        }
+                        for (let k = 0; k < colsRepeated; k++) dataSets[dsIdx++].values.push(val);
+                        valuesLeft -= colsRepeated;
                     }
                 }
             }
@@ -242,13 +264,7 @@ const extractOdfChartData = (xmlBuffer: Buffer): ChartData => {
         else if (dimension === 'y') yAxisTitle = axisTitle;
     }
 
-    // Structured rawTexts: title + series info
-    if (title) rawTexts.push(title);
-    for (const ds of dataSets) {
-        if (ds.name) rawTexts.push(ds.name);
-        rawTexts.push(...labels);
-        rawTexts.push(...ds.values);
-    }
+    const rawTexts = chartRawTexts(title, dataSets, labels);
 
     return {
         title,

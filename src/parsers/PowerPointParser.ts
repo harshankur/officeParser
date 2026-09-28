@@ -131,6 +131,33 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         }
     }
 
+    // The comments of each comments part, read once and shared by every relationship naming it: read
+    // again for each, a slide naming one large comments part thousands of times (19 KB of PPTX) ran the
+    // process out of memory. The writers write a shared comment once.
+    const commentsByPart = new Map<string, OfficeContentNode[]>();
+    const attachedCommentParts = new Set<string>();
+    const commentsOfPart = (target: string): OfficeContentNode[] => {
+        let comments = commentsByPart.get(target);
+        if (comments) return comments;
+        comments = [];
+        const cFile = files.find(f => f.path.endsWith(target));
+        if (cFile) {
+            for (const cNode of getElementsByTagName(parseXmlString(cFile.content.toString()), "p:cm")) {
+                const authorId = cNode.getAttribute("authorId");
+                const authorData = authorId !== null ? authorMap[authorId] : undefined;
+                const text = getElementsByTagName(cNode, "a:t").map(t => t.textContent || '').join('');
+                if (text) comments.push({
+                    type: 'comment',
+                    text,
+                    children: [{ type: 'text', text, formatting: {} }],
+                    metadata: authorData && authorData.author ? { author: authorData.author } : undefined
+                });
+            }
+        }
+        commentsByPart.set(target, comments);
+        return comments;
+    };
+
     let currentListId = 0;
     let runningListIndex = 0;
 
@@ -892,25 +919,15 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                 if (!config.ignoreComments && slideRelsMap[slideNumber]) {
                     const commentRels = Object.values(slideRelsMap[slideNumber]).filter(r => r.type === "comments");
                     for (const rel of commentRels) {
-                        const cFile = files.find(f => f.path.endsWith(rel.target));
-                        if (cFile) {
-                            const cXml = parseXmlString(cFile.content.toString());
-                            const commentNodes = getElementsByTagName(cXml, "p:cm");
-                            for (const cNode of commentNodes) {
-                                const authorId = cNode.getAttribute("authorId");
-                                const authorData = authorId !== null ? authorMap[authorId] : undefined;
-                                const text = getElementsByTagName(cNode, "a:t").map(t => t.textContent || '').join('');
-                                if (text) {
-                                    if (!slidesMap[slideNumber].comments) slidesMap[slideNumber].comments = [];
-                                    slidesMap[slideNumber].comments.push({
-                                        type: 'comment',
-                                        text,
-                                        children: [{ type: 'text', text, formatting: {} }],
-                                        metadata: authorData && authorData.author ? { author: authorData.author } : undefined
-                                    });
-                                }
-                            }
-                        }
+                        // Each comments part once, on the first slide naming it (a part is one slide's):
+                        // attached for every relationship, or every slide, naming it, one large part
+                        // was repeated thousands of times (see commentsOfPart).
+                        if (attachedCommentParts.has(rel.target)) continue;
+                        attachedCommentParts.add(rel.target);
+                        const comments = commentsOfPart(rel.target);
+                        if (!comments.length) continue;
+                        const slideComments = slidesMap[slideNumber].comments ??= [];
+                        for (const comment of comments) slideComments.push(comment);
                     }
                 }
             }
