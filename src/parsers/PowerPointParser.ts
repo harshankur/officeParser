@@ -138,11 +138,15 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     // process out of memory. The writers write a shared comment once.
     const commentsByPart = new Map<string, OfficeContentNode[]>();
     const attachedCommentParts = new Set<string>();
+    // The package's parts by file name (what a slide relationship's target keeps, see slideRelsMap), the
+    // first of each: a scan of every part for each comments target took targets x parts.
+    const fileByName = new Map<string, (typeof files)[number]>();
+    for (const f of files) { const name = f.path.slice(f.path.lastIndexOf('/') + 1); if (!fileByName.has(name)) fileByName.set(name, f); }
     const commentsOfPart = (target: string): OfficeContentNode[] => {
         let comments = commentsByPart.get(target);
         if (comments) return comments;
         comments = [];
-        const cFile = files.find(f => f.path.endsWith(target));
+        const cFile = fileByName.get(target);
         if (cFile) {
             for (const cNode of getElementsByTagName(parseXmlString(cFile.content.toString(), { config }), "p:cm")) {
                 const authorId = cNode.getAttribute("authorId");

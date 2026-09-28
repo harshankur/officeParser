@@ -322,16 +322,20 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     let spaceBudget = 16 * 1024 * 1024;
     let repeatedObjectText = REPEATED_OBJECT_TEXT;
     const embeddedObjects = new Map<string, { formula?: string; chartData?: ChartData; chartText?: string; uses: number } | null>();
-    // The package's files by path, and by each tail of their path a folder starts (`Object 1/content.xml`
-    // of `Pictures/Object 1/content.xml`), the first of each: a scan of every file per object took
-    // objects x files.
+    // The package's files by path, and by each tail of their path one of its last 16 folders starts
+    // (`Object 1/content.xml` of `Pictures/Object 1/content.xml`), the first of each: a scan of every
+    // file per object took objects x files, and a tail at every folder of a long path read the rest of
+    // the path again at each.
     let filesByPath: Map<string, (typeof files)[number]> | undefined;
     const fileAt = (path: string) => {
         if (!filesByPath) {
             filesByPath = new Map();
             for (const f of files) if (!filesByPath.has(f.path)) filesByPath.set(f.path, f);
             for (const f of files) {
-                for (let at = f.path.indexOf('/'); at !== -1; at = f.path.indexOf('/', at + 1)) {
+                let at = f.path.length;
+                for (let depth = 0; depth < 16 && at > 0; depth++) {
+                    at = f.path.lastIndexOf('/', at - 1);
+                    if (at === -1) break;
                     const tail = f.path.slice(at + 1);
                     if (tail && !filesByPath.has(tail)) filesByPath.set(tail, f);
                 }

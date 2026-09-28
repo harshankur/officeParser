@@ -73,6 +73,15 @@ import { lookupTable, plainRecord, setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 
+/** Where a text box's paragraph is read into: the paragraph drawing the text box (see parseParagraph). */
+interface ParagraphSink {
+    children: OfficeContentNode[];
+    notes: OfficeContentNode[];
+    comments: OfficeContentNode[];
+    anchorIds: string[];
+    insideLink: boolean;
+}
+
 /** A text box's content, which the text box's own paragraphs are parsed from (see ownFirst). */
 const TEXT_BOX: ReadonlySet<string> = new Set(['w:txbxContent', 'txbxContent']);
 
@@ -526,7 +535,12 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
     const listCounters: { [key: string]: { [key: string]: number } } = Object.create(null); // Track item index per listId/level
 
     // Helper to parse a paragraph node
-    const parseParagraph = (pNode: Element, documentContent: string, pendingAnchorIds: string[] = []): OfficeContentNode => {
+    /**
+     * @param into - The paragraph a text box's paragraph is read into (its children, notes, comments,
+     * bookmarks, and whether a link encloses the text box): pushed there directly, where copying each
+     * text box paragraph's content up into the one around it copied it again at every level of nesting.
+     */
+    const parseParagraph = (pNode: Element, documentContent: string, pendingAnchorIds: string[] = [], into?: ParagraphSink): OfficeContentNode => {
         // Check if it's a list item
         // The paragraph's own properties (children of it, as the schema has them): looked up through
         // its whole subtree, a text box's numbering made the paragraph around it a list item, and a
@@ -586,13 +600,13 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
 
         // Extract text and children
         let text = '';
-        const children: OfficeContentNode[] = [];
-        const notes: OfficeContentNode[] = [];
-        const comments: OfficeContentNode[] = [];
+        const children: OfficeContentNode[] = into?.children ?? [];
+        const notes: OfficeContentNode[] = into?.notes ?? [];
+        const comments: OfficeContentNode[] = into?.comments ?? [];
 
         // Traverse children of paragraph (runs, hyperlinks, etc.)
         // Whether a hyperlink enclosing the node being read gives its runs their link (see w:hyperlink).
-        let insideLink = false;
+        let insideLink = into?.insideLink ?? false;
         const processChildNode = (node: Node) => {
             if (isElement(node) && (node.nodeName === 'w:r' || node.nodeName === 'm:r')) {
                 const runNode = node;
@@ -778,9 +792,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 for (const drawing of runDrawings) {
                     for (const txbx of getOutermostElements(drawing, "w:txbxContent")) {
                         for (const txbxParagraph of getOutermostElements(txbx, "w:p")) {
-                            const nestedP = parseParagraph(txbxParagraph, documentContent);
-                            appendAll(children, (nestedP.children || []));
-                            text += nestedP.text;
+                            text += parseParagraph(txbxParagraph, documentContent, [], { children, notes, comments, anchorIds, insideLink }).text;
                         }
                     }
                 }
@@ -900,9 +912,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 for (const txbx of textBoxes) {
                     // Its paragraphs wherever they sit: in a table or a content control of the text box too.
                     for (const txbxParagraph of getOutermostElements(txbx, "w:p")) {
-                        const nestedP = parseParagraph(txbxParagraph, documentContent);
-                        appendAll(children, (nestedP.children || []));
-                        text += nestedP.text;
+                        text += parseParagraph(txbxParagraph, documentContent, [], { children, notes, comments, anchorIds, insideLink }).text;
                     }
                 }
             } else if (isElement(node) && (node.nodeName === 'm:oMath' || node.nodeName === 'oMath'
@@ -930,7 +940,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
             }
         };
 
-        const anchorIds: string[] = [...pendingAnchorIds];
+        const anchorIds: string[] = into?.anchorIds ?? [...pendingAnchorIds];
         const childNodes = Array.from(pNode.childNodes);
         for (const child of childNodes) {
             processChildNode(child);
@@ -988,7 +998,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 } as ListMetadata
             };
 
-            if (config.includeRawContent) listNode.rawContent = getRawContent(pNode, documentContent, config);
+            if (config.includeRawContent && !into) listNode.rawContent = getRawContent(pNode, documentContent, config);
             return listNode;
 
         } else if (isHeading) {
@@ -1001,7 +1011,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 ...(comments.length > 0 ? { comments } : {}),
                 metadata: { level, alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined, ...commonMetadata }
             };
-            if (config.includeRawContent) headingNode.rawContent = getRawContent(pNode, documentContent, config);
+            if (config.includeRawContent && !into) headingNode.rawContent = getRawContent(pNode, documentContent, config);
             return headingNode;
         } else {
             const paraNode: OfficeContentNode = {
@@ -1012,7 +1022,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig):
                 ...(comments.length > 0 ? { comments } : {}),
                 metadata: { alignment, paragraphIndentation: paraIndentation, style: pStyleVal ?? undefined, ...commonMetadata }
             };
-            if (config.includeRawContent) paraNode.rawContent = getRawContent(pNode, documentContent, config);
+            if (config.includeRawContent && !into) paraNode.rawContent = getRawContent(pNode, documentContent, config);
             return paraNode;
         }
     };

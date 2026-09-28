@@ -117,15 +117,19 @@ export const serializeXml = (node: Node, options: { preserveWhitespace?: boolean
     return serializer.serializeToString(node as any);
 };
 
+/** What getSourceSubstring returns for an element longer than it may read. */
+const SOURCE_TOO_LONG = Symbol('source too long');
+
 /**
  * Attempts to extract the original raw substring from the source XML for a given node.
  * Requires the document to have been parsed with { locator: true }.
  * 
  * @param node - The DOM node to extract source for
  * @param sourceXml - The original XML source string
+ * @param maxLength - The longest substring to read: past it, the scan stops (SOURCE_TOO_LONG)
  * @returns The raw XML substring, or undefined if it cannot be reliably determined
  */
-export const getSourceSubstring = (node: any, sourceXml: string): string | undefined => {
+const getSourceSubstring = (node: any, sourceXml: string, maxLength = Infinity): string | undefined | typeof SOURCE_TOO_LONG => {
     if (!node || typeof node.lineNumber !== 'number' || typeof node.columnNumber !== 'number') {
         return undefined;
     }
@@ -145,15 +149,21 @@ export const getSourceSubstring = (node: any, sourceXml: string): string | undef
     // cut a nested element short, and searched the rest of the part for each element that has none.
     // Searched only up to where the next node after it starts: an element the reader closed for a
     // malformed part has no end tag, and each such one searched the rest of the part.
-    const within = sourceXml.substring(0, followingStart(node, starts, sourceXml.length));
+    // Read no further than `maxLength` past its start either: what is left of the rawContent budget.
+    const following = followingStart(node, starts, sourceXml.length);
+    const truncated = following - startIdx > maxLength;
+    const within = sourceXml.substring(0, truncated ? startIdx + maxLength : following);
     const open = '<' + tagName;
     const close = '</' + tagName + '>';
     let depth = 1;
     let at = startTagEnd + 1;
+    // The next start tag of the name, kept until the scan passes it: searched again after each end
+    // tag, a run of end tags with no start tag left searched to the end every time (160,000 nested
+    // `w:t`, 3 KB of DOCX, took two minutes).
+    let nextOpen = within.indexOf(open, at);
     while (true) {
         const nextClose = within.indexOf(close, at);
-        if (nextClose === -1) return undefined;
-        let nextOpen = within.indexOf(open, at);
+        if (nextClose === -1) return truncated ? SOURCE_TOO_LONG : undefined;
         while (nextOpen !== -1 && nextOpen < nextClose) {
             const after = sourceXml.charCodeAt(nextOpen + open.length);
             const end = tagEndAt(sourceXml, nextOpen + open.length);
@@ -216,9 +226,15 @@ const lineStartsOf = (source: string): number[] => {
 export const getRawContent = (node: Node, sourceXml: string, config: OfficeParserConfig): string | undefined => {
     // A spent budget is checked before serializing: nested tables re-serialize every level below
     // them, so skipping the work, not only the result, is what keeps it linear.
-    if (rawContentBudget(config).spent) return undefined;
+    const budget = rawContentBudget(config);
+    if (budget.spent) return undefined;
     let raw: string | undefined;
-    if (config.serializeRawContent === false) raw = getSourceSubstring(node, sourceXml);
+    if (config.serializeRawContent === false) {
+        const found = getSourceSubstring(node, sourceXml, budget.left);
+        // Longer than the budget has left: it is spent, without reading or serializing the rest.
+        if (found === SOURCE_TOO_LONG) { spendRawContent(config); return undefined; }
+        raw = found;
+    }
     if (!raw) raw = serializeXml(node, { preserveWhitespace: config.preserveXmlWhitespace });
     return chargeRawContent(raw, config);
 };
@@ -245,12 +261,18 @@ export const chargeRawContent = (raw: string | undefined, config: OfficeParserCo
         budget.left -= raw.length;
         return raw;
     }
+    spendRawContent(config);
+    return undefined;
+};
+
+/** Marks the parse's rawContent budget spent, warning the first time. */
+const spendRawContent = (config: OfficeParserConfig): void => {
+    const budget = rawContentBudget(config);
     budget.left = 0;
     if (!budget.spent) {
         budget.spent = true;
         logWarning(OfficeWarningType.RAW_CONTENT_LIMIT_EXCEEDED, config, config.decompressionLimits?.maxRawContentLength ?? DEFAULT_MAX_RAW_CONTENT_LENGTH);
     }
-    return undefined;
 };
 /**
  * Gets the first element with the specified tag name within a parent element.

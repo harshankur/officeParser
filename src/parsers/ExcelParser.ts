@@ -391,20 +391,23 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         }
 
         // 3. Process Media Files
+        // Each picture's alt text, by its media path: the first drawing showing it with one (each
+        // drawing by its first relationship to it). Looked up per media file through every drawing's
+        // relationships, 2,000 media files beside 200,000 relationships took 90 seconds.
+        const altTextByMedia = new Map<string, string>();
+        for (const drawingPath in drawingImageMap) {
+            const seenInDrawing = new Set<string>();
+            for (const rId in drawingImageMap[drawingPath]) {
+                const image = drawingImageMap[drawingPath][rId];
+                if (seenInDrawing.has(image.path)) continue;
+                seenInDrawing.add(image.path);
+                if (image.altText && !altTextByMedia.has(image.path)) altTextByMedia.set(image.path, image.altText);
+            }
+        }
         for (const media of mediaFiles) {
             const attachment = createAttachment(media.path.split('/').pop() || 'image', media.content);
 
-            // Try to find alt text for this media
-            let altText = '';
-            for (const drawingPath in drawingImageMap) {
-                for (const rId in drawingImageMap[drawingPath]) {
-                    if (drawingImageMap[drawingPath][rId].path === media.path) {
-                        altText = drawingImageMap[drawingPath][rId].altText || '';
-                        break;
-                    }
-                }
-                if (altText) break;
-            }
+            const altText = altTextByMedia.get(media.path);
             if (altText) attachment.altText = altText;
 
             attachments.push(attachment);
@@ -501,6 +504,13 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     }
 
     const content: OfficeContentNode[] = [];
+    // The package's parts by path (a scan of all of them per sheet and per relationship took sheets x
+    // parts), and the comments parts already attached: each is read, and its comments attached, once
+    // (to the first sheet naming it). Read again for each relationship naming it, one comments part of
+    // 1 MB named 2,000 times (3.7 KB of XLSX) ended the process out of memory.
+    const fileByPath = new Map<string, (typeof files)[number]>();
+    for (const f of files) if (!fileByPath.has(f.path)) fileByPath.set(f.path, f);
+    const attachedCommentParts = new Set<string>();
 
     for (const file of files) {
         if (file.path.match(mediaFileRegex)) continue;
@@ -514,7 +524,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         if (file.path.match(sheetsRegex)) {
             const sheetFilename = file.path.split('/').pop() || '';
             const relsFilename = `xl/worksheets/_rels/${sheetFilename}.rels`;
-            const relsFile = files.find(f => f.path === relsFilename);
+            const relsFile = fileByPath.get(relsFilename);
 
             const drawingMap: Record<string, string> = Object.create(null); // rId -> drawingPath
             // Null-prototype: keyed by the document-derived cell ref, so a crafted ref of `__proto__`
@@ -534,8 +544,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             drawingMap[id] = 'xl/drawings/' + target.replace('../drawings/', '');
                         } else if (!config.ignoreComments && type.includes('comments')) {
                             const commentsPath = 'xl/' + target.replace('../', '');
-                            const cFile = files.find(f => f.path === commentsPath);
+                            const cFile = attachedCommentParts.has(commentsPath) ? undefined : fileByPath.get(commentsPath);
                             if (cFile) {
+                                attachedCommentParts.add(commentsPath);
                                 const cXml = parseXmlString(cFile.content.toString(), { config });
                                 const commentNodes = getElementsByTagName(cXml, "comment");
                                 const authorsList = getElementsByTagName(cXml, "author");

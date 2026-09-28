@@ -2814,11 +2814,11 @@ async function parserHardeningTests() {
     const nestedTables = odfOf('text', nest('<text:p>x</text:p>' + '<text:span/>'.repeat(20000), 300, s => `<table:table><table:table-row><table:table-cell>${s}</table:table-cell></table:table-row></table:table>`));
     await heapBudget('odt: rawContent of tables nested 300 deep around 20,000 elements is read', () => timed('odt: rawContent of tables nested 300 deep is read', () => parseQuiet(nestedTables, 'odt', { includeRawContent: true })));
     const textBoxes = docxOf(nest('<w:p><w:r><w:t>x</w:t></w:r></w:p>' + empties(150000), 500, s => `<w:p><w:pict><w:txbxContent>${s}</w:txbxContent></w:pict></w:p>`));
-    const boundedRaw = await warned(textBoxes, 'docx', { includeRawContent: true, decompressionLimits: { maxRawContentLength: 4_000_000 } });
+    const boundedRaw = await warned(textBoxes, 'docx', { includeRawContent: true, decompressionLimits: { maxRawContentLength: 400_000 } });
     let rawTotal = 0;
     const sumRaw = (ns: any[] | undefined, seen = new Set<any>()) => ns?.forEach((n: any) => { if (seen.has(n)) return; seen.add(n); rawTotal += n.rawContent?.length ?? 0; sumRaw(n.children, seen); });
     sumRaw(boundedRaw.ast?.content);
-    check('docx: rawContent stops at maxRawContentLength with RAW_CONTENT_LIMIT_EXCEEDED', !boundedRaw.error && rawTotal > 0 && rawTotal <= 4_000_000 && boundedRaw.codes.includes('RAW_CONTENT_LIMIT_EXCEEDED'), `${rawTotal} ${boundedRaw.codes} ${boundedRaw.error}`);
+    check('docx: rawContent stops at maxRawContentLength with RAW_CONTENT_LIMIT_EXCEEDED', !boundedRaw.error && rawTotal > 0 && rawTotal <= 400_000 && boundedRaw.codes.includes('RAW_CONTENT_LIMIT_EXCEEDED'), `${rawTotal} ${boundedRaw.codes} ${boundedRaw.error}`);
     const repeatedRaw = await warned(odfOf('text', `<table:table><table:table-row><table:table-cell table:number-columns-repeated="1000"><text:p>${'<text:span>y</text:span>'.repeat(2000)}</text:p></table:table-cell></table:table-row></table:table>`), 'odt', { includeRawContent: true, decompressionLimits: { maxRawContentLength: 1_000_000 } });
     rawTotal = 0;
     sumRaw(repeatedRaw.ast?.content);
@@ -3215,6 +3215,38 @@ async function parserHardeningTests() {
     const alternateShape = await parseQuiet(pptxOf({ 'ppt/slides/slide1.xml': `<?xml version="1.0"?><p:sld ${pns} xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:cSld><p:spTree><mc:AlternateContent><mc:Choice Requires="a14"><p:sp><p:txBody><a:p><a:r><a:t>ALTSHAPE</a:t></a:r></a:p></p:txBody></p:sp></mc:Choice><mc:Fallback><p:sp><p:txBody><a:p><a:r><a:t>ALTSHAPE</a:t></a:r></a:p></p:txBody></p:sp></mc:Fallback></mc:AlternateContent></p:spTree></p:cSld></p:sld>` }), 'pptx');
     const alternateCount = (JSON.stringify(alternateShape.ast?.content ?? []).match(/"text":"ALTSHAPE"/g) ?? []).length;
     check('pptx: a shape in alternate content is read once', !alternateShape.error && alternateCount === 2, `${alternateShape.error} ${alternateCount}`);
+
+    // An element's own source is found in one pass, however many elements of its name nest in it.
+    await timed('docx: raw source of a run of 160,000 nested w:t is found', () => parseQuiet(docxOf(`<w:p><w:r><w:t>${'<w:t>'.repeat(160000)}x${'</w:t>'.repeat(160000)}</w:t></w:r></w:p>`), 'docx', { includeRawContent: true, serializeRawContent: false }));
+    const rawLimited = await parseQuiet(docxOf(`<w:p><w:r><w:t>${'x'.repeat(5000)}</w:t></w:r></w:p>`), 'docx', { includeRawContent: true, serializeRawContent: false, decompressionLimits: { maxRawContentLength: 1000 } });
+    let rawLimitedTotal = 0;
+    const sumLimited = (ns: any[] | undefined) => ns?.forEach((n: any) => { rawLimitedTotal += n.rawContent?.length ?? 0; sumLimited(n.children); });
+    sumLimited(rawLimited.ast?.content);
+    check('docx: raw source longer than the budget is left out', !rawLimited.error && rawLimitedTotal <= 1000, `${rawLimited.error} ${rawLimitedTotal}`);
+    // An XLSX comments part named many times is read and attached once.
+    const commentRel = '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments1.xml"/>';
+    const manyCommentRels = await heapBudget('xlsx: a comments part of 1 MB named 2,000 times is read', () => parseQuiet(xlsxOf({
+        'xl/worksheets/_rels/sheet1.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${commentRel.repeat(2000)}</Relationships>`,
+        'xl/comments1.xml': `<?xml version="1.0"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>a</author></authors><commentList><comment ref="A1" authorId="0"><text><t>${'x'.repeat(1_000_000)}</t></text></comment></commentList></comments>`,
+    }), 'xlsx')) as any;
+    const attachedComments = cellsOf(manyCommentRels.ast).reduce((sum: number, c: any) => sum + (c.comments?.length ?? 0), 0);
+    check('xlsx: a comments part named 2,000 times is attached once', !manyCommentRels.error && attachedComments === 1, `${manyCommentRels.error} ${attachedComments}`);
+    // Pictures' alt text is found through a map, not a scan of every drawing relationship per picture.
+    let mediaRels = '<?xml version="1.0"?><Relationships>';
+    for (let i = 0; i < 100000; i++) mediaRels += `<Relationship Id="r${i}" Target="../media/z"/>`;
+    await timed('xlsx: 1,000 pictures beside 100,000 drawing relationships are read', () => parseQuiet(xlsxOf({
+        'xl/drawings/_rels/drawing1.xml.rels': mediaRels + '</Relationships>',
+        ...Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`xl/media/${i}`, ''])),
+    }), 'xlsx', { extractAttachments: true }));
+    // Text boxes nested in text boxes add their content to the outer paragraph once.
+    const boxRuns = '<w:t>x</w:t>'.repeat(400);
+    await timed('docx: text boxes nested 1,000 deep, each of 400 runs, parse', () => parseQuiet(docxOf(`${`<w:p><w:r>${boxRuns}</w:r><w:r><w:pict><w:txbxContent>`.repeat(1000)}${'</w:txbxContent></w:pict></w:r></w:p>'.repeat(1000)}`), 'docx'));
+    const boxedNote = await parseQuiet(docxOf('<w:p><w:r><w:t>outer</w:t></w:r><w:r><w:pict><w:txbxContent><w:p><w:bookmarkStart w:id="1" w:name="inbox"/><w:r><w:t>inner</w:t></w:r></w:p></w:txbxContent></w:pict></w:r></w:p>'), 'docx');
+    check('docx: a bookmark in a text box reaches the paragraph around it', !boxedNote.error && JSON.stringify(boxedNote.ast?.content[0]?.metadata ?? {}).includes('inbox'), JSON.stringify(boxedNote.ast?.content[0]?.metadata));
+    // ODF: long part paths are indexed by their last folders only.
+    const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
+    for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';
+    await timed('odt: 20 parts of 30,000 folders each are indexed', () => parseQuiet(odfOf('text', '<text:p><draw:frame><draw:object xlink:href="./Obj"/></draw:frame></text:p>', longPaths), 'odt'));
 }
 
 async function main() {
