@@ -3396,6 +3396,10 @@ async function parserHardeningTests() {
     const htmlNestedLinks = await parseQuiet(Buffer.from('<p><a href="https://one.example/">one <a href="https://two.example/">two</a></a></p>'), 'html');
     const linkJson = JSON.stringify(htmlNestedLinks.ast?.content ?? []);
     check('html: a link started inside a link ends the first, as a browser reads it', /"text":"one ".*"link":"https:\/\/one\.example\/"/.test(linkJson) && /"text":"two".*"link":"https:\/\/two\.example\/"/.test(linkJson), linkJson);
+    // ODF: runs inside spans, links and fields nested in each other are read into the paragraph once.
+    for (const [open, close] of [['<text:span>', '</text:span>'], ['<text:a xlink:href="#x">', '</text:a>'], ['<text:meta>', '</text:meta>']] as const) {
+        await timed(`odt: 600,000 runs inside ${open} nested 1,000 deep parse`, () => parseQuiet(odfOf('text', `<text:p>${open.repeat(1000)}${'x<text:s/>'.repeat(300000)}${close.repeat(1000)}</text:p>`), 'odt'));
+    }
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';

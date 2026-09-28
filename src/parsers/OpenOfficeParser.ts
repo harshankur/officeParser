@@ -574,13 +574,18 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         parentFormatting: TextFormatting = {},
         linkMetadata?: { link?: string; linkType?: 'internal' | 'external' },
         sourceXml: string = '',
-        withFrames = true
+        withFrames = true,
+        into?: { children: OfficeContentNode[]; anchorIds: string[] }
     ): { text: string; children: OfficeContentNode[]; anchorIds: string[] } => {
-        const children: OfficeContentNode[] = [];
-        const anchorIds: string[] = [];
+        // An element's content goes straight into the paragraph's lists (`into`, for the elements
+        // nested in it): returned and copied up, each level of spans, links or fields copied everything
+        // inside it again (250 spans around 600,000 runs took four times as long as none).
+        const children: OfficeContentNode[] = into?.children ?? [];
+        const anchorIds: string[] = into?.anchorIds ?? [];
+        const sink = { children, anchorIds };
         let fullText = '';
 
-        if (!node.childNodes) return { text: '', children: [], anchorIds: [] };
+        if (!node.childNodes) return { text: '', children, anchorIds };
 
         for (let i = 0; i < node.childNodes.length; i++) {
             const child = node.childNodes[i];
@@ -650,10 +655,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     const styleName = element.getAttribute("text:style-name");
                     const formatting = styleName ? mergeFormatting(parentFormatting, styleMap[styleName]) : parentFormatting;
 
-                    const spanContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, formatting, linkMetadata, sourceXml, withFrames);
-                    fullText += spanContent.text;
-                    appendAll(children, spanContent.children);
-                    appendAll(anchorIds, spanContent.anchorIds);
+                    fullText += parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, formatting, linkMetadata, sourceXml, withFrames, sink).text;
                 } else if (tagName === 'text:a' || tagName === 'draw:a') {
                     // Hyperlink: around text (text:a), or around a frame, a picture that is a link (draw:a)
                     let href = element.getAttribute('xlink:href') || '';
@@ -678,10 +680,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         newLinkMetadata = { link: href, linkType: linkType as 'internal' | 'external' };
                     }
 
-                    const linkContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, newLinkMetadata, sourceXml, withFrames);
-                    fullText += linkContent.text;
-                    appendAll(children, linkContent.children);
-                    appendAll(anchorIds, linkContent.anchorIds);
+                    fullText += parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, newLinkMetadata, sourceXml, withFrames, sink).text;
                 } else if (tagName === 'text:note' && !config.ignoreNotes) {
                     // Footnote or endnote
                     const noteClass = (element.getAttribute('text:note-class') || 'footnote') as 'footnote' | 'endnote';
@@ -752,15 +751,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     const annotation = getDirectChildren(element, 'text:ruby-text')[0];
                     for (const part of [base, annotation]) {
                         if (!part) continue;
-                        const partContent = parseInlineContent(part, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, withFrames);
+                        // The reading's parenthesis goes before its content: kept only when there is some.
+                        const openAt = children.length;
+                        if (part === annotation) children.push({ type: 'text', text: '(', formatting: parentFormatting, metadata: linkMetadata ? { ...linkMetadata } : undefined });
+                        const partText = parseInlineContent(part, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, withFrames, sink).text;
                         if (part === annotation) {
-                            if (!partContent.text) continue;
+                            if (!partText) { children.splice(openAt, children.length - openAt); continue; }
                             fullText += '(';
-                            children.push({ type: 'text', text: '(', formatting: parentFormatting, metadata: linkMetadata ? { ...linkMetadata } : undefined });
                         }
-                        fullText += partContent.text;
-                        appendAll(children, partContent.children);
-                        appendAll(anchorIds, partContent.anchorIds);
+                        fullText += partText;
                         if (part === annotation) {
                             fullText += ')';
                             children.push({ type: 'text', text: ')', formatting: parentFormatting, metadata: linkMetadata ? { ...linkMetadata } : undefined });
@@ -771,20 +770,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // placeholder), `text:meta`, and any other text element: the text it shows, where it
                     // stands. Each was dropped, so "Figure 3" read as "Figure " and a reference to a
                     // heading as nothing.
-                    const fieldContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, withFrames);
-                    fullText += fieldContent.text;
-                    appendAll(children, fieldContent.children);
-                    appendAll(anchorIds, fieldContent.anchorIds);
+                    fullText += parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, withFrames, sink).text;
                 } else if (tagName === 'draw:frame' && !withFrames) {
                     // A spreadsheet cell reads its frames' pictures and objects itself; here, the text of
                     // a frame's text box only (its own frames, nested, are the cell's too).
                     const drawTextBox = frameChild(element, "draw:text-box");
                     if (drawTextBox) {
                         for (const boxParagraph of ownParagraphs(drawTextBox)) {
-                            const boxContent = parseInlineContent(boxParagraph, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, false);
-                            fullText += boxContent.text;
-                            appendAll(children, boxContent.children);
-                            appendAll(anchorIds, boxContent.anchorIds);
+                            fullText += parseInlineContent(boxParagraph, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, false, sink).text;
                         }
                     }
                 } else if (tagName === 'draw:frame') {
