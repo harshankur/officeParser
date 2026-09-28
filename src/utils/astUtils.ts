@@ -1,3 +1,4 @@
+import { boundRepeatedValues } from './repeatUtils.js';
 import { OfficeGenerator } from '../OfficeGenerator.js';
 import { ConversionResult, GeneratorConfig, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeParserConfig, SupportedDestination, SupportedFileType } from '../types.js';
 
@@ -22,6 +23,8 @@ export function createAST(
     config: OfficeParserConfig,
     auxiliary: OfficeAuxiliaryContent | undefined,
 ): OfficeParserAST {
+    // Last, over everything the parser built: values a definition gave many nodes are bounded in all.
+    boundRepeatedValues([content, auxiliary?.headers, auxiliary?.footers, auxiliary?.slideMasters, auxiliary?.outline], config);
     return {
         config,
         type,

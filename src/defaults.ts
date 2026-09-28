@@ -61,6 +61,8 @@ const DEFAULT_PDF_PARSER_CONFIG: DeepRequired<PdfParserConfig> = {
     pageRange: '',
     normalizeText: true,
     extractTextColor: true,
+    maxTextItems: 20_000,
+    maxOperators: 250_000,
 };
 
 /**
@@ -104,7 +106,7 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
         maxTableCells: 1000000,
         maxXmlElements: 2000000,
         maxRawContentLength: 64 * 1024 * 1024,
-        maxRepeatedCellContent: 16 * 1024 * 1024,
+        maxRepeatedContent: 16 * 1024 * 1024,
     },
     htmlParserConfig: DEFAULT_HTML_PARSER_CONFIG,
     pdfParserConfig: DEFAULT_PDF_PARSER_CONFIG,

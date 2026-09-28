@@ -12,6 +12,7 @@ import * as path from 'path';
 import { strFromU8, unzipSync, zipSync, zlibSync } from 'fflate';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
+import { OfficeTemplate } from '../../src/OfficeTemplate';
 import { OfficeParserAST, OfficeWarningType } from '../../src/types';
 import { resolveGeneratorConfig, resolveParserConfig } from '../../src/utils/configUtils';
 import {
@@ -2832,13 +2833,13 @@ async function parserHardeningTests() {
         const started = Date.now();
         const repeated = await warned(doc, 'ods');
         if (repeated.ast) html = (await OfficeGenerator.generate(repeated.ast, 'html', { onWarning: () => {} } as any)).value as string;
-        check(`ods: ${label} is copied within maxRepeatedCellContent, with REPEATED_CONTENT_LIMIT_EXCEEDED`, !repeated.error && html.length < 20_000_000 && Date.now() - started < 5000 && repeated.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && html.includes('after'), `${html.length} ${Date.now() - started}ms ${repeated.codes} ${repeated.error}`);
+        check(`ods: ${label} is copied within maxRepeatedContent, with REPEATED_CONTENT_LIMIT_EXCEEDED`, !repeated.error && html.length < 20_000_000 && Date.now() - started < 5000 && repeated.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED') && html.includes('after'), `${html.length} ${Date.now() - started}ms ${repeated.codes} ${repeated.error}`);
     }
     const cellsOf = (ast: any) => { const out: any[] = []; const walk = (ns: any[]) => ns?.forEach((n: any) => { if (n.type === 'cell') out.push(n); else walk(n.children); }); walk(ast?.content); return out; };
-    const small = await warned(repeatedCell(100), 'ods', { decompressionLimits: { maxRepeatedCellContent: 100_000 } });
-    const large = await warned(repeatedCell(100), 'ods', { decompressionLimits: { maxRepeatedCellContent: 100_000_000 } });
+    const small = await warned(repeatedCell(100), 'ods', { decompressionLimits: { maxRepeatedContent: 100_000 } });
+    const large = await warned(repeatedCell(100), 'ods', { decompressionLimits: { maxRepeatedContent: 100_000_000 } });
     const smallCells = cellsOf(small.ast), largeCells = cellsOf(large.ast);
-    check('ods: maxRepeatedCellContent is the limit, and later cells keep their columns', smallCells.length < 10 && largeCells.length === 101 && smallCells[smallCells.length - 1]?.metadata?.col === 100 && !large.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${smallCells.length} ${largeCells.length} ${smallCells[smallCells.length - 1]?.metadata?.col}`);
+    check('ods: maxRepeatedContent is the limit, and later cells keep their columns', smallCells.length < 10 && largeCells.length === 101 && smallCells[smallCells.length - 1]?.metadata?.col === 100 && !large.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${smallCells.length} ${largeCells.length} ${smallCells[smallCells.length - 1]?.metadata?.col}`);
     const xlsxCells = await warned(xlsxOf({ 'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${'<row><c t="inlineStr"><is><t>x</t></is></c><c><v>1</v></c></row>'.repeat(2500)}</sheetData></worksheet>` }), 'xlsx', { decompressionLimits: { maxTableCells: 1000 } });
     check('xlsx: a sheet holds maxTableCells cells, with TABLE_CELL_LIMIT_EXCEEDED', cellsOf(xlsxCells.ast).length === 1000 && xlsxCells.codes.includes('TABLE_CELL_LIMIT_EXCEEDED'), `${cellsOf(xlsxCells.ast).length} ${xlsxCells.codes}`);
 
@@ -2847,6 +2848,86 @@ async function parserHardeningTests() {
     let deepTable: any = { type: 'paragraph', children: [{ type: 'text', text: 'x' }] };
     for (let d = 0; d < 26; d++) deepTable = { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [deepTable] }] }] };
     await timed('text: tables nested 26 deep are written', () => OfficeGenerator.generate(astWith([deepTable]), 'text' as any, { onWarning: () => {} } as any));
+
+    let deepSheet: any = { type: 'paragraph', children: [{ type: 'text', text: 'x' }] };
+    for (let d = 0; d < 3000; d++) deepSheet = { type: 'sheet', metadata: { sheetName: 's' }, children: [{ type: 'row', children: [{ type: 'cell', children: [deepSheet] }] }] };
+    let deepError: any;
+    try { await OfficeGenerator.generate(astWith([deepSheet]), 'html' as any, { onWarning: () => {} } as any); } catch (e) { deepError = e; }
+    check('generators: an AST nested past the stack is MAX_NESTING_DEPTH_EXCEEDED', deepError?.officeIssue?.code === 'MAX_NESTING_DEPTH_EXCEEDED', String(deepError));
+
+    // Content repeated by reference is bounded in all (maxRepeatedContent): one XLSX string shown in
+    // many cells, one style's font or one relationship's link given to many runs, a style's font on a
+    // repeated ODF cell. Each made hundreds of MB of output, or a heap abort, from a few KB.
+    const sharedStringBook = (si: string, cells: number) => xlsxOf({
+        'xl/sharedStrings.xml': `<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si>${si}</si></sst>`,
+        'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${Array.from({ length: cells / 100 }, (_, r) => `<row r="${r + 1}">${'<c t="s"><v>0</v></c>'.repeat(100)}</row>`).join('')}</sheetData></worksheet>`,
+    });
+    for (const [label, si, cells] of [['a 1 MB string shown in 400 cells', `<t>${'x'.repeat(1_000_000)}</t>`, 400], ['a string of 20,000 runs shown in 50,000 cells', '<r><rPr><b/></rPr><t>x</t></r>'.repeat(20000), 50000]] as const) {
+        const started = Date.now();
+        const shown = await heapBudget(`xlsx: ${label} is read`, () => warned(sharedStringBook(si, cells), 'xlsx')) as any;
+        const csv = shown.ast ? (await OfficeGenerator.generate(shown.ast, 'csv', { onWarning: () => {} } as any)).value as string : '';
+        check(`xlsx: ${label} repeats within maxRepeatedContent, with REPEATED_CONTENT_LIMIT_EXCEEDED`, !shown.error && csv.length < 40_000_000 && Date.now() - started < 5000 && shown.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${csv.length} ${Date.now() - started}ms ${shown.codes} ${shown.error}`);
+    }
+    const styledRuns = await parseQuiet(xlsxOf({
+        'xl/sharedStrings.xml': '<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><r><t>rich</t></r></si></sst>',
+        'xl/styles.xml': '<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font/></fonts><fills count="3"><fill/><fill/><fill><patternFill patternType="solid"><fgColor rgb="FF00FF00"/></patternFill></fill></fills><cellXfs count="2"><xf fontId="0" fillId="0"/><xf fontId="0" fillId="2"/></cellXfs></styleSheet>',
+        'xl/worksheets/sheet1.xml': '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s" s="1"><v>0</v></c><c r="B1" t="s"><v>0</v></c></row></sheetData></worksheet>',
+    }), 'xlsx');
+    const runBackgrounds = cellsOf(styledRuns.ast).map(c => c.children?.[0]?.formatting?.backgroundColor ?? '');
+    check('xlsx: cells sharing a rich string keep their own cell style', JSON.stringify(runBackgrounds) === JSON.stringify(['#00FF00', '']), JSON.stringify(runBackgrounds));
+    const longFont = 'F'.repeat(65536);
+    const fontRuns = await warned(docxOf(`<w:p>${'<w:r><w:rPr><w:rStyle w:val="A"/></w:rPr><w:t>x</w:t></w:r>'.repeat(7500)}</w:p>`, { 'word/styles.xml': `<?xml version="1.0"?><w:styles ${W}><w:style w:type="character" w:styleId="A"><w:rPr><w:rFonts w:ascii="${longFont}"/></w:rPr></w:style></w:styles>` }), 'docx');
+    const linkRuns = await warned(docxOf(`<w:p>${'<w:hyperlink r:id="rId5"><w:r><w:t>x</w:t></w:r></w:hyperlink> '.repeat(2000)}</w:p>`, { 'word/_rels/document.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://e.com/${'a'.repeat(65536)}" TargetMode="External"/></Relationships>` }), 'docx');
+    const fontCell = await warned(odfOf('spreadsheet', '<table:table table:name="S"><table:table-row><table:table-cell table:style-name="ce1" table:number-columns-repeated="5000"><text:p><text:span text:style-name="T1">x</text:span></text:p></table:table-cell></table:table-row></table:table>', {},
+        `<style:style style:name="T1" style:family="text"><style:text-properties xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" fo:font-family="${longFont}"/></style:style><style:style style:name="ce1" style:family="table-cell"><style:text-properties xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" fo:font-family="${longFont}"/></style:style>`), 'ods');
+    for (const [label, result] of [['docx: a 64 KB style font on 7,500 runs', fontRuns], ['docx: a 64 KB link target on 2,000 links', linkRuns], ['ods: a 64 KB cell font repeated 5,000 times', fontCell]] as const) {
+        let longest = 0;
+        for (const format of ['html', 'rtf'] as const) {
+            const out = result.ast ? (await OfficeGenerator.generate(result.ast, format, { onWarning: () => {} } as any)).value as string : '';
+            longest = Math.max(longest, out.length);
+        }
+        check(`${label} repeats within maxRepeatedContent, with REPEATED_CONTENT_LIMIT_EXCEEDED`, !result.error && longest > 0 && longest < 40_000_000 && result.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${longest} ${result.codes} ${result.error}`);
+    }
+
+    // PDF: a form XObject drawing another many times is read within a budget of text items and
+    // operators (seven forms deep, 2.5 KB, ended the process out of memory).
+    const pdfForms = (depth: number, leaf: string) => {
+        const ids = Array.from({ length: depth }, (_, i) => 6 + i);
+        const xobjects = (upto: number) => '<< ' + ids.slice(0, upto).map((id, i) => `/X${i} ${id} 0 R`).join(' ') + ' >>';
+        const stream = (body: string, extra = '') => `<< /Length ${body.length}${extra} >>\nstream\n${body}\nendstream`;
+        const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> /XObject ${xobjects(depth)} >> /Contents 5 0 R >>`,
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', stream(`BT /F1 12 Tf 10 700 Td (page) Tj ET /X${depth - 1} Do`),
+            ...ids.map((_, i) => stream(i === 0 ? leaf : `/X${i - 1} Do `.repeat(10), ` /Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> /XObject ${xobjects(i)} >>`))];
+        let pdf = '%PDF-1.4\n';
+        const offsets: number[] = [];
+        objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+        const xref = pdf.length;
+        pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+        return Buffer.from(pdf, 'latin1');
+    };
+    for (const [label, leaf] of [['text', 'BT /F1 12 Tf 10 10 Td (xy) Tj ET'], ['shapes', '0 0 1 1 re f']] as const) {
+        const started = Date.now();
+        const forms = await heapBudget(`pdf: forms of ${label} nested 8 deep, each drawn 10 times, are read`, () => warned(pdfForms(8, leaf), 'pdf')) as any;
+        check(`pdf: forms of ${label} nested 8 deep stop at the content limit with PDF_CONTENT_LIMIT_EXCEEDED`, !forms.error && Date.now() - started < 5000 && forms.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED') && JSON.stringify(forms.ast?.content).includes('page'), `${Date.now() - started}ms ${forms.codes} ${forms.error}`);
+    }
+    const strictPdf = await warned(pdfForms(5, 'BT /F1 12 Tf 10 10 Td (xy) Tj ET'), 'pdf', { pdfParserConfig: { maxTextItems: 1 } });
+    const roomyPdf = await warned(pdfForms(5, 'BT /F1 12 Tf 10 10 Td (xy) Tj ET'), 'pdf', { pdfParserConfig: { maxTextItems: 100_000, maxOperators: 1_000_000 } });
+    check('pdf: maxTextItems is the base of the limit', strictPdf.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED') && !roomyPdf.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${strictPdf.codes} | ${roomyPdf.codes}`);
+
+    // Templates, raw source and chunks.
+    await timed('template: a part of 160,000 unclosed <w:p is rendered', () => OfficeTemplate.render(Buffer.from(zipSync({ '[Content_Types].xml': enc('<Types/>'), 'word/document.xml': enc('<w:p '.repeat(160000)) })), { data: { a: 1 } }).catch(() => undefined));
+    await timed('docx: raw source of 32,000 paragraphs is read', () => parseQuiet(docxOf('<w:p><w:r><w:t>x</w:t></w:r></w:p>\n'.repeat(32000)), 'docx', { includeRawContent: true, serializeRawContent: false }));
+    const nestedSource = await parseQuiet(docxOf('<w:tbl><w:tr><w:tc><w:tbl><w:tr><w:tc><w:p><w:r><w:t>in</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>out</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:br/><w:t>b</w:t></w:r></w:p>'), 'docx', { includeRawContent: true, serializeRawContent: false });
+    const sources: string[] = [];
+    const collectSources = (ns: any[] | undefined) => ns?.forEach((n: any) => { if (n.type === 'paragraph' && n.rawContent) sources.push(n.rawContent); collectSources(n.children); });
+    collectSources(nestedSource.ast?.content);
+    check('docx: raw source of a paragraph is the paragraph, nested or after a break', JSON.stringify(sources) === JSON.stringify(['<w:p><w:r><w:t>in</w:t></w:r></w:p>', '<w:p><w:r><w:t>out</w:t></w:r></w:p>', '<w:p><w:r><w:br/><w:t>b</w:t></w:r></w:p>']), JSON.stringify(sources));
+    const longHeading = await parseQuiet(docxOf(`<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>${'H'.repeat(1_000_000)}</w:t></w:r></w:p>${'<w:p><w:r><w:t>body text</w:t></w:r></w:p>'.repeat(1000)}`), 'docx');
+    const chunked = longHeading.ast ? (await OfficeGenerator.generate(longHeading.ast, 'chunks', { onWarning: () => {} } as any)).value as any : [];
+    const chunkList: any[] = Array.isArray(chunked) ? chunked : chunked.chunks;
+    const chunkMetadata = chunkList.reduce((n: number, c: any) => n + JSON.stringify(c.metadata).length, 0);
+    check('chunks: a 1 MB heading is not repeated in each chunk\'s metadata', chunkList.length > 0 && chunkMetadata < 5_000_000, `${chunkList.length} ${chunkMetadata}`);
 }
 
 async function main() {

@@ -129,35 +129,80 @@ export const getSourceSubstring = (node: any, sourceXml: string): string | undef
     if (!node || typeof node.lineNumber !== 'number' || typeof node.columnNumber !== 'number') {
         return undefined;
     }
+    const starts = lineStartsOf(sourceXml);
+    if (node.lineNumber < 1 || node.lineNumber > starts.length) return undefined;
+    const startIdx = starts[node.lineNumber - 1] + node.columnNumber - 1;
+    if (!isElement(node) || !sourceXml.startsWith('<' + node.tagName, startIdx)) return undefined;
+    const tagName: string = node.tagName;
 
-    // Convert line/column to absolute index
-    const lines = sourceXml.split('\n');
-    let startIdx = 0;
-    for (let i = 0; i < node.lineNumber - 1; i++) {
-        startIdx += lines[i].length + 1; // +1 for newline
-    }
-    startIdx += node.columnNumber - 1;
+    // The start tag's end, past quoted attribute values (which may hold `>`).
+    const startTagEnd = tagEndAt(sourceXml, startIdx + 1 + tagName.length);
+    if (startTagEnd === -1) return undefined;
+    if (sourceXml.charCodeAt(startTagEnd - 1) === 47 /* / */) return sourceXml.substring(startIdx, startTagEnd + 1);
 
-    // To find the end of the node, we look for the closing tag.
-    // This is a heuristic approach that works well for simple structured nodes (p, tbl, etc.)
-    // but might be complex for overlapping namespaces or malformed XML.
-    if (isElement(node)) {
-        const tagName = node.tagName;
-        const closingTag = `</${tagName}>`;
-        const endIdx = sourceXml.indexOf(closingTag, startIdx);
-        if (endIdx !== -1) {
-            return sourceXml.substring(startIdx, endIdx + closingTag.length);
+    // Its matching end tag: elements of the same name inside it open and close their own. Found by a
+    // forward scan over the element alone (what it returns), where searching for the first `</name>`
+    // cut a nested element short, and searched the rest of the part for each element that has none.
+    // Searched only up to where the next node after it starts: an element the reader closed for a
+    // malformed part has no end tag, and each such one searched the rest of the part.
+    const within = sourceXml.substring(0, followingStart(node, starts, sourceXml.length));
+    const open = '<' + tagName;
+    const close = '</' + tagName + '>';
+    let depth = 1;
+    let at = startTagEnd + 1;
+    while (true) {
+        const nextClose = within.indexOf(close, at);
+        if (nextClose === -1) return undefined;
+        let nextOpen = within.indexOf(open, at);
+        while (nextOpen !== -1 && nextOpen < nextClose) {
+            const after = sourceXml.charCodeAt(nextOpen + open.length);
+            const end = tagEndAt(sourceXml, nextOpen + open.length);
+            if (end === -1) return undefined;
+            // The same name (not a longer one it starts), and not self-closing.
+            if ((after === 62 || after === 47 || after === 32 || after === 9 || after === 10 || after === 13) && sourceXml.charCodeAt(end - 1) !== 47) depth++;
+            nextOpen = within.indexOf(open, end + 1);
         }
-
-        // Self-closing tag handling (e.g., <w:p/>)
-        const selfClosingEnd = sourceXml.indexOf('/>', startIdx);
-        const nextOpenTag = sourceXml.indexOf('<', startIdx + 1);
-        if (selfClosingEnd !== -1 && (nextOpenTag === -1 || selfClosingEnd < nextOpenTag)) {
-            return sourceXml.substring(startIdx, selfClosingEnd + 2);
-        }
+        at = nextClose + close.length;
+        if (--depth === 0) return sourceXml.substring(startIdx, at);
     }
+};
 
-    return undefined;
+/** Where the first node after `node` in the document (not inside it) starts, or `fallback`. */
+const followingStart = (node: any, starts: number[], fallback: number): number => {
+    for (let n = node; n; n = n.parentNode) {
+        let sibling = n.nextSibling;
+        while (sibling && typeof sibling.lineNumber !== 'number') sibling = sibling.nextSibling;
+        if (sibling && sibling.lineNumber >= 1 && sibling.lineNumber <= starts.length) return starts[sibling.lineNumber - 1] + sibling.columnNumber - 1;
+    }
+    return fallback;
+};
+
+/** Where the tag whose name ends before `from` ends (its `>`), past quoted attribute values; -1 if it does not. */
+const tagEndAt = (xml: string, from: number): number => {
+    let quote = 0;
+    for (let i = from; i < xml.length; i++) {
+        const c = xml.charCodeAt(i);
+        if (quote) { if (c === quote) quote = 0; }
+        else if (c === 34 || c === 39) quote = c;
+        else if (c === 62) return i;
+        else if (c === 60) return -1;
+    }
+    return -1;
+};
+
+/**
+ * Where each line of `source` starts, for the parse's locator positions: computed once per source,
+ * where splitting the source into lines for every node took time in the square of its size.
+ */
+let lineStartsSource: string | undefined;
+let lineStarts: number[] = [];
+const lineStartsOf = (source: string): number[] => {
+    if (source !== lineStartsSource) {
+        lineStarts = [0];
+        for (let i = source.indexOf('\n'); i !== -1; i = source.indexOf('\n', i + 1)) lineStarts.push(i + 1);
+        lineStartsSource = source;
+    }
+    return lineStarts;
 };
 
 /**

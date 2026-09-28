@@ -142,13 +142,39 @@ function replaceInChunk(chunk: string, phRe: RegExp, resolve: (key: string) => s
 }
 
 /**
+ * `xml` split at every paragraph-boundary tag (`<w:p ...>`, `</w:p>`, `<w:p/>`), the tags kept as their
+ * own pieces, found by a forward scan: a pattern reading a tag to its `>` read the rest of the part from
+ * every `<w:p` that has none, so 570 bytes of zipped `<w:p ` took 24 seconds.
+ */
+function paragraphPieces(xml: string): string[] {
+    const pieces: string[] = [];
+    let pieceStart = 0;
+    for (let at = xml.indexOf('<', 0); at !== -1; at = xml.indexOf('<', at + 1)) {
+        let tagEnd = -1;
+        if (xml.startsWith('</w:p>', at)) tagEnd = at + 6;
+        else if (xml.startsWith('<w:p', at) && !/[\w]/.test(xml.charAt(at + 4))) {
+            const gt = xml.indexOf('>', at + 4);
+            // No `>` left: no tag can end in the rest of the part.
+            if (gt === -1) break;
+            tagEnd = gt + 1;
+        }
+        if (tagEnd === -1) continue;
+        pieces.push(xml.slice(pieceStart, at), xml.slice(at, tagEnd));
+        pieceStart = tagEnd;
+        at = tagEnd - 1;
+    }
+    pieces.push(xml.slice(pieceStart));
+    return pieces;
+}
+
+/**
  * Applies placeholder replacement to one XML part. The part is split at every paragraph-boundary tag
- * (`<w:p ...>`, `</w:p>`, `<w:p/>`); each piece between boundaries is one paragraph's own run content
- * (nested paragraphs, e.g. text boxes, become their own pieces), so joining a piece's `<w:t>` never
- * crosses a paragraph boundary. This is linear (no `[\s\S]*?`-to-`</w:p>` backtracking).
+ * (see paragraphPieces); each piece between boundaries is one paragraph's own run content (nested
+ * paragraphs, e.g. text boxes, become their own pieces), so joining a piece's `<w:t>` never crosses a
+ * paragraph boundary.
  */
 function replaceInPart(xml: string, phRe: RegExp, resolve: (key: string) => string | null): string {
-    const pieces = xml.split(/(<w:p\b[^>]*\/>|<w:p\b[^>]*>|<\/w:p>)/g);
+    const pieces = paragraphPieces(xml);
     for (let i = 0; i < pieces.length; i++) {
         // Boundary tags (odd indices) have no `<w:t>`, so processing them is a harmless no-op; process
         // every piece uniformly rather than tracking parity.

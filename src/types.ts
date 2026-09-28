@@ -112,7 +112,7 @@ export enum OfficeWarningType {
     TABLE_CELL_LIMIT_EXCEEDED = 'TABLE_CELL_LIMIT_EXCEEDED',
     /** The document's rawContent reached `decompressionLimits.maxRawContentLength`; the remaining nodes carry none */
     RAW_CONTENT_LIMIT_EXCEEDED = 'RAW_CONTENT_LIMIT_EXCEEDED',
-    /** ODF repeated cells or rows reached `decompressionLimits.maxRepeatedCellContent`; the remaining repeats were not made */
+    /** The content a document repeats by reference reached `decompressionLimits.maxRepeatedContent`; later repeats were not made, shortened, or went without the value */
     REPEATED_CONTENT_LIMIT_EXCEEDED = 'REPEATED_CONTENT_LIMIT_EXCEEDED',
     /** A metadata override could not be represented in the destination format's vocabulary */
     METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE',
@@ -132,6 +132,8 @@ export enum OfficeWarningType {
     PDF_NO_TEXT_EXTRACTED = 'PDF_NO_TEXT_EXTRACTED',
     /** A PDF's bookmark outline was cut short by the depth/size cap or could not be read; `ast.auxiliary.outline` holds only what was recovered */
     PDF_OUTLINE_TRUNCATED = 'PDF_OUTLINE_TRUNCATED',
+    /** A PDF produced more text items or drawing operators than `pdfParserConfig.maxTextItems` / `maxOperators` allow; the rest of it was not read */
+    PDF_CONTENT_LIMIT_EXCEEDED = 'PDF_CONTENT_LIMIT_EXCEEDED',
     /** `ocr: true` was set without `extractAttachments: true`; OCR runs over extracted images (in every format), so no OCR was performed */
     OCR_REQUIRES_ATTACHMENTS = 'OCR_REQUIRES_ATTACHMENTS',
     /** A config option was passed that this version does not recognize (e.g. a key renamed in a major release); it had no effect */
@@ -591,6 +593,26 @@ export interface PdfParserConfig {
      * Default is true.
      */
     extractTextColor?: boolean;
+    /**
+     * Base of the text items one PDF may yield; the limit is this plus one per byte of the file. A form
+     * XObject can draw another many times, and pdf.js reads a form again at each use, so a few KB of
+     * nested forms can ask for millions of text items (2.5 KB, seven forms deep, ended the process out
+     * of memory). Past the limit, the page keeps the text read so far, the rest of the document is not
+     * read, and a `PDF_CONTENT_LIMIT_EXCEEDED` warning is raised. The allowance per byte keeps large
+     * documents whole; raise the base for a small file that legitimately holds more.
+     *
+     * Default is 20000.
+     */
+    maxTextItems?: number;
+    /**
+     * Base of the drawing operators pdf.js may read from one PDF (for fonts, images and text color);
+     * the limit is this plus four per byte of the file. Nested forms that draw only shapes multiply
+     * operators as text items multiply (see `maxTextItems`). Past the limit the rest of the document
+     * is not read, with a `PDF_CONTENT_LIMIT_EXCEEDED` warning.
+     *
+     * Default is 250000.
+     */
+    maxOperators?: number;
 }
 
 /**
@@ -752,20 +774,25 @@ export interface DecompressionLimits {
      */
     maxRawContentLength?: number;
     /**
-     * Maximum amount of content that ODF repeated cells and rows (`table:number-columns-repeated`,
-     * `table:number-rows-repeated`) may copy in one document, counted as the characters of text plus
-     * 16 for each node a copy holds. A repeated cell shares its content with the first copy, so the
-     * AST stays small, but everything that reads the AST afterwards (each generator, `toText`) writes
-     * the content once per copy: 700 bytes asking for 100,000 copies of a 2,000-span cell made 200 MB
-     * of text. `maxTableCells` counts cells, not what they hold, so it cannot catch this. Empty cells
-     * cost nothing, and real documents repeat small values, far below it. Past it, the remaining
-     * repeats of content-bearing cells are not made and a `REPEATED_CONTENT_LIMIT_EXCEEDED` warning is
-     * raised; later cells keep their row and column numbers. Raise it for documents that legitimately
-     * repeat large cells.
+     * Maximum amount of content one document repeats by reference. A document can state something
+     * once and use it many times: an ODF cell or row repeated with `table:number-columns-repeated` /
+     * `table:number-rows-repeated`, an XLSX shared string shown in many cells, a style's font or colour
+     * given to every run using it, a relationship's link target given to every hyperlink naming it, a
+     * comment author named by id. The AST shares the value, so it stays small, but everything that reads
+     * the AST afterwards (each generator, `toText`) writes it at each use: 700 bytes asking for 100,000
+     * copies of a 2,000-span cell made 200 MB of text, and 1.7 KB of DOCX giving one 64 KB font to 2,000
+     * runs made 131 MB of HTML. `maxTableCells` counts cells, not what they hold.
+     *
+     * Each use after the first costs what it weighs (characters, plus 16 for each node a repeated cell
+     * holds) past 64, so short values repeat freely. Past the limit, with a
+     * `REPEATED_CONTENT_LIMIT_EXCEEDED` warning, the remaining repeats of a content-bearing ODF cell are
+     * not made (later cells keep their row and column numbers), an XLSX cell shows the start of its
+     * string, and a node repeating a long style value or link goes without it. Raise it for documents
+     * that legitimately repeat large content.
      *
      * Default is 16777216.
      */
-    maxRepeatedCellContent?: number;
+    maxRepeatedContent?: number;
 }
 
 /**
@@ -2094,9 +2121,9 @@ export interface OfficeChunk {
         pageNumber?: number;
         /** Slide number (1-based), if available (PPTX/ODP). */
         slideNumber?: number;
-        /** Sheet name, if available (XLSX/ODS). */
+        /** Sheet name, if available (XLSX/ODS); past 256 characters, its start and `…`. */
         sheetName?: string;
-        /** The text of the nearest heading above this chunk in the document. */
+        /** The text of the nearest heading above this chunk in the document; past 256 characters, its start and `…` (every chunk under the heading repeats it). */
         closestHeading?: string;
         /** True if this chunk is part of a table split. */
         isTableChunk?: boolean;

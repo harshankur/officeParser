@@ -679,11 +679,112 @@ function resolveSectionLinks(
     for (const roots of rewriteRoots) for (const n of roots) rewrite(n);
 }
 
+/**
+ * What pdf.js may produce for one document: text items and drawing operators. A form XObject can draw
+ * another many times, and pdf.js reads a form again at each use, so 2.5 KB nesting seven forms that
+ * each draw the one below ten times asked for ten million text items and ended the process out of
+ * memory (forms that draw only shapes did the same through the operator list). Each budget is its
+ * `pdfParserConfig` base plus an allowance per byte of the file (1 text item, 4 operators), so a
+ * large document is never cut short for its size. Past either, the rest of the document is not
+ * read: pdf.js keeps reading a request it was asked to stop, so the document is closed, which is
+ * what stops it.
+ */
+class PdfWorkBudget {
+    private textLeft: number;
+    private operatorsLeft: number;
+    spent = false;
+    constructor(private pdfDocument: any, private config: FullOfficeParserConfig, fileBytes: number) {
+        this.textLeft = (config.pdfParserConfig?.maxTextItems ?? 20_000) + fileBytes;
+        this.operatorsLeft = (config.pdfParserConfig?.maxOperators ?? 250_000) + 4 * fileBytes;
+    }
+    /** How many of `count` text items may be kept; fewer than `count` means the budget is spent (see spend). */
+    takeText(count: number): number {
+        const allowed = Math.max(0, Math.min(count, this.textLeft));
+        this.textLeft -= count;
+        return allowed;
+    }
+    /** Whether `count` more operators may be read. */
+    takeOperators(count: number): boolean {
+        this.operatorsLeft -= count;
+        if (this.operatorsLeft < 0) this.spend();
+        return !this.spent;
+    }
+    /**
+     * Closes the document once the budget is spent, which stops pdf.js's tasks. A stream being read is
+     * left unread rather than cancelled: pdf.js never finishes closing a document one of whose streams
+     * was cancelled, so the parse waited forever.
+     */
+    spend(): void {
+        if (this.spent) return;
+        this.spent = true;
+        logWarning(OfficeWarningType.PDF_CONTENT_LIMIT_EXCEEDED, this.config);
+        try { Promise.resolve(this.pdfDocument.loadingTask.destroy()).catch(() => { /* already closed */ }); } catch { /* already closed */ }
+    }
+}
+
+/** A page's text as `getTextContent` gives it, read as a stream so reading stops at the budget. */
+async function readTextContent(page: any, params: object, work: PdfWorkBudget): Promise<{ items: any[]; styles: Record<string, any> }> {
+    const items: any[] = [];
+    const styles: Record<string, any> = Object.create(null);
+    const reader = page.streamTextContent(params).getReader();
+    while (!work.spent) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        Object.assign(styles, value.styles);
+        const allowed = work.takeText(value.items.length);
+        for (let i = 0; i < allowed; i++) items.push(value.items[i]);
+        // Past the budget the stream is left unread, not cancelled (see spend).
+        if (allowed < value.items.length) work.spend();
+    }
+    return { items, styles };
+}
+
+/** The operators the image and color readers use; the rest (paths, above all) are not kept. */
+const keptOperatorsCache = new WeakMap<object, Set<number>>();
+const keptOperators = (OPS: any): Set<number> => {
+    let kept = keptOperatorsCache.get(OPS);
+    if (!kept) {
+        kept = new Set(['save', 'restore', 'transform', 'paintFormXObjectBegin', 'paintFormXObjectEnd', 'dependency',
+            'paintImageXObject', 'paintImageXObjectRepeat', 'paintInlineImageXObject',
+            'setFillRGBColor', 'setFillColorN', 'setFillTransparent', 'setStrokeRGBColor', 'setStrokeColorN', 'setStrokeTransparent',
+            'beginText', 'setTextMatrix', 'moveText', 'setLeadingMoveText', 'setLeading', 'nextLine', 'setTextRise',
+            'setTextRenderingMode', 'showText'].map(name => OPS[name]).filter((op): op is number => typeof op === 'number'));
+        keptOperatorsCache.set(OPS, kept);
+    }
+    return kept;
+};
+
+/**
+ * A page's operator list within the budget, holding only what `keep` asks for: nothing when it is read
+ * only so pdf.js resolves the page's fonts. pdf.js offers no stream of it, so each chunk is counted
+ * as it arrives (its `_renderPageChunk`); without that hook the list is read unbounded, as before.
+ */
+async function readOperatorList(pdfjs: any, page: any, work: PdfWorkBudget, keep: 'none' | 'drawing'): Promise<any | null> {
+    if (work.spent) return null;
+    const kept = keep === 'drawing' ? keptOperators(pdfjs.OPS) : null;
+    let stopped!: () => void;
+    const stop = new Promise<null>(resolve => { stopped = () => resolve(null); });
+    const hooked = typeof page._renderPageChunk === 'function' && !Object.prototype.hasOwnProperty.call(page, '_renderPageChunk');
+    if (hooked) {
+        const original = page._renderPageChunk;
+        page._renderPageChunk = function (chunk: any, intentState: any) {
+            if (!work.takeOperators(chunk?.length ?? 0)) { stopped(); return; }
+            const fnArray: number[] = [];
+            const argsArray: unknown[] = [];
+            if (kept) for (let i = 0; i < chunk.length; i++) if (kept.has(chunk.fnArray[i])) { fnArray.push(chunk.fnArray[i]); argsArray.push(chunk.argsArray[i]); }
+            return original.call(this, { ...chunk, fnArray, argsArray, length: fnArray.length }, intentState);
+        };
+    }
+    try { return await Promise.race([page.getOperatorList(), stop]); }
+    catch { return null; }
+    finally { if (hooked) delete page._renderPageChunk; }
+}
+
 /** Collects one page's text runs, images and annotations into a PageExtract. */
 async function collectPage(
     pdfjs: any, pdfDocument: any, pageNumber: number, config: FullOfficeParserConfig,
     pdfCfg: PdfLayoutConfig, fontCache: Map<string, ResolvedFont>, destCache: Map<string, SectionTarget | null>,
-    sectionLinks: SectionLinks,
+    sectionLinks: SectionLinks, work: PdfWorkBudget,
 ): Promise<PageExtract> {
     const page = await pdfDocument.getPage(pageNumber);
     const rotation = ((page.rotate % 360) + 360) % 360;
@@ -696,7 +797,7 @@ async function collectPage(
     const width = rotation % 180 === 0 ? authoredW : authoredH;
     const height = rotation % 180 === 0 ? authoredH : authoredW;
 
-    const textContent = await page.getTextContent({ includeMarkedContent: true, disableNormalization: !pdfCfg.normalizeText });
+    const textContent = await readTextContent(page, { includeMarkedContent: true, disableNormalization: !pdfCfg.normalizeText }, work);
     const styles: Record<string, any> = textContent.styles || {};
 
     // Resolve every font on the page once (document-scoped cache). Real font objects (with their
@@ -711,7 +812,7 @@ async function collectPage(
     // Not `config.ocr`: page-image OCR runs over collected images, which require extractAttachments, so
     // ocr alone needs no operator list (and must not fetch one just to discard it).
     if (needFonts || config.extractAttachments || pdfCfg.extractTextColor) {
-        try { ops = await page.getOperatorList(); } catch { ops = null; }
+        ops = await readOperatorList(pdfjs, page, work, config.extractAttachments || pdfCfg.extractTextColor ? 'drawing' : 'none');
     }
     for (const key of seen) if (!fontCache.has(key)) fontCache.set(key, await resolveFont(key, page.commonObjs, styles));
 
@@ -720,7 +821,10 @@ async function collectPage(
         ? makeColorLookup(collectColorMarks(ops, layoutViewport.transform, pdfjs.OPS))
         : null;
 
-    const { links, highlights } = await resolveAnnotations(page, layoutViewport, pdfDocument, config, destCache, sectionLinks);
+    // Past the budget the document is closed: the page keeps the text read, without what pdf.js would read next.
+    const { links, highlights } = work.spent
+        ? { links: [] as ResolvedLink[], highlights: [] as ResolvedHighlight[] }
+        : await resolveAnnotations(page, layoutViewport, pdfDocument, config, destCache, sectionLinks);
 
     // Walk items, tracking the marked-content stack for mcid / Artifact scope.
     // Each entry carries the nearest mcid and whether an Artifact encloses it, set when pushed, so a run
@@ -798,25 +902,26 @@ async function collectPage(
     // OCR of page images is emitted through the attachment path (`emitImage` requires
     // extractAttachments), so collecting images for `ocr` alone would decode and then drop them.
     // Gate on extractAttachments only; `ocr` without it raised OCR_REQUIRES_ATTACHMENTS above.
-    const images = config.extractAttachments
-        ? await collectImages(pdfjs, page, layoutViewport, config, pageNumber, ops)
+    const images = config.extractAttachments && !work.spent
+        ? await collectImages(pdfjs, page, layoutViewport, config, pageNumber, work, ops)
         : [];
 
     let structTree: unknown | null = null;
-    if (pdfCfg.useTags) {
+    if (pdfCfg.useTags && !work.spent) {
         try { structTree = await page.getStructTree(); } catch { structTree = null; }
     }
 
-    if (typeof page.cleanup === 'function') { try { page.cleanup(); } catch { /* best effort */ } }
+    if (typeof page.cleanup === 'function' && !work.spent) { try { page.cleanup(); } catch { /* best effort */ } }
 
     return { pageNumber, width, height, authoredW, authoredH, authoredY1, rotation, runs, images, structTree };
 }
 
 /** Extracts images from a page's operator list, positioned in layout-viewport space. */
-async function collectImages(pdfjs: any, page: any, viewport: any, config: FullOfficeParserConfig, pageNumber: number, prefetchedOps?: any): Promise<PdfImage[]> {
+async function collectImages(pdfjs: any, page: any, viewport: any, config: FullOfficeParserConfig, pageNumber: number, work: PdfWorkBudget, prefetchedOps?: any): Promise<PdfImage[]> {
     const images: PdfImage[] = [];
     try {
-        const ops = prefetchedOps || await page.getOperatorList();
+        const ops = prefetchedOps || await readOperatorList(pdfjs, page, work, 'drawing');
+        if (!ops) return images;
         const fnArray = ops.fnArray;
         const argsArray = ops.argsArray;
         // Graphics-state CTM, tracked exactly as `collectColorMarks` tracks it: an image fills the
@@ -1042,15 +1147,18 @@ export const parsePdf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         }
 
         try {
-            return await buildAst(pdfjs, pdfDocument, config, pdfCfg);
+            return await buildAst(pdfjs, pdfDocument, config, pdfCfg, buffer.length);
         } finally {
-            try { await loadingTask.destroy(); } catch { /* best effort cleanup */ }
+            // Bounded: closing waits for pdf.js's tasks, and one that never ends must not hold the parse.
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try { await Promise.race([loadingTask.destroy(), new Promise(resolve => { timer = setTimeout(resolve, 2000); })]); } catch { /* best effort cleanup */ }
+            finally { clearTimeout(timer); }
         }
     }
 };
 
 /** Assembles the AST from an opened document. Separated so the caller can guarantee task cleanup. */
-async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig): Promise<OfficeParserAST> {
+async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserConfig, pdfCfg: PdfLayoutConfig, fileBytes: number): Promise<OfficeParserAST> {
     const content: OfficeContentNode[] = [];
     const attachments: OfficeAttachment[] = [];
     const numPages = pdfDocument.numPages;
@@ -1171,10 +1279,12 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const destCache = new Map<string, SectionTarget | null>();
     const sectionLinks = new SectionLinks();
     const extracts: PageExtract[] = [];
+    const work = new PdfWorkBudget(pdfDocument, config, fileBytes);
     for (const pageNum of pageNumbers) {
         checkAbortSignal(config.abortSignal);
+        if (work.spent) break;
         try {
-            extracts.push(await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks));
+            extracts.push(await collectPage(pdfjs, pdfDocument, pageNum, config, pdfCfg, fontCache, destCache, sectionLinks, work));
         } catch (e: any) {
             logWarning(OfficeWarningType.PAGE_LOAD_FAILED, config, pageNum, e);
         }

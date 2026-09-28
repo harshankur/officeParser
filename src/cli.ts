@@ -372,6 +372,8 @@ if (fileArg && !showHelp) {
     console.log('  --pdfParserConfig.mergeHyphenatedWords=false Keep words hyphenated across line breaks (default: true)');
     console.log('  --pdfParserConfig.normalizeText=false       Skip Unicode/ligature normalization of PDF text (default: true)');
     console.log('  --pdfParserConfig.extractTextColor          Record each PDF run\'s fill colour in formatting.color (default: true; set false to skip)');
+    console.log('  --pdfParserConfig.maxTextItems=20000        Base of the text items a PDF may yield, plus one per byte (default: 20000)');
+    console.log('  --pdfParserConfig.maxOperators=250000       Base of the drawing operators read, plus four per byte (default: 250000)');
     console.log('');
     console.log('High-Value Generator Options:');
     console.log('  --includeFormatting                         Include font formatting like bold/italic (default: true)');

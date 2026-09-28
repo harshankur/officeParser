@@ -250,7 +250,11 @@
                     <code>headingDetection</code> (<code>auto</code>/<code>font-size</code>/<code>off</code>),
                     <code>pageRange</code> (e.g. <code>1-3,7</code>), <code>normalizeText</code>, and
                     <code>extractTextColor</code> (per-run fill color into <code>formatting.color</code>; on by default,
-                    set <code>false</code> to skip the per-page operator-list fetch on a throughput-focused text path).</td>
+                    set <code>false</code> to skip the per-page operator-list fetch on a throughput-focused text path),
+                    <code>maxTextItems</code> (default <code>20000</code>) and <code>maxOperators</code> (default <code>250000</code>): the bases of the
+                    text items and drawing operators one PDF may produce, each plus an allowance per byte of the file (one item, four operators).
+                    Nested form XObjects can multiply a few KB into millions; past either, the rest of the document is not read and
+                    <code>PDF_CONTENT_LIMIT_EXCEEDED</code> is raised.</td>
             </tr>
             <tr>
                 <td><code>fileType</code></td>
@@ -303,10 +307,10 @@
                 <td><strong>XML Element Limit</strong>: Maximum number of XML elements read from one document's parts (DOCX, XLSX, PPTX and ODF parts, EPUB package XML and chapters, charts and metadata; XLSX sheets do not count). Each element takes several hundred bytes of memory to read, so a small zip of empty elements could fill the heap long before <code>maxUncompressedBytes</code>. Past it, the parse rejects with <code>XML_ELEMENT_LIMIT_EXCEEDED</code>.</td>
             </tr>
             <tr>
-                <td><code>decompressionLimits.maxRepeatedCellContent</code></td>
+                <td><code>decompressionLimits.maxRepeatedContent</code></td>
                 <td><code>number</code></td>
                 <td><code>16777216</code></td>
-                <td><strong>Repeated Content Limit</strong>: Maximum amount of content ODF repeated cells and rows may copy in one document, counted as characters of text plus 16 for each node. A repeat shares its content in the AST, but every generator writes it once per copy, so a few hundred bytes could ask for gigabytes of output. Empty cells cost nothing. Past it, the remaining repeats of content-bearing cells are not made and <code>REPEATED_CONTENT_LIMIT_EXCEEDED</code> is raised; later cells keep their row and column numbers.</td>
+                <td><strong>Repeated Content Limit</strong>: Maximum amount of content one document repeats by reference: ODF repeated cells and rows, XLSX cells showing one shared string, and the style values (fonts, colours) and link targets a definition gives every node using it. The AST shares the value, but every generator writes it at each use, so a few KB could ask for hundreds of MB of output. Each use after the first costs what it weighs (characters, plus 16 per node a repeated cell holds) past 64, so short values repeat freely. Past it, <code>REPEATED_CONTENT_LIMIT_EXCEEDED</code> is raised: the remaining repeats of a content-bearing ODF cell are not made (later cells keep their row and column numbers), an XLSX cell shows the start of its string, and a node repeating a long style value or link goes without it.</td>
             </tr>
             <tr>
                 <td><code>decompressionLimits.maxRawContentLength</code></td>

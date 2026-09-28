@@ -49,12 +49,9 @@ import { lookupTable, plainRecord } from '../utils/lookupUtils.js';
 class CellBudget {
     private remaining: number;
     private warned = false;
-    private contentLeft: number;
-    private contentWarned = false;
     private readonly weights = new WeakMap<object, number>();
-    constructor(private limit: number, private contentLimit: number, private config: OfficeParserConfig) {
+    constructor(private limit: number, private config: OfficeParserConfig) {
         this.remaining = limit;
-        this.contentLeft = contentLimit;
     }
     /**
      * How many of `repeats` further copies of content weighing `weight` (see `weighCell`) may be
@@ -62,22 +59,15 @@ class CellBudget {
      * after the parse (each pass over the AST, each generator) meets that content once per copy: a
      * 700-byte spreadsheet repeating a 2,000-span cell 100,000 times made 200 MB of text and ran the
      * HTML and CSV generators out of memory. The cell count alone does not bound it, so the content
-     * copied is bounded too (`decompressionLimits.maxRepeatedCellContent`); empty cells cost nothing.
+     * copied is charged to the document's repeated-content budget (see repeatUtils).
      */
     takeRepeats(repeats: number, weight: number): number {
-        if (!(repeats > 0)) return 0;
-        if (!(weight > 0)) return repeats;
-        const granted = Math.max(0, Math.min(repeats, Math.floor(this.contentLeft / weight)));
-        this.contentLeft -= granted * weight;
-        if (granted < repeats && !this.contentWarned) {
-            this.contentWarned = true;
-            logWarning(OfficeWarningType.REPEATED_CONTENT_LIMIT_EXCEEDED, this.config, this.contentLimit);
-        }
-        return granted;
+        return takeRepeats(this.config, repeats, weight);
     }
     /**
-     * What one copy of a cell writes: its text, and the text of each node it holds plus 16 for the node
-     * itself (a generator spends on a node what it spends on a dozen or two characters of text).
+     * What one copy of a cell writes: its text, and for each node it holds the node's text, formatting
+     * and metadata values (a style's 64 KB font is written with every copy) plus 16 for the node itself
+     * (a generator spends on a node what it spends on a dozen or two characters of text).
      */
     weighCell(text: string, children: OfficeContentNode[] | undefined, comments: OfficeContentNode[] | undefined): number {
         return text.length + this.weigh(children) + this.weigh(comments);
@@ -94,7 +84,7 @@ class CellBudget {
         for (const node of nodes) {
             let weight = this.weights.get(node);
             if (weight === undefined) {
-                weight = 16 + (node.text?.length ?? 0) + this.weigh(node.children) + this.weigh(node.comments) + this.weigh(node.notes);
+                weight = 16 + (node.text?.length ?? 0) + valuesLength(node.formatting) + valuesLength(node.metadata) + this.weigh(node.children) + this.weigh(node.comments) + this.weigh(node.notes);
                 this.weights.set(node, weight);
             }
             total += weight;
@@ -139,7 +129,17 @@ const repeatCell = (c: OfficeContentNode, config: OfficeParserConfig): OfficeCon
 
 /** Resolves the configured cell budget, falling back to the documented default. */
 const createCellBudget = (config: OfficeParserConfig): CellBudget =>
-    new CellBudget(config.decompressionLimits?.maxTableCells ?? 1000000, config.decompressionLimits?.maxRepeatedCellContent ?? 16 * 1024 * 1024, config);
+    new CellBudget(config.decompressionLimits?.maxTableCells ?? 1000000, config);
+
+/** The characters of the string values an object holds directly (a node's formatting or metadata). */
+const valuesLength = (values: object | undefined): number => {
+    let length = 0;
+    if (values) for (const key in values) {
+        const value = (values as Record<string, unknown>)[key];
+        if (typeof value === 'string') length += value.length;
+    }
+    return length;
+};
 
 /**
  * Coerces a `table:number-*-repeated` attribute to a usable repeat count. A missing, zero,
@@ -254,6 +254,7 @@ const toRepeatCount = (attr: string | null): number => {
 };
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
+import { takeRepeats } from '../utils/repeatUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 

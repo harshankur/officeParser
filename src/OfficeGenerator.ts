@@ -59,8 +59,18 @@ export class OfficeGenerator {
         // for a string, text for a number) is coerced or removed, so none reaches a writer that
         // escapes one kind and writes another raw. A table or sheet whose cells span a grid too
         // large to write (a few cells far apart) is laid out closer, before any writer fills it.
-        const known = withBoundedSheetGrids(withKnownNodeTypes(withWellTypedValues(ast)));
-        const input = keepsComments ? known : withoutSourceComments(known);
+        // An AST nested past what the stack holds (a sheet in a cell in a sheet, 800 deep) is rejected as
+        // the parsers reject one, not with the engine's own RangeError.
+        const asNestingError = (error: unknown): unknown => error instanceof RangeError && /call stack/i.test(error.message)
+            ? getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, config?.onWarning ? config : ast.config ?? config)
+            : error;
+        let input: OfficeParserAST;
+        try {
+            const known = withBoundedSheetGrids(withKnownNodeTypes(withWellTypedValues(ast)));
+            input = keepsComments ? known : withoutSourceComments(known);
+        } catch (error) {
+            throw asNestingError(error);
+        }
 
         switch (normalizedDestination) {
             case 'text':
@@ -101,6 +111,10 @@ export class OfficeGenerator {
                 throw getOfficeError(OfficeErrorType.FORMAT_UNSUPPORTED, config?.onWarning ? config : ast.config ?? config, destination);
         }
 
-        return generator.generate() as Promise<ConversionResult<D>>;
+        try {
+            return await generator.generate() as ConversionResult<D>;
+        } catch (error) {
+            throw asNestingError(error);
+        }
     }
 }

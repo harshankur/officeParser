@@ -228,6 +228,18 @@
                     <code>false</code> to skip the per-page operator-list fetch on a throughput-focused text path.</td>
             </tr>
             <tr>
+                <td><code>--pdfParserConfig.maxTextItems</code></td>
+                <td>number</td>
+                <td><code>20000</code></td>
+                <td>Base of the text items one PDF may yield, plus one per byte of the file. Past it the rest of the document is not read.</td>
+            </tr>
+            <tr>
+                <td><code>--pdfParserConfig.maxOperators</code></td>
+                <td>number</td>
+                <td><code>250000</code></td>
+                <td>Base of the drawing operators read from one PDF, plus four per byte of the file. Past it the rest of the document is not read.</td>
+            </tr>
+            <tr>
                 <td><code>--ocrConfig.preserveLayout</code></td>
                 <td>boolean</td>
                 <td><code>true</code></td>

@@ -30,6 +30,19 @@ const BLOCK_NODE_TYPES = new Set<string>([
     'definitionList', 'definitionTerm', 'definitionDescription', 'sheet', 'slide', 'page', 'embed',
 ]);
 
+/** How much of a heading or sheet name each chunk's metadata repeats. */
+const CONTEXT_LABEL_LENGTH = 256;
+/**
+ * A heading or sheet name as a chunk's context: every chunk under it carries it, so a 1 MB heading over
+ * a thousand chunks made a gigabyte of chunk metadata. Past CONTEXT_LABEL_LENGTH it is cut, marked
+ * with `…`; the heading's full text is in its own chunk.
+ */
+function contextLabel(text: string | undefined): string | undefined {
+    if (text === undefined || text.length <= CONTEXT_LABEL_LENGTH) return text;
+    const code = text.charCodeAt(CONTEXT_LABEL_LENGTH - 1);
+    return text.slice(0, code >= 0xD800 && code <= 0xDBFF ? CONTEXT_LABEL_LENGTH - 1 : CONTEXT_LABEL_LENGTH) + '…';
+}
+
 /**
  * The visible text of a content node: its own `.text` when set, otherwise its descendants' text,
  * plus any footnote/endnote bodies hanging off `node.notes`.
@@ -348,9 +361,9 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             contextStack.pageNumber = meta?.pageNumber;
         } else if (node.type === 'sheet') {
             const meta = node.metadata as SheetMetadata;
-            contextStack.sheetName = meta?.sheetName;
+            contextStack.sheetName = contextLabel(meta?.sheetName);
         } else if (node.type === 'heading') {
-            contextStack.heading = node.text;
+            contextStack.heading = contextLabel(node.text);
         }
 
         const isStructuralBoundary = this.isStructuralBoundary(node, splitBy);
@@ -402,7 +415,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 return;
             }
 
-            if (node.type === 'heading') contextStack.heading = text;
+            if (node.type === 'heading') contextStack.heading = contextLabel(text);
 
             const chunk: OfficeChunk = {
                 text,
@@ -704,10 +717,10 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             const override = await this.handleOnNode(node);
             if (override === false) return;
 
-            if (node.type === 'heading') currentHeading = node.text;
+            if (node.type === 'heading') currentHeading = contextLabel(node.text);
             if (node.type === 'slide') currentSlide = (node.metadata as SlideMetadata)?.slideNumber;
             if (node.type === 'page') currentPage = (node.metadata as PageMetadata)?.pageNumber;
-            if (node.type === 'sheet') currentSheet = (node.metadata as SheetMetadata)?.sheetName;
+            if (node.type === 'sheet') currentSheet = contextLabel((node.metadata as SheetMetadata)?.sheetName);
 
             const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0));
 
@@ -765,10 +778,10 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             const override = await this.handleOnNode(node);
             if (override === false) return;
 
-            if (node.type === 'heading') currentHeading = node.text;
+            if (node.type === 'heading') currentHeading = contextLabel(node.text);
             if (node.type === 'slide') currentSlide = (node.metadata as SlideMetadata)?.slideNumber;
             if (node.type === 'page') currentPage = (node.metadata as PageMetadata)?.pageNumber;
-            if (node.type === 'sheet') currentSheet = (node.metadata as SheetMetadata)?.sheetName;
+            if (node.type === 'sheet') currentSheet = contextLabel((node.metadata as SheetMetadata)?.sheetName);
 
             const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0));
 

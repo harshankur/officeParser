@@ -28,6 +28,7 @@ import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
+import { repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
 import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
@@ -145,6 +146,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     // The text of each rich shared string, joined once: joined per cell, a large string many cells
     // show was copied for each, and a small file filled the heap.
     const richStringText = new Map<number, string>();
+    // How many cells have shown each shared string so far.
+    const sharedStringUses = new Map<number, number>();
 
     if (sharedStringsFile) {
         const xml = parseXmlString(sharedStringsFile.content.toString(), { config });
@@ -622,19 +625,24 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     let text = '';
                     let cellNodes: OfficeContentNode[] = [];
 
+                    // Shared rich-text runs, merged with this cell's style below (the runs themselves are shared).
+                    let sharedRuns: OfficeContentNode[] | undefined;
                     if (type === 's' && vContent !== undefined) {
                         const idx = parseInt(vContent);
                         const content = sharedStrings[idx];
-                        if (Array.isArray(content)) {
-                            // Rich text runs. Share the (read-only) run nodes across every cell that
-                            // references this shared string via a shallow array copy, rather than
-                            // deep-copying them per cell: XLSX has no cell budget, so a large rich-text
-                            // shared string referenced by many cells would otherwise amplify to N x its
-                            // size in the AST. The run nodes are never mutated in place downstream.
-                            cellNodes = content.slice();
-                            let joined = richStringText.get(idx);
-                            if (joined === undefined) richStringText.set(idx, joined = cellNodes.map(n => n.text).join(''));
-                            text = joined;
+                        let joined = typeof content === 'string' ? content : richStringText.get(idx);
+                        if (joined === undefined && Array.isArray(content)) richStringText.set(idx, joined = content.map(n => n.text).join(''));
+                        // Each cell after the first showing a string writes it again, so those are charged
+                        // to the document's repeated-content budget (see repeatUtils): 2.7 KB showing one
+                        // 1 MB string in 400 cells made 400 MB of CSV. Past it a cell shows the string's start.
+                        const shown = sharedStringUses.get(idx) ?? 0;
+                        sharedStringUses.set(idx, shown + 1);
+                        const weight = (joined?.length ?? 0) + (Array.isArray(content) ? 16 * content.length : 0);
+                        if (shown > 0 && takeRepeats(config, 1, weight) === 0) {
+                            text = repeatPreview(joined ?? '');
+                        } else if (Array.isArray(content)) {
+                            sharedRuns = content;
+                            text = joined ?? '';
                         } else {
                             text = content || '';
                         }
@@ -657,26 +665,30 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     }
                     lastColIndex = colIndex;
 
-                    if (text || cellNodes.length > 0) {
+                    if (text || sharedRuns?.length) {
                         // Extract cell style index
                         const styleMatch = cAttrs.match(/s="(\d+)"/);
                         const styleIdx = styleMatch ? parseInt(styleMatch[1]) : undefined;
                         const cellFormatting = (styleIdx !== undefined && cellFormatMap[styleIdx]) ? cellFormatMap[styleIdx] : {};
 
-                        if (cellNodes.length > 0) {
-                            // If we have specific runs, merge cell styles into them if run style is missing
-                            // But usually run style overrides cell style (except maybe background)
-                            for (const node of cellNodes) {
-                                if (!node.formatting) node.formatting = {};
-                                // Cell background always applies
-                                if (cellFormatting.backgroundColor) node.formatting.backgroundColor = cellFormatting.backgroundColor;
-                                // Cell alignment always applies
-                                if (cellFormatting.alignment) node.formatting.alignment = cellFormatting.alignment;
-
-                                // Font defaults from cell style if not in run
-                                if (!node.formatting.font && cellFormatting.font) node.formatting.font = cellFormatting.font;
-                                if (!node.formatting.size && cellFormatting.size) node.formatting.size = cellFormatting.size;
-                            }
+                        if (sharedRuns?.length) {
+                            // The cell's style under each run's own: its background and alignment always
+                            // apply, its font and size where a run has none. On copies of the runs, which
+                            // every cell showing the string shares: merged into them in place, the last
+                            // cell's style was every cell's.
+                            const { backgroundColor, alignment, font, size } = cellFormatting;
+                            cellNodes = backgroundColor || alignment || font || size
+                                ? sharedRuns.map(run => ({
+                                    ...run,
+                                    formatting: {
+                                        ...run.formatting,
+                                        ...(backgroundColor ? { backgroundColor } : {}),
+                                        ...(alignment ? { alignment } : {}),
+                                        ...(font && !run.formatting?.font ? { font } : {}),
+                                        ...(size && !run.formatting?.size ? { size } : {}),
+                                    },
+                                }))
+                                : sharedRuns.slice();
                         } else {
                             // Simple text node
                             cellNodes.push({
