@@ -85,7 +85,7 @@ export class OfficeGenerator {
             const repeatedContent = typeof configured === 'number' && configured >= 0 ? Math.min(configured, 1024 * 1024 * 1024) : 16 * 1024 * 1024;
             const maxVisits = MAX_SHARED_NODE_VISITS + repeatedContent / 16;
             const tooLarge = (): never => { throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, config?.onWarning ? config : ast.config ?? config); };
-            const tooShared = (candidate: OfficeParserAST) => sharedNodeVisits(candidate) > maxVisits;
+            const tooShared = (candidate: OfficeParserAST) => sharedNodeVisits(candidate, maxVisits) > maxVisits;
             if (tooShared(ast)) tooLarge();
             // Writing nodes of unknown types as their content is held to the same number of visits: notes,
             // which sharedNodeVisits counts once, can hold such nodes along many paths.

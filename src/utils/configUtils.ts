@@ -455,9 +455,13 @@ export function resolveGeneratorConfig<D extends string>(
         // generator's `csvConfig.columnDelimiter`, so `parseOffice(f, { csvDelimiter: ';' }).to('csv')`
         // matches the CLI's `--csvDelimiter=';'` (which wires the same propagation). Precedence:
         // csvConfig.columnDelimiter > csvDelimiter > ','.
+        // One character from the AST's own config, and none that ends a row or starts a formula: the AST
+        // (built in code, or JSON) is not the caller, and a delimiter of `\n=` wrote a formula line that
+        // no cell of the document held.
         const astCsvDelim = shortDelimiter(astConfig.csvDelimiter);
-        if (astCsvDelim && destination === 'csv' && (userConfig as any)?.csvConfig?.columnDelimiter === undefined) {
-            config.csvConfig.columnDelimiter = astCsvDelim;
+        const safeAstCsvDelim = astCsvDelim && astCsvDelim.length === 1 && !'\r\n"=+-@'.includes(astCsvDelim) ? astCsvDelim : undefined;
+        if (safeAstCsvDelim && destination === 'csv' && (userConfig as any)?.csvConfig?.columnDelimiter === undefined) {
+            config.csvConfig.columnDelimiter = safeAstCsvDelim;
         }
     }
 

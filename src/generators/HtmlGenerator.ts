@@ -850,10 +850,13 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             splitResult = '';
             let run: OfficeContentNode[] = [];
             let part: OfficeContentNode = node;
+            // The parts after the first, without the paragraph's anchors: made once, where a copy of the
+            // paragraph's metadata for each part took time in the product of its fields and its parts.
+            const laterPart = { ...node, metadata: { ...(node.metadata as object), anchorIds: undefined } as any } as OfficeContentNode;
             const flush = async () => {
                 if (run.some(child => child.type !== 'text' || (child.text ?? '').trim() || child.notes?.length)) {
                     splitResult += await processor({ ...part, children: run }, await this.processNodeArray(run));
-                    part = { ...node, metadata: { ...(node.metadata as object), anchorIds: undefined } as any };
+                    part = laterPart;
                 }
                 run = [];
             };

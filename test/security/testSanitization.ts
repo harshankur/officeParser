@@ -3443,6 +3443,43 @@ async function parserHardeningTests() {
     const arrayStarted = Date.now();
     try { await OfficeGenerator.generate(astWith(Array.from({ length: 1000000 }, () => ({ type: 'paragraph', children: sharedKids, notes: sharedNoteList }))), 'text', { onWarning: () => {} } as any); } catch (e) { arrayError = e; }
     check('generators: a million nodes sharing one list of 100,000 children are refused at once', arrayError?.officeIssue?.code === 'OUTPUT_TOO_LARGE' && Date.now() - arrayStarted < 5000, `${Date.now() - arrayStarted}ms ${arrayError}`);
+    // Generators: values shared across nodes (records, id lists, note lists, slides' notes, nested and
+    // sparse arrays) count at every path and node holding them, and each is read once.
+    const refusedQuickly = async (label: string, content: any[], format = 'text', extra: object = {}) => {
+        let refusal: any;
+        const started = Date.now();
+        try { await OfficeGenerator.generate({ ...astWith(content), ...extra } as any, format as any, { onWarning: () => {} } as any); } catch (e) { refusal = e; }
+        check(`generators: ${label} is refused at once`, refusal?.officeIssue?.code === 'OUTPUT_TOO_LARGE' && Date.now() - started < 3000, `${Date.now() - started}ms ${refusal}`);
+    };
+    const bigRecord = Object.fromEntries(Array.from({ length: 20000 }, (_, i) => [`k${i}`, 1]));
+    await refusedQuickly('one record of 20,000 fields shared by 20,000 runs', [{ type: 'paragraph', children: Array.from({ length: 20000 }, () => ({ type: 'text', text: 'x', formatting: bigRecord })) }], 'csv');
+    const sharedIds = Array.from({ length: 3000 }, (_, i) => `id${i}`);
+    await refusedQuickly('one list of 3,000 ids shared by 3,000 paragraphs', Array.from({ length: 3000 }, () => ({ type: 'paragraph', metadata: { anchorIds: sharedIds }, children: [{ type: 'text', text: 'x' }] })), 'docx');
+    const smallNote = { type: 'note', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'n' }] }] };
+    const referencing = { type: 'text', text: 'x', notes: Array(3000).fill(smallNote) };
+    await refusedQuickly('a run holding 3,000 note references, shared 3,000 times', [{ type: 'paragraph', children: Array(3000).fill(referencing) }], 'odt');
+    const sharedSlide = { type: 'slide', metadata: { slideNumber: 1 }, children: [], notes: Array(10000).fill(smallNote) };
+    await refusedQuickly('a slide of 10,000 notes shared 10,000 times', Array(10000).fill(sharedSlide), 'rtf');
+    let nested: any = ['v'];
+    for (let i = 0; i < 8; i++) nested = Array(10).fill(nested);
+    await refusedQuickly('a style that is ten lists nested eight deep', [{ type: 'paragraph', children: [{ type: 'text', text: 'x', metadata: { style: nested } }] }], 'csv');
+    const sparse: any[] = [];
+    sparse.length = 4294967295;
+    sparse[0] = { type: 'text', text: 'x' };
+    await refusedQuickly('a sparse list of four billion slots', [{ type: 'paragraph', children: sparse }], 'csv');
+    // Values that JSON can hold are read in time linear in the JSON: a wrapper's thousands of unknown
+    // formatting fields, a paragraph's thousands of metadata fields split around blocks, and a chart
+    // whose labels are lists.
+    const manyFields = JSON.parse(JSON.stringify(astWith([{ type: 'paragraph', children: [{ type: 'wrap', formatting: Object.fromEntries(Array.from({ length: 16000 }, (_, i) => [`k${i}`, 1])), children: Array.from({ length: 16000 }, () => ({ type: 'text', text: 'x' })) }] }])));
+    await timed('generators: a wrapper of 16,000 formatting fields around 16,000 runs is written', () => OfficeGenerator.generate(manyFields, 'csv', { onWarning: () => {} } as any));
+    const splitFields = JSON.parse(JSON.stringify(astWith([{ type: 'paragraph', metadata: Object.fromEntries(Array.from({ length: 8000 }, (_, i) => [`m${i}`, 'v'])), children: Array.from({ length: 8000 }, () => [{ type: 'text', text: 'x' }, { type: 'code', text: 'y', metadata: { math: 'block' } }]).flat() }])));
+    await timed('html: a paragraph of 8,000 metadata fields split around 8,000 blocks is written', () => OfficeGenerator.generate(splitFields, 'html', { onWarning: () => {} } as any));
+    const listLabels = Array(10).fill(Array(10).fill(Array(10).fill(Array(10).fill(Array(10).fill('l')))));
+    const chartAst = { ...astWith([{ type: 'chart', metadata: { attachmentName: 'c' } }]), attachments: [{ type: 'chart', name: 'c', mimeType: 'application/json', data: '', extension: 'json', chartData: { labels: Array(2000).fill(listLabels), dataSets: [{ name: listLabels, values: Array(2000).fill(listLabels), pointLabels: [] }], rawTexts: [] } }] } as any;
+    await timed('tex, docx: a chart whose labels are nested lists is written', async () => { for (const format of ['tex', 'docx'] as const) await OfficeGenerator.generate(chartAst, format, { onWarning: () => {} } as any); });
+    // CSV: the AST's own delimiter is one character that neither ends a row nor starts a formula.
+    const astDelimited = (await OfficeGenerator.generate({ ...astWith([{ type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'a' }] }] }, { type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text: "cmd|' /C calc'!A0" }] }] }] }] }]), config: { csvDelimiter: '\n=' } } as any, 'csv', { onWarning: () => {} } as any)).value as string;
+    check('csv: an AST\'s delimiter cannot start a row or a formula', !/(^|\n)=/.test(astDelimited), JSON.stringify(astDelimited));
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';
