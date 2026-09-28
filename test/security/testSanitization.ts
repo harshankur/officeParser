@@ -2630,6 +2630,37 @@ async function parserHardeningTests() {
     const referencesHtml = (await OfficeGenerator.generate(references.ast!, 'html', { onWarning: () => {} } as any)).value as string;
     check('md: a long reference target used 2000 times repeats within a budget', referencesHtml.length < 40_000_000, `${referencesHtml.length}`);
 
+    // PDF: layout, marked content and annotations take time linear in a page (each was quadratic in
+    // it, and pages sharing one content stream multiplied that at no size cost); RTF: a picture's
+    // groups and a paragraph's notes are serialized once.
+    const pdfOf = (content: string, pages: number, extraPage = '', extraObjects: string[] = []) => {
+        const { deflateSync } = require('zlib') as typeof import('zlib');
+        const data = deflateSync(Buffer.from(content));
+        const objs: (string | Buffer)[] = [
+            '<< /Type /Catalog /Pages 2 0 R >>',
+            `<< /Type /Pages /Kids [${Array.from({ length: pages }, (_, i) => `${5 + extraObjects.length + i} 0 R`).join(' ')}] /Count ${pages} >>`,
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+            Buffer.concat([Buffer.from(`<< /Length ${data.length} /Filter /FlateDecode >>\nstream\n`), data, Buffer.from('\nendstream')]),
+            ...extraObjects,
+        ];
+        for (let i = 0; i < pages; i++) objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 3200000 2000] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R ${extraPage} >>`);
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n')];
+        const offsets: number[] = [];
+        let at = parts[0].length;
+        objs.forEach((o, i) => { const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), typeof o === 'string' ? Buffer.from(o) : o, Buffer.from('\nendobj\n')]); offsets.push(at); at += b.length; parts.push(b); });
+        parts.push(Buffer.from(`xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+        return Buffer.concat(parts);
+    };
+    await timed('pdf: 4 pages sharing one line of 16,000 spaced words lay out', () => parseQuiet(pdfOf('BT /F1 10 Tf 0 50 Td\n' + '(ab) Tj 100 0 Td\n'.repeat(16000) + 'ET', 4), 'pdf'));
+    await timed('pdf: 20,000 text items inside content nested 20,000 deep are read', () => parseQuiet(pdfOf('/Span <</MCID 1>> BDC\n'.repeat(20000) + 'BT /F1 10 Tf 0 1900 Td\n' + '(a) Tj 0 -0.09 Td\n'.repeat(20000) + 'ET', 1), 'pdf'));
+    const quads = Array.from({ length: 20000 }, (_, i) => `${i} 1000 ${i + 1} 1000 ${i} 990 ${i + 1} 990`).join(' ');
+    await timed('pdf: a highlight of 20,000 quads and a link listed 20,000 times over 20,000 words are read', () => parseQuiet(pdfOf('BT /F1 10 Tf 0 995 Td\n' + '(ab) Tj 3 0 Td\n'.repeat(20000) + 'ET', 1,
+        `/Annots [6 0 R ${'5 0 R '.repeat(20000)}]`,
+        ['<< /Type /Annot /Subtype /Link /Rect [0 990 100 1000] /A << /S /URI /URI (https://example.com/) >> >>', `<< /Type /Annot /Subtype /Highlight /Rect [0 990 20000 1000] /QuadPoints [${quads}] >>`]), 'pdf'));
+    const pictRtf = await heapBudget('rtf: a picture of 8,000 groups is read', () => parseQuiet(Buffer.from('{\\rtf1\\ansi {\\pict\\pngblip ' + '{}'.repeat(8000) + '}}'), 'rtf', { extractAttachments: true, includeRawContent: true }));
+    check('rtf: a picture of 8,000 groups is read without error', !(pictRtf as any).error, (pictRtf as any).error);
+    await timed('rtf: a paragraph of 80,000 footnotes is read', () => parseQuiet(Buffer.from('{\\rtf1\\ansi ' + 'word {\\super\\chftn}{\\footnote\\pard {\\super\\chftn} note}'.repeat(80000) + '\\par}'), 'rtf'));
+
     // Spans are held to what a browser allows, and never below 1.
     const gridSpan = await parseQuiet(repack('test.docx', z => { z['word/document.xml'] = enc(new TextDecoder().decode(z['word/document.xml']).replace(/<w:body>/, '<w:body><w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2147483647"/></w:tcPr><w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:gridSpan w:val="-5"/></w:tcPr><w:p><w:r><w:t>neg</w:t></w:r></w:p></w:tc></w:tr></w:tbl>')); }), 'docx');
     const spans = (ast: any) => { const out: any[] = []; const walk = (ns: any[]) => ns?.forEach((n: any) => { if (n.type === 'cell') out.push([n.metadata?.colSpan, n.metadata?.rowSpan, n.metadata?.col]); walk(n.children); }); walk(ast?.content); return out; };

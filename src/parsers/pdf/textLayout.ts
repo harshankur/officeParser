@@ -341,7 +341,10 @@ function bestHorizontalGap(lines: PdfLine[]): { gap: number; at: number } | null
 
 /**
  * Widest vertical gutter that fully separates the lines into a left group and a right group.
- * `at` is the x of the split. A gutter only counts if no line straddles it.
+ * `at` is the x of the split. A gutter only counts if no line straddles it, which the sweep already
+ * ensures: the lines before it (by left edge) end by `maxRight`, and the rest start at or after the
+ * next left edge. (Checking every line again at each gap took time in the square of the lines: a PDF
+ * of 2 KB with one line of 32,000 spaced words took minutes.)
  */
 function bestVerticalGutter(lines: PdfLine[]): { gap: number; at: number } | null {
     const intervals = lines.map(l => [l.x, l.x + l.width] as const).sort((a, b) => a[0] - b[0]);
@@ -349,12 +352,7 @@ function bestVerticalGutter(lines: PdfLine[]): { gap: number; at: number } | nul
     let best: { gap: number; at: number } | null = null;
     for (let i = 1; i < intervals.length; i++) {
         const gap = intervals[i][0] - maxRight;
-        if (gap > 0) {
-            // valid only if every line is entirely left of maxRight or entirely right of intervals[i][0]
-            const split = (maxRight + intervals[i][0]) / 2;
-            const straddles = lines.some(l => l.x < split && l.x + l.width > split);
-            if (!straddles && (!best || gap > best.gap)) best = { gap, at: split };
-        }
+        if (gap > 0 && (!best || gap > best.gap)) best = { gap, at: (maxRight + intervals[i][0]) / 2 };
         maxRight = Math.max(maxRight, intervals[i][1]);
     }
     return best;

@@ -296,6 +296,9 @@ function highlightRects(viewport: any, annot: any): [number, number, number, num
     return annot.rect ? [toViewportRect(viewport, annot.rect)] : [];
 }
 
+/** The most distinct links, and highlight areas, read from one page (see resolveAnnotations). */
+const MAX_PAGE_ANNOTATIONS = 1000;
+
 /**
  * Resolves a page's Link and Highlight annotations. Links become geometry + hyperlink metadata
  * (honoring config flags); highlights become per-quad viewport rects carrying their color, so a run
@@ -314,11 +317,22 @@ async function resolveAnnotations(
         logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, e);
         return { links, highlights };
     }
+    // Each distinct highlight quad and link once, and at most MAX_PAGE_ANNOTATIONS of each: every run on
+    // the page is matched against them, so a page listing one annotation many times, or a highlight of
+    // a huge QuadPoints array, took time in the square of the page.
+    const seenHighlights = new Set<string>(), seenLinks = new Set<string>();
+    let capped = false;
     for (const annot of annots) {
         if (annot.subtype === 'Highlight') {
             // A highlight with no /C renders yellow (pdf.js synthesizes that appearance), so mirror it.
             const color = rgbArrayToHex(annot.color) ?? '#ffff00';
-            for (const rect of highlightRects(viewport, annot)) highlights.push({ rect, color });
+            for (const rect of highlightRects(viewport, annot)) {
+                const key = `${rect.join(',')}|${color}`;
+                if (seenHighlights.has(key)) continue;
+                if (highlights.length >= MAX_PAGE_ANNOTATIONS) { capped = true; break; }
+                seenHighlights.add(key);
+                highlights.push({ rect, color });
+            }
             continue;
         }
         if (annot.subtype !== 'Link' || !annot.rect) continue;
@@ -333,8 +347,16 @@ async function resolveAnnotations(
             const target = await resolveDestFull(annot.dest, pdfDocument, destCache);
             meta = { link: target ? sectionLinks.register(target) : '#internal', linkType: 'internal' };
         }
-        if (meta) links.push({ rect: toViewportRect(viewport, annot.rect), meta });
+        if (meta) {
+            const rect = toViewportRect(viewport, annot.rect);
+            const key = `${rect.join(',')}|${meta.link}`;
+            if (seenLinks.has(key)) continue;
+            if (links.length >= MAX_PAGE_ANNOTATIONS) { capped = true; continue; }
+            seenLinks.add(key);
+            links.push({ rect, meta });
+        }
     }
+    if (capped) logWarning(OfficeWarningType.ANNOTATION_EXTRACTION_FAILED, config, page.pageNumber, `the page has more than ${MAX_PAGE_ANNOTATIONS} distinct links or highlight areas; the rest were not read`);
     return { links, highlights };
 }
 
@@ -403,14 +425,24 @@ async function resolveDestFull(
  */
 function segmentByLinks(x: number, width: number, yTop: number, height: number, len: number, links: ResolvedLink[]): { start: number; end: number; link?: TextMetadata }[] {
     const charLink: (TextMetadata | undefined)[] = new Array(len).fill(undefined);
+    // The characters whose centre a link's rect holds are a range, computed rather than tested one by
+    // one; each character is assigned once (the first link holding it), skipping over assigned ones.
+    const nextFree = new Int32Array(len + 1).map((_, i) => i);
+    const free = (i: number): number => { let r = i; while (nextFree[r] !== r) r = nextFree[r]; while (nextFree[i] !== r) { const n = nextFree[i]; nextFree[i] = r; i = n; } return r; };
     for (const l of links) {
         const [lx1, ly1, lx2, ly2] = l.rect;
         if (!(yTop < ly2 && yTop + height > ly1)) continue; // require vertical overlap
-        for (let i = 0; i < len; i++) {
-            if (charLink[i]) continue;
-            const cx = x + ((i + 0.5) / len) * width;
-            if (cx >= lx1 && cx <= lx2) charLink[i] = l.meta;
+        if (width === 0) {
+            // No width to place characters by: the centre of every character is `x`.
+            if (x >= lx1 && x <= lx2) for (let i = free(0); i < len; i = free(i + 1)) { charLink[i] = l.meta; nextFree[i] = i + 1; }
+            continue;
         }
+        if (!Number.isFinite(width)) continue;
+        // The i whose centre x + (i + 0.5) / len * width lies in [lx1, lx2] (width may be negative).
+        const a = ((lx1 - x) / width) * len - 0.5, b = ((lx2 - x) / width) * len - 0.5;
+        const from = Math.max(0, Math.ceil(Math.min(a, b)));
+        const to = Math.min(len - 1, Math.floor(Math.max(a, b)));
+        for (let i = free(from); i <= to; i = free(i + 1)) { charLink[i] = l.meta; nextFree[i] = i + 1; }
     }
     const segs: { start: number; end: number; link?: TextMetadata }[] = [];
     let s = 0;
@@ -691,13 +723,18 @@ async function collectPage(
     const { links, highlights } = await resolveAnnotations(page, layoutViewport, pdfDocument, config, destCache, sectionLinks);
 
     // Walk items, tracking the marked-content stack for mcid / Artifact scope.
-    const stack: { id: string | null; tag: string | null }[] = [];
+    // Each entry carries the nearest mcid and whether an Artifact encloses it, set when pushed, so a run
+    // reads them from the top entry: looked up through the whole stack for each run, content nested
+    // thousands deep took time in the square of the page.
+    const stack: { mcid: string | null; artifact: boolean }[] = [];
     const runs: RawRun[] = [];
     for (const item of textContent.items) {
         if (!isTextItem(item)) {
             const type = (item as any).type as string | undefined;
             if (type === 'beginMarkedContent' || type === 'beginMarkedContentProps') {
-                stack.push({ id: (item as any).id ?? null, tag: (item as any).tag ?? null });
+                const parent = stack[stack.length - 1];
+                const id: string | null = (item as any).id ?? null;
+                stack.push({ mcid: id ?? parent?.mcid ?? null, artifact: (item as any).tag === 'Artifact' || !!parent?.artifact });
             } else if (type === 'endMarkedContent') {
                 stack.pop();
             }
@@ -727,11 +764,8 @@ async function collectPage(
             if (bg) formatting.backgroundColor = bg;
         }
 
-        let mcid: string | null = null, inArtifact = false;
-        for (let i = stack.length - 1; i >= 0; i--) {
-            if (stack[i].tag === 'Artifact') inArtifact = true;
-            if (mcid === null && stack[i].id !== null) mcid = stack[i].id;
-        }
+        const top = stack[stack.length - 1];
+        const mcid = top?.mcid ?? null, inArtifact = !!top?.artifact;
 
         const dir = (item.dir === 'rtl' || item.dir === 'ttb') ? item.dir : 'ltr';
         const angle = box.angle === -1 ? 0 : box.angle;

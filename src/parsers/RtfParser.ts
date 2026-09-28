@@ -637,9 +637,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             // CRITICAL: Save current paragraph content before flushing table
             // because flushTable() -> flushRow() -> flushCell() -> flushParagraph()
             // would otherwise process this content during the table flush
-            const savedParagraphTextChunks = [...currentParagraphTextChunks];
-            const savedParagraphChildren = [...currentParagraphChildren];
-            const savedParagraphRawChunks = [...currentParagraphRawChunks];
+            // (Kept as they are, not copied: the buffers are replaced below, and a copy of the paragraph
+            // for each table or note in it took time in the square of a long paragraph.)
+            const savedParagraphTextChunks = currentParagraphTextChunks;
+            const savedParagraphChildren = currentParagraphChildren;
+            const savedParagraphRawChunks = currentParagraphRawChunks;
 
             // Clear buffers so nested flushParagraph() doesn't process them
             currentParagraphTextChunks = [];
@@ -1284,7 +1286,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                                 }
                             }
                         };
-                        serializeGroupContent(node);
+                        // The child group, not the whole picture again: serialized for each child group,
+                        // a picture of 8,000 empty groups (16 KB) took 2 GB.
+                        currentParagraphRawChunks.push('{');
+                        serializeGroupContent(child);
+                        currentParagraphRawChunks.push('}');
                     }
                 }
                 currentParagraphRawChunks.push('}');
@@ -1342,9 +1348,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 currentTarget = noteNode.children!;
                 
                 // Save current paragraph state so we don't mix footnote paragraphs with main text
-                savedParagraphTextChunks = [...currentParagraphTextChunks];
-                savedParagraphChildren = [...currentParagraphChildren];
-                savedParagraphRawChunks = [...currentParagraphRawChunks];
+                // (Kept, not copied: see the table case above.)
+                savedParagraphTextChunks = currentParagraphTextChunks;
+                savedParagraphChildren = currentParagraphChildren;
+                savedParagraphRawChunks = currentParagraphRawChunks;
                 
                 currentParagraphTextChunks = [];
                 currentParagraphChildren = [];
