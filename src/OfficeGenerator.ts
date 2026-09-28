@@ -74,14 +74,20 @@ export class OfficeGenerator {
         };
         let input: OfficeParserAST;
         try {
+            // Nodes shared along many paths (see sharedNodeVisits) past what the parsers' own sharing
+            // reaches are refused before anything reads them along each path: the passes below write a
+            // node of a type the AST does not define as its content once per path to it, and an AST of
+            // such nodes each holding the next twice, 30 deep, ended the process out of memory before the
+            // check after them ran.
+            // The parse's repeat budget widens the allowance, a number up to 1 GiB of it: an AST built in
+            // code carries a config of its own, and a limit of Infinity (or text) in it turned the check off.
+            const configured: unknown = ast.config?.decompressionLimits?.maxRepeatedContent;
+            const repeatedContent = typeof configured === 'number' && configured >= 0 ? Math.min(configured, 1024 * 1024 * 1024) : 16 * 1024 * 1024;
+            const tooShared = (candidate: OfficeParserAST) => sharedNodeVisits(candidate) > MAX_SHARED_NODE_VISITS + repeatedContent / 16;
+            if (tooShared(ast)) throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, config?.onWarning ? config : ast.config ?? config);
             const known = withBoundedSheetGrids(withKnownNodeTypes(withWellTypedValues(ast)));
             input = keepsComments ? known : withoutSourceComments(known);
-            // Nodes shared along many paths (see sharedNodeVisits) past what the parsers' own sharing
-            // reaches are refused before any writer multiplies them.
-            const repeatedContent = input.config?.decompressionLimits?.maxRepeatedContent ?? 16 * 1024 * 1024;
-            if (sharedNodeVisits(input) > MAX_SHARED_NODE_VISITS + repeatedContent / 16) {
-                throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, config?.onWarning ? config : ast.config ?? config);
-            }
+            if (tooShared(input)) throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, config?.onWarning ? config : ast.config ?? config);
         } catch (error) {
             throw asNestingError(error);
         }

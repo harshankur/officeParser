@@ -51,7 +51,7 @@ const IMPLIED_END: Record<string, ImpliedEnd> = (() => {
     rules.option = { closes: new Set(['option']), stop: new Set(['select', 'datalist', 'optgroup']) };
     // A link cannot hold a link: a browser ends an open one where another starts (so no text is given
     // its links' metadata again at every level of nesting).
-    rules.a = { closes: new Set(['a']), stop: pScope };
+    rules.a = { closes: new Set(['a']), stop: new Set(['applet', 'caption', 'html', 'marquee', 'object', 'td', 'template', 'th']) };
     rules.optgroup = { closes: new Set(['option', 'optgroup']), stop: new Set(['select']) };
     // A row goes directly under its table or table section, a cell under its row, a section under its table.
     rules.tr = { under: new Set(['table', 'thead', 'tbody', 'tfoot']) };
@@ -1609,7 +1609,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 }
                 if (wikilinkPage !== undefined) {
                     children.forEach(c => {
-                        if (c.type === 'text') {
+                        if (c.type === 'text' && !(c.metadata as TextMetadata | undefined)?.link) {
                             c.metadata = { ...c.metadata, link: wikilinkPage, linkType: 'internal', wikilink: true } as TextMetadata;
                         }
                     });
@@ -1625,14 +1625,18 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         });
                     }
                     children.forEach(c => {
-                        if (c.type === 'text') {
+                        if (c.type === 'text' && !(c.metadata as TextMetadata | undefined)?.link) {
                             c.metadata = { ...c.metadata, link: page, linkType: 'internal', wikilink: true } as TextMetadata;
                         }
                     });
                 } else if (href) {
                     const linkType = href.startsWith('#') ? 'internal' : 'external';
                     const linkTitle = node.attributes?.title;
+                    // A link inside this one (which a browser allows across a table cell or an object) is
+                    // the one its text follows: this link goes only to text without one, and allocates
+                    // nothing for the rest at every level of nesting.
                     children.forEach(c => {
+                        if ((c.metadata as TextMetadata | undefined)?.link) return;
                         if (c.type === 'text') {
                             c.metadata = { ...c.metadata, link: href, linkType, title: linkTitle } as TextMetadata;
                         } else if (c.type === 'image') {

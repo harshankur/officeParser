@@ -24,81 +24,153 @@ const isKnown = (type: string): boolean => Object.prototype.hasOwnProperty.call(
 const placeOfChildren = (type: string): Place =>
     type === 'table' || type === 'sheet' ? 'table' : type === 'row' ? 'row' : BLOCK_CONTAINERS.has(type) ? 'block' : 'inline';
 
+/** The formatting and link of the unknown wrappers around a node, for the text in them (its own first). */
+interface Inherited {
+    formatting?: OfficeContentNode['formatting'];
+    metadata?: OfficeContentNode['metadata'];
+}
+
+/** `text` with the formatting and link of the wrappers around it under its own. */
+const withInherited = (text: OfficeContentNode, inherited: Inherited | undefined): OfficeContentNode => {
+    if (!inherited || (!inherited.formatting && !inherited.metadata)) return text;
+    return {
+        ...text,
+        ...((inherited.formatting || text.formatting) && { formatting: { ...inherited.formatting, ...text.formatting } }),
+        ...((text.metadata ?? inherited.metadata) && { metadata: text.metadata ?? inherited.metadata }),
+    } as OfficeContentNode;
+};
+
+/** A node of a known type with its lists' unknown nodes replaced, once per node (see withKnownNodeTypes). */
+function knownResult(node: OfficeContentNode, done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode {
+    let next = done.get(node);
+    if (!next) {
+        done.set(node, node);
+        next = node;
+        for (const key of ['children', 'notes', 'comments'] as const) {
+            const list = node[key];
+            if (!list?.length) continue;
+            const replaced = replaceUnknownNodes(list, key === 'children' ? placeOfChildren(node.type) : 'block', done);
+            if (replaced !== list) next = { ...next, [key]: replaced };
+        }
+        done.set(node, next);
+    }
+    return next;
+}
+
 /**
  * `nodes` with each node of a type the AST does not define replaced by its content (its children, or
  * its text) in the form its place takes: among blocks a run of inline content is a paragraph, in a row
- * the content is a cell, and in a table a row. Returns `nodes` itself when nothing changes.
+ * the content is a cell, and in a table a row. Returns `nodes` itself when nothing changes. Written
+ * into `into` when given (the list a wrapper's content joins).
  */
-function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place, done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode[] {
-    let changed = false;
-    const out: OfficeContentNode[] = [];
+function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place, done: Map<OfficeContentNode, OfficeContentNode>, inherited?: Inherited, into?: OfficeContentNode[]): OfficeContentNode[] {
+    let changed = !!inherited || !!into;
+    const out = into ?? [];
     for (const node of nodes) {
         if (isKnown(node.type)) {
-            // Each node once (see withKnownNodeTypes): a node the AST shares keeps one result.
-            let next = done.get(node);
-            if (!next) {
-                done.set(node, node);
-                next = node;
-                for (const key of ['children', 'notes', 'comments'] as const) {
-                    const list = node[key];
-                    if (!list?.length) continue;
-                    const replaced = replaceUnknownNodes(list, key === 'children' ? placeOfChildren(node.type) : 'block', done);
-                    if (replaced !== list) next = { ...next, [key]: replaced };
-                }
-                done.set(node, next);
-            }
+            const next = knownResult(node, done);
             if (next !== node) changed = true;
-            out.push(next);
+            out.push(next.type === 'text' ? withInherited(next, inherited) : next);
             continue;
         }
         changed = true;
-        const notes = node.notes?.length ? replaceUnknownNodes(node.notes, 'block', done) : undefined;
-        const comments = node.comments?.length ? replaceUnknownNodes(node.comments, 'block', done) : undefined;
-        const content = (inner: Place): OfficeContentNode[] => {
-            if (!node.children?.length) {
-                // Its text, with its formatting, link, notes and comments.
-                return node.text || notes || comments ? [{
-                    type: 'text', text: node.text ?? '',
-                    ...(node.formatting && { formatting: node.formatting }), ...(node.metadata && { metadata: node.metadata }),
-                    ...(notes && { notes }), ...(comments && { comments }),
-                } as OfficeContentNode] : [];
-            }
-            let replaced = replaceUnknownNodes(node.children, inner, done);
-            // A wrapper's formatting and link reach the text directly in it (the text's own first).
-            if (node.formatting || node.metadata) {
-                replaced = replaced.map(child => (child.type === 'text'
-                    ? { ...child, ...((node.formatting || child.formatting) && { formatting: { ...node.formatting, ...child.formatting } }), ...((child.metadata ?? node.metadata) && { metadata: child.metadata ?? node.metadata }) } as OfficeContentNode
-                    : child));
-            }
-            // Its notes and comments are carried by the last of its content.
-            if (notes || comments) {
-                const last = replaced.length ? { ...replaced[replaced.length - 1] } : { type: 'text', text: '' } as OfficeContentNode;
-                if (notes) last.notes = [...(last.notes ?? []), ...notes];
-                if (comments) last.comments = [...(last.comments ?? []), ...comments];
-                replaced = [...replaced.slice(0, -1), last];
-            }
-            return replaced;
-        };
-        if (place === 'inline') {
-            for (const child of content('inline')) out.push(child);
-        } else if (place === 'row') {
-            out.push({ type: 'cell', children: content('block') });
-        } else if (place === 'table') {
-            for (const child of content('table')) out.push(child.type === 'row' ? child : { type: 'row', children: [{ type: 'cell', children: [child] }] });
-        } else {
-            let run: OfficeContentNode[] = [];
-            const flush = () => {
-                if (run.length) out.push({ type: 'paragraph', children: run });
-                run = [];
-            };
-            for (const child of content('block')) {
-                if (INLINE_TYPES.has(child.type)) run.push(child);
-                else { flush(); out.push(child); }
-            }
-            flush();
-        }
+        writeUnknown(node, place, done, place === 'inline' ? inherited : undefined, out);
     }
     return changed ? out : nodes;
+}
+
+/**
+ * Writes an unknown node's content into `out` in the form `place` takes, straight into it however many
+ * unknown wrappers nest in a line of text (each writing its own content, none copying another's): the
+ * formatting and link of the wrappers reach the text in them as it is made. Copied up and given to all
+ * of a wrapper's text at every level, 1,000 nested wrappers around 100,000 runs took 80 times as long
+ * as none. Among blocks and in a table a nested wrapper's content is paragraphs or rows of its own,
+ * which the wrapper's formatting does not reach.
+ */
+function writeUnknown(node: OfficeContentNode, place: Place, done: Map<OfficeContentNode, OfficeContentNode>, inherited: Inherited | undefined, out: OfficeContentNode[]): void {
+    const notes = node.notes?.length ? replaceUnknownNodes(node.notes, 'block', done) : undefined;
+    const comments = node.comments?.length ? replaceUnknownNodes(node.comments, 'block', done) : undefined;
+    // What text in it takes: its own formatting over its wrappers', its link before theirs.
+    const inner: Inherited | undefined = node.formatting || node.metadata
+        ? { formatting: node.formatting ? { ...inherited?.formatting, ...node.formatting } : inherited?.formatting, metadata: node.metadata ?? inherited?.metadata }
+        : inherited;
+    const leaf = (): OfficeContentNode | undefined => node.text || notes || comments
+        ? withInherited({ type: 'text', text: node.text ?? '' } as OfficeContentNode, inner)
+        : undefined;
+    // Puts its notes and comments on `list[at]`, a copy of it.
+    const carry = (list: OfficeContentNode[], at: number): void => {
+        const last = { ...list[at] };
+        if (notes) last.notes = [...(last.notes ?? []), ...notes];
+        if (comments) last.comments = [...(last.comments ?? []), ...comments];
+        list[at] = last;
+    };
+    if (place === 'row') {
+        // In a row, its content is one cell, as it stands among blocks.
+        let children: OfficeContentNode[];
+        if (node.children?.length) {
+            children = replaceUnknownNodes(node.children, 'block', done, inner);
+            if (children === node.children) children = children.slice();
+        } else {
+            const text = leaf();
+            children = text ? [text] : [];
+        }
+        if (notes || comments) {
+            if (!children.length) children.push({ type: 'text', text: '' });
+            carry(children, children.length - 1);
+        }
+        out.push({ type: 'cell', children });
+        return;
+    }
+    // Among blocks, inline content waits in a run for its paragraph. Where the last of its content went,
+    // for its notes and comments.
+    let run: OfficeContentNode[] = [];
+    let lastList: OfficeContentNode[] | undefined;
+    let lastAt = -1;
+    const flush = () => {
+        if (run.length) out.push({ type: 'paragraph', children: run });
+        run = [];
+    };
+    const write = (child: OfficeContentNode) => {
+        if (place === 'inline') {
+            out.push(child);
+            lastList = out; lastAt = out.length - 1;
+        } else if (place === 'table' && child.type !== 'row') {
+            const cellChildren = [child];
+            out.push({ type: 'row', children: [{ type: 'cell', children: cellChildren }] });
+            lastList = cellChildren; lastAt = 0;
+        } else if (place === 'block' && INLINE_TYPES.has(child.type)) {
+            run.push(child);
+            lastList = run; lastAt = run.length - 1;
+        } else {
+            if (place === 'block') flush();
+            out.push(child);
+            lastList = out; lastAt = out.length - 1;
+        }
+    };
+    if (!node.children?.length) {
+        const text = leaf();
+        if (text) write(text);
+    } else {
+        for (const child of node.children) {
+            if (isKnown(child.type)) {
+                const next = knownResult(child, done);
+                write(next.type === 'text' ? withInherited(next, inner) : next);
+                continue;
+            }
+            // A wrapper among blocks makes paragraphs of its own: the run so far ends before it.
+            if (place === 'block') flush();
+            const before = out.length;
+            writeUnknown(child, place, done, place === 'inline' ? inner : undefined, out);
+            if (out.length > before) { lastList = out; lastAt = out.length - 1; }
+        }
+    }
+    // Its notes and comments are carried by the last of its content (an empty text of their own, when
+    // it has none).
+    if (notes || comments) {
+        if (!lastList) write({ type: 'text', text: '' });
+        carry(lastList!, lastAt);
+    }
+    flush();
 }
 
 /**

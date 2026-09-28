@@ -3400,6 +3400,29 @@ async function parserHardeningTests() {
     for (const [open, close] of [['<text:span>', '</text:span>'], ['<text:a xlink:href="#x">', '</text:a>'], ['<text:meta>', '</text:meta>']] as const) {
         await timed(`odt: 600,000 runs inside ${open} nested 1,000 deep parse`, () => parseQuiet(odfOf('text', `<text:p>${open.repeat(1000)}${'x<text:s/>'.repeat(300000)}${close.repeat(1000)}</text:p>`), 'odt'));
     }
+    // A note every reference shares is resolved once (HTML, EPUB, Markdown).
+    await timed('html: 16,000 references to a note of 16,000 paragraphs parse', () => parseQuiet(Buffer.from('<p>a<sup data-footnote-ref="k"></sup></p>'.repeat(16000) + '<section data-footnotes><div data-footnote-id="k">' + '<p>x</p>'.repeat(16000) + '</div></section>'), 'html'));
+    await timed('md: 16,000 references to a footnote of 16,000 paragraphs parse', () => parseQuiet(Buffer.from('a[^k]\n\n'.repeat(16000) + '[^k]: x\n' + '\n    y\n'.repeat(16000)), 'md'));
+    // Generators: an AST sharing nodes of an unknown type along many paths is refused before any pass expands it.
+    let sharedUnknown: any = { type: 'text', text: 'a' };
+    for (let i = 0; i < 40; i++) sharedUnknown = { type: 'wrap', children: [sharedUnknown, sharedUnknown] };
+    for (const limit of [undefined, Infinity, 'x']) {
+        let unknownError: any;
+        const unknownStarted = Date.now();
+        const withConfig = { ...astWith([{ type: 'paragraph', children: [sharedUnknown] }]), ...(limit !== undefined && { config: { decompressionLimits: { maxRepeatedContent: limit } } }) } as any;
+        try { await OfficeGenerator.generate(withConfig, 'text', { onWarning: () => {} } as any); } catch (e) { unknownError = e; }
+        check(`generators: unknown nodes shared along 2^40 paths are refused (repeat limit ${String(limit)})`, unknownError?.officeIssue?.code === 'OUTPUT_TOO_LARGE' && Date.now() - unknownStarted < 2000, `${Date.now() - unknownStarted}ms ${unknownError}`);
+    }
+    // Generators: unknown wrappers nested 1,000 deep are written as their content once.
+    let unknownWrapped: any = Array.from({ length: 100000 }, () => ({ type: 'text', text: 'a' }));
+    for (let i = 0; i < 1000; i++) unknownWrapped = [{ type: 'wrap', formatting: { bold: true }, children: unknownWrapped }];
+    const wrappedStarted = Date.now();
+    const wrappedText = (await OfficeGenerator.generate(astWith([{ type: 'paragraph', children: unknownWrapped }]), 'text', { onWarning: () => {} } as any)).value as string;
+    check('generators: 100,000 runs under 1,000 unknown wrappers are written in linear time', wrappedText.length >= 100000 && Date.now() - wrappedStarted < 5000, `${Date.now() - wrappedStarted}ms ${wrappedText.length}`);
+    // HTML: the innermost link is the one its text follows.
+    const innerLink = await parseQuiet(Buffer.from('<table><tr><td><a href="https://outer.example/"><table><tr><td><a href="https://inner.example/">in</a></td></tr></table></a></td></tr></table>'), 'html');
+    const innerJson = JSON.stringify(innerLink.ast?.content ?? []);
+    check('html: text in a link inside a link follows the inner one', innerJson.includes('inner.example') && !/"text":"in"[^}]*outer\.example/.test(innerJson), innerJson.slice(0, 400));
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';

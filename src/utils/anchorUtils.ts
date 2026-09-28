@@ -38,11 +38,15 @@ function addIds(node: OfficeContentNode, ids: string[]): void {
  * many marks cost time in proportion to their number. The tree is at most the parser's depth limit
  * deep.
  */
-export function resolveAnchorMarks(nodes: OfficeContentNode[], parent?: OfficeContentNode): OfficeContentNode[] {
+export function resolveAnchorMarks(nodes: OfficeContentNode[], parent?: OfficeContentNode, resolved = new Set<OfficeContentNode>()): OfficeContentNode[] {
+    // Each node's own lists once: a note is one node every reference to it holds, and resolved again at
+    // each, 64,000 references to a note of 64,000 paragraphs (9.5 KB of EPUB) took two and a half minutes.
     for (const node of nodes) {
-        if (node.children?.length) node.children = resolveAnchorMarks(node.children, node);
-        if (node.notes?.length) node.notes = resolveAnchorMarks(node.notes);
-        if (node.comments?.length) node.comments = resolveAnchorMarks(node.comments);
+        if (resolved.has(node)) continue;
+        resolved.add(node);
+        if (node.children?.length) node.children = resolveAnchorMarks(node.children, node, resolved);
+        if (node.notes?.length) node.notes = resolveAnchorMarks(node.notes, undefined, resolved);
+        if (node.comments?.length) node.comments = resolveAnchorMarks(node.comments, undefined, resolved);
     }
     if (!nodes.some(isAnchorMark)) return nodes;
     const inLine = !!parent && ANCHOR_INLINE_HOLDERS.has(parent.type);

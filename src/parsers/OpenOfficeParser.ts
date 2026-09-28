@@ -756,7 +756,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         if (part === annotation) children.push({ type: 'text', text: '(', formatting: parentFormatting, metadata: linkMetadata ? { ...linkMetadata } : undefined });
                         const partText = parseInlineContent(part, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, withFrames, sink).text;
                         if (part === annotation) {
-                            if (!partText) { children.splice(openAt, children.length - openAt); continue; }
+                            // No reading: its parenthesis goes, and a note or picture placed in it stays.
+                            if (!partText) { children.splice(openAt, 1); continue; }
                             fullText += '(';
                         }
                         fullText += partText;
