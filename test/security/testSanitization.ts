@@ -3329,6 +3329,29 @@ async function parserHardeningTests() {
     check('epub: text split by a million stray end tags is one text node', !strayEnds.error && strayNodes < 10, `${strayEnds.error} ${strayNodes}`);
     // The template renderer rebuilds a paragraph from slices, not a character at a time.
     await heapBudget('template: one paragraph of 20 million characters around a placeholder renders', () => timed('template: one paragraph of 20 million characters renders', () => OfficeTemplate.render(docxOf(`<w:p><w:r><w:t>{{a}}${'x'.repeat(20_000_000)}</w:t></w:r></w:p>`), { data: { a: 'y' } })));
+    // SmartArt: a diagram's text is read, once however many frames show it, whatever its connections.
+    const dgmNs = 'xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+    const dgmPoint = (id: string, text: string, type = '') => `<dgm:pt modelId="${id}"${type ? ` type="${type}"` : ''}>${text ? `<dgm:t><a:p><a:r><a:t>${text}</a:t></a:r></a:p></dgm:t>` : ''}</dgm:pt>`;
+    const dgmData = (points: string, connections: string) => `<?xml version="1.0"?><dgm:dataModel ${dgmNs}><dgm:ptLst>${points}</dgm:ptLst><dgm:cxnLst>${connections}</dgm:cxnLst></dgm:dataModel>`;
+    const dgmFrame = '<p:graphicFrame><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rId5"/></a:graphicData></a:graphic></p:graphicFrame>';
+    const smartArtPptx = (frames: number, data: string) => pptxOf({
+        'ppt/slides/slide1.xml': `<?xml version="1.0"?><p:sld ${pns}><p:cSld><p:spTree>${dgmFrame.repeat(frames)}</p:spTree></p:cSld></p:sld>`,
+        'ppt/slides/_rels/slide1.xml.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData" Target="../diagrams/data1.xml"/></Relationships>',
+        'ppt/diagrams/data1.xml': data,
+    });
+    const smartArt = await parseQuiet(smartArtPptx(1, dgmData(dgmPoint('0', '', 'doc') + dgmPoint('1', 'FIRST') + dgmPoint('2', 'SECOND') + dgmPoint('3', 'CHILD') + dgmPoint('p', 'PRESENTATION', 'pres'), '<dgm:cxn modelId="a" srcId="0" destId="2" srcOrd="1"/><dgm:cxn modelId="b" srcId="0" destId="1" srcOrd="0"/><dgm:cxn modelId="c" srcId="2" destId="3" srcOrd="0"/>')), 'pptx');
+    const smartItems = (smartArt.ast?.content[0]?.children ?? []).map((n: any) => `${n.metadata?.indentation}:${n.text}`);
+    check('pptx: SmartArt text is read in order and nested, without its presentation points', !smartArt.error && JSON.stringify(smartItems) === JSON.stringify(['0:FIRST', '0:SECOND', '1:CHILD']), `${smartArt.error} ${JSON.stringify(smartItems)}`);
+    const manyFrames = await parseQuiet(smartArtPptx(100000, dgmData(dgmPoint('0', '', 'doc') + dgmPoint('1', 'x'.repeat(100000)), '<dgm:cxn modelId="a" srcId="0" destId="1"/>')), 'pptx');
+    check('pptx: one SmartArt shown by 100,000 frames is read once', !manyFrames.error && (manyFrames.ast?.content[0]?.children?.length ?? 0) === 1, `${manyFrames.error} ${manyFrames.ast?.content[0]?.children?.length}`);
+    const chainPoints = Array.from({ length: 100000 }, (_, i) => dgmPoint(String(i + 1), 'n')).join('');
+    const chainLinks = Array.from({ length: 100000 }, (_, i) => `<dgm:cxn modelId="c${i}" srcId="${i}" destId="${i + 1}"/>`).join('') + '<dgm:cxn modelId="loop" srcId="100000" destId="1"/>';
+    await timed('pptx: SmartArt of a 100,000-point chain looping back is read', () => parseQuiet(smartArtPptx(1, dgmData(dgmPoint('0', '', 'doc') + chainPoints, chainLinks)), 'pptx'));
+    const smartArtDocx = await parseQuiet(docxOf('<w:p><w:r><w:t>Intro</w:t></w:r><w:r><w:drawing><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData><dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rId9"/></a:graphicData></a:graphic></w:drawing></w:r></w:p>', {
+        'word/_rels/document.xml.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="x" Target="diagrams/data1.xml"/></Relationships>',
+        'word/diagrams/data1.xml': dgmData(dgmPoint('0', '', 'doc') + dgmPoint('1', 'ALPHA'), '<dgm:cxn modelId="a" srcId="0" destId="1"/>'),
+    }), 'docx');
+    check('docx: SmartArt text joins its paragraph', !smartArtDocx.error && smartArtDocx.ast?.content[0]?.text === 'Intro\nALPHA', JSON.stringify(smartArtDocx.ast?.content[0]?.text));
     // ODF: long part paths are indexed by their last folders only.
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';

@@ -34,6 +34,7 @@ import { getChildElements, getDirectChildren, getElementsByTagName, getFirstElem
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
+import { diagramList, readDiagram } from '../utils/diagramUtils.js';
 
 /**
  * Parses a PowerPoint presentation (.pptx) and extracts slides and notes.
@@ -62,6 +63,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     const commentAuthorsRegex = /ppt\/commentAuthors\.xml/;
     const slideMastersRegex = /ppt\/slideMasters\/slideMaster\d+\.xml/;
     const presentationFileRegex = /ppt\/presentation\.xml/;
+    const diagramDataRegex = /ppt\/diagrams\/data\d+\.xml/;
 
     const files = await extractFiles(
         buffer,
@@ -74,6 +76,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             (!config.ignoreComments && (!!x.match(commentsFileRegex) || !!x.match(commentAuthorsRegex))) ||
             (!config.ignoreSlideMasters && !!x.match(slideMastersRegex)) ||
             !!x.match(presentationFileRegex) ||
+            !!x.match(diagramDataRegex) ||
             (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(chartFileRegex))),
         config.decompressionLimits,
         config
@@ -419,6 +422,22 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         return null;
     }
 
+    // SmartArt data parts read so far: each is shown once, on the first frame showing it (a part shown by
+    // many frames is one diagram, and its text was written again at each).
+    const readDiagrams = new Set<string>();
+    let diagramCount = 0;
+    /** A SmartArt frame's text as a list (see readDiagram); undefined for a frame that is not SmartArt. */
+    const extractDiagramNodes = (frameNode: Element, slideNumber: number): OfficeContentNode[] | undefined => {
+        const relIds = getFirstElementByTagName(frameNode, "dgm:relIds");
+        if (!relIds) return undefined;
+        const rId = relIds.getAttribute("r:dm");
+        const target = rId ? slideRelsMap[slideNumber]?.[rId]?.target : undefined;
+        const file = target ? fileByName.get(target) : undefined;
+        if (!file || !diagramDataRegex.test(file.path) || readDiagrams.has(file.path)) return [];
+        readDiagrams.add(file.path);
+        return diagramList(readDiagram(file.content.toString(), config), `smartart-${++diagramCount}`);
+    };
+
     /** Extract text and hyperlinks from a p:sp shape. */
     const extractShapeNodes = (spNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
@@ -746,9 +765,14 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             }
             // Case 3: Chart or other graphic frame
             else if (tag === "p:graphicFrame") {
-                const tableNode = extractGraphicFrameNode(element, slideNumber, xmlContentString);
-                if (tableNode) {
-                    nodes.push(tableNode);
+                const diagram = extractDiagramNodes(element, slideNumber);
+                if (diagram) {
+                    appendAll(nodes, diagram);
+                } else {
+                    const tableNode = extractGraphicFrameNode(element, slideNumber, xmlContentString);
+                    if (tableNode) {
+                        nodes.push(tableNode);
+                    }
                 }
             }
             // Case 4: Grouped shape (recursive!)
@@ -875,6 +899,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         // has to be skipped explicitly: it carries no slide number and would otherwise be
         // added to the deck as an empty slide.
         if (file.path.match(presentationFileRegex)) continue;
+        if (file.path.match(diagramDataRegex)) continue;
 
         const xmlContentString = file.content.toString();
         const xml = parseXmlString(xmlContentString, { config, locator: config.includeRawContent });

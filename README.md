@@ -776,7 +776,7 @@ extracted (the matching `ignore*` flag is then a no-op).
 | ODP  | Y (page) | speaker notes | – | – (ODP masters not extracted) | Y | Y | Y |
 | ODG  | Y (page) | – | – | – | Y | – | Y |
 | PDF  | – | footnotes/endnotes (tagged) | Y (top/bottom bands) | – | Y | – | Y (spans: tagged only) |
-| RTF  | – | footnotes/endnotes | – (dropped) | – | Y | – | Y |
+| RTF  | Y (annotations) | footnotes/endnotes | Y | – | Y | – | Y |
 | HTML | `<!-- -->` become `comment` nodes* (opt-in: `preserveComments`) | footnotes/endnotes | – | – | Y (`data:` only) | – | Y |
 | MD   | `<!-- -->` become `comment` nodes* | footnotes/endnotes | – | – | Y (`data:` only) | – | Y (HTML-table fallback) |
 | CSV  | `#`-rows become `comment` nodes* | – | – | – | – | – | rows |
@@ -792,6 +792,11 @@ stays hidden). `ignoreNotes` /
 `ignoreComments` / `ignoreHeadersAndFooters` / `ignoreSlideMasters` each remove the corresponding
 column and are a no-op wherever it shows `–`. OCR (`ocr: true`) recognizes text from any extracted
 image and therefore also needs `extractAttachments: true`.
+
+Content kept in parts of its own is read where it stands: SmartArt text (PPTX as a nested bulleted
+list, DOCX a line per item in its paragraph), DOCX content controls, text boxes and alternative-format
+chunks (`w:altChunk`: HTML, MHT, RTF, plain text or a DOCX), and RTF shape text boxes. Text a tracked
+change deleted or moved away (DOCX, ODT) is not read; insertions are.
 
 ---
 

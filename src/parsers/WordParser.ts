@@ -72,6 +72,7 @@ import { extractFiles, findRequiredPart, maxUncompressedBytesOf } from '../utils
 import { lookupTable, plainRecord, setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
+import { DiagramItem, readDiagram } from '../utils/diagramUtils.js';
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { mhtPartText, MhtPart, readMht } from '../utils/mhtUtils.js';
 import { parseHtml } from './HtmlParser.js';
@@ -85,6 +86,9 @@ interface WordChunk {
     bytesLeft: number;
     bytesUsed: number;
 }
+
+/** SmartArt data parts (see readDiagram). */
+const diagramDataRegex = /^word\/diagrams\/data\d*\.xml$/;
 
 /** The parts an alternative-format chunk (`w:altChunk`) is read from: HTML, MHT, RTF, plain text or a DOCX. */
 const altChunkFileRegex = /^word\/.+\.(?:html?|xht(?:ml)?|mht(?:ml)?|rtf|txt|docx)$/i;
@@ -339,7 +343,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             (!config.ignoreComments && !!x.match(commentsFileRegex)) ||
             (!config.ignoreHeadersAndFooters && (!!x.match(headerFileRegex) || !!x.match(footerFileRegex))) ||
             (!!config.extractAttachments && !!x.match(mediaFileRegex)) ||
-            altChunkFileRegex.test(x),
+            altChunkFileRegex.test(x) ||
+            diagramDataRegex.test(x),
         // A DOCX read as a chunk inflates within what the enclosing document left.
         chunk ? { ...config.decompressionLimits, maxUncompressedBytes: chunk.bytesLeft } : config.decompressionLimits,
         config
@@ -515,6 +520,24 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         takeXmlElements(html, config);
         return adoptChunk(await parseHtml(Buffer.from(html, 'utf8'), config, { imageAttachment }));
     };
+    // SmartArt data parts by path, and those read so far: each is shown once, at the first drawing
+    // showing it.
+    const diagramParts = new Map<string, (typeof files)[number]>();
+    for (const f of files) if (diagramDataRegex.test(f.path) && !diagramParts.has(f.path)) diagramParts.set(f.path, f);
+    const readDiagrams = new Set<string>();
+    /** The text of the SmartArt a drawing shows (see readDiagram), or none: not SmartArt, or shown before. */
+    const diagramItems = (drawing: Element): DiagramItem[] => {
+        const relIds = ownFirst(drawing, "dgm:relIds");
+        const rId = relIds?.getAttribute("r:dm");
+        const target = rId ? relsMap[rId] : undefined;
+        if (!target) return [];
+        const path = resolvePartPath('word/', target);
+        const part = readDiagrams.has(path) ? undefined : diagramParts.get(path);
+        if (!part) return [];
+        readDiagrams.add(path);
+        return readDiagram(part.content.toString(), config);
+    };
+
     /** A chunk's content where it stands, read by readChunk before the body. */
     const placeChunk = (element: Element): OfficeContentNode[] => {
         placedChunks.add(element);
@@ -931,6 +954,18 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                             }
                             children.push(imageNode);
                         }
+                    }
+                }
+
+                // SmartArt the run draws: its items join the paragraph's text, a line each.
+                for (const drawing of runDrawings) {
+                    for (const item of diagramItems(drawing)) {
+                        if (children.length > 0) {
+                            children.push({ type: 'text', text: '\n', metadata: { isLineBreak: true } as TextMetadata });
+                            text += '\n';
+                        }
+                        children.push({ type: 'text', text: item.text });
+                        text += item.text;
                     }
                 }
 
@@ -1414,6 +1449,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         if (file.path.match(headerFileRegex)) continue;
         if (file.path.match(footerFileRegex)) continue;
         if (altChunkFileRegex.test(file.path)) continue;
+        if (diagramDataRegex.test(file.path)) continue;
 
         const documentContent = file.content.toString();
         const doc = parseXmlString(documentContent, { config, locator: config.includeRawContent });
