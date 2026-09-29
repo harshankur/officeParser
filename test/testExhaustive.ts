@@ -4290,6 +4290,47 @@ async function testDocxReadingReview(): Promise<void> {
     assert.ok(collectAllNodes((await parse(breaks, { includeBreakNodes: true })).ast).some(n => n.type === 'break' && (n.metadata as any)?.breakType === 'page'), 'DOCX: a page break is a node with includeBreakNodes');
     assert.strictEqual((await (await parse(Buffer.from((await byDefault.to('docx')).value as Uint8Array))).ast.to('text')).value, 'Line one\nLine two\nA\tB\nC', 'DOCX: line breaks and tabs round-trip through DOCX');
     console.log('  DOCX reading review: All assertions passed ✓');
+// ─── HTML and EPUB: reading as a browser does, writing what a reader accepts ─────
+
+async function testHtmlBrowserReading(): Promise<void> {
+    console.log('\n=== Running HTML/EPUB reading and writing tests ===');
+    const parse = (src: string | Buffer, fileType = 'html', extra: object = {}) => OfficeParser.parseOffice(Buffer.isBuffer(src) ? src : Buffer.from(src), { fileType, onWarning: () => { }, ...extra } as any);
+    const write = async (ast: any, format = 'html', extra: object = {}) => (await OfficeGenerator.generate(ast, format as any, { generateIds: false, htmlConfig: { standalone: false }, onWarning: () => { }, ...extra } as any)).value;
+    const T = (text: string, extra: object = {}) => ({ type: 'text', text, ...extra });
+    const doc = (content: any[], metadata: object = {}) => ({ type: 'docx', metadata, attachments: [], content } as any);
+    const idsOf = (html: string) => [...html.matchAll(/\sid="([^"]*)"/g)].map(m => m[1]);
+    const chapterOf = async (ast: any, extra: object = {}) => strFromU8(unzipSync((await write(ast, 'epub', extra)) as Uint8Array)['OEBPS/chapter1.xhtml']);
+
+    // A paragraph holding a block: its wrapper (a quote's <blockquote>) is kept, and its ids go on its
+    // first part, whatever that part is.
+    const quoted = await parse('<blockquote><pre>code</pre></blockquote>');
+    const quotedHtml = await write(quoted) as string;
+    assert.ok(quotedHtml.includes('<blockquote><pre><code>code</code></pre></blockquote>'), `HTML: a quote holding only a code block keeps its <blockquote> (${quotedHtml})`);
+    assert.strictEqual((await parse(quotedHtml)).content[0].metadata && ((await parse(quotedHtml)).content[0].metadata as any).style, 'Quote', 'HTML: the quoted code block reads back quoted');
+    const anchored = await write(doc([
+        { type: 'paragraph', metadata: { anchorIds: ['eq1'] }, children: [{ type: 'code', text: 'E=mc^2', metadata: { math: 'block' } }] },
+        { type: 'paragraph', metadata: { anchorIds: ['bm1'] }, children: [{ type: 'break', metadata: { breakType: 'page' } }] },
+        { type: 'paragraph', metadata: { anchorIds: ['p3'] }, children: [{ type: 'code', text: 'x' }, T('after')] },
+    ])) as string;
+    for (const id of ['eq1', 'bm1', 'p3']) assert.strictEqual(idsOf(anchored).filter(x => x === id).length, 1, `HTML: a paragraph starting with a block keeps its id ${id} (${anchored})`);
+    assert.ok(anchored.indexOf('id="eq1"') < anchored.indexOf('math-block'), 'HTML: the id stands before the block it starts with');
+    // Every block a paragraph holds is written outside its <p> (a table, an admonition, a video), and a
+    // chapter holding one is well-formed.
+    const holding = doc([
+        { type: 'paragraph', children: [T('before'), { type: 'table', children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'paragraph', children: [T('in a cell')] }] }] }] }, T('after')] },
+        { type: 'paragraph', children: [T('x'), { type: 'admonition', metadata: { admonitionType: 'note' }, children: [{ type: 'paragraph', children: [T('inside')] }] }] },
+        { type: 'paragraph', children: [T('Watch: '), { type: 'embed', metadata: { embedType: 'youtube', videoId: 'abc' } }, T(' now')] },
+    ]);
+    const holdingHtml = await write(holding) as string;
+    const paragraphsHoldNoBlock = [...holdingHtml.matchAll(/<p[ >]/g)].every(m => !/<(?:div|table|ul|ol|p[ >])/.test(holdingHtml.slice(m.index! + 2, holdingHtml.indexOf('</p>', m.index!))));
+    assert.ok(paragraphsHoldNoBlock && holdingHtml.includes('in a cell') && holdingHtml.includes('data-youtube-video="abc"'), `HTML: no block inside a <p> (${holdingHtml})`);
+    parseXmlString(await chapterOf(holding));
+    // The EPUB writer pairs each </p> with the <p> it closes (a paragraph written whole by onNode).
+    const replaced = await chapterOf(doc([{ type: 'paragraph', children: [T('x')] }]), { onNode: (n: any) => n.type === 'paragraph' ? '<p>a<table><tr><td><p>cell</p></td></tr></table>b</p>' : undefined });
+    parseXmlString(replaced);
+    assert.ok(replaced.includes('<div>a<table>') && replaced.includes('b</div>'), `EPUB: a paragraph holding a table is promoted to a div (${replaced})`);
+
+    console.log('  HTML/EPUB reading and writing: All assertions passed ✓');
 }
 
 async function runTests(): Promise<void> {
@@ -4304,6 +4345,7 @@ async function runTests(): Promise<void> {
         ['Image links', testImageLinks],
         ['DOCX reading review', testDocxReadingReview],
         ['HTML', testHtml],
+        ['HTML browser reading', testHtmlBrowserReading],
         ['SourceComments', testSourceComments],
         ['CSV', testCsv],
         ['RTF', testRtf],

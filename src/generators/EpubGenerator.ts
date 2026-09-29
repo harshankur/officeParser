@@ -7,54 +7,60 @@ import { decodeBase64, documentLanguage, MIME_EXT, resolveZipInstant } from '../
 
 const VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
 
-/** Block-level tags whose HTML5 content model does not permit them inside a <p>. */
-const BLOCK_TAGS_INVALID_IN_P = ['div', 'table', 'ul', 'ol', 'dl', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'section', 'figure'];
+/** Block-level tags whose HTML5 content model does not permit them inside a <p> (a <p> among them). */
+const BLOCK_TAGS_INVALID_IN_P = new Set(['address', 'article', 'aside', 'blockquote', 'details', 'dialog', 'div', 'dl', 'fieldset',
+    'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'main', 'menu', 'nav', 'ol',
+    'p', 'pre', 'section', 'table', 'ul']);
 
 /**
  * HTML5's content model forbids block elements inside <p> (a <p> can only hold "phrasing
  * content"), but browsers silently fix this via the HTML5 parsing algorithm's
  * auto-closing rule: seeing a block start tag implicitly closes the open <p> first.
- * XML parsers have no such rule - they just build the tree exactly as written. Since
- * HtmlGenerator always wraps images in `<div class="image-container">`, a paragraph
- * whose only child is an image becomes `<p><div>...</div></p>`: well-formed XML, but
- * many EPUB rendering engines refuse to lay out a block box found inside a paragraph and
- * simply drop it - silently, with no parse error, which is why the image vanishes.
+ * XML parsers have no such rule - they just build the tree exactly as written, and many EPUB
+ * rendering engines refuse to lay out a block box found inside a paragraph and simply drop it.
+ * HtmlGenerator writes a paragraph holding a block as its parts, so this is for markup it is
+ * handed whole (an `onNode` replacement, a heading's content).
  *
  * Fixes this by promoting any `<p ...>` that contains a nested block tag to a `<div ...>`
- * instead, matching what a browser's auto-correction effectively produces. Paragraphs
- * don't nest, so the first `</p>` after each `<p>` is always its match.
+ * instead, matching what a browser's auto-correction effectively produces. The tags are read
+ * once, in order, each `</p>` matched to the `<p>` it closes: paired with the first `</p>` after
+ * it, a paragraph holding a table with a <p> in a cell was closed at the cell's `</p>` and the
+ * document was no longer well-formed. Comments are passed over (their text is not markup).
  */
 const promoteParagraphsWithBlockContent = (html: string): string => {
-    const blockTagPattern = new RegExp(`<(?:${BLOCK_TAGS_INVALID_IN_P.join('|')})\\b`, 'i');
-    let result = '';
-    let cursor = 0;
-    const pOpenRegex = /<p(\s[^>]*)?>/gi;
-    let match: RegExpExecArray | null;
-
-    while ((match = pOpenRegex.exec(html)) !== null) {
-        if (match.index < cursor) continue; // inside content already emitted by a prior promotion
-
-        result += html.slice(cursor, match.index);
-        const contentStart = match.index + match[0].length;
-        const closeMatch = /<\/p>/i.exec(html.slice(contentStart));
-        if (!closeMatch) {
-            // No closing tag found (shouldn't happen with well-formed generator output) -
-            // leave as-is rather than risk corrupting the rest of the document.
-            result += match[0];
-            cursor = contentStart;
-            pOpenRegex.lastIndex = cursor;
+    const open: { at: number; hasBlock: boolean }[] = [];
+    const edits: { at: number; length: number; text: string }[] = [];
+    for (let i = html.indexOf('<'); i !== -1; i = html.indexOf('<', i + 1)) {
+        if (html.startsWith('<!--', i)) {
+            const end = html.indexOf('-->', i + 4);
+            if (end === -1) break;
+            i = end + 2;
             continue;
         }
-
-        const inner = html.slice(contentStart, contentStart + closeMatch.index);
-        const attrs = match[1] || '';
-        result += blockTagPattern.test(inner) ? `<div${attrs}>${inner}</div>` : `<p${attrs}>${inner}</p>`;
-
-        cursor = contentStart + closeMatch.index + closeMatch[0].length;
-        pOpenRegex.lastIndex = cursor;
+        const closing = html[i + 1] === '/';
+        let nameEnd = i + (closing ? 2 : 1);
+        while (nameEnd < html.length && /[A-Za-z0-9]/.test(html[nameEnd])) nameEnd++;
+        const name = html.slice(i + (closing ? 2 : 1), nameEnd).toLowerCase();
+        if (closing) {
+            if (name !== 'p') continue;
+            const paragraph = open.pop();
+            if (paragraph?.hasBlock) edits.push({ at: paragraph.at, length: 2, text: '<div' }, { at: i, length: 3, text: '</div' });
+            continue;
+        }
+        // The innermost open paragraph holds this block; a paragraph holding it holds a block too.
+        if (BLOCK_TAGS_INVALID_IN_P.has(name) && open.length) open[open.length - 1].hasBlock = true;
+        if (name === 'p') open.push({ at: i, hasBlock: false });
     }
-    result += html.slice(cursor);
-    return result;
+    if (!edits.length) return html;
+    edits.sort((a, b) => a.at - b.at);
+    const parts: string[] = [];
+    let cursor = 0;
+    for (const edit of edits) {
+        parts.push(html.slice(cursor, edit.at), edit.text);
+        cursor = edit.at + edit.length;
+    }
+    parts.push(html.slice(cursor));
+    return parts.join('');
 };
 
 /**

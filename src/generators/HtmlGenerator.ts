@@ -7,11 +7,32 @@ import { isSourceComment } from '../utils/commentUtils.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 
-/** A child that is a block of its own (a code block or display equation), which a <p> cannot hold. */
+/** Node types written as block elements (a <div>, <table>, <ul>, <dl>, <section>...), which a <p> cannot hold. */
+const BLOCK_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'sheet', 'row', 'cell', 'chart', 'embed', 'admonition',
+    'definitionList', 'definitionTerm', 'definitionDescription', 'slide', 'page', 'note']);
+
+/** Node types written as their children alone: blocks when one of their children is. */
+const TRANSPARENT_TYPES = new Set<string>(['drawing', 'header', 'footer', 'slideMaster']);
+
+/**
+ * A child that is a block of its own, which a <p> cannot hold: a code block or display equation, a
+ * rule or page break (an <hr>; a Word page break is a break in its paragraph), and every node written
+ * as a block element (a table, a list, an embed's <div>...), or holding one. Only these were split
+ * out, so a paragraph holding a table or a video wrote a <div> inside its <p>, which a DOM parser
+ * closes the paragraph at and XHTML (EPUB's) rejects.
+ */
 const isBlockInParagraph = (child: OfficeContentNode): boolean =>
-    (child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math !== 'inline')
-    // A rule or page break is an <hr>, which cannot sit in a <p> either (a Word page break is a break in its paragraph).
-    || (child.type === 'break' && ['thematic', 'page'].includes((child.metadata as { breakType?: string } | undefined)?.breakType ?? ''));
+    BLOCK_TYPES.has(child.type)
+    || (child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math !== 'inline')
+    || (child.type === 'break' && ['thematic', 'page'].includes((child.metadata as { breakType?: string } | undefined)?.breakType ?? ''))
+    || ((TRANSPARENT_TYPES.has(child.type) || (child.type === 'comment' && !isSourceComment(child))) && !!child.children?.some(isBlockInParagraph));
+
+/**
+ * Elements a styleMap can write a paragraph as that hold flow content (blocks included), so a block the
+ * paragraph holds stays inside it: a quoted code block is `<blockquote><pre>`, not a bare `<pre>`.
+ */
+const FLOW_CONTAINER_TAGS = new Set(['blockquote', 'div', 'section', 'article', 'aside', 'header', 'footer', 'main', 'figure',
+    'figcaption', 'address', 'li', 'dd', 'dt']);
 
 type ResolvedStandalone = Required<StandaloneConfig>;
 
@@ -838,8 +859,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         // A paragraph holding a block (a code block's <pre>, a display equation's <div>) is written as
         // its parts, since HTML cannot nest a block in a <p>: a DOM parser closes the paragraph at it,
         // and XHTML (EPUB's) rejects it. Each run of inline content is a paragraph, each block stands
-        // on its own, and the paragraph's id and anchors go on its first part.
-        const splitsAroundBlocks = node.type === 'paragraph' && processor === this.boundNodeProcessor && !!node.children?.some(isBlockInParagraph);
+        // on its own, and the paragraph's id and anchors go on its first part. A paragraph a styleMap
+        // writes as an element that holds blocks (a quote's <blockquote>) is written whole instead:
+        // split, a quote holding only a code block lost its <blockquote>.
+        const splitsAroundBlocks = node.type === 'paragraph' && processor === this.boundNodeProcessor && !!node.children?.some(isBlockInParagraph)
+            && !this.holdsFlowContent(node);
         // A paragraph or heading holds phrasing content only: a picture in one is written inline.
         const holdsInline = node.type === 'paragraph' || node.type === 'heading';
         let splitResult: string | undefined;
@@ -863,6 +887,13 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             for (const child of node.children!) {
                 if (isBlockInParagraph(child)) {
                     await flush();
+                    // A block before any of the paragraph's text takes its ids, as named anchors before it:
+                    // with no part of text to carry them, a link to the paragraph (a bookmark on a display
+                    // equation, or on a page break) had nothing to land on.
+                    if (part === node) {
+                        splitResult += this.namedAnchors(node);
+                        part = laterPart;
+                    }
                     // The block stands on its own, outside the paragraph's line of text.
                     this.inlineDepth--;
                     try {
@@ -921,6 +952,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         }
 
         return result;
+    }
+
+    /** Whether a styleMap writes `node` (a paragraph) as an element that holds blocks (see FLOW_CONTAINER_TAGS). */
+    private holdsFlowContent(node: OfficeContentNode): boolean {
+        const tag = this.getSemanticMapping(node)?.tag;
+        return isSafeStyleMapTag(tag) && FLOW_CONTAINER_TAGS.has(tag.toLowerCase());
+    }
+
+    /** `node`'s ids as empty named anchors, for a node whose own element is not written (none under ignoreInternalLinks). */
+    private namedAnchors(node: OfficeContentNode): string {
+        if (this.config.ignoreInternalLinks) return '';
+        const ids: string[] = ((node.metadata as { anchorIds?: string[] } | undefined)?.anchorIds || []).filter((id: string) => !!id);
+        return ids.map(aid => `<a id="${this.escape(aid)}" name="${this.escape(aid)}"></a>`).join('');
     }
 
     /**
@@ -1548,7 +1592,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // Normalize empty paragraphs so DOCX and PPTX empty cells render with consistent height
                 // Strip tags to check if it's purely empty or just contains non-breaking spaces (like PPTX)
                 const textOnly = childrenOutput.replace(/<[^<>]+>/g, '').trim();
-                if (!textOnly && !node.children?.some(c => c.type === 'image' || c.type === 'chart')) {
+                // A block written inside it (a quote holding only a rule) is its content, not emptiness.
+                if (!textOnly && !node.children?.some(c => c.type === 'image' || c.type === 'chart' || isBlockInParagraph(c))) {
                     const extraClass = className ? ` class="${className.replace('class="', '').replace('"', '')} empty-paragraph"` : ' class="empty-paragraph"';
                     return `${extraAnchors}<${tag}${idAttr}${extraClass}${mappedAttrs}${styleAttr}><br></${tag}>`;
                 }

@@ -3877,6 +3877,26 @@ async function pdfProcessTests(h: {
     const begun = Date.now();
     const afterHere = await read(drawnOften, { pdfParserConfig: { maxTimeMs: 200 } });
     check('pdf: after pdf.js ran in this process, the next parse still runs it in a separate one', !afterHere.error && Date.now() - begun < 4000 && named(afterHere.warnings, 'maxTimeMs'), `${Date.now() - begun}ms ${afterHere.codes} ${afterHere.error}`);
+ * The HTML reader's tree building (implied ends, formatting carried across paragraphs, foster
+ * parenting, declarations) and the EPUB writer's paragraph pairing, on hostile shapes: each in time
+ * linear in the input, checked by timing two sizes four times apart (linear work takes about four
+ * times as long, quadratic sixteen).
+ */
+async function htmlReadingTests() {
+    console.log('- HTML reading and EPUB writing (linear time)...');
+    const scalesLinearly = async (label: string, run: (size: number) => Promise<unknown>, size: number) => {
+        const time = async (n: number) => { const started = performance.now(); await run(n); return performance.now() - started; };
+        await time(size);
+        const small = await time(size);
+        const large = await time(size * 4);
+        check(`${label} takes linear time`, large < 5000 && large < Math.max(small, 25) * 10, `${small.toFixed(0)}ms -> ${large.toFixed(0)}ms`);
+    };
+    const epubOf = (override: string) => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'x' }] }]), 'epub', { onNode: (n: any) => n.type === 'paragraph' ? override : undefined, onWarning: () => {} } as any);
+
+    // EPUB: each </p> is paired with its <p> in one pass, nested or not, and an unclosed comment ends the scan.
+    await scalesLinearly('epub: paragraphs holding tables holding paragraphs, repeated,', n => epubOf('<p>a<table><tr><td><p>b</p></td></tr></table>c</p>'.repeat(n)), 5000);
+    await scalesLinearly('epub: paragraphs nested 200 deep, repeated,', n => epubOf(('<p>'.repeat(200) + 'x' + '</p>'.repeat(200)).repeat(n)), 100);
+    await scalesLinearly('epub: unclosed comments before paragraphs', n => epubOf('<!--<p>'.repeat(n)), 20000);
 }
 
 async function main() {
@@ -3909,6 +3929,7 @@ async function main() {
     errorReportingTests();
     await errorRoutingTests();
     await parserHardeningTests();
+    await htmlReadingTests();
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);
