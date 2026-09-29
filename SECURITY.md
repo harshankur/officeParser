@@ -8,9 +8,9 @@ Maintenance and security patches are currently provided for the latest major bra
 
 | Version | Supported          |
 | ------- | ------------------ |
+| v8.x    | :white_check_mark: |
 | v7.x    | :white_check_mark: |
-| v6.x    | :white_check_mark: |
-| < v6.x  | :x:                |
+| < v7.x  | :x:                |
 
 ## Reporting a Vulnerability
 
