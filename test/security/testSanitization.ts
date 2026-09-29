@@ -3877,6 +3877,9 @@ async function pdfProcessTests(h: {
     const begun = Date.now();
     const afterHere = await read(drawnOften, { pdfParserConfig: { maxTimeMs: 200 } });
     check('pdf: after pdf.js ran in this process, the next parse still runs it in a separate one', !afterHere.error && Date.now() - begun < 4000 && named(afterHere.warnings, 'maxTimeMs'), `${Date.now() - begun}ms ${afterHere.codes} ${afterHere.error}`);
+}
+
+/**
  * The HTML reader's tree building (implied ends, formatting carried across paragraphs, foster
  * parenting, declarations) and the EPUB writer's paragraph pairing, on hostile shapes: each in time
  * linear in the input, checked by timing two sizes four times apart (linear work takes about four

@@ -2367,6 +2367,7 @@ async function testLatexGeneration(): Promise<void> {
     const empty: any = { type: 'docx', metadata: {}, attachments: [], content: [], getImages: () => [] };
     const etex = (await OfficeGenerator.generate(empty, 'tex', {})).value as string;
     assert.ok(etex.endsWith('\\begin{document}\n\n\n\n\\end{document}\n') && !etex.includes('\\title'), 'TEX empty: bare document, no title');
+
 }
 
 async function testLatexParsing(): Promise<void> {
@@ -4290,6 +4291,8 @@ async function testDocxReadingReview(): Promise<void> {
     assert.ok(collectAllNodes((await parse(breaks, { includeBreakNodes: true })).ast).some(n => n.type === 'break' && (n.metadata as any)?.breakType === 'page'), 'DOCX: a page break is a node with includeBreakNodes');
     assert.strictEqual((await (await parse(Buffer.from((await byDefault.to('docx')).value as Uint8Array))).ast.to('text')).value, 'Line one\nLine two\nA\tB\nC', 'DOCX: line breaks and tabs round-trip through DOCX');
     console.log('  DOCX reading review: All assertions passed ✓');
+}
+
 // ─── HTML and EPUB: reading as a browser does, writing what a reader accepts ─────
 
 async function testHtmlBrowserReading(): Promise<void> {
