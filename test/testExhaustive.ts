@@ -2368,6 +2368,10 @@ async function testLatexGeneration(): Promise<void> {
     const etex = (await OfficeGenerator.generate(empty, 'tex', {})).value as string;
     assert.ok(etex.endsWith('\\begin{document}\n\n\n\n\\end{document}\n') && !etex.includes('\\title'), 'TEX empty: bare document, no title');
 
+    // mathtools' environments (dcases, pmatrix*, ...) are math, and load mathtools: refused, they were
+    // written as text.
+    const mathtoolsTex = (await (await OfficeParser.parseOffice(Buffer.from('$$\n|x| = \\begin{dcases} x & x \\ge 0 \\\\ -x & x < 0 \\end{dcases}\n$$\n\nand $\\begin{pmatrix*}[r] 1 & -2 \\end{pmatrix*}$.\n'), { fileType: 'md' })).to('tex')).value as string;
+    assert.ok(mathtoolsTex.includes('\\usepackage{mathtools}') && mathtoolsTex.includes('\\begin{dcases}') && mathtoolsTex.includes('\\begin{pmatrix*}[r]') && !mathtoolsTex.includes('\\begin{verbatim}'), 'TEX: mathtools environments are math, with mathtools loaded');
 }
 
 async function testLatexParsing(): Promise<void> {

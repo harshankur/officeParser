@@ -1,3 +1,4 @@
+import { MATHTOOLS_ENVIRONMENTS } from './sanitize.js';
 import { lookupTable } from './lookupUtils.js';
 
 /**
@@ -369,6 +370,9 @@ const LATEX_MATH_COMMANDS: ReadonlySet<string> = new Set(`
     zeta
 `.split(/\s+/).filter(Boolean));
 
+/** What mathCommandsOf records for a formula opening one of mathtools' environments: no control word has this name. */
+const MATHTOOLS_ENVIRONMENT = 'begin-mathtools-environment';
+
 /**
  * Packages with math commands a formula may use (so a document parsed from LaTeX that loaded them
  * keeps working), in the order they are loaded, each with its load options and its commands. `bm`
@@ -381,7 +385,7 @@ const MATH_PACKAGES: ReadonlyArray<{ name: string; options?: string; commands: s
             + 'crampedclap crampedllap crampedrlap smashoperator adjustlimits prescript underbracket overbracket xmapsto xhookrightarrow '
             + 'xhookleftarrow xLeftarrow xRightarrow xleftrightarrow xLeftrightarrow xleftharpoonup xrightharpoonup xleftharpoondown '
             + 'xrightharpoondown xleftrightharpoons xrightleftharpoons splitfrac splitdfrac MoveEqLeft ArrowBetweenLines shortintertext '
-            + 'lparen rparen Aboxed',
+            + `lparen rparen Aboxed ${MATHTOOLS_ENVIRONMENT}`,
     },
     { name: 'esint', commands: 'oiint oiiint sqint sqiint ointclockwise ointctrclockwise varointclockwise varointctrclockwise fint landupint landdownint' },
     { name: 'stmaryrd', commands: 'llbracket rrbracket llparenthesis rrparenthesis mapsfrom Mapsfrom Mapsto longmapsfrom Longmapsfrom Longmapsto lightning' },
@@ -449,9 +453,14 @@ function eachMathCommand(latex: string, visit: (name: string, start: number, end
     }
 }
 
-/** Adds the control words of a formula to `into`. */
+/** Adds the control words of a formula to `into`, and MATHTOOLS_ENVIRONMENT when it opens one of mathtools' environments. */
 export function mathCommandsOf(latex: string, into: Set<string>): void {
-    eachMathCommand(latex, name => { into.add(name); });
+    eachMathCommand(latex, (name, _start, end) => {
+        into.add(name);
+        if (name !== 'begin') return;
+        const env = /^[ \t\n]*\{([A-Za-z]+\*?)\}/.exec(latex.slice(end, end + 48));
+        if (env && MATHTOOLS_ENVIRONMENTS.has(env[1])) into.add(MATHTOOLS_ENVIRONMENT);
+    });
 }
 
 /**

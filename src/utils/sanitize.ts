@@ -757,10 +757,20 @@ const LATEX_MATH_BLOCKED_COMMANDS = new Set([
  */
 const LATEX_MATH_BLOCKED_PREFIXES = ['pdf', 'lua', 'XeTeX', 'file', 'every', 'new', 'New', 'renew', 'Renew', 'provide', 'Provide', 'Declare', 'show', 'fancy'];
 
-/** Environments a formula may open anywhere inside math (amsmath and the kernel). */
+/**
+ * mathtools' environments a formula may open inside math (`dcases`, `matrix*`, ...). LaTeX output
+ * loads mathtools for a formula that opens one (see mathCommandsOf in latexUtils).
+ */
+export const MATHTOOLS_ENVIRONMENTS: ReadonlySet<string> = new Set(['dcases', 'dcases*', 'rcases', 'rcases*', 'drcases', 'drcases*', 'cases*',
+    'matrix*', 'pmatrix*', 'bmatrix*', 'Bmatrix*', 'vmatrix*', 'Vmatrix*', 'smallmatrix*', 'psmallmatrix', 'psmallmatrix*', 'bsmallmatrix',
+    'bsmallmatrix*', 'Bsmallmatrix', 'Bsmallmatrix*', 'vsmallmatrix', 'vsmallmatrix*', 'Vsmallmatrix', 'Vsmallmatrix*', 'multlined',
+    'lgathered', 'rgathered']);
+
+/** Environments a formula may open anywhere inside math: amsmath's, the kernel's and mathtools'. */
 const LATEX_INNER_MATH_ENVIRONMENTS = new Set([
     'matrix', 'pmatrix', 'bmatrix', 'Bmatrix', 'vmatrix', 'Vmatrix', 'smallmatrix',
     'cases', 'aligned', 'alignedat', 'gathered', 'split', 'array', 'subarray',
+    ...MATHTOOLS_ENVIRONMENTS,
 ]);
 
 /**
