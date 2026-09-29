@@ -4,7 +4,7 @@ import * as fsPath from 'path';
 import * as child_process from 'child_process';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
-import { unzipSync, strFromU8 } from 'fflate';
+import { unzipSync, strFromU8, strToU8, zipSync } from 'fflate';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = fsPath.dirname(__filename);
@@ -848,6 +848,26 @@ async function runTests() {
     const res48c = runCliRaw([todayTex, '--texParserConfig.today=May 1, 2024', '--to=text']);
     const todayOk = res48c.status === 0 && res48c.stdout.includes('Written on May 1, 2024.');
     results.push({ name: 'CLI: --texParserConfig.today sets what \\today prints', status: todayOk ? 'PASS' : 'FAIL', details: todayOk ? 'fixed date printed' : `exit ${res48c.status}, stdout: ${res48c.stdout.slice(0, 120)}`, duration: 0 });
+
+    // 49. Option values are text on the command line: one whose default is a number is read as one (a
+    //     limit that adds an allowance to it joined the text, so --decompressionLimits.maxTableCells=10
+    //     read as 10 followed by the allowance's digits), and an option only generators have
+    //     (--maxInlineImageBytes) reaches the generator (sent to the parser, it was unrecognized).
+    console.log('Test 49: numeric option values / generator-only options');
+    const t49 = Date.now();
+    const repeatOds = fsPath.join(RESULTS_DIR, 'repeat.ods');
+    fs.writeFileSync(repeatOds, zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.spreadsheet'),
+        'content.xml': strToU8('<?xml version="1.0" encoding="UTF-8"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table table:name="S"><table:table-row><table:table-cell table:number-columns-repeated="100000"><text:p>X</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>'),
+    }));
+    const res49 = runCliRaw([repeatOds, '--decompressionLimits.maxTableCells=10', '--to=csv']);
+    // maxTableCells plus one cell per byte of the document.
+    const cells49 = res49.stdout.trim().split(',').length;
+    const numbersOk = res49.status === 0 && cells49 === 10 + fs.statSync(repeatOds).size;
+    results.push({ name: 'CLI: a numeric option value is a number', status: numbersOk ? 'PASS' : 'FAIL', details: numbersOk ? `${cells49} cells` : `exit ${res49.status}, ${cells49} cells, stderr: ${res49.stderr.slice(0, 160)}`, duration: Date.now() - t49 });
+    const res49b = runCliRaw([fsPath.join(ROOT, 'test', 'files', 'test.docx'), '--extractAttachments', '--maxInlineImageBytes=10', '--to=md']);
+    const inlineOk = res49b.status === 0 && !res49b.stdout.includes('data:image') && !res49b.stderr.includes('UNRECOGNIZED_CONFIG_OPTION');
+    results.push({ name: 'CLI: --maxInlineImageBytes reaches the generator', status: inlineOk ? 'PASS' : 'FAIL', details: inlineOk ? 'no picture inlined' : `exit ${res49b.status}, stderr: ${res49b.stderr.slice(0, 160)}`, duration: 0 });
 
     // Print summary report
     const logger = new DualLogger();

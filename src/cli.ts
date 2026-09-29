@@ -43,6 +43,7 @@ import { OfficeGenerator } from './OfficeGenerator.js';
 import { OfficeParserAST, OfficeParserConfig, OfficeWarningType, UniversalGeneratorFormat } from './types.js';
 import * as fs from 'fs';
 import { lookupTable } from './utils/lookupUtils.js';
+import { DEFAULT_GENERATOR_CONFIG, DEFAULT_OFFICE_PARSER_CONFIG } from './defaults.js';
 
 const args = process.argv.slice(2);
 let fileArg: string | undefined;
@@ -109,6 +110,11 @@ const REMOVED_CLI_FLAGS: Record<string, string> = lookupTable({
 const generatorPrefixes = [
     'generatorConfig.', 'htmlConfig.', 'csvConfig.', 'textConfig.', 'mdConfig.', 'pdfConfig.', 'rtfConfig.', 'docxConfig.', 'odtConfig.', 'texConfig.', 'chunksConfig.'
 ];
+
+// Options only a generator has (`--maxInlineImageBytes`, `--metadataOverrides.title`), read from the
+// defaults so each is routed to the generator: sent to the parser, it was reported as unrecognized and
+// did nothing.
+const generatorOnlyKeys = new Set(Object.keys(DEFAULT_GENERATOR_CONFIG).filter(key => !(key in DEFAULT_OFFICE_PARSER_CONFIG)));
 
 // Trackers to detect if deprecated/legacy options were used to log helpful warnings.
 let usedFormat = false;
@@ -181,7 +187,7 @@ for (let i = 0; i < args.length; i++) {
             verbose = boolValue !== undefined ? boolValue : true;
         } else {
             // Check if the flag belongs to generatorConfig or a specific sub-generator (e.g., htmlConfig)
-            const isGeneratorOption = knownGeneratorBooleans.has(cleanKey) || generatorPrefixes.some(pref => cleanKey.startsWith(pref));
+            const isGeneratorOption = knownGeneratorBooleans.has(cleanKey) || generatorPrefixes.some(pref => cleanKey.startsWith(pref)) || generatorOnlyKeys.has(cleanKey.split('.')[0]);
             const target = isGeneratorOption ? generatorConfig : config;
 
             let path = cleanKey;
@@ -225,7 +231,24 @@ for (let i = 0; i < args.length; i++) {
     }
 }
 
+/**
+ * `target`'s values given on the command line (always text) as numbers where the option's default in
+ * `defaults` is a number: `--pdfParserConfig.maxTextItems=20000` arrived as "20000", and a budget adding
+ * to it joined the text ("20000" + 285947 is "20000285947", and a time limit of 5 seconds read 14 hours).
+ */
+function numbersAsNumbers(target: Record<string, any>, defaults: unknown): void {
+    if (!defaults || typeof defaults !== 'object') return;
+    for (const key of Object.keys(target)) {
+        const value = target[key];
+        const fallback = (defaults as Record<string, unknown>)[key];
+        if (value && typeof value === 'object' && !Array.isArray(value)) numbersAsNumbers(value, fallback);
+        else if (typeof value === 'string' && typeof fallback === 'number' && /^\s*(?:-?\d+(?:\.\d+)?|Infinity)\s*$/.test(value)) target[key] = Number(value);
+    }
+}
+
 if (fileArg && !showHelp) {
+    numbersAsNumbers(config, DEFAULT_OFFICE_PARSER_CONFIG);
+    numbersAsNumbers(generatorConfig, DEFAULT_GENERATOR_CONFIG);
     // Resolve output format prioritizing: --to > --format
     let outputFormat: string | undefined;
     if (toFlagOption) {
