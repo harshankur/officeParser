@@ -255,14 +255,17 @@
                     <code>extractTextColor</code> (per-run fill color into <code>formatting.color</code>; on by default,
                     set <code>false</code> to skip the per-page operator-list fetch on a throughput-focused text path),
                     <code>maxTextItems</code> (default <code>20000</code>; an item counts once more per 64 characters), <code>maxOperators</code>
-                    (default <code>250000</code>) and <code>maxTimeMs</code> (default <code>5000</code>): the bases of the text items, drawing operators
-                    and pdf.js time one PDF may take, each plus an allowance for the file's size (one item and four operators per byte, 20 ms per KB).
-                    Nested form XObjects can multiply a few KB into millions of items or minutes of work; past any, the rest of the document is not read
-                    and <code>PDF_CONTENT_LIMIT_EXCEEDED</code> is raised. <code>maxAnnotations</code> (default <code>10000</code>, plus one per 32 bytes)
-                    bounds the links and highlights read. <code>separateProcess</code> (default <code>true</code>) runs pdf.js in a separate Node process
-                    under <code>processMemoryMb</code> (default <code>1024</code>), so a PDF that inflates into gigabytes inside pdf.js rejects with
-                    <code>PDF_PROCESS_FAILED</code> instead of ending the host, and <code>abortSignal</code> can stop it mid-stream; where it cannot start,
-                    pdf.js runs in the host with <code>PDF_SEPARATE_PROCESS_UNAVAILABLE</code>.</td>
+                    (default <code>250000</code>; only the operators kept count, not paths) and <code>maxTimeMs</code> (default <code>5000</code>): the bases of
+                    the text items, drawing operators and CPU time of the separate pdf.js process one PDF may take, each plus an allowance for the file's
+                    size (one item and four operators per byte, 20 ms per KB). Nested form XObjects can multiply a few KB into millions of items or minutes
+                    of work; past the text or time limit the rest of the document is not read, past the operator limit its images, text colours and font
+                    styles are not (its text is), and <code>PDF_CONTENT_LIMIT_EXCEEDED</code> names the limit. Being CPU time, the time limit is not
+                    spent by a busy host or machine; pdf.js in the host has none. <code>maxAnnotations</code> (default <code>10000</code>, plus one per
+                    32 bytes) bounds the links and highlights read. <code>Infinity</code> is no limit. <code>separateProcess</code> (default
+                    <code>true</code>) runs pdf.js in separate Node processes, at most one per CPU, under <code>processMemoryMb</code> (default
+                    <code>1024</code>), so a PDF that inflates into gigabytes inside pdf.js rejects with <code>PDF_PROCESS_FAILED</code> instead of ending
+                    the host, and <code>abortSignal</code> can stop it mid-stream; where one cannot start, pdf.js runs in the host with
+                    <code>PDF_SEPARATE_PROCESS_UNAVAILABLE</code>.</td>
             </tr>
             <tr>
                 <td><code>fileType</code></td>

@@ -179,9 +179,9 @@ npx officeparser my_document --fileType=docx --to=json
 | `--pdfParserConfig.normalizeText` | boolean | `true` | Unicode/ligature normalization of extracted text |
 | `--pdfParserConfig.extractTextColor` | boolean | `true` | Record each run's fill colour in `formatting.color` (set `false` to skip for speed) |
 | `--pdfParserConfig.maxTextItems` | number | `20000` | Base of the text items a PDF may yield (plus one per byte of the file) |
-| `--pdfParserConfig.maxOperators` | number | `250000` | Base of the drawing operators read from a PDF (plus four per byte of the file) |
+| `--pdfParserConfig.maxOperators` | number | `250000` | Base of the drawing operators kept from a PDF (plus four per byte of the file) |
 | `--pdfParserConfig.maxAnnotations` | number | `10000` | Base of the annotations read from a PDF (plus one per 32 bytes of the file) |
-| `--pdfParserConfig.maxTimeMs` | number | `5000` | Base of the time pdf.js may spend on a PDF (plus 20 ms per KB of the file) |
+| `--pdfParserConfig.maxTimeMs` | number | `5000` | Base of the CPU time the separate pdf.js process may spend on a PDF (plus 20 ms per KB of the file) |
 | `--pdfParserConfig.separateProcess` | boolean | `true` | Run pdf.js in a separate process under a memory limit (Node) |
 | `--pdfParserConfig.processMemoryMb` | number | `1024` | Heap the separate pdf.js process may use |
 | `--verbose` | boolean | `false` | Show full error stack traces and warning logs |
@@ -324,7 +324,8 @@ archive. Reading a document's own markup (its XML, HTML, Markdown or LaTeX) is s
 a timer cannot fire while it runs, so an abort requested during it takes effect only once it ends.
 To bound the time an untrusted document can take, parse it in a worker thread or child process and
 end that when your time limit passes; the signal alone cannot. PDFs are the exception in Node: pdf.js
-runs in a separate process (`pdfParserConfig.separateProcess`), which the signal ends mid-stream.
+runs in a separate process (`pdfParserConfig.separateProcess`), which the signal ends mid-stream, and
+pdf.js in the host stops at its next time slice.
 
 > [!IMPORTANT]
 > **AbortError Propagation**
@@ -729,8 +730,8 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `NO_WORKSHEETS_FOUND` / `NO_SLIDES_FOUND` | parse | A legitimately empty workbook/presentation. |
 | `TABLE_CELL_LIMIT_EXCEEDED` | parse | The cells an ODF or XLSX document yields passed `decompressionLimits.maxTableCells` plus one per byte of the document; the rest were not read. |
 | `REPEATED_CONTENT_LIMIT_EXCEEDED` | parse | The document repeated `decompressionLimits.maxRepeatedContent` (plus 16 characters per byte of the document) of content by reference (ODF repeated cells and chart values, XLSX shared strings, style values, link targets, chart text per frame, LaTeX titles per reference); later repeats were not made, shortened or went without the value. |
-| `PDF_SEPARATE_PROCESS_UNAVAILABLE` | parse | pdf.js could not start in a separate process (Node), so it runs in the host; a hostile PDF can then exhaust its memory. |
-| `PDF_CONTENT_LIMIT_EXCEEDED` | parse | A PDF produced more text items or operators than `pdfParserConfig.maxTextItems` / `maxOperators` allow (plus an allowance per byte); the rest of it was not read. |
+| `PDF_SEPARATE_PROCESS_UNAVAILABLE` | parse | pdf.js could not start in a separate process (Node), so it runs in the host; a hostile PDF can then exhaust its memory, and pdf.js's time is not bounded (bound it with `abortSignal`). |
+| `PDF_CONTENT_LIMIT_EXCEEDED` | parse | A PDF passed one of its content limits (plus an allowance per byte), which the message names: past `pdfParserConfig.maxTextItems` or `maxTimeMs` the rest of it was not read; past `maxOperators` its images, text colours and font styles from that page on were not (its text was). |
 | `ALT_CHUNK_NOT_READ` | parse | A DOCX alternative-format chunk (`w:altChunk`) was not read: its part is missing, is of a format other than HTML, MHT, RTF, plain text or DOCX, is a DOCX inside a DOCX chunk, or could not be read (not a ZIP, no document part, nested too deep). The rest of the document is read; a chunk past the document's limits (`maxXmlElements`, `maxUncompressedBytes`) still fails the parse. Saving the document again in Word merges chunks into it. |
 | `RAW_CONTENT_LIMIT_EXCEEDED` | parse | With `includeRawContent`, the document's nodes reached `decompressionLimits.maxRawContentLength` of raw content; the remaining nodes carry none. |
 | `IMAGE_EXTRACTION_FAILED` / `IMAGE_PROCESSING_FAILED` / `ATTACHMENT_EXTRACTION_FAILED` | parse | An image/attachment could not be extracted or decoded; it was skipped or degraded. |
@@ -1368,11 +1369,11 @@ PDF-specific options, passed as `pdfParserConfig` on the parser config.
 | `normalizeText` | `boolean` | `true` | Unicode-normalize extracted text (expand ligatures, compose combining marks, regularize whitespace). Set `false` to preserve the raw source glyphs verbatim |
 | `extractTextColor` | `boolean` | `true` | Extract each run's fill color into `formatting.color`. Recovered from the operator list; on by default (color is content like bold/font). Costs about 1.6x parse time on a text-heavy PDF, near-free when `extractAttachments`/`ocr` already fetch the operator list; set `false` to skip it. Pure black is left unset. Highlight annotations set `formatting.backgroundColor` regardless of this flag |
 | `maxTextItems` | `number` | `20000` | Base of the text items one PDF may yield; the limit is this plus one per byte of the file, an item counting once more per 64 characters. Nested form XObjects can multiply a few KB into millions of items; past the limit the rest of the document is not read (`PDF_CONTENT_LIMIT_EXCEEDED`). |
-| `maxOperators` | `number` | `250000` | Base of the drawing operators read from one PDF (for fonts, images and text color); the limit is this plus four per byte of the file, past which the rest of the document is not read (`PDF_CONTENT_LIMIT_EXCEEDED`). |
+| `maxOperators` | `number` | `250000` | Base of the drawing operators kept from one PDF (for images, text color and font styles); the limit is this plus four per byte of the file. Paths, which are not kept, do not count; a shown string counts once more per 64 glyphs. Past it no more operators are read: from that page on, images, text colors and font styles are missing, and the text is still read (`PDF_CONTENT_LIMIT_EXCEEDED`). |
 | `maxAnnotations` | `number` | `10000` | Base of the annotations (links, highlights) one PDF may have read; the limit is this plus one per 32 bytes of the file. Past it the rest of the document's links and highlights are not read (`ANNOTATION_EXTRACTION_FAILED`). |
-| `maxTimeMs` | `number` | `5000` | Base of the time pdf.js may spend reading one PDF; the limit is this plus 20 ms per KB of the file. Past it the rest of the document is not read (`PDF_CONTENT_LIMIT_EXCEEDED`). |
-| `separateProcess` | `boolean` | `true` | Run pdf.js in a separate process (Node) under `processMemoryMb`, so a PDF that inflates into gigabytes inside pdf.js fails with `PDF_PROCESS_FAILED` instead of ending the host; `abortSignal` and `maxTimeMs` stop it mid-request. Falls back to the host with `PDF_SEPARATE_PROCESS_UNAVAILABLE`. |
-| `processMemoryMb` | `number` | `1024` | Heap, in MB, of the separate pdf.js process. |
+| `maxTimeMs` | `number` | `5000` | Base of the CPU time the separate pdf.js process may spend reading one PDF; the limit is this plus 20 ms per KB of the file. CPU time, not time passed, so a busy host, many parses at once or a loaded machine never cut a document short. Past it the process is ended and the rest of the document is not read (`PDF_CONTENT_LIMIT_EXCEEDED`). pdf.js in the host (`separateProcess: false`, or the fallback) has no time limit, since no measure of time there is the document's own; bound it with `abortSignal`. |
+| `separateProcess` | `boolean` | `true` | Run pdf.js in a separate process (Node) under `processMemoryMb`, so a PDF that inflates into gigabytes inside pdf.js fails with `PDF_PROCESS_FAILED` instead of ending the host; `abortSignal` and `maxTimeMs` stop it mid-request. Processes are pooled, at most one per CPU, each reading one document at a time (further parses wait), and end with the host. Falls back to the host with `PDF_SEPARATE_PROCESS_UNAVAILABLE`. |
+| `processMemoryMb` | `number` | `1024` | Heap, in MB, of the separate pdf.js process (64 or more). |
 
 ---
 
@@ -1933,7 +1934,7 @@ responsibility for what you feed it, and for the effect a malicious file has on 
 with you. If you process files from untrusted sources, sanitize and validate them at your own
 boundary, and run the parsing in isolation appropriate to your threat model: sandboxing or
 containerization, memory and time limits (a worker you can end: `abortSignal` cannot interrupt a
-parse already running, except a PDF's in Node, whose pdf.js runs in a separate process), a low-privilege process, and the `abortSignal` and `decompressionLimits`
+parse already running, except a PDF's in Node, whose pdf.js it stops mid-stream), a low-privilege process, and the `abortSignal` and `decompressionLimits`
 options this library exposes. Do not rely on any single library's hardening
 as a complete defense.
 

@@ -237,7 +237,7 @@
                 <td><code>--pdfParserConfig.maxOperators</code></td>
                 <td>number</td>
                 <td><code>250000</code></td>
-                <td>Base of the drawing operators read from one PDF, plus four per byte of the file. Past it the rest of the document is not read.</td>
+                <td>Base of the drawing operators kept from one PDF (paths do not count), plus four per byte of the file. Past it the document's images, text colours and font styles are not read; its text is.</td>
             </tr>
             <tr>
                 <td><code>--pdfParserConfig.maxAnnotations</code></td>
@@ -249,7 +249,7 @@
                 <td><code>--pdfParserConfig.maxTimeMs</code></td>
                 <td>number</td>
                 <td><code>5000</code></td>
-                <td>Base of the time pdf.js may spend on one PDF, plus 20 ms per KB of the file. Past it the rest of the document is not read.</td>
+                <td>Base of the CPU time the separate pdf.js process may spend on one PDF, plus 20 ms per KB of the file. Past it the rest of the document is not read.</td>
             </tr>
             <tr>
                 <td><code>--pdfParserConfig.separateProcess</code></td>
