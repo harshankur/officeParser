@@ -221,8 +221,8 @@ function resolvePdfLayoutConfig(config: FullOfficeParserConfig): PdfLayoutConfig
         useTags: p.useTags !== false,
         detectColumns: p.detectColumns !== false,
         mergeHyphenatedWords: p.mergeHyphenatedWords !== false,
-        lineToleranceFactor: num(p.lineToleranceFactor, 0.35),
-        spaceToleranceFactor: num(p.spaceToleranceFactor, 0.25),
+        lineToleranceFactor: given(p.lineToleranceFactor) ? num(p.lineToleranceFactor, 0.35) : 0.35,
+        spaceToleranceFactor: given(p.spaceToleranceFactor) ? num(p.spaceToleranceFactor, 0.25) : 0.25,
         headingDetection: p.headingDetection ?? 'auto',
         normalizeText: p.normalizeText !== false,
         extractTextColor: p.extractTextColor !== false, // default true, matching defaults.ts and its siblings

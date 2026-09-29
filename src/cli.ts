@@ -396,9 +396,9 @@ if (fileArg && !showHelp) {
     console.log('  --pdfParserConfig.normalizeText=false       Skip Unicode/ligature normalization of PDF text (default: true)');
     console.log('  --pdfParserConfig.extractTextColor          Record each PDF run\'s fill colour in formatting.color (default: true; set false to skip)');
     console.log('  --pdfParserConfig.maxTextItems=20000        Base of the text items a PDF may yield, plus one per byte (default: 20000)');
-    console.log('  --pdfParserConfig.maxOperators=250000       Base of the drawing operators read, plus four per byte (default: 250000)');
+    console.log('  --pdfParserConfig.maxOperators=250000       Base of the drawing operators kept, plus four per byte (default: 250000)');
     console.log('  --pdfParserConfig.maxAnnotations=10000      Base of the annotations read, plus one per 32 bytes (default: 10000)');
-    console.log('  --pdfParserConfig.maxTimeMs=5000            Base of the time pdf.js may spend, plus 20 ms per KB (default: 5000)');
+    console.log('  --pdfParserConfig.maxTimeMs=5000            Base of the CPU time the pdf.js process may spend, plus 20 ms per KB (default: 5000)');
     console.log('  --pdfParserConfig.separateProcess=false     Run pdf.js in this process, not a separate one (default: true)');
     console.log('  --pdfParserConfig.processMemoryMb=1024      Heap of the separate pdf.js process (default: 1024)');
     console.log('');
