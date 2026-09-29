@@ -201,9 +201,30 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         let out = '';
         let prevPaginated: string | null = null;
         const items = nodes || [];
+        // Where the run of inline nodes last found without text ends (see below), so it is looked at once.
+        let inlineWithoutTextUntil = -1;
         for (let idx = 0; idx < items.length; idx++) {
             const node = items[idx];
             checkAbortSignal(this.config.abortSignal);
+            // Inline nodes among the blocks (a cell's, a note's or a comment's runs, as ODS and several
+            // parsers give them) are one paragraph: each was a paragraph of its own, so a cell reading
+            // "Total: 5 units" with the 5 in bold was three lines. A run of pictures or breaks with no
+            // text stays blocks.
+            if (idx >= inlineWithoutTextUntil && isInlineNode(node)) {
+                let end = idx;
+                let hasText = false;
+                while (end < items.length && isInlineNode(items[end])) {
+                    if (items[end].type === 'text') hasText = true;
+                    end++;
+                }
+                if (hasText) {
+                    out += await this.paragraph({ type: 'paragraph', children: items.slice(idx, end) } as OfficeContentNode);
+                    prevPaginated = null;
+                    idx = end - 1;
+                    continue;
+                }
+                inlineWithoutTextUntil = end;
+            }
             if (node.type === 'list') {
                 // Consume the maximal run of consecutive sibling lists sharing a listId, so the parser
                 // rejoins them (it keys the logical list off the shared list style name). handleOnNode
@@ -895,6 +916,13 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         return `<?xml version="1.0" encoding="UTF-8"?>\n`
             + `<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">${files}</manifest:manifest>`;
     }
+}
+
+/** Whether a node among blocks belongs in a paragraph's line: a run, a picture, a line break, inline math. */
+function isInlineNode(node: OfficeContentNode): boolean {
+    if (node.type === 'text' || node.type === 'image') return true;
+    if (node.type === 'break') return !['page', 'column', 'thematic', 'lastRenderedPage'].includes((node.metadata as any)?.breakType);
+    return node.type === 'code' && (node.metadata as any)?.math === 'inline';
 }
 
 function cellOf(text: string): OfficeContentNode {

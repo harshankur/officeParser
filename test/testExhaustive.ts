@@ -2186,6 +2186,33 @@ async function testOdtGeneration(): Promise<void> {
     const econtent = strFromU8(unzipSync(ebytes)['content.xml']);
     assert.doesNotThrow(() => parseXmlString(econtent), 'ODT empty: content.xml well-formed');
     assert.ok(/<office:text><text:p\/><\/office:text>/.test(econtent), 'ODT empty: emits one empty paragraph');
+
+    await testOdtInlineRuns();
+}
+
+/**
+ * Inline runs among blocks (an ODS cell's runs, a note's, a comment's, an admonition's) are one
+ * paragraph in ODT, not a paragraph each.
+ */
+async function testOdtInlineRuns(): Promise<void> {
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"';
+    const ods = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.spreadsheet'),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:automatic-styles><style:style style:name="B" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style></office:automatic-styles><office:body><office:spreadsheet><table:table table:name="S"><table:table-row><table:table-cell office:value-type="string"><text:p>Total: <text:span text:style-name="B">5</text:span> units</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>`),
+    }));
+    const sheet = await OfficeParser.parseOffice(ods, { fileType: 'ods' } as any);
+    const cellXml = strFromU8(unzipSync((await sheet.to('odt')).value as Uint8Array)['content.xml']).match(/<table:table-cell[^>]*>(.*?)<\/table:table-cell>/)?.[1] ?? '';
+    assert.strictEqual((cellXml.match(/<text:p[ >]/g) ?? []).length, 1, `ODT: an ODS cell's runs are one paragraph (${cellXml})`);
+    const T = (text: string, extra: any = {}) => ({ type: 'text', text, ...extra });
+    const runs = () => [T('Alpha '), T('bold', { formatting: { bold: true } }), T(' omega')];
+    const odt = strFromU8(unzipSync((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'paragraph', children: [T('Noted', { notes: [{ type: 'note', metadata: { noteType: 'footnote', noteId: '1' }, children: runs() }], comments: [{ type: 'comment', metadata: { author: 'A' }, children: runs() }] })] },
+        { type: 'admonition', metadata: { admonitionType: 'note' }, children: runs() },
+    ] } as any, 'odt')).value as Uint8Array)['content.xml']);
+    const back = await OfficeParser.parseOffice(Buffer.from(zipSync({ mimetype: strToU8('application/vnd.oasis.opendocument.text'), 'content.xml': strToU8(odt) })), { fileType: 'odt' } as any);
+    const notes = collectAllNodes(back).filter(n => n.type === 'note' || n.type === 'comment').map(n => (n.children ?? []).map(c => c.text));
+    assert.deepStrictEqual(notes, [['Alpha bold omega'], ['Alpha bold omega']], 'ODT: a note\'s and a comment\'s runs are one paragraph each');
+    assert.deepStrictEqual(back.content.map(n => n.text).slice(1), ['Note', 'Alpha bold omega'], 'ODT: an admonition\'s runs are one paragraph');
 }
 
 /**

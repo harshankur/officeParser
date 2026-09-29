@@ -705,6 +705,14 @@ async function markdownTests() {
     const cellStarted = Date.now();
     await OfficeParser.parseOffice(Buffer.from(cellOdt.value as any), { fileType: 'odt' } as any);
     check('odt: a table cell of 100,000 paragraphs parses in linear time', Date.now() - cellStarted < 5000, `${Date.now() - cellStarted}ms`);
+    // ODT: a cell's inline runs are gathered into a paragraph once each, pictures without text too.
+    const runsStarted = Date.now();
+    const runsOdt = await OfficeGenerator.generate(astWith([{ type: 'table', children: [{ type: 'row', children: [
+        { type: 'cell', children: Array.from({ length: many }, (_, i) => ({ type: 'text', text: `r${i} ` })) },
+        { type: 'cell', children: Array.from({ length: many }, () => ({ type: 'break' })) },
+    ] }] }] as any), 'odt', { onWarning: () => { } } as any);
+    const runsXml = strFromU8(unzipSync(runsOdt.value as Uint8Array)['content.xml']);
+    check('odt: a cell of 100,000 runs, and one of 100,000 breaks, are written in linear time, the runs one paragraph', Date.now() - runsStarted < 5000 && runsXml.includes('r0 r1 r2'), `${Date.now() - runsStarted}ms`);
     // A formula's commands are read once each: rewriting KaTeX macros (`\R`), and planning packages and
     // definitions for 100,000 distinct unknown commands.
     const unknownCommands = Array.from({ length: many }, (_, i) => `\\x${i.toString(26).replace(/\d/g, d => 'abcdefghij'[+d])}`).join(' ');
