@@ -551,6 +551,19 @@ function splitHeadingAnchor(rest: string): { text: string; anchor?: string } {
 }
 
 /**
+ * An ATX heading's text without its closing sequence (`## Title ##`): a run of `#` ending it after a
+ * space or tab, or making up all of it (`### ###` is empty), as CommonMark reads it. Found from the end
+ * by trimming, not by an end-anchored pattern.
+ */
+function withoutClosingHashes(text: string): string {
+    const trimmed = trimEndChars(text, ' \t');
+    const before = trimEndChars(trimmed, '#').length;
+    if (before === trimmed.length) return text;
+    if (before === 0) return '';
+    return trimmed[before - 1] === ' ' || trimmed[before - 1] === '\t' ? trimEndChars(trimmed.slice(0, before), ' \t') : text;
+}
+
+/**
  * The names of HTML's elements (current and obsolete ones a browser still renders): a tag of one of
  * them written in capitals (`<IMG SRC>`, `<B>`, `<BR/>`, older HTML's way) is HTML, not a component.
  */
@@ -2445,10 +2458,13 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         }
 
         // Heading (allowing for leading HTML anchors and trailing {#anchor}); `#` alone is an empty one.
+        // A closing sequence of `#` is no text, before or after the id (`## Title ## {#id}`).
         const headingMatch = block.match(/^((?:<a[^>]*><\/a>)*)[ \t]*(#{1,6})(?:[ \t]+([\s\S]*))?$/);
         if (headingMatch) {
             const leadingAnchorsRaw = headingMatch[1];
-            const { text: rawText, anchor: explicitAnchor } = splitHeadingAnchor(headingMatch[3] ?? '');
+            const split = splitHeadingAnchor(withoutClosingHashes(headingMatch[3] ?? ''));
+            const rawText = withoutClosingHashes(split.text);
+            const explicitAnchor = split.anchor;
 
             const anchorIds: string[] = [];
             if (leadingAnchorsRaw) {

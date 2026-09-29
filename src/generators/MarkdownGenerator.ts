@@ -840,7 +840,13 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // An empty heading is its hashes alone (with its id, if any): `#` ends the line. A
                     // heading is one line, so its line breaks are joined as a list item's are (a line
                     // break ended it, and the rest, its id with it, was read back as a paragraph).
-                    const headingText = joinLines(trimBlockEdges(childrenOutput), this.resolvedFallbackToHtml.itemLineBreaks ? '<br>' : ' ');
+                    // A run of `#` ending it after a space (or making up all of it) is escaped, as a
+                    // reader takes it for the heading's closing sequence (`## Issue #` was `Issue`).
+                    let headingText = joinLines(trimBlockEdges(childrenOutput), this.resolvedFallbackToHtml.itemLineBreaks ? '<br>' : ' ');
+                    const closingHashes = trimEndChars(headingText, '#').length;
+                    if (closingHashes < headingText.length && (closingHashes === 0 || /[ \t]/.test(headingText[closingHashes - 1]))) {
+                        headingText = `${headingText.slice(0, closingHashes)}\\${headingText.slice(closingHashes)}`;
+                    }
                     const prefix = '#'.repeat(level) + (headingText || id ? ' ' : '');
 
                     const anchors = this.resolvedFallbackToHtml.anchors
