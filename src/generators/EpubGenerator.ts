@@ -69,6 +69,45 @@ const promoteParagraphsWithBlockContent = (html: string): string => {
  */
 const xmlText = (value: string | undefined): string => escapeXml(stripInvalidXmlChars(value as string));
 
+/** XML's name characters (XML 1.0, fifth edition): what an id may start with, and what it may hold. */
+const XML_NAME_START = 'A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\u{10000}-\u{EFFFF}';
+const XML_NAME = new RegExp(`^[${XML_NAME_START}][${XML_NAME_START}.0-9\u00B7\u0300-\u036F\u203F\u2040-]*$`, 'u');
+const NOT_XML_NAME_CHARACTER = new RegExp(`[^${XML_NAME_START}.0-9\u00B7\u0300-\u036F\u203F\u2040-]`, 'gu');
+
+/**
+ * `xhtml` with each id an EPUB checker accepts: an XML name without a colon (`2024-results`, a heading
+ * starting with a digit, and `page=3` are not). Each other id is renamed (its other characters made
+ * `_`, `_` put first when it does not start as a name may, numbered when taken), and every link to it
+ * with it. Kept as they were, the book failed validation (RSC-005). Also leaves out the `name` that
+ * HtmlGenerator writes beside an anchor's id, which EPUB's XHTML does not allow.
+ */
+const withXmlNameIds = (xhtml: string): string => {
+    const out = xhtml.replace(/<a id="([^"]*)" name="\1">/g, '<a id="$1">');
+    const ids = new Set<string>();
+    for (const match of out.matchAll(/\sid="([^"]*)"/g)) ids.add(match[1]);
+    const renamed = new Map<string, string>();
+    const taken = new Set(ids);
+    // The number each renamed base tries next, so ids renamed alike are numbered in one pass.
+    const nextNumber = new Map<string, number>();
+    for (const id of ids) {
+        if (XML_NAME.test(id) || !id) continue;
+        let base = id.replace(NOT_XML_NAME_CHARACTER, '_');
+        if (!XML_NAME.test(base)) base = `_${base}`;
+        let candidate = base;
+        let n = nextNumber.get(base) ?? 2;
+        while (taken.has(candidate)) candidate = `${base}-${n++}`;
+        nextNumber.set(base, n);
+        taken.add(candidate);
+        renamed.set(id, candidate);
+    }
+    if (!renamed.size) return out;
+    return out.replace(/(\s(?:id|href)=")(#?)([^"]*)"/g, (whole: string, attribute: string, hash: string, value: string) => {
+        const isId = attribute.includes('id=');
+        const name = renamed.get(isId ? hash + value : value);
+        return name === undefined || (!isId && !hash) ? whole : `${attribute}${isId ? '' : '#'}${name}"`;
+    });
+};
+
 /**
  * Converts HtmlGenerator's HTML output into well-formed XHTML, which EPUB reading
  * systems parse as strict XML (unlike browsers, which tolerate HTML's looseness).
@@ -119,7 +158,8 @@ const toXhtml = (html: string): string => {
     const voidTagPattern = new RegExp(`<(${VOID_TAGS.join('|')})((?:\\s[^>]*?)?)\\s*/?>`, 'gi');
     out = out.replace(voidTagPattern, (_m, tag, attrs) => `<${tag}${attrs}/>`);
 
-    return out;
+    // Ids an EPUB accepts, and the links to them (see withXmlNameIds).
+    return withXmlNameIds(out);
 };
 
 /**

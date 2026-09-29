@@ -66,8 +66,12 @@ function sanitizeSrcset(value: string): string {
         while (i < value.length && !/\s/.test(value[i])) i++;
         let url = value.slice(urlStart, i);
         let descriptors = '';
-        if (url.endsWith(',')) url = url.replace(/,+$/, '');
-        else {
+        if (url.endsWith(',')) {
+            // Its trailing commas end the candidate, counted from the end (`/,+$/` retried every comma in the URL).
+            let end = url.length;
+            while (end > 0 && url[end - 1] === ',') end--;
+            url = url.slice(0, end);
+        } else {
             const comma = value.indexOf(',', i);
             descriptors = value.slice(i, comma === -1 ? value.length : comma).trim();
             i = comma === -1 ? value.length : comma + 1;
@@ -642,9 +646,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         // same-level sibling arrives, when the level is popped, or at the end.
         const listStack: { indentation: number, type: 'ordered' | 'unordered', isTask: boolean, liClose: string }[] = [];
 
+        // A task list is marked `data-type="taskList"`, an ordered one on its <ol> (its numbers kept):
+        // opened as a <ul> and closed as an </ol>, it was not well-formed, and an EPUB holding it was unreadable.
         const openListTag = (type: 'ordered' | 'unordered', isTask: boolean) => {
-            if (isTask) return '<ul data-type="taskList">';
-            return type === 'ordered' ? '<ol>' : '<ul>';
+            const marker = isTask ? ' data-type="taskList"' : '';
+            return type === 'ordered' ? `<ol${marker}>` : `<ul${marker}>`;
         };
         const closeListTag = (type: 'ordered' | 'unordered') => type === 'ordered' ? '</ol>' : '</ul>';
 
@@ -973,6 +979,26 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         return `footnote-ref-${key}-${written.nextSuffix++}`;
     }
 
+    /** How many times each generated heading id was taken (see uniqueHeadingSlug). */
+    private readonly headingSlugsTaken = new Map<string, number>();
+
+    /**
+     * `slug` made unique among the generated heading ids as GitHub makes it: the first is `slug`, later
+     * ones `slug-1`, `slug-2`..., passing over one taken already (a heading written "Intro 1"). Each
+     * number is tried once per slug.
+     */
+    private uniqueHeadingSlug(slug: string): string {
+        if (!slug) return slug;
+        let unique = slug;
+        while (this.headingSlugsTaken.has(unique)) {
+            const count = this.headingSlugsTaken.get(slug)! + 1;
+            this.headingSlugsTaken.set(slug, count);
+            unique = `${slug}-${count}`;
+        }
+        this.headingSlugsTaken.set(unique, 0);
+        return unique;
+    }
+
     /** Whether a styleMap writes `node` (a paragraph) as an element that holds blocks (see FLOW_CONTAINER_TAGS). */
     private holdsFlowContent(node: OfficeContentNode): boolean {
         const tag = this.getSemanticMapping(node)?.tag;
@@ -1049,8 +1075,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // From the heading's text, whether the node carries it or only its runs do. A heading
                 // whose text slugifies to nothing (punctuation and symbols alone) gets no generated
                 // id, rather than an empty one. The id is GitHub's, as the other writers' are, so a
-                // link written for a Markdown heading (`#version-20`) reaches it.
-                const slug = this.slugify(node.text || this.getNodeText(node));
+                // link written for a Markdown heading (`#version-20`) reaches it; a second heading of the
+                // same text is `-1` after it, as GitHub numbers it (two headings had one id).
+                const slug = this.uniqueHeadingSlug(this.slugify(node.text || this.getNodeText(node)));
                 if (slug && !anchorIds.includes(slug)) anchorIds.push(slug);
             } else if (node.type === 'sheet') {
                 const sheetId = `sheet-${Math.max(0, this.sheetIndex(node))}`;

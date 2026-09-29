@@ -4469,6 +4469,21 @@ async function testHtmlBrowserReading(): Promise<void> {
     });
     await assert.rejects(parse(drm, 'epub'), /encrypted \(DRM/, 'EPUB: a book whose chapters are encrypted is refused with a clear error');
 
+    // ── Writing: an ordered task list, generated heading ids, ids an EPUB accepts ──
+    const tasks = await parse('1. [ ] one\n2. [x] two\n\n# Intro\n\ntext\n\n# Intro\n\n# 2024 Results\n\n[second](#intro-1) [year](#2024-results)\n', 'md');
+    const tasksHtml = await write(tasks, 'html', { generateIds: true }) as string;
+    assert.ok(/<ol data-type="taskList">[\s\S]*<\/ol>/.test(tasksHtml) && !tasksHtml.includes('<ul'), `HTML: an ordered task list is an <ol> closed as one (${tasksHtml})`);
+    const tasksBack = collectAllNodes(await parse(tasksHtml)).filter(n => n.type === 'list').map(n => `${(n.metadata as any).listType}:${(n.metadata as any).isTask}`);
+    assert.deepStrictEqual(tasksBack, ['ordered:true', 'ordered:true'], 'HTML: an ordered task list reads back ordered');
+    assert.deepStrictEqual(idsOf(tasksHtml).filter(id => id.startsWith('intro')), ['intro', 'intro-1'], 'HTML: a second heading of the same text is numbered, as GitHub numbers it');
+    const taskChapter = await chapterOf(tasks, { generateIds: true });
+    parseXmlString(taskChapter);
+    assert.ok(taskChapter.includes('id="_2024-results"') && taskChapter.includes('href="#_2024-results"') && taskChapter.includes('href="#intro-1"'), 'EPUB: an id starting with a digit is made a name, and the link to it with it');
+    const anchoredChapter = await chapterOf(doc([{ type: 'paragraph', metadata: { anchorIds: ['a', 'b c', '9'] }, children: [T('x'), T('to 9', { metadata: { link: '#9', linkType: 'internal' } })] }]));
+    const anchorIds = idsOf(anchoredChapter);
+    assert.ok(anchorIds.every(id => /^[A-Za-z_][\w.-]*$/.test(id)) && new Set(anchorIds).size === anchorIds.length && !anchoredChapter.includes(' name="'), `EPUB: every id is an XML name, and anchors carry no name attribute (${anchorIds})`);
+    assert.ok(anchoredChapter.includes('href="#_9"'), 'EPUB: a link follows its renamed id');
+
     console.log('  HTML/EPUB reading and writing: All assertions passed ✓');
 }
 

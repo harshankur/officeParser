@@ -3921,6 +3921,10 @@ async function htmlReadingTests() {
     // A page in the encoding it declares is decoded twice at most (once found not UTF-8).
     await scalesLinearly('html: a windows-1252 page', n => OfficeParser.parseOffice(Buffer.from('<meta charset="windows-1252"><p>' + 'caf\xe9 '.repeat(n), 'latin1'), { fileType: 'html', onWarning: () => {} } as any), 20000);
 
+    // Writing: a srcset candidate's trailing commas (a pattern for them retried every comma), ids renamed as XML names.
+    await scalesLinearly('html: a srcset candidate of commas', n => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'image', metadata: { url: 'https://ok/a.png' }, htmlAttributes: { srcset: 'a' + ','.repeat(n) + 'x,' } }] }]), 'html', { onWarning: () => {} } as any), 20000);
+    await scalesLinearly('epub: ids each starting with a digit, and links to them', n => OfficeGenerator.generate(astWith(Array.from({ length: n }, (_, k) => ({ type: 'paragraph', metadata: { anchorIds: [`${k}`, `${k} x`] }, children: [{ type: 'text', text: 'x', metadata: { link: `#${k}`, linkType: 'internal' } }] }))), 'epub', { onWarning: () => {} } as any), 1000);
+
     // EPUB: each </p> is paired with its <p> in one pass, nested or not, and an unclosed comment ends the scan.
     await scalesLinearly('epub: paragraphs holding tables holding paragraphs, repeated,', n => epubOf('<p>a<table><tr><td><p>b</p></td></tr></table>c</p>'.repeat(n)), 5000);
     await scalesLinearly('epub: paragraphs nested 200 deep, repeated,', n => epubOf(('<p>'.repeat(200) + 'x' + '</p>'.repeat(200)).repeat(n)), 100);
