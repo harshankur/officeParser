@@ -358,7 +358,7 @@ const IGNORED_COMMANDS: Record<string, string> = {
     renewcommand: '', footnotesize: '', thanks: 'm', setcounter: 'mm', normalsize: '', ding: 'm', captionsetup: 'om',
     AtBeginDocument: 'm', AtEndDocument: 'm', listfiles: '', hyphenation: 'm',
     enlargethispage: 'sm', newpage: '', color: '', label: '', column: 'om', textwidth: '', linewidth: '',
-    columnwidth: '', paperwidth: '', textheight: '', paperheight: '', baselineskip: '', parindent_: '', tabcolsep: '',
+    columnwidth: '', paperwidth: '', textheight: '', paperheight: '', baselineskip: '', tabcolsep: '',
     arraybackslash: '', arrayrulewidth: '', dimexpr: '', fboxsep: '', setbeamersize: 'm', logo: 'm',
     documentstyle: 'om', NeedsTeXFormat: 'mo', ProvidesPackage: 'mo', ProvidesClass: 'mo', ProvidesFile: 'mo',
     PassOptionsToPackage: 'mm', PassOptionsToClass: 'mm', setCJKmainfont: 'omo', setCJKsansfont: 'omo', setCJKmonofont: 'omo',
@@ -386,9 +386,9 @@ const TEX_REGISTERS = new Set(['magnification', 'hsize', 'vsize', 'hoffset', 'vo
 /** Commands whose last mandatory argument is ordinary content, with the signature before it. */
 const WRAPPER_COMMANDS: Record<string, string> = {
     mbox: '', makebox: 'oo', fbox: '', framebox: 'oo', parbox: 'oom', raisebox: 'moo', scalebox: 'mo', resizebox: 'sm',
-    rotatebox: 'om', centerline: '', textnormal: '', textup: '', textmd: '', textsc: '', textulc: '', textbf_: '',
+    rotatebox: 'om', centerline: '', textnormal: '', textup: '', textmd: '', textsc: '', textulc: '',
     boxed: '', text: '', only: 'O', uncover: 'O', visible: 'O', invisible: 'O', alt: 'Om', temporal: 'Omm', onslide: 'O',
-    structure: 'O', alert: 'O', emph_: '', newblock: '', tcbox: 'o', adjustbox: 'm', shortstack: 'o', underbrace: '',
+    structure: 'O', alert: 'O', newblock: '', tcbox: 'o', adjustbox: 'm', shortstack: 'o', underbrace: '',
     foreignlanguage: 'om', textlang: 'om', IEEEauthorblockN: '', IEEEauthorblockA: '', IEEEmembership: '',
     IEEEtitleabstractindextext: '', dedicatory: '', line: '', leftline: '', rightline: '',
 };
@@ -2077,18 +2077,18 @@ class LatexReader {
             case 'hfil': case 'hfill': case 'hss': return;
             case 'clearpage': case 'newpage': case 'cleardoublepage': case 'pagebreak': case 'include':
                 if (name === 'pagebreak') sc.readRawOptional();
-                if (name === 'include') { this.includeFile(sc, flow, sc.readRawGroup()); return; }
+                if (name === 'include') { this.includeFile(sc, sc.readRawGroup()); return; }
                 this.endParagraph(flow);
                 if (this.config.includeBreakNodes) this.pushBlock(flow, { type: 'break', metadata: { breakType: 'page' } as any });
                 return;
             case 'input': case 'subfile':
                 // `\input` also takes TeX's primitive form, a name with no braces (`\input chapter1`).
-                this.includeFile(sc, flow, name === 'input' && !sc.nextIs('{') ? sc.readBareFileName() : sc.readRawGroup(), name === 'subfile');
+                this.includeFile(sc, name === 'input' && !sc.nextIs('{') ? sc.readBareFileName() : sc.readRawGroup(), name === 'subfile');
                 return;
             case 'import': case 'subimport': case 'inputfrom': case 'subinputfrom': {
                 sc.readStar();
                 const [dir, file] = this.readArgs(sc, 'mm');
-                this.includeFile(sc, flow, `${(dir ?? '').replace(/\/?$/, '/')}${file ?? ''}`);
+                this.includeFile(sc, `${(dir ?? '').replace(/\/?$/, '/')}${file ?? ''}`);
                 return;
             }
             case 'item': case 'bibitem': {
@@ -2204,7 +2204,7 @@ class LatexReader {
                 // BibTeX writes the list LaTeX reads back as `<main file>.bbl`: a project that ships it (arXiv
                 // sources do) is read with it, as compiling it would.
                 const bbl = this.mainFile ? this.mainFile.replace(/^.*\//, '').replace(/\.[^.]*$/, '') + '.bbl' : null;
-                if (name === 'bibliography' && bbl && this.findProjectFile(bbl, [''])) { this.includeFile(sc, flow, bbl); return; }
+                if (name === 'bibliography' && bbl && this.findProjectFile(bbl, [''])) { this.includeFile(sc, bbl); return; }
                 const kv = new Map(this.keyValues(options ?? ''));
                 this.addBlock(flow, { type: 'list', __bibliography: { title: kv.get('title'), heading: kv.get('heading')?.trim() } } as any);
                 return;
@@ -2607,7 +2607,7 @@ class LatexReader {
                 const file = sc.readRawGroup();
                 const then = sc.readRawGroup() ?? '';
                 sc.readRawGroup();
-                if (name === 'InputIfFileExists' && file !== null) this.includeFile(sc, flow, file);
+                if (name === 'InputIfFileExists' && file !== null) this.includeFile(sc, file);
                 this.expand(sc, then);
                 return;
             }
@@ -2901,8 +2901,7 @@ class LatexReader {
 
     // ── includes and images ──
 
-    private includeFile(sc: Scanner, flow: Flow, raw: string | null, subfile = false): void {
-        void flow;
+    private includeFile(sc: Scanner, raw: string | null, subfile = false): void {
         const path = (raw ?? '').trim();
         if (!path) return;
         const resolved = this.project ? this.findProjectFile(path, ['', '.tex']) : null;
@@ -3079,7 +3078,7 @@ class LatexReader {
         if (own(TABLE_ENVS, env)) { this.table(sc, flow, env); return; }
         if (env === 'filecontents' || env === 'filecontents*') { this.fileContents(sc, env); return; }
         if (DRAWING_ENVS.has(env)) { sc.readRawEnvBody(env); this.unknown.add(`${env} environment`); return; }
-        if (env === 'frame') return this.frame(sc, flow, stop);
+        if (env === 'frame') return this.frame(sc, flow);
         if (env === 'block' || env === 'alertblock' || env === 'exampleblock') {
             sc.readRawOptional('<', '>');
             const title = this.plainText(sc.readRawGroup());
@@ -3715,8 +3714,7 @@ class LatexReader {
 
     // ── beamer ──
 
-    private frame(sc: Scanner, flow: Flow, stop: Stop): StopReason | void {
-        void stop;
+    private frame(sc: Scanner, flow: Flow): StopReason | void {
         sc.readRawOptional('<', '>');
         sc.readRawOptional();
         sc.readRawOptional('<', '>');
@@ -3759,7 +3757,7 @@ class LatexReader {
         this.endParagraph(flow);
         this.tableDepth++;
         let node: ReturnType<LatexReader['buildTable']>;
-        try { node = this.buildTable(body, aligns, env); } finally { this.tableDepth--; }
+        try { node = this.buildTable(body, aligns); } finally { this.tableDepth--; }
         if (node) this.pushBlock(flow, node.table);
         if (node?.caption.length) for (const c of node.caption) this.pushBlock(flow, c);
     }
@@ -3862,13 +3860,12 @@ class LatexReader {
 
     private static RULES = /^\s*(?:\\(?:hline|toprule|midrule|bottomrule|endhead|endfirsthead|endfoot|endlastfoot|hhline\s*\{[^}]*\}|cline\s*\{[^}]*\}|cmidrule\s*(?:\([^)]*\)\s*)?(?:\[[^\]]*\]\s*)?\{[^}]*\}|addlinespace(?:\s*\[[^\]]*\])?|noalign\s*\{[^}]*\}|rowcolor\s*(?:\[[^\]]*\]\s*)?\{[^}]*\}|specialrule\s*\{[^}]*\}\{[^}]*\}\{[^}]*\})(?:\[[^\]]*\])?\s*)+/;
 
-    private buildTable(body: string, aligns: (('left' | 'center' | 'right') | undefined)[], env: string): { table: OfficeContentNode; caption: OfficeContentNode[] } | null {
-        void env;
+    private buildTable(body: string, aligns: (('left' | 'center' | 'right') | undefined)[]): { table: OfficeContentNode; caption: OfficeContentNode[] } | null {
         const raw = this.splitTable(body);
         type RawRow = { cells: string[]; header?: boolean; rowColor?: string };
         const rows: RawRow[] = [];
         const caption: OfficeContentNode[] = [];
-        let seenFirstHead = false, seenHead = false, seenFoot = false;
+        let seenFirstHead = false, seenHead = false;
         let headStart = -1;
         for (let rawIndex = 0; rawIndex < raw.length; rawIndex++) {
             const cells = raw[rawIndex];
@@ -3882,7 +3879,6 @@ class LatexReader {
                 else rows.forEach(r => { r.header = true; });
                 seenHead = true;
             }
-            if (/\\endfoot/.test(prefix) && !/\\endlastfoot/.test(prefix)) { seenFoot = true; }
             if (/\\midrule/.test(prefix) && rows.length && !seenHead && rows.length <= 2 && !rows.some(r => r.header)) rows.forEach(r => { r.header = true; });
             const rowColor = /\\rowcolor\s*(?:\[([^\]]*)\]\s*)?\{([^}]*)\}/.exec(prefix);
             const cellsNow = [first, ...cells.slice(1)];
@@ -3896,7 +3892,6 @@ class LatexReader {
                 continue;
             }
             rows.push({ cells: cellsNow, rowColor: rowColor ? this.resolveColor(rowColor[2], rowColor[1] ?? null) : undefined });
-            void seenFoot;
         }
         if (!rows.length) return null;
 

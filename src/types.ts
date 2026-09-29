@@ -1689,7 +1689,7 @@ export interface TexGeneratorConfig {
      * it. Every engine reads it; with `--output-directory`, pdfLaTeX and LuaLaTeX still find the
      * files, but XeLaTeX and dvipdfmx look beside the `.tex`, so use `bundle` there. The data adds
      * about a quarter to each image's size. A PNG that must be decoded to be carried (transparency,
-     * interlacing) is carried up to 16 megapixels, and a document's decoded images up to 256 in all;
+     * interlacing) is carried up to 16 megapixels, and a document's decoded images up to 256 megapixels in all;
      * past that it is referenced as a file. When false, images are referenced as `images/<name>`
      * files and reported with `IMAGES_NOT_BUNDLED`. Defaults to true. Ignored with `bundle`.
      */
