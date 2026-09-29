@@ -105,6 +105,8 @@ import {
     GeneratorConfig,
     SupportedDestination,
     UniversalGeneratorFormat,
+    GeneratorFormatAlias,
+    CanonicalFormat,
     ChunkingConfig,
     ChunkingStrategy,
     FixedSizeChunkingConfig,
@@ -147,6 +149,7 @@ import {
     HeaderFooterMetadata,
     IndentationMetadata,
     ParagraphMetadata,
+    DefinitionMetadata,
 } from './types.js';
 
 
@@ -182,6 +185,8 @@ export {
     GeneratorConfig,
     SupportedDestination,
     UniversalGeneratorFormat,
+    GeneratorFormatAlias,
+    CanonicalFormat,
     ChunkingConfig,
     ChunkingStrategy,
     FixedSizeChunkingConfig,
@@ -252,6 +257,7 @@ export {
     HeaderFooterMetadata,
     IndentationMetadata,
     ParagraphMetadata,
+    DefinitionMetadata,
 };
 
 

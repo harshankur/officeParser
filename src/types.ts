@@ -914,17 +914,17 @@ export interface OfficeError extends Error {
 /**
  * The result of a document conversion operation.
  */
-type ConversionValue<D extends UniversalGeneratorFormat> =
-    D extends 'pdf' ? Uint8Array | string :
-    D extends 'chunks' ? OfficeChunk[] :
-    D extends 'csv' ? string | Uint8Array :
-    D extends 'epub' ? Uint8Array :
-    D extends 'docx' ? Uint8Array :
-    D extends 'odt' ? Uint8Array :
-    D extends 'tex' ? string | Uint8Array :
+type ConversionValue<D extends string> =
+    CanonicalFormat<D> extends 'pdf' ? Uint8Array | string :
+    CanonicalFormat<D> extends 'chunks' ? OfficeChunk[] :
+    CanonicalFormat<D> extends 'csv' ? string | Uint8Array :
+    CanonicalFormat<D> extends 'epub' ? Uint8Array :
+    CanonicalFormat<D> extends 'docx' ? Uint8Array :
+    CanonicalFormat<D> extends 'odt' ? Uint8Array :
+    CanonicalFormat<D> extends 'tex' ? string | Uint8Array :
     string;
 
-export interface ConversionResult<D extends UniversalGeneratorFormat> {
+export interface ConversionResult<D extends string> {
     /** The actual generated content (HTML, Markdown, Text, OfficeChunk[], etc.). */
     value: ConversionValue<D>;
     /** A collection of issues (warnings/infos) generated during the process. */
@@ -937,10 +937,19 @@ export interface ConversionResult<D extends UniversalGeneratorFormat> {
 export type UniversalGeneratorFormat = 'text' | 'md' | 'html' | 'pdf' | 'csv' | 'rtf' | 'chunks' | 'epub' | 'docx' | 'odt' | 'tex';
 
 /**
- * Allowed destination formats for a given source type.
+ * Other names the generators accept for a format: `'txt'` for `'text'`, `'markdown'` for `'md'` and
+ * `'latex'` for `'tex'`.
+ */
+export type GeneratorFormatAlias = 'txt' | 'markdown' | 'latex';
+
+/** The format a destination names: an alias's format (see GeneratorFormatAlias), else the destination itself. */
+export type CanonicalFormat<D extends string> = D extends 'txt' ? 'text' : D extends 'markdown' ? 'md' : D extends 'latex' ? 'tex' : D;
+
+/**
+ * Allowed destination formats for a given source type, aliases included.
  * Currently, all generators are universal across all source formats.
  */
-export type SupportedDestination<_T extends SupportedFileType = SupportedFileType> = UniversalGeneratorFormat;
+export type SupportedDestination<_T extends SupportedFileType = SupportedFileType> = UniversalGeneratorFormat | GeneratorFormatAlias;
 
 /**
  * Configuration options for the OfficeGenerator.
@@ -1177,7 +1186,8 @@ export interface CommonGeneratorConfig {
 /**
  * Maps a destination format string to its corresponding specific configuration object type.
  */
-type GeneratorSpecificConfig<D extends string> = 
+type GeneratorSpecificConfig<D extends string> = GeneratorSpecificConfigOf<CanonicalFormat<D>>;
+type GeneratorSpecificConfigOf<D extends string> =
     D extends 'html' ? { htmlConfig?: HtmlGeneratorConfig } :
     D extends 'md' ? { mdConfig?: MdGeneratorConfig } :
     D extends 'pdf' ? { pdfConfig?: PdfGeneratorConfig } :
@@ -1230,7 +1240,7 @@ export type OfficeConverterConfig<D extends string = string, T extends Supported
     /** 
      * Specific configuration for the source parsing phase.
      */
-    parseConfig?: OfficeParserConfig & { fileType?: T };
+    parseConfig?: OfficeParserConfig & { fileType?: T | FileTypeAlias | null };
     /**
      * Specific configuration for the destination generation phase.
      */
@@ -2916,7 +2926,7 @@ export interface HeaderFooterMetadata {
 /**
  * Union type for content metadata.
  */
-export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | CommentMetadata | HeaderFooterMetadata | TableMetadata | EmbedMetadata | AdmonitionMetadata | undefined;
+export type ContentMetadata = SlideMetadata | SheetMetadata | HeadingMetadata | ListMetadata | CellMetadata | ImageMetadata | ChartMetadata | PageMetadata | ParagraphMetadata | TextMetadata | NoteMetadata | BreakMetadata | CodeMetadata | CommentMetadata | HeaderFooterMetadata | TableMetadata | EmbedMetadata | AdmonitionMetadata | DefinitionMetadata | undefined;
 
 
 /**
@@ -3396,7 +3406,7 @@ export interface OfficeParserAST {
         this: T,
         destination: D,
         config?: GeneratorConfig<D>
-    ): Promise<ConversionResult<D>>;
+    ): Promise<ConversionResult<CanonicalFormat<D>>>;
 }
 
 declare global {

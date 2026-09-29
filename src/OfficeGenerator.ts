@@ -11,7 +11,7 @@ import { LatexGenerator } from './generators/LatexGenerator.js';
 import { PdfGenerator } from './generators/PdfGenerator.js';
 import { RtfGenerator } from './generators/RtfGenerator.js';
 import { TextGenerator } from './generators/TextGenerator.js';
-import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeErrorType, OfficeParserAST, SupportedDestination, SupportedFileType, UniversalGeneratorFormat } from './types.js';
+import { CanonicalFormat, ConversionResult, GeneratorConfig, OfficeContentNode, OfficeErrorType, OfficeParserAST, SupportedDestination, SupportedFileType, UniversalGeneratorFormat } from './types.js';
 import { withoutSourceComments } from './utils/commentUtils.js';
 import { withKnownNodeTypes } from './utils/nodeTypeUtils.js';
 import { withBoundedSheetGrids } from './utils/sheetGridUtils.js';
@@ -53,7 +53,7 @@ export class OfficeGenerator {
         ast: OfficeParserAST & { type: T },
         destination: D,
         config?: GeneratorConfig<D>
-    ): Promise<ConversionResult<D>> {
+    ): Promise<ConversionResult<CanonicalFormat<D>>> {
         let generator: BaseGenerator<any>;
         const normalizedDestination = OfficeGenerator.normalizeDestination(destination);
         // A source comment (`<!-- ... -->`, CommentMetadata.sourceSyntax 'html') is the author's hidden
@@ -160,7 +160,7 @@ export class OfficeGenerator {
 
         if (laidOut) generator.reportTablesLaidOut(laidOut);
         try {
-            return await generator.generate() as ConversionResult<D>;
+            return await generator.generate() as ConversionResult<CanonicalFormat<D>>;
         } catch (error) {
             throw asNestingError(error);
         }

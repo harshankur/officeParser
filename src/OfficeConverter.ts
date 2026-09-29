@@ -1,6 +1,6 @@
 import { OfficeGenerator } from './OfficeGenerator.js';
 import { OfficeParser } from './OfficeParser.js';
-import { BlobLike, ConversionResult, GeneratorConfig, OfficeConverterConfig, OfficeIssue, OfficeParserConfig, OfficeWarningType, SupportedDestination, SupportedFileType } from './types.js';
+import { BlobLike, CanonicalFormat, ConversionResult, GeneratorConfig, OfficeConverterConfig, OfficeIssue, OfficeParserConfig, OfficeWarningType, SupportedDestination, SupportedFileType } from './types.js';
 import { PROTOTYPE_POLLUTION_KEYS, RECOGNIZED_GENERATOR_KEYS, RECOGNIZED_PARSER_KEYS } from './utils/configUtils.js';
 import { logWarning } from './utils/errorUtils.js';
 import { resolveImageMode } from './utils/officeGenUtils.js';
@@ -79,7 +79,7 @@ export class OfficeConverter {
         file: F,
         destination: D,
         config?: OfficeConverterConfig<D, T>
-    ): Promise<ConversionResult<D>> {
+    ): Promise<ConversionResult<CanonicalFormat<D>>> {
         // 1. Prepare Parser Configuration
         // We prioritize the top-level onWarning if provided.
         const parserConfig: OfficeParserConfig = {
