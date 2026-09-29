@@ -222,12 +222,15 @@ function splitUrlTitle(raw: string): { url: string; title?: string } {
         }
         const url = opener === -1 ? '' : text.slice(0, opener).trimEnd();
         if (opener !== -1 && url && !url.includes('\n')) {
-            return { url: decodeMarkdownText(url), title: decodeMarkdownText(text.slice(opener + 1, -1)) };
+            return { url: decodeMarkdownText(unbracketTarget(url)), title: decodeMarkdownText(text.slice(opener + 1, -1)) };
         }
     }
     // The target is decoded too, as a renderer decodes it (the generator escapes what it must).
-    return { url: decodeMarkdownText(text) };
+    return { url: decodeMarkdownText(unbracketTarget(text)) };
 }
+
+/** A link target without the angle brackets that let it hold spaces (`<./my docs/a.md>`), which are not part of it. */
+const unbracketTarget = (target: string): string => (/^<[^<>\n]*>$/.test(target) ? target.slice(1, -1) : target);
 
 /** ASCII punctuation, the characters a backslash escapes in CommonMark. */
 const ASCII_PUNCTUATION = /[!-/:-@[-`{-~]/;
