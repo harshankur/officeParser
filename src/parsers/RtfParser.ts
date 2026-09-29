@@ -582,7 +582,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     const colorTable = extractColorTable(doc);
 
     const content: OfficeContentNode[] = [];
-    const notes: OfficeContentNode[] = [];
     // Headers and footers (`\header`, `\headerl`, `\footerf`, ...), for the AST's auxiliary: skipped,
     // their text was lost, and the left, right and first-page ones were read into the body.
     const headers: OfficeContentNode[] = [];
@@ -696,6 +695,146 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // ═══════════════════════════════════════════════════════════════════
     let currentLinkUrl: string | undefined;
 
+    // Blocks read from a shape's text box (`\shptxt`), placed after the paragraph anchoring the shape:
+    // read in place, the text box's paragraphs split that paragraph and took its first half as theirs.
+    let blocksAfterParagraph: OfficeContentNode[] = [];
+
+    /**
+     * Everything the reading of paragraphs and tables keeps between control words. A destination read
+     * apart from the flow around it (a header or footer, a footnote, an annotation, a shape's text box)
+     * starts from a fresh one and gives the one around it back at its end. Sharing it, the destination's
+     * `\pard` (which Word always writes there) ended the list item, heading or table cell it was
+     * anchored in, and a table left open around it was flushed into the destination: a comment in a
+     * table cell took the table into the comment, and a table ending a section went into the header.
+     */
+    interface FlowState {
+        target: OfficeContentNode[];
+        paragraphTextChunks: string[];
+        paragraphChildren: OfficeContentNode[];
+        paragraphRawChunks: string[];
+        runTextChunks: string[];
+        runFormatting: TextFormatting;
+        indent: number;
+        alignment: 'left' | 'center' | 'right' | 'justify';
+        listItem: boolean;
+        list: 'ordered' | 'unordered' | undefined;
+        heading: number | undefined;
+        listId: string | undefined;
+        anchorIds: string[];
+        knownListId: string | undefined;
+        knownListType: 'ordered' | 'unordered' | undefined;
+        tables: TableContext[];
+        table: boolean;
+        paragraphTable: boolean;
+        cellProps: CellProps[];
+        cellDefinitionProps: CellProps;
+        cellIndex: number;
+        linkUrl: string | undefined;
+        afterParagraph: OfficeContentNode[];
+    }
+
+    /** Sets the flow aside for a destination whose blocks go to `target`, starting it afresh. */
+    const enterDestination = (target: OfficeContentNode[]): FlowState => {
+        const saved: FlowState = {
+            target: currentTarget,
+            paragraphTextChunks: currentParagraphTextChunks,
+            paragraphChildren: currentParagraphChildren,
+            paragraphRawChunks: currentParagraphRawChunks,
+            runTextChunks: currentRunTextChunks,
+            runFormatting: currentFormatting,
+            indent: paragraphIndent,
+            alignment: paragraphAlignment,
+            listItem: isListItem,
+            list: listType,
+            heading: headingLevel,
+            listId: currentListId,
+            anchorIds: currentAnchorIds,
+            knownListId: lastKnownListId,
+            knownListType: lastKnownListType,
+            tables: tableStack,
+            table: inTable,
+            paragraphTable: paragraphInTable,
+            cellProps: rowCellProps,
+            cellDefinitionProps: currentCellDefinitionProps,
+            cellIndex: cellContentIndex,
+            linkUrl: currentLinkUrl,
+            afterParagraph: blocksAfterParagraph,
+        };
+        currentTarget = target;
+        currentParagraphTextChunks = [];
+        currentParagraphChildren = [];
+        currentParagraphRawChunks = [];
+        currentRunTextChunks = [];
+        currentFormatting = {};
+        paragraphIndent = 0;
+        paragraphAlignment = 'left';
+        isListItem = false;
+        listType = undefined;
+        headingLevel = undefined;
+        currentListId = undefined;
+        currentAnchorIds = [];
+        lastKnownListId = undefined;
+        lastKnownListType = undefined;
+        tableStack = [];
+        inTable = false;
+        paragraphInTable = false;
+        rowCellProps = [];
+        currentCellDefinitionProps = { isMergedContinuation: false };
+        cellContentIndex = 0;
+        currentLinkUrl = undefined;
+        blocksAfterParagraph = [];
+        return saved;
+    };
+
+    /** Ends a destination: its last paragraph and any table still open go to its blocks, then the flow around it is back. */
+    const leaveDestination = (saved: FlowState) => {
+        finishFlow();
+        currentTarget = saved.target;
+        currentParagraphTextChunks = saved.paragraphTextChunks;
+        currentParagraphChildren = saved.paragraphChildren;
+        currentParagraphRawChunks = saved.paragraphRawChunks;
+        currentRunTextChunks = saved.runTextChunks;
+        currentFormatting = saved.runFormatting;
+        paragraphIndent = saved.indent;
+        paragraphAlignment = saved.alignment;
+        isListItem = saved.listItem;
+        listType = saved.list;
+        headingLevel = saved.heading;
+        currentListId = saved.listId;
+        currentAnchorIds = saved.anchorIds;
+        lastKnownListId = saved.knownListId;
+        lastKnownListType = saved.knownListType;
+        tableStack = saved.tables;
+        inTable = saved.table;
+        paragraphInTable = saved.paragraphTable;
+        rowCellProps = saved.cellProps;
+        currentCellDefinitionProps = saved.cellDefinitionProps;
+        cellContentIndex = saved.cellIndex;
+        currentLinkUrl = saved.linkUrl;
+        blocksAfterParagraph = saved.afterParagraph;
+    };
+
+    /**
+     * Ends the flow being read (the document's, or a destination's): its last paragraph, then every table
+     * still open. The paragraph first: flushed after the table, a paragraph following a table's last
+     * `\row` without its own `\par` went before the table.
+     */
+    const finishFlow = () => {
+        flushParagraph();
+        while (tableStack.length > 0 && !isFlushingTable) flushTable();
+        inTable = false;
+        paragraphInTable = false;
+    };
+
+    /** Where a finished block goes: the open cell for a paragraph in a table, else the flow's target. */
+    const blockContainer = (): OfficeContentNode[] => {
+        if (inTable && paragraphInTable) {
+            ensureTableContext();
+            return getCurrentTable()!.currentCellContent;
+        }
+        return currentTarget;
+    };
+
     // Helper to check if formatting changed
     const formattingChanged = (a: TextFormatting, b: TextFormatting): boolean => {
         return a.bold !== b.bold ||
@@ -742,7 +881,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         // If we were in a table, but this paragraph is NOT marked as in-table, 
         // and we have content, then the table has ended.
         const hasContent = currentParagraphTextChunks.length > 0 || currentParagraphChildren.length > 0;
-        if (inTable && !paragraphInTable && !isFlushingTable && hasContent) {
+        if (inTable && !paragraphInTable && !isFlushingTable && (hasContent || blocksAfterParagraph.length > 0)) {
             // CRITICAL: Save current paragraph content before flushing table
             // because flushTable() -> flushRow() -> flushCell() -> flushParagraph()
             // would otherwise process this content during the table flush
@@ -751,11 +890,13 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             const savedParagraphTextChunks = currentParagraphTextChunks;
             const savedParagraphChildren = currentParagraphChildren;
             const savedParagraphRawChunks = currentParagraphRawChunks;
+            const savedBlocksAfterParagraph = blocksAfterParagraph;
 
             // Clear buffers so nested flushParagraph() doesn't process them
             currentParagraphTextChunks = [];
             currentParagraphChildren = [];
             currentParagraphRawChunks = [];
+            blocksAfterParagraph = [];
 
             flushTable();
 
@@ -763,6 +904,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             currentParagraphTextChunks = savedParagraphTextChunks;
             currentParagraphChildren = savedParagraphChildren;
             currentParagraphRawChunks = savedParagraphRawChunks;
+            blocksAfterParagraph = savedBlocksAfterParagraph;
         }
 
         if (hasContent) {
@@ -866,23 +1008,25 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 node.rawContent = chargeRawContent(currentParagraphRawChunks.join(''), config);
             }
 
-            // If we're building a table, add to current cell 
+            // If we're building a table, add to current cell
             // but ONLY if this paragraph was actually marked as in-table
-            if (inTable && paragraphInTable) {
-                ensureTableContext();
-                getCurrentTable()!.currentCellContent.push(node);
-            } else {
-                currentTarget.push(node);
-            }
+            blockContainer().push(node);
 
             currentParagraphTextChunks = [];
             currentParagraphChildren = [];
             currentParagraphRawChunks = [];
 
             // Reset paragraph-level state that should NOT persist
-            // Note: list properties (\ls, \ilvl, \li) and alignment (\ql, etc.) 
+            // Note: list properties (\ls, \ilvl, \li) and alignment (\ql, etc.)
             // persist in RTF until \pard or a new value is set.
             currentAnchorIds = []; // Reset anchors
+        }
+
+        // The text boxes of shapes anchored in the paragraph, after it.
+        if (blocksAfterParagraph.length > 0) {
+            const container = blockContainer();
+            for (const block of blocksAfterParagraph) container.push(block);
+            blocksAfterParagraph = [];
         }
     };
 
@@ -1211,10 +1355,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             let isHyperlinkField = false;
             let isPict = false;
             // Where a header's or footer's paragraphs go, and whether the group is an annotation (a
-            // comment) or a shape whose text box (`\shptxt`) alone is read.
+            // comment), a shape whose text box (`\shptxt`) alone is read, or that text box.
             let redirect: OfficeContentNode[] | undefined;
             let isAnnotation = false;
             let isShapeInstance = false;
+            let isShapeText = false;
 
             // Add group start to raw content
             // Note: We don't add ignored groups to rawContent to keep it clean
@@ -1282,6 +1427,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     isIgnored = true;
                 } else if (node.destination === 'shpinst') {
                     isShapeInstance = true;
+                } else if (node.destination === 'shptxt') {
+                    isShapeText = true;
                 } else if (ignoreList.includes(node.destination)) {
                     isIgnored = true;
                 } else if (node.content.length > 0 && node.content[0].type === 'control' && node.content[0].value === '*') {
@@ -1357,9 +1504,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     // Only add image node to content if this is NOT a list definition picture
                     // List pictures (bullets) should not appear in content, only as attachments
                     if (!parsingListTable && !parsingListDefinition) {
-                        // Also add an image node to the content tree (like DOCX)
+                        // Also add an image node to the content tree (like DOCX), in the cell of a
+                        // paragraph in a table (it went to the body, before the table)
                         flushParagraph();
-                        currentTarget.push({
+                        blockContainer().push({
                             type: 'image',
                             text: '',
                             metadata: {
@@ -1425,11 +1573,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 return;
             }
 
-            // Handle footnote: switch target to notes
-            const previousTarget = currentTarget;
-            let savedParagraphTextChunks: string[] | undefined;
-            let savedParagraphChildren: OfficeContentNode[] | undefined;
-            let savedParagraphRawChunks: string[] | undefined;
+            // A footnote, header, footer, annotation or shape text box is read apart from the flow around
+            // it (see FlowState), into the blocks it goes to.
+            let savedFlow: FlowState | undefined;
+            let footnote: OfficeContentNode | undefined;
 
             if (isFootnote) {
                 if (config.ignoreNotes) {
@@ -1472,22 +1619,17 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     emptyTextNode.notes = [noteNode];
                     currentParagraphChildren.push(emptyTextNode);
                 }
-                
-                currentTarget = noteNode.children!;
-                
-                // Save current paragraph state so we don't mix footnote paragraphs with main text
-                // (Kept, not copied: see the table case above.)
-                savedParagraphTextChunks = currentParagraphTextChunks;
-                savedParagraphChildren = currentParagraphChildren;
-                savedParagraphRawChunks = currentParagraphRawChunks;
-                
-                currentParagraphTextChunks = [];
-                currentParagraphChildren = [];
-                currentParagraphRawChunks = [];
+
+                // The paragraph's state is set aside (kept, not copied: see the table case above), so the
+                // note's paragraphs do not mix with the main text.
+                footnote = noteNode;
+                savedFlow = enterDestination(noteNode.children!);
             }
 
-            // A header, footer or annotation: its paragraphs go to their own list, not the body's.
+            // A header, footer, annotation or shape text box: its paragraphs go to their own list, not the body's.
             let redirectedComment: OfficeContentNode | undefined;
+            let shapeBlocks: OfficeContentNode[] | undefined;
+            if (isShapeText) redirect = shapeBlocks = [];
             if (redirect || isAnnotation) {
                 flushRun();
                 if (isAnnotation) {
@@ -1502,13 +1644,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     else currentParagraphChildren.push({ type: 'text', text: '', comments: [redirectedComment] });
                     redirect = redirectedComment.children!;
                 }
-                currentTarget = redirect!;
-                savedParagraphTextChunks = currentParagraphTextChunks;
-                savedParagraphChildren = currentParagraphChildren;
-                savedParagraphRawChunks = currentParagraphRawChunks;
-                currentParagraphTextChunks = [];
-                currentParagraphChildren = [];
-                currentParagraphRawChunks = [];
+                savedFlow = enterDestination(redirect!);
             }
 
             // Create a new formatting context for the group
@@ -1565,16 +1701,14 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
             }
 
-            if (isFootnote || redirect) {
-                flushParagraph();
-                currentTarget = previousTarget;
-                
-                // Restore the saved paragraph state
-                currentParagraphTextChunks = savedParagraphTextChunks!;
-                currentParagraphChildren = savedParagraphChildren!;
-                currentParagraphRawChunks = savedParagraphRawChunks!;
+            if (savedFlow) leaveDestination(savedFlow);
+            // A text box's blocks follow the paragraph the shape is anchored in.
+            if (shapeBlocks) for (const block of shapeBlocks) blocksAfterParagraph.push(block);
+            // A note's or comment's text is its paragraphs' (a final pass meant to give notes theirs did not
+            // reach them, on the runs' `notes`).
+            for (const holder of [redirectedComment, footnote]) {
+                if (holder) holder.text = (holder.children ?? []).map(n => n.text ?? '').join(' ').trim();
             }
-            if (redirectedComment) redirectedComment.text = (redirectedComment.children ?? []).map(n => n.text ?? '').join(' ').trim();
 
             // Clear link URL after processing the field group
             if (isHyperlinkField) {
@@ -2000,13 +2134,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     traverse(doc, {});
 
-    // Flush any remaining table
-    const finalCtx = getCurrentTable();
-    if (inTable || (finalCtx && (finalCtx.rows.length > 0 || finalCtx.currentCells.length > 0))) {
-        flushTable();
-    }
-
-    flushParagraph();
+    // The last paragraph, and any table still open.
+    finishFlow();
 
     // Perform OCR if enabled
     if (config.ocr && config.extractAttachments) {
@@ -2043,25 +2172,6 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         };
         assignOcr(content);
     }
-
-    // Final pass to ensure all 'note' nodes have their 'text' property populated so downstream
-    // generators that read node.text (e.g. chunking) see the note's content.
-    const populateNoteText = (nodes: OfficeContentNode[]) => {
-        for (const node of nodes) {
-            if (node.type === 'note' && node.children) {
-                const getText = (n: OfficeContentNode): string => {
-                    if (n.children && n.children.length > 0) return n.children.map(getText).join('');
-                    return n.text || '';
-                };
-                node.text = node.children.map(getText).join('').trim();
-            }
-            if (node.children) {
-                populateNoteText(node.children);
-            }
-        }
-    };
-    populateNoteText(content);
-    populateNoteText(notes);
 
     const result = createAST(
         'rtf',

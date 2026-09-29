@@ -3416,6 +3416,15 @@ async function parserHardeningTests() {
     check('rtf: headers and footers are read into the auxiliary, not the body', !rtfParts.error && ['HEADERTEXT', 'LEFTHEADER', 'FIRSTFOOTER'].every(m => rtfAux.includes(m) && !rtfBody.includes(m)), `${rtfParts.error} ${rtfAux}`);
     check('rtf: an annotation is a comment with its author, and shape text is read', /"type":"comment"[^]*COMMENTTEXT/.test(rtfBody) && rtfBody.includes('"author":"ANN"') && rtfBody.includes('SHAPETEXT') && !rtfBody.includes('shapeType'), rtfBody.slice(0, 400));
     check('rtf: a Unicode character\'s fallback is skipped', rtfBody.includes('A€B') && rtfBody.includes('Пр') && !rtfBody.includes('П?'), rtfBody.slice(-300));
+    // Each destination sets the flow around it aside and back in constant time: 20,000 comments, notes
+    // and text boxes in one table's cells, then in one list item, are read in linear time and leave the
+    // table whole and the item an item.
+    const destinationsStarted = Date.now();
+    const destinationCell = String.raw`\pard\intbl A{\*\atnid J}\chatn{\*\annotation\pard\plain R\par}{\footnote\pard\plain N\par}{\shp{\*\shpinst{\shptxt\pard\plain T\par}}}\cell`;
+    const destinationItem = String.raw`{\*\atnid J}\chatn{\*\annotation\pard\plain R\par}{\footnote\pard\plain N\par}{\shp{\*\shpinst{\shptxt\pard\plain T\par}}}`;
+    const manyDestinations = await parseQuiet(Buffer.from(String.raw`{\rtf1\ansi\trowd\cellx3000` + destinationCell.repeat(20000) + String.raw`\row\pard\ls1\ilvl0 Item` + destinationItem.repeat(20000) + String.raw`\par}`), 'rtf');
+    const destinationBlocks = manyDestinations.ast?.content ?? [];
+    check('rtf: 20,000 comments, notes and text boxes in table cells and a list item are read in linear time', !manyDestinations.error && Date.now() - destinationsStarted < 5000 && destinationBlocks[0]?.type === 'table' && destinationBlocks[0]?.children?.[0]?.children?.length === 20000 && destinationBlocks[1]?.type === 'list', `${Date.now() - destinationsStarted}ms ${manyDestinations.error} ${destinationBlocks.slice(0, 2).map((n: any) => n.type)}`);
     // DOCX tracked changes read as the document now stands: insertions in, deletions and moved-away text out.
     const tracked = await parseQuiet(docxOf('<w:p><w:r><w:t xml:space="preserve">keep </w:t></w:r><w:moveFrom w:id="1" w:author="a"><w:r><w:t>MOVED</w:t></w:r></w:moveFrom><w:del w:id="2" w:author="a"><w:r><w:delText>DELETED</w:delText></w:r></w:del><w:ins w:id="3" w:author="a"><w:r><w:t>INSERTED</w:t></w:r></w:ins></w:p><w:p><w:moveTo w:id="4" w:author="a"><w:r><w:t>MOVED</w:t></w:r></w:moveTo></w:p>'), 'docx');
     const trackedTexts = (tracked.ast?.content ?? []).map((n: any) => n.text);

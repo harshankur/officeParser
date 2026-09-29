@@ -851,7 +851,68 @@ async function testRtf(): Promise<void> {
     assert.ok(rtfOutput.includes('{\\rtf1'), 'RTF roundtrip: output starts with {\\rtf1');
     assert.ok(rtfOutput.includes('\\par'), 'RTF roundtrip: has \\par paragraph marker');
 
+    await testRtfDestinations();
+
     console.log('  RTF: All assertions passed ✓');
+}
+
+/**
+ * A destination read apart from the body (an annotation, a header or footer, a footnote, a shape's text
+ * box) keeps the paragraph and table it sits in as they were, and takes nothing of the body. Word writes
+ * `\pard\plain` inside each, which ended the list item, heading or table cell around it, and a table left
+ * open was flushed into the destination.
+ */
+async function testRtfDestinations(): Promise<void> {
+    const head = String.raw`{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Calibri;}}`;
+    const lists = String.raw`{\*\listtable{\list\listtemplateid1{\listlevel\levelnfc23{\leveltext\'01舦 ?;}}\listid1}}{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}`;
+    const parse = async (body: string) => OfficeParser.parseOffice(Buffer.from(head + body + '}', 'latin1'), { fileType: 'rtf' } as any);
+    const shape = (n: OfficeContentNode): any => n.type === 'table' || n.type === 'row' || n.type === 'cell'
+        ? [n.type, (n.children ?? []).map(shape)]
+        : [n.type + ((n.metadata as any)?.level ?? '') + ((n.metadata as any)?.listId ? `#${(n.metadata as any).itemIndex}` : ''), n.text];
+    const table2x2 = [['table', [['row', [['cell', [['paragraph', 'A']]], ['cell', [['paragraph', 'B']]]]], ['row', [['cell', [['paragraph', 'C text']]], ['cell', [['paragraph', 'D']]]]]]]];
+    const comments = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'comment').map(c => (c.children ?? []).map(shape));
+
+    // A comment in a table cell, as Word writes it.
+    const inCell = await parse(String.raw`\trowd\cellx3000\cellx6000\pard\plain\intbl A\cell B\cell\row\trowd\cellx3000\cellx6000\pard\plain\intbl {\*\atrfstart 0}C text{\*\atrfend 0}{\*\atnid JD}{\*\atnauthor John Doe}\chatn {\*\annotation{\*\atndate 1}\pard\plain \s16\ql {\chatn }{Comment text}}\cell D\cell\row\pard\plain After table\par`);
+    assert.deepStrictEqual(inCell.content.map(shape), [...table2x2, ['paragraph', 'After table']], 'RTF: a comment in a table cell leaves the table in the body');
+    assert.deepStrictEqual(comments(inCell), [[['paragraph', 'Comment text']]], 'RTF: the comment holds its own text only');
+
+    // A comment on a list item or a heading.
+    const onItem = await parse(lists + String.raw`\pard\ls1\ilvl0 Item one{\*\atnid JD}{\*\atnauthor J}\chatn {\*\annotation\pard\plain {Remark}}\par\pard\ls1\ilvl0 Item two\par`);
+    assert.deepStrictEqual(onItem.content.map(shape), [['list#0', 'Item one'], ['list#1', 'Item two']], 'RTF: a comment on a list item keeps it an item');
+    const onHeading = await parse(String.raw`\pard\s1 Title{\*\atnid JD}\chatn {\*\annotation\pard\plain {Remark}}\par\pard Body\par`);
+    assert.deepStrictEqual(onHeading.content.map(shape), [['heading1', 'Title'], ['paragraph', 'Body']], 'RTF: a comment on a heading keeps it a heading');
+
+    // A table ending a section, before the next section's header.
+    const sections = await parse(String.raw`\sectd{\header \pard Head1\par}\pard Intro\par\trowd\cellx3000\cellx6000\pard\intbl A\cell B\cell\row\pard\par\sect\sectd{\header \pard Head2\par}\pard After\par`);
+    assert.deepStrictEqual(sections.content.map(shape), [['paragraph', 'Intro'], ['table', [['row', [['cell', [['paragraph', 'A']]], ['cell', [['paragraph', 'B']]]]]]], ['paragraph', 'After']], 'RTF: a table ending a section stays in the body');
+    assert.deepStrictEqual(sections.auxiliary?.headers?.map(shape), [['paragraph', 'Head1'], ['paragraph', 'Head2']], 'RTF: the headers hold their own paragraphs only');
+    // A header's own table, and a footer written inside a table cell.
+    const headerTable = await parse(String.raw`\trowd\cellx3000\pard\intbl A\cell\row{\header \trowd\cellx3000\pard\intbl H\cell\row\pard Hx\par}\pard After\par`);
+    assert.deepStrictEqual(headerTable.content.map(shape), [['table', [['row', [['cell', [['paragraph', 'A']]]]]]], ['paragraph', 'After']], 'RTF: a header with a table leaves the body\'s table in the body');
+    assert.deepStrictEqual(headerTable.auxiliary?.headers?.map(shape), [['table', [['row', [['cell', [['paragraph', 'H']]]]]]], ['paragraph', 'Hx']], 'RTF: a header keeps its own table');
+    const footerInCell = await parse(String.raw`\trowd\cellx3000\cellx6000\pard\intbl A{\footer \pard Foot\par}\cell B\cell\row\pard After\par`);
+    assert.deepStrictEqual(footerInCell.content.map(shape), [['table', [['row', [['cell', [['paragraph', 'A']]], ['cell', [['paragraph', 'B']]]]]]], ['paragraph', 'After']], 'RTF: a footer written in a cell leaves the cell as it was');
+
+    // Footnotes in a table cell and in a list item (8.0.0 broke both the same way).
+    const noteInCell = await parse(String.raw`\trowd\cellx3000\cellx6000\pard\intbl A{\super\chftn}{\footnote\pard\plain {\super\chftn} Note text\par}\cell B\cell\row\pard After\par`);
+    assert.deepStrictEqual(noteInCell.content.map(shape), [['table', [['row', [['cell', [['paragraph', 'A']]], ['cell', [['paragraph', 'B']]]]]]], ['paragraph', 'After']], 'RTF: a footnote in a table cell leaves the table whole');
+    const noteOnItem = await parse(lists + String.raw`\pard\ls1\ilvl0 Item one{\footnote\pard\plain Note text\par}\par\pard\ls1\ilvl0 Item two\par`);
+    assert.deepStrictEqual(noteOnItem.content.map(shape), [['list#0', 'Item one'], ['list#1', 'Item two']], 'RTF: a footnote on a list item keeps it an item');
+    assert.deepStrictEqual(collectAllNodes(noteOnItem).filter(n => n.type === 'note').map(n => n.text), ['Note text'], 'RTF: the footnote keeps its text');
+
+    // A shape's text box follows the paragraph anchoring it, which stays whole.
+    const shapeOnItem = await parse(lists + String.raw`\pard\ls1\ilvl0 Item one{\shp{\*\shpinst{\sp{\sn shapeType}{\sv 202}}{\shptxt \pard\plain Box words\par}}} more\par\pard\ls1\ilvl0 Item two\par`);
+    assert.deepStrictEqual(shapeOnItem.content.map(shape), [['list#0', 'Item one more'], ['paragraph', 'Box words'], ['list#1', 'Item two']], 'RTF: a text box follows the list item anchoring it');
+    const shapeInCell = await parse(String.raw`\trowd\cellx3000\pard\intbl A{\shp{\*\shpinst{\shptxt \pard\plain Box\par}}}\cell\row\pard After\par`);
+    assert.deepStrictEqual(shapeInCell.content.map(shape), [['table', [['row', [['cell', [['paragraph', 'A'], ['paragraph', 'Box']]]]]]], ['paragraph', 'After']], 'RTF: a text box in a cell stays in the cell');
+
+    // A comment inside a link is not the link; a paragraph after a table's last row without its own \par follows the table.
+    const inLink = await parse(String.raw`\pard {\field{\*\fldinst HYPERLINK "https://x.test"}{\fldrslt Link{\*\atnid JD}\chatn{\*\annotation\pard Remark\par}}} tail\par`);
+    const linked = collectAllNodes(inLink).filter(n => (n.metadata as any)?.link).map(n => n.text);
+    assert.deepStrictEqual(linked, ['Link'], 'RTF: a comment inside a link is not linked');
+    const tailAfterTable = await parse(String.raw`\trowd\cellx3000\pard\intbl A\cell\row\pard Tail`);
+    assert.deepStrictEqual(tailAfterTable.content.map(shape), [['table', [['row', [['cell', [['paragraph', 'A']]]]]]], ['paragraph', 'Tail']], 'RTF: the last paragraph after a table follows it');
 }
 
 /**
