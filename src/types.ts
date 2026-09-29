@@ -2906,6 +2906,12 @@ export interface CommentMetadata {
     date?: string;
     commentId?: string;
     /**
+     * The `commentId` of the comment this one replies to, in the same list of comments: a reply in a
+     * PowerPoint comment thread (modern comments, and classic ones since PowerPoint 2013). Absent for a
+     * comment that starts a thread.
+     */
+    parentId?: string;
+    /**
      * `'html'` marks a SOURCE comment, `<!-- ... -->` in Markdown or HTML: the author's hidden note,
      * not a review annotation. Its node's `text` is the raw text between `<!--` and `-->`, verbatim
      * (whitespace included) and it has no children. The Markdown and HTML generators re-emit it as a

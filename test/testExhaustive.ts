@@ -1562,6 +1562,31 @@ async function testOdfComments(): Promise<void> {
     assert.strictEqual(bodied[0].children![0], bodied[1].children![0], 'ODT embedded repeat: repeated cells share the child node by reference (no per-cell duplication)');
 }
 
+/** PowerPoint comments, from the OOXML review before 8.1.0. */
+async function testPptxComments(): Promise<void> {
+    const { relsOf, rel, parse, texts } = ooxmlHelpers();
+    // PowerPoint comments: a classic comment's plain text, a modern comment's paragraphs apart, and
+    // replies with their date, initials and the comment they reply to.
+    const pns = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main" xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"';
+    const pptx = Buffer.from(zipSync({
+        'ppt/presentation.xml': strToU8(`<?xml version="1.0"?><p:presentation ${pns}/>`),
+        'ppt/slides/slide1.xml': strToU8(`<?xml version="1.0"?><p:sld ${pns}><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>S1</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`),
+        'ppt/slides/_rels/slide1.xml.rels': strToU8(relsOf(rel('rId1', 'comments', '../comments/comment1.xml') + '<Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2018/10/relationships/comments" Target="../comments/modernComment_100_1.xml"/>')),
+        'ppt/commentAuthors.xml': strToU8(`<?xml version="1.0"?><p:cmAuthorLst ${pns}><p:cmAuthor id="0" name="Old Author" initials="OA" lastIdx="2" clrIdx="0"/><p:cmAuthor id="1" name="Old Replier" initials="OR" lastIdx="1" clrIdx="1"/></p:cmAuthorLst>`),
+        'ppt/comments/comment1.xml': strToU8(`<?xml version="1.0"?><p:cmLst ${pns}><p:cm authorId="0" dt="2020-01-01T00:00:00.000" idx="1"><p:pos x="10" y="10"/><p:text>CLASSIC LINE ONE\nCLASSIC LINE TWO</p:text></p:cm><p:cm authorId="1" dt="2020-01-02T00:00:00.000" idx="1"><p:pos x="10" y="10"/><p:text>CLASSIC REPLY</p:text><p:extLst><p:ext uri="{C676402C-5697-4E1C-873F-D02D1690AC5C}"><p15:threadingInfo timeZoneBias="0"><p15:parentCm authorId="0" idx="1"/></p15:threadingInfo></p:ext></p:extLst></p:cm></p:cmLst>`),
+        'ppt/authors.xml': strToU8(`<?xml version="1.0"?><p188:authorLst ${pns}><p188:author id="{A1}" name="Modern Ann" initials="MA" userId="ann" providerId="None"/><p188:author id="{A2}" name="Replier Bob" initials="RB" userId="bob" providerId="None"/></p188:authorLst>`),
+        'ppt/comments/modernComment_100_1.xml': strToU8(`<?xml version="1.0"?><p188:cmLst ${pns}><p188:cm id="{C1}" authorId="{A1}" created="2021-01-01T00:00:00.000"><p188:replyLst><p188:reply id="{R1}" authorId="{A2}" created="2021-01-02T00:00:00.000"><p188:txBody><a:bodyPr/><a:p><a:r><a:t>MODERN REPLY</a:t></a:r></a:p></p188:txBody></p188:reply></p188:replyLst><p188:txBody><a:bodyPr/><a:p><a:r><a:t>MODERN ONE</a:t></a:r></a:p><a:p><a:r><a:t>MODERN TWO</a:t></a:r></a:p></p188:txBody></p188:cm></p188:cmLst>`),
+    }));
+    const slideComments = (await parse(pptx, {}, 'pptx')).ast.content[0].comments!;
+    assert.deepStrictEqual(slideComments.map(c => [c.text, texts(c.children!).map(t => t[1]), c.metadata]), [
+        ['CLASSIC LINE ONE CLASSIC LINE TWO', ['CLASSIC LINE ONE', 'CLASSIC LINE TWO'], { commentId: '0-1', author: 'Old Author', initials: 'OA', date: '2020-01-01T00:00:00.000' }],
+        ['CLASSIC REPLY', ['CLASSIC REPLY'], { commentId: '1-1', author: 'Old Replier', initials: 'OR', date: '2020-01-02T00:00:00.000', parentId: '0-1' }],
+        ['MODERN ONE MODERN TWO', ['MODERN ONE', 'MODERN TWO'], { commentId: '{C1}', author: 'Modern Ann', initials: 'MA', date: '2021-01-01T00:00:00.000' }],
+        ['MODERN REPLY', ['MODERN REPLY'], { commentId: '{R1}', author: 'Replier Bob', initials: 'RB', date: '2021-01-02T00:00:00.000', parentId: '{C1}' }],
+    ], 'PPTX: classic and modern comments, their paragraphs, and replies with their date, initials and thread');
+    console.log('  PPTX comments: All assertions passed ✓');
+}
+
 /**
  * Cross-format consistency guarantees a user relies on (from the consistency review): an option must
  * not silently no-op where a user would expect it to work, and the CLI and library must agree.
@@ -4112,6 +4137,7 @@ async function runTests(): Promise<void> {
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],
         ['ODFComments', testOdfComments],
+        ['PPTX comments', testPptxComments],
         ['ConsistencyBehaviors', testConsistencyBehaviors],
         ['DOCX', testDocxGeneration],
         ['DOCX notes and bookmarks', testDocxNotesAndBookmarks],

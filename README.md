@@ -786,7 +786,7 @@ extracted (the matching `ignore*` flag is then a no-op).
 | EPUB | `<!-- -->` become `comment` nodes* (opt-in: `preserveComments`) | footnotes/endnotes | – | – | Y | – | Y |
 | TEX  | Y (`% Comment (Author, date):` lines); `% <!-- -->` lines become `comment` nodes* | footnotes/endnotes | Y (`fancyhdr`) | – | Y (from a project zip) | – | Y |
 
-Notes: comments land on `node.comments[]` (with `author`/`date`) except source-level comments, which
+Notes: comments land on `node.comments[]` (with `author`/`date`, and a PowerPoint reply's `parentId`) except source-level comments, which
 are *not* governed by `ignoreComments`: CSV's leading-`#` rows become top-level `comment` nodes, and
 Markdown/HTML `<!-- ... -->` (and LaTeX `% <!-- ... -->` lines) become `comment` nodes (block or
 inline) marked `metadata.sourceSyntax: 'html'` whose `text` is the raw comment body. The Markdown,

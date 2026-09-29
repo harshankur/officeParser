@@ -23,7 +23,7 @@
  */
 
 import { attachmentLookup } from '../utils/repeatUtils.js';
-import { ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, SlideMetadata, TextFormatting } from '../types.js';
+import { BreakMetadata, ChartMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, SlideMetadata, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
@@ -35,6 +35,40 @@ import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 import { diagramList, readDiagram } from '../utils/diagramUtils.js';
+import { alternateContentBranch, PRESENTATION_NAMESPACES } from '../utils/markupCompatibility.js';
+
+/** An element's own text (its text and CDATA children), not its descendants': a classic comment's `p:text` is a plain string. */
+const ownText = (element: Element): string => {
+    const parts: string[] = [];
+    for (let i = 0; i < element.childNodes.length; i++) {
+        const child = element.childNodes[i];
+        if (child.nodeType === 3 || child.nodeType === 4) parts.push(child.nodeValue || '');
+    }
+    return parts.join('');
+};
+
+/** A comment's paragraph of `children`, its text theirs (a line break a new line). */
+const commentParagraph = (children: OfficeContentNode[]): OfficeContentNode => ({
+    type: 'paragraph',
+    text: children.map(child => child.type === 'break' ? '\n' : child.text ?? '').join(''),
+    children,
+});
+
+/** A modern comment's DrawingML paragraph (`a:p`): its runs' and fields' text, and its line breaks. */
+const drawingParagraph = (paragraph: Element): OfficeContentNode => {
+    const children: OfficeContentNode[] = [];
+    for (let i = 0; i < paragraph.childNodes.length; i++) {
+        const child = paragraph.childNodes[i];
+        if (!isElement(child)) continue;
+        if (child.tagName === 'a:r' || child.tagName === 'a:fld') {
+            const text = getChildElements(child, 'a:t').map(t => t.textContent || '').join('');
+            if (text) children.push({ type: 'text', text });
+        } else if (child.tagName === 'a:br') {
+            children.push({ type: 'break', metadata: { breakType: 'textWrapping' } as BreakMetadata });
+        }
+    }
+    return commentParagraph(children);
+};
 
 /**
  * Parses a PowerPoint presentation (.pptx) and extracts slides and notes.
@@ -164,29 +198,53 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         if (comments) return comments;
         comments = [];
         const cFile = fileByName.get(target);
-        const commentOf = (authorId: string | null, text: string): void => {
+        /** A comment of `paragraphs`, with its author (and initials) by `authorId`, its date, and the comment it replies to. */
+        const commentOf = (paragraphs: OfficeContentNode[], authorId: string | null, info: { commentId?: string; date?: string; parentId?: string }): void => {
+            if (!paragraphs.length) return;
             const authorData = authorId !== null ? authorMap[authorId] : undefined;
-            if (text) comments!.push({
-                type: 'comment',
-                text,
-                children: [{ type: 'text', text, formatting: {} }],
-                metadata: authorData && authorData.author ? { author: authorData.author } : undefined
-            });
+            const metadata: CommentMetadata = {};
+            if (info.commentId) metadata.commentId = info.commentId;
+            if (authorData?.author) metadata.author = authorData.author;
+            if (authorData?.initials) metadata.initials = authorData.initials;
+            if (info.date) metadata.date = info.date;
+            if (info.parentId) metadata.parentId = info.parentId;
+            comments!.push({ type: 'comment', text: paragraphs.map(p => p.text).join(' '), children: paragraphs, metadata });
         };
         if (cFile) {
             const cXml = parseXmlString(cFile.content.toString(), { config });
+            // A comment as PowerPoint wrote it until 2019: its text is a plain string (`p:text`), a
+            // paragraph a line, which was never read (only DrawingML text, which it holds none of, was
+            // looked for). A reply (PowerPoint 2013 and later) names its comment in `p15:threadingInfo`.
+            const classicId = (authorId: string | null, idx: string | null) => authorId !== null && idx !== null ? `${authorId}-${idx}` : undefined;
             for (const cNode of getElementsByTagName(cXml, "p:cm")) {
-                commentOf(cNode.getAttribute("authorId"), getElementsByTagName(cNode, "a:t").map(t => t.textContent || '').join(''));
+                const textNode = getChildElements(cNode, "p:text")[0];
+                const paragraphs = textNode ? ownText(textNode).split(/\r\n?|\n/).filter(line => line.trim()).map(line => commentParagraph([{ type: 'text', text: line }])) : [];
+                const extensions = getChildElements(cNode, "p:extLst")[0];
+                let parent: Element | undefined;
+                for (const extension of extensions ? getChildElements(extensions, "p:ext") : []) {
+                    const threading = getChildElements(extension, "p15:threadingInfo")[0];
+                    parent = threading ? getChildElements(threading, "p15:parentCm")[0] : undefined;
+                    if (parent) break;
+                }
+                commentOf(paragraphs, cNode.getAttribute("authorId"), {
+                    commentId: classicId(cNode.getAttribute("authorId"), cNode.getAttribute("idx")),
+                    date: cNode.getAttribute("dt") || undefined,
+                    parentId: parent ? classicId(parent.getAttribute("authorId"), parent.getAttribute("idx")) : undefined,
+                });
             }
-            // A modern comment's own text, then each reply's, a comment each.
-            const modernText = (holder: Element): string => {
+            // A modern comment, then each of its replies: a comment each, a paragraph each of their
+            // text's paragraphs (joined, they ran together).
+            const modernParagraphs = (holder: Element): OfficeContentNode[] => {
                 const body = getChildElements(holder, "p188:txBody")[0];
-                return body ? getElementsByTagName(body, "a:t").map(t => t.textContent || '').join('') : '';
+                return body ? getChildElements(body, "a:p").map(drawingParagraph).filter(p => p.text?.trim()) : [];
             };
             for (const cNode of getElementsByTagName(cXml, "p188:cm")) {
-                commentOf(cNode.getAttribute("authorId"), modernText(cNode));
+                const commentId = cNode.getAttribute("id") || undefined;
+                commentOf(modernParagraphs(cNode), cNode.getAttribute("authorId"), { commentId, date: cNode.getAttribute("created") || undefined });
                 const replies = getChildElements(cNode, "p188:replyLst")[0];
-                for (const reply of replies ? getChildElements(replies, "p188:reply") : []) commentOf(reply.getAttribute("authorId"), modernText(reply));
+                for (const reply of replies ? getChildElements(replies, "p188:reply") : []) {
+                    commentOf(modernParagraphs(reply), reply.getAttribute("authorId"), { commentId: reply.getAttribute("id") || undefined, date: reply.getAttribute("created") || undefined, parentId: commentId });
+                }
             }
         }
         commentsByPart.set(target, comments);
@@ -806,10 +864,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                 // Recurse into the group element itself which holds the child shapes
                 appendAll(nodes, traverseSpTree(element, slideNumber, xmlContentString));
             }
-            // Case 5: Shapes written for newer readers (an equation, an SVG picture) beside a fallback
-            // for older ones: the first branch, read in place (the whole element was dropped).
+            // Case 5: Shapes written for newer readers (an equation, a 3D model, a chart of a newer kind)
+            // beside a fallback for older ones: the branch this reader understands (see
+            // alternateContentBranch), read in place (the whole element was dropped).
             else if (tag === "mc:AlternateContent") {
-                const branch = getDirectChildren(element, "mc:Choice")[0] ?? getDirectChildren(element, "mc:Fallback")[0];
+                const branch = alternateContentBranch(element, PRESENTATION_NAMESPACES);
                 if (branch) pushChildren(branch.childNodes);
             }
         }

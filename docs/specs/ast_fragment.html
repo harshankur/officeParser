@@ -208,7 +208,8 @@
     <ul>
         <li><strong><code>comment</code></strong>: An inline comment or annotation attached to a document node via
             <code>node.comments[]</code>. Carries <code>CommentMetadata</code>: <code>author</code>,
-            <code>initials</code>, <code>date</code>, <code>commentId</code>.</li>
+            <code>initials</code>, <code>date</code>, <code>commentId</code>, and for a reply in a PowerPoint
+            comment thread <code>parentId</code> (the <code>commentId</code> of the comment it replies to).</li>
         <li><strong><code>comment</code> with <code>sourceSyntax: 'html'</code></strong>: A source comment,
             <code>&lt;!-- ... --&gt;</code> from Markdown (always) or HTML and EPUB (under <code>htmlParserConfig.preserveComments</code>):
             the author's hidden note, as a block node or inline in a run. <code>text</code> holds the raw body verbatim; it has no
