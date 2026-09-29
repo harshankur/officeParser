@@ -125,11 +125,49 @@ export const readMht = (buffer: Buffer, charge: (count: number) => void = () => 
     return parts;
 };
 
-/** A part's text in its charset: UTF-8 unless it names another this runtime can decode. */
-export const mhtPartText = (part: MhtPart): string => {
+/** A decoder for the encoding `label` names, or none when this runtime cannot decode it. */
+const decoderFor = (label: string): TextDecoder | undefined => {
     try {
-        return new TextDecoder(part.charset || 'utf-8').decode(part.body);
+        return new TextDecoder(label.trim());
     } catch {
-        return new TextDecoder('utf-8').decode(part.body);
+        return undefined;
     }
+};
+
+/**
+ * The encoding an HTML page's `<meta>` names (`charset`, or `http-equiv` Content-Type's `charset`) in its
+ * first 1,024 bytes, where a browser looks for it; UTF-16 there is UTF-8, as a browser takes it.
+ */
+const metaDecoder = (bytes: Uint8Array): TextDecoder | undefined => {
+    const head = Buffer.from(bytes.buffer, bytes.byteOffset, Math.min(bytes.length, 1024)).toString('latin1');
+    const label = /<meta\b[^>]*?\bcharset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head)?.[1];
+    const decoder = label ? decoderFor(label) : undefined;
+    return decoder?.encoding.startsWith('utf-16') ? new TextDecoder('utf-8') : decoder;
+};
+
+/**
+ * Text (an HTML page, or plain text when `html` is false) in its encoding: the one its byte order mark
+ * names, else the one an HTML page's `<meta>` names, else UTF-8, or Windows-1252 when it is not valid
+ * UTF-8. Decoding every chunk as UTF-8 garbled a UTF-16 page and a Windows-1252 one.
+ */
+export const decodeMarkup = (bytes: Uint8Array, html: boolean): string => {
+    if (bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) return new TextDecoder('utf-8').decode(bytes);
+    if (bytes[0] === 0xFF && bytes[1] === 0xFE) return new TextDecoder('utf-16le').decode(bytes);
+    if (bytes[0] === 0xFE && bytes[1] === 0xFF) return new TextDecoder('utf-16be').decode(bytes);
+    const declared = html ? metaDecoder(bytes) : undefined;
+    if (declared) return declared.decode(bytes);
+    try {
+        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+        return (decoderFor('windows-1252') ?? new TextDecoder('utf-8')).decode(bytes);
+    }
+};
+
+/**
+ * A part's text in its charset: the one its Content-Type names if this runtime can decode it, else as
+ * {@link decodeMarkup} finds it (an HTML part by its `<meta>`).
+ */
+export const mhtPartText = (part: MhtPart): string => {
+    const named = part.charset ? decoderFor(part.charset) : undefined;
+    return named ? named.decode(part.body) : decodeMarkup(part.body, part.contentType === 'text/html');
 };

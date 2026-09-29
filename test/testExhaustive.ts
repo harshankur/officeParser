@@ -3918,6 +3918,122 @@ async function testImageLinks(): Promise<void> {
     console.log('  Image links: All assertions passed ✓');
 }
 
+/** Builders and readers of small OOXML packages, for the OOXML review tests below. */
+function ooxmlHelpers() {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"';
+    const r = (text: string) => `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>`;
+    const p = (text: string) => `<w:p>${r(text)}</w:p>`;
+    const relsOf = (rels: string) => `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`;
+    const rel = (id: string, type: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/>`;
+    const part = (root: string, inner: string) => `<?xml version="1.0"?><w:${root} ${W}>${inner}</w:${root}>`;
+    const docx = (body: string, parts: Record<string, string | Uint8Array> = {}) => Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+        'word/document.xml': strToU8(part('document', `<w:body>${body}</w:body>`)),
+        ...Object.fromEntries(Object.entries(parts).map(([name, value]) => [name, typeof value === 'string' ? strToU8(value) : value])),
+    }));
+    const parse = async (bytes: Buffer | Uint8Array, extra: object = {}, fileType = 'docx') => {
+        const issues: any[] = [];
+        const ast = await OfficeParser.parseOffice(Buffer.from(bytes), { fileType, onWarning: (issue: any) => issues.push(issue), ...extra } as any);
+        return { ast, issues };
+    };
+    const texts = (nodes: OfficeContentNode[]) => nodes.map(n => [n.type, n.text]);
+    return { W, r, p, relsOf, rel, part, docx, parse, texts };
+}
+
+/**
+ * DOCX reading, from the OOXML review before 8.1.0: chunks that cannot be read, chunks in notes, comments
+ * and headers (each part's ids its own relationships), text boxes and SmartArt read as blocks of their own,
+ * and alternate content read from the branch the reader understands.
+ */
+async function testDocxReadingReview(): Promise<void> {
+    const { W, r, p, relsOf, rel, part, docx, parse, texts } = ooxmlHelpers();
+    // A chunk that cannot be read is not read, with a warning, and the document is; the document's
+    // budgets still hold for its chunks.
+    const chunked = (name: string, content: string | Uint8Array) => docx(p('MAIN-TEXT') + '<w:altChunk r:id="c1"/>' + p('MAIN-END'), { 'word/_rels/document.xml.rels': relsOf(rel('c1', 'aFChunk', name)), [`word/${name}`]: content });
+    for (const [label, name, content, code] of [
+        ['a DOCX chunk that is not a ZIP', 'chunk.docx', 'not a zip', 'ZIP_NO_ENTRIES_FOUND'],
+        ['a DOCX chunk without a document part', 'chunk.docx', zipSync({ 'foo.txt': strToU8('x') }), 'REQUIRED_PART_MISSING'],
+        ['an RTF chunk nested 300 deep', 'chunk.rtf', '{\\rtf1 ' + '{'.repeat(300) + 'x' + '}'.repeat(300) + '}', 'MAX_NESTING_DEPTH_EXCEEDED'],
+    ] as const) {
+        const { ast, issues } = await parse(chunked(name, content));
+        assert.deepStrictEqual(ast.content.map(n => n.text), ['MAIN-TEXT', 'MAIN-END'], `DOCX: ${label} leaves the document read`);
+        assert.ok(issues.length === 1 && issues[0].code === 'ALT_CHUNK_NOT_READ' && issues[0].message.includes(code), `DOCX: ${label} is one warning naming ${code} (${JSON.stringify(issues.map(i => [i.type, i.code, i.message]))})`);
+    }
+    let overBudget: any;
+    try { await parse(chunked('chunk.txt', 'a\n'.repeat(2000)), { decompressionLimits: { maxXmlElements: 1000 } }); } catch (e) { overBudget = e; }
+    assert.strictEqual(overBudget?.officeIssue?.code, 'XML_ELEMENT_LIMIT_EXCEEDED', 'DOCX: a chunk past the element budget still fails the document');
+
+    // Chunks in notes, comments and headers are read, and each part's ids name its own relationships
+    // (its links and pictures too); an embedded object is not inflated; an HTML chunk keeps its encoding.
+    const parts = await parse(docx(`<w:p>${r('Body')}<w:r><w:footnoteReference w:id="1"/></w:r><w:r><w:commentReference w:id="4"/></w:r></w:p><w:altChunk r:id="c1"/><w:altChunk r:id="c2"/>`, {
+        'word/_rels/document.xml.rels': relsOf(rel('rId1', 'hyperlink', 'https://document.example/') + rel('c1', 'aFChunk', 'utf16.htm') + rel('c2', 'aFChunk', 'cp1252.htm')),
+        'word/utf16.htm': Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('<p>UTF-16 café</p>', 'utf16le')]),
+        'word/cp1252.htm': Buffer.from('<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252"></head><body><p>Windows-1252 caf\xe9</p></body></html>', 'latin1'),
+        'word/footnotes.xml': part('footnotes', `<w:footnote w:id="1"><w:p>${r('FN ')}<w:hyperlink r:id="rId1">${r('link')}</w:hyperlink></w:p><w:altChunk r:id="c1"/></w:footnote>`),
+        'word/_rels/footnotes.xml.rels': relsOf(rel('rId1', 'hyperlink', 'https://footnote.example/') + rel('c1', 'aFChunk', 'footnote.txt')),
+        'word/footnote.txt': 'CHUNK IN FOOTNOTE',
+        'word/comments.xml': part('comments', `<w:comment w:id="4" w:author="A"><w:p>${r('CM')}</w:p><w:altChunk r:id="c1"/></w:comment>`),
+        'word/_rels/comments.xml.rels': relsOf(rel('c1', 'aFChunk', 'comment.txt')),
+        'word/comment.txt': 'CHUNK IN COMMENT',
+        'word/header1.xml': part('hdr', `<w:p><w:r><w:drawing><wp:inline><wp:docPr id="1" name="p" descr="logo"/><a:graphic><a:graphicData><a:blip r:embed="rId1"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p><w:altChunk r:id="c1"/>`),
+        'word/_rels/header1.xml.rels': relsOf(rel('rId1', 'image', 'media/logo.png') + rel('c1', 'aFChunk', 'header.txt')),
+        'word/header.txt': 'CHUNK IN HEADER',
+        'word/media/logo.png': new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    }), { extractAttachments: true });
+    const bodyRefs = parts.ast.content[0].children!;
+    const footnote = bodyRefs.flatMap(n => n.notes ?? [])[0];
+    const comment = bodyRefs.flatMap(n => n.comments ?? [])[0];
+    const plain = (node: OfficeContentNode): string => node.text ?? (node.children ?? []).map(plain).join('');
+    assert.deepStrictEqual(parts.ast.content.slice(1).map(plain), ['UTF-16 café', 'Windows-1252 café'], 'DOCX: HTML chunks are read in the encoding their byte order mark or <meta> names');
+    assert.deepStrictEqual(texts(footnote.children!), [['paragraph', 'FN link'], ['paragraph', 'CHUNK IN FOOTNOTE']], 'DOCX: a chunk in a footnote is read');
+    assert.strictEqual((footnote.children![0].children![1].metadata as any)?.link, 'https://footnote.example/', 'DOCX: a footnote\'s link is its part\'s relationship, not the document\'s');
+    assert.deepStrictEqual(texts(comment.children!), [['paragraph', 'CM'], ['paragraph', 'CHUNK IN COMMENT']], 'DOCX: a chunk in a comment is read');
+    const header = parts.ast.auxiliary!.headers!;
+    assert.deepStrictEqual([(header[0].children![0].metadata as any)?.attachmentName, header[1].text], ['logo.png', 'CHUNK IN HEADER'], 'DOCX: a header\'s picture and chunk are read through its own relationships');
+    assert.deepStrictEqual(parts.issues, [], 'DOCX: chunks in every part read without a warning');
+    const embeddedObject = zipSync({ 'word/document.xml': strToU8('<w:document/>'), 'big.bin': new Uint8Array(3_000_000) }, { level: 0 });
+    const embedded = await parse(docx(p('MAIN'), { 'word/embeddings/Microsoft_Word_Document.docx': embeddedObject }), { decompressionLimits: { maxUncompressedBytes: 2_000_000 } });
+    assert.deepStrictEqual(embedded.ast.content.map(n => n.text), ['MAIN'], 'DOCX: an embedded object no chunk names is not inflated against the limit');
+
+    // A text box's blocks follow the paragraph drawing it: paragraphs apart, its list and table kept.
+    // Alternate content is read from the branch this reader understands: a text box's Choice (the
+    // Fallback here says so if taken), an emoji's Fallback (its Choice is `w16se`).
+    const box = (inner: string) => `<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor><wp:docPr id="2" name="Text Box"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:txbx><w:txbxContent>${inner}</w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape><v:textbox><w:txbxContent>${p('FALLBACK')}</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r>`;
+    const item = (text: string) => `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>${r(text)}</w:p>`;
+    const boxed = await parse(docx(`<w:p>${r('Intro text.')}${box(p('Box title') + p('Box line two') + item('bullet one') + item('bullet two') + `<w:tbl><w:tr><w:tc>${p('Cell')}</w:tc></w:tr></w:tbl>`)}</w:p>${p('After')}`, {
+        'word/numbering.xml': part('numbering', '<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>'),
+    }), { extractAttachments: true });
+    assert.deepStrictEqual(texts(boxed.ast.content), [['paragraph', 'Intro text.'], ['paragraph', 'Box title'], ['paragraph', 'Box line two'], ['list', 'bullet one'], ['list', 'bullet two'], ['table', undefined], ['paragraph', 'After']], 'DOCX: a text box\'s paragraphs, list and table follow the paragraph drawing it');
+    assert.ok(!collectAllNodes(boxed.ast).some(n => n.type === 'image'), 'DOCX: a text box\'s drawing is no picture');
+    for (const format of ['text', 'md', 'html', 'rtf', 'tex'] as const) {
+        const out = (await boxed.ast.to(format)).value as string;
+        assert.ok(out.includes('Box title') && out.includes('bullet two') && !/text\.Box|titleBox|twobullet|onebullet/.test(out), `${format}: a text box's paragraphs keep their word boundaries`);
+    }
+    for (const format of ['docx', 'odt'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await boxed.ast.to(format)).value as Uint8Array), { fileType: format } as any);
+        assert.deepStrictEqual(back.content.map(n => n.text).filter(Boolean), ['Intro text.', 'Box title', 'Box line two', 'bullet one', 'bullet two', 'After'], `${format}: a text box's paragraphs are written apart`);
+    }
+    const emoji = await parse(docx(`<w:p>${r('I love ')}<w:r><mc:AlternateContent xmlns:w16se="http://schemas.microsoft.com/office/word/2015/wordml/symex"><mc:Choice Requires="w16se"><w16se:symEx w16se:font="Segoe UI Emoji" w16se:char="1F600"/></mc:Choice><mc:Fallback><w:t>😀</w:t></mc:Fallback></mc:AlternateContent></w:r>${r(' emoji')}</w:p>`));
+    assert.strictEqual(emoji.ast.content[0].text, 'I love 😀 emoji', 'DOCX: an emoji in alternate content is read from its Fallback');
+
+    // SmartArt is a list after the paragraph drawing it: an item a line in every writer, and none
+    // before the text after it.
+    const point = (id: string, text: string) => `<dgm:pt modelId="${id}"><dgm:t><a:p><a:r><a:t>${text}</a:t></a:r></a:p></dgm:t></dgm:pt>`;
+    const smartData = `<?xml version="1.0"?><dgm:dataModel ${W}><dgm:ptLst><dgm:pt modelId="0" type="doc"/>${point('1', 'Plan')}${point('2', 'Build')}${point('3', 'Ship')}</dgm:ptLst><dgm:cxnLst>${['1', '2', '3'].map((id, i) => `<dgm:cxn modelId="c${id}" srcId="0" destId="${id}" srcOrd="${i}"/>`).join('')}</dgm:cxnLst></dgm:dataModel>`;
+    const smart = await parse(docx(`<w:p>${r('See:')}<w:r><w:drawing><wp:inline><wp:docPr id="3" name="Diagram"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds r:dm="rId9"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>${p('After')}`, {
+        'word/_rels/document.xml.rels': relsOf(rel('rId9', 'diagramData', 'diagrams/data1.xml')),
+        'word/diagrams/data1.xml': smartData,
+    }), { extractAttachments: true });
+    assert.deepStrictEqual(texts(smart.ast.content), [['paragraph', 'See:'], ['list', 'Plan'], ['list', 'Build'], ['list', 'Ship'], ['paragraph', 'After']], 'DOCX: SmartArt is a list after its paragraph');
+    assert.ok(!collectAllNodes(smart.ast).some(n => n.type === 'image'), 'DOCX: a SmartArt drawing is no picture');
+    for (const format of ['docx', 'odt', 'rtf', 'md', 'html'] as const) {
+        const back = await OfficeParser.parseOffice(Buffer.from((await smart.ast.to(format)).value as any), { fileType: format } as any);
+        const lines = ((await back.to('text')).value as string).split('\n').map(line => line.replace(/^\W+/, '')).filter(Boolean);
+        assert.deepStrictEqual(lines.slice(-4), ['Plan', 'Build', 'Ship', 'After'], `${format}: SmartArt items are lines of their own`);
+    }
+    console.log('  DOCX reading review: All assertions passed ✓');
+}
+
 async function runTests(): Promise<void> {
     console.log('Starting exhaustive officeParser test suite...');
     let passed = 0;
@@ -3928,6 +4044,7 @@ async function runTests(): Promise<void> {
         ['Markdown round trips', testMarkdownRoundTrips],
         ['Second review', testSecondReview],
         ['Image links', testImageLinks],
+        ['DOCX reading review', testDocxReadingReview],
         ['HTML', testHtml],
         ['SourceComments', testSourceComments],
         ['CSV', testCsv],

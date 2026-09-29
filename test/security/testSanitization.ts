@@ -3218,7 +3218,7 @@ async function parserHardeningTests() {
     try { longMarkdown = (await OfficeGenerator.generate(longParagraph, 'md', { onWarning: () => {} } as any)).value as string; } catch (e) { longError = e; }
     check('md: a paragraph of 200,000 runs is written', !longError && longMarkdown.length >= 200000, `${longError?.officeIssue?.code ?? longError}`);
     const longTextBox = await parseQuiet(docxOf(`<w:p><w:r><w:drawing><w:txbxContent><w:p>${'<w:r><w:t>x</w:t></w:r>'.repeat(130000)}</w:p></w:txbxContent></w:drawing></w:r></w:p>`), 'docx');
-    check('docx: a text box of 130,000 runs is read', !longTextBox.error && (longTextBox.ast?.content[0] as any)?.text?.length === 130000, longTextBox.error);
+    check('docx: a text box of 130,000 runs is read, after the paragraph drawing it', !longTextBox.error && (longTextBox.ast?.content[1] as any)?.text?.length === 130000, longTextBox.error);
 
     // Content Word wraps (content controls, custom XML, text boxes in runs) is read, not dropped.
     const wrapped = await parseQuiet(docxOf(
@@ -3231,7 +3231,7 @@ async function parserHardeningTests() {
     const wrappedJson = JSON.stringify(wrapped.ast ?? {});
     const missing = ['BODYCONTROL', 'CUSTOMXML', 'ROWCONTROL', 'CELLCUSTOM', 'RUNTEXTBOX', 'BOXTABLE', 'HEADERCONTROL'].filter(marker => !wrappedJson.includes(marker));
     check('docx: content in content controls, custom XML and text boxes in runs is read', !wrapped.error && missing.length === 0, `${wrapped.error} missing ${missing}`);
-    const textBoxOnce = (JSON.stringify(wrapped.ast?.content ?? []).match(/"text":"RUNTEXTBOX"/g) ?? []).length;
+    const textBoxOnce = (wrapped.ast?.content ?? []).filter((n: any) => n.text === 'RUNTEXTBOX').length;
     check('docx: a text box in alternate content is read once', textBoxOnce === 1, `${textBoxOnce}`);
     const boxedPicture = await parseQuiet(docxOf(
         '<w:p><w:r><w:drawing><w:txbxContent><w:p><w:r><w:drawing><a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:embed="rId9"/></w:drawing></w:r></w:p></w:txbxContent></w:drawing></w:r></w:p>',
@@ -3277,11 +3277,11 @@ async function parserHardeningTests() {
         'xl/drawings/_rels/drawing1.xml.rels': mediaRels + '</Relationships>',
         ...Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`xl/media/${i}`, ''])),
     }), 'xlsx', { extractAttachments: true }));
-    // Text boxes nested in text boxes add their content to the outer paragraph once.
+    // Text boxes nested in text boxes are read once each, after the paragraph drawing them.
     const boxRuns = '<w:t>x</w:t>'.repeat(400);
     await timed('docx: text boxes nested 1,000 deep, each of 400 runs, parse', () => parseQuiet(docxOf(`${`<w:p><w:r>${boxRuns}</w:r><w:r><w:pict><w:txbxContent>`.repeat(1000)}${'</w:txbxContent></w:pict></w:r></w:p>'.repeat(1000)}`), 'docx'));
     const boxedNote = await parseQuiet(docxOf('<w:p><w:r><w:t>outer</w:t></w:r><w:r><w:pict><w:txbxContent><w:p><w:bookmarkStart w:id="1" w:name="inbox"/><w:r><w:t>inner</w:t></w:r></w:p></w:txbxContent></w:pict></w:r></w:p>'), 'docx');
-    check('docx: a bookmark in a text box reaches the paragraph around it', !boxedNote.error && JSON.stringify(boxedNote.ast?.content[0]?.metadata ?? {}).includes('inbox'), JSON.stringify(boxedNote.ast?.content[0]?.metadata));
+    check('docx: a bookmark in a text box stays on the text box\'s paragraph', !boxedNote.error && JSON.stringify(boxedNote.ast?.content[1]?.metadata ?? {}).includes('inbox') && !JSON.stringify(boxedNote.ast?.content[0]?.metadata ?? {}).includes('inbox'), JSON.stringify(boxedNote.ast?.content.map(n => n.metadata)));
     // XLSX: an inline string keeps every rich run (not its phonetic reading), and a boolean shows as TRUE or FALSE.
     const inlineRuns = await parseQuiet(xlsxOf({ 'xl/worksheets/sheet1.xml': '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><r><t>ONE </t></r><r><t>TWO</t></r><rPh sb="0" eb="1"><t>READING</t></rPh></is></c><c r="B1" t="b"><v>1</v></c><c r="C1" t="b"><v>0</v></c></row></sheetData></worksheet>' }), 'xlsx');
     const inlineCells = cellsOf(inlineRuns.ast).map((c: any) => c.text);
@@ -3316,6 +3316,22 @@ async function parserHardeningTests() {
     const innerDocx = Buffer.from(zipSync({ '[Content_Types].xml': enc('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'), 'word/document.xml': enc(`<?xml version="1.0"?><w:document ${W}><w:body><w:p><w:r><w:t>${'x'.repeat(3_000_000)}</w:t></w:r></w:p></w:body></w:document>`) }));
     const nestedBomb = await parseQuiet(docxOf('<w:altChunk r:id="c1"/>', { 'word/_rels/document.xml.rels': chunkRels(chunkRel('c1', 'inner.docx')), 'word/inner.docx': new Uint8Array(innerDocx) }), 'docx', { decompressionLimits: { maxUncompressedBytes: 2_000_000 } });
     check('docx: a DOCX chunk inflating past what the document left is refused', /size|limit/i.test(nestedBomb.error), nestedBomb.error || 'parsed');
+    // A chunk that cannot be read is skipped with a warning, never as a way past a budget: an unreadable
+    // DOCX chunk's reported error is not reported, and a DOCX chunk past the size limit still fails.
+    const unreadable = await warned(docxOf('<w:altChunk r:id="c1"/><w:p><w:r><w:t>after</w:t></w:r></w:p>', { 'word/_rels/document.xml.rels': chunkRels(chunkRel('c1', 'inner.docx')), 'word/inner.docx': 'not a zip' }), 'docx');
+    check('docx: an unreadable chunk is one warning, and the document is read', !unreadable.error && JSON.stringify(unreadable.codes) === '["ALT_CHUNK_NOT_READ"]' && unreadable.ast?.content[0]?.text === 'after', `${unreadable.error} ${unreadable.codes}`);
+    // Only the parts an aFChunk relationship names are inflated as chunks, not every part of a chunk's kind.
+    const ignoredEmbedding = await parseQuiet(docxOf('<w:p><w:r><w:t>main</w:t></w:r></w:p>', { 'word/embeddings/object.docx': new Uint8Array(innerDocx) }), 'docx', { decompressionLimits: { maxUncompressedBytes: 2_000_000 } });
+    check('docx: an embedded DOCX no chunk names is not inflated', !ignoredEmbedding.error, ignoredEmbedding.error);
+    // Fields, bookmarks and note references a paragraph holds by the hundred thousand are read in one pass.
+    const noteParts = { 'word/footnotes.xml': `<?xml version="1.0"?><w:footnotes ${W}><w:footnote w:id="1"><w:p><w:r><w:t>n</w:t></w:r></w:p></w:footnote></w:footnotes>` };
+    await timed('docx: 100,000 fields begun and never ended before 100,000 runs are read', () => parseQuiet(docxOf(`<w:p>${'<w:r><w:fldChar w:fldCharType="begin"/><w:instrText> NOTEREF a \\f </w:instrText></w:r>'.repeat(100000)}${'<w:r><w:t>x</w:t></w:r>'.repeat(100000)}</w:p>`, noteParts), 'docx'));
+    await timed('docx: 100,000 bookmarks left open before 50,000 note references are read', () => parseQuiet(docxOf(`<w:p>${Array.from({ length: 100000 }, (_, i) => `<w:bookmarkStart w:id="${i}" w:name="b${i}"/>`).join('')}${'<w:r><w:footnoteReference w:id="1"/></w:r>'.repeat(50000)}</w:p>`, noteParts), 'docx'));
+    await timed('docx: 100,000 NOTEREF fields to one note are read', () => parseQuiet(docxOf(`<w:p><w:bookmarkStart w:id="0" w:name="a"/><w:r><w:footnoteReference w:id="1"/></w:r><w:bookmarkEnd w:id="0"/>${'<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> NOTEREF a \\f \\h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>'.repeat(100000)}</w:p>`, noteParts), 'docx'));
+    // Alternate content nested deep, in a run and between blocks, and a Choice requiring 100,000 namespaces.
+    await timed('docx: alternate content nested 20,000 deep in a run is read', () => parseQuiet(docxOf(`<w:p><w:r>${'<mc:AlternateContent><mc:Choice Requires="w">'.repeat(20000)}<w:t>x</w:t>${'</mc:Choice></mc:AlternateContent>'.repeat(20000)}</w:r></w:p>`), 'docx'));
+    await timed('docx: alternate content nested 20,000 deep between blocks is read', () => parseQuiet(docxOf(`${'<mc:AlternateContent><mc:Choice Requires="w">'.repeat(20000)}<w:p><w:r><w:t>x</w:t></w:r></w:p>${'</mc:Choice></mc:AlternateContent>'.repeat(20000)}`), 'docx'));
+    await timed('docx: 5,000 choices each requiring 1,000 namespaces are read', () => parseQuiet(docxOf(`<w:p><w:r>${`<mc:AlternateContent><mc:Choice Requires="${Array.from({ length: 1000 }, (_, i) => `p${i}`).join(' ')}"><w:t>c</w:t></mc:Choice><mc:Fallback><w:t>f</w:t></mc:Fallback></mc:AlternateContent>`.repeat(5000)}</w:r></w:p>`), 'docx'));
     // XLSX: a rich shared string's run formatting counts toward the repeated-content budget per cell.
     const sharedFontRuns = await parseQuiet(xlsxOf({
         'xl/sharedStrings.xml': `<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><r><rPr><rFont val="${'F'.repeat(65536)}"/></rPr><t>a</t></r></si></sst>`,
@@ -3390,7 +3406,7 @@ async function parserHardeningTests() {
         'word/_rels/document.xml.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="x" Target="diagrams/data1.xml"/></Relationships>',
         'word/diagrams/data1.xml': dgmData(dgmPoint('0', '', 'doc') + dgmPoint('1', 'ALPHA'), '<dgm:cxn modelId="a" srcId="0" destId="1"/>'),
     }), 'docx');
-    check('docx: SmartArt text joins its paragraph', !smartArtDocx.error && smartArtDocx.ast?.content[0]?.text === 'Intro\nALPHA', JSON.stringify(smartArtDocx.ast?.content[0]?.text));
+    check('docx: SmartArt text is a list after its paragraph', !smartArtDocx.error && JSON.stringify(smartArtDocx.ast?.content.map(n => [n.type, n.text])) === JSON.stringify([['paragraph', 'Intro'], ['list', 'ALPHA']]), JSON.stringify(smartArtDocx.ast?.content.map(n => [n.type, n.text])));
     // PPTX: modern comments (PowerPoint 365) and their replies are read with their authors.
     const p188Ns = 'xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
     const modernComments = await parseQuiet(pptxOf({

@@ -731,7 +731,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `REPEATED_CONTENT_LIMIT_EXCEEDED` | parse | The document repeated `decompressionLimits.maxRepeatedContent` (plus 16 characters per byte of the document) of content by reference (ODF repeated cells and chart values, XLSX shared strings, style values, link targets, chart text per frame, LaTeX titles per reference); later repeats were not made, shortened or went without the value. |
 | `PDF_SEPARATE_PROCESS_UNAVAILABLE` | parse | pdf.js could not start in a separate process (Node), so it runs in the host; a hostile PDF can then exhaust its memory. |
 | `PDF_CONTENT_LIMIT_EXCEEDED` | parse | A PDF produced more text items or operators than `pdfParserConfig.maxTextItems` / `maxOperators` allow (plus an allowance per byte); the rest of it was not read. |
-| `ALT_CHUNK_NOT_READ` | parse | A DOCX alternative-format chunk (`w:altChunk`) was not read: its part is missing, is of a format other than HTML, MHT, RTF, plain text or DOCX, is a DOCX inside a DOCX chunk, or sits in a header or footer. Saving the document again in Word merges chunks into it. |
+| `ALT_CHUNK_NOT_READ` | parse | A DOCX alternative-format chunk (`w:altChunk`) was not read: its part is missing, is of a format other than HTML, MHT, RTF, plain text or DOCX, is a DOCX inside a DOCX chunk, or could not be read (not a ZIP, no document part, nested too deep). The rest of the document is read; a chunk past the document's limits (`maxXmlElements`, `maxUncompressedBytes`) still fails the parse. Saving the document again in Word merges chunks into it. |
 | `RAW_CONTENT_LIMIT_EXCEEDED` | parse | With `includeRawContent`, the document's nodes reached `decompressionLimits.maxRawContentLength` of raw content; the remaining nodes carry none. |
 | `IMAGE_EXTRACTION_FAILED` / `IMAGE_PROCESSING_FAILED` / `ATTACHMENT_EXTRACTION_FAILED` | parse | An image/attachment could not be extracted or decoded; it was skipped or degraded. |
 | `ANNOTATION_EXTRACTION_FAILED` / `CHART_DATA_EXTRACTION_FAILED` | parse | A PDF annotation / a chart's data could not be read. |
@@ -796,9 +796,10 @@ stays hidden). `ignoreNotes` /
 column and are a no-op wherever it shows `–`. OCR (`ocr: true`) recognizes text from any extracted
 image and therefore also needs `extractAttachments: true`.
 
-Content kept in parts of its own is read where it stands: SmartArt text (PPTX as a nested bulleted
-list, DOCX a line per item in its paragraph), DOCX content controls, text boxes and alternative-format
-chunks (`w:altChunk`: HTML, MHT, RTF, plain text or a DOCX), and RTF shape text boxes. Text a tracked
+Content kept in parts of its own is read where it stands: SmartArt text (as a nested bulleted list, in
+DOCX after the paragraph drawing it), DOCX content controls, text boxes (their paragraphs, lists and
+tables, after the paragraph drawing them) and alternative-format chunks (`w:altChunk`: HTML, MHT, RTF,
+plain text or a DOCX, in the body, headers, footers, notes and comments), and RTF shape text boxes. Text a tracked
 change deleted or moved away (DOCX, ODT) is not read; insertions are.
 
 ---
