@@ -750,6 +750,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `IMAGE_NOT_INLINED` | generate | An image over `maxInlineImageBytes` was referenced by name instead of inlined (Markdown / fragment HTML). |
 | `IMAGES_NOT_BUNDLED` | generate | LaTeX output references image files the `.tex` does not carry (with `texConfig.embedImages: false`, an image other than a readable PNG or JPEG, or one past the decoding limits); the message names them. Ship them alongside, or set `texConfig.bundle: true`. It also names images the source referred to only by a relative path, with no image data (a `.tex` without its project, an HTML page's `<img src="pics/a.png">`): supply those at that path yourself, since not even a bundle can contain them. |
 | `MATH_WRITTEN_AS_TEXT` | generate | A math expression used an unsafe LaTeX command (file access, shell, redefinition) or was malformed, so LaTeX output shows it as literal text instead of typesetting it. |
+| `CITATIONS_NOT_RESOLVED` | generate | LaTeX output cites keys (`\cite{key}`) that have no entry in a bibliography it holds, so LaTeX prints `[?]` for them until one is added (a `\bibliography{file}` with a `.bib` file, or a `thebibliography` list); the message names the keys. |
 | `PDF_GENERATION_FAILED` | generate | PDF generation failed (e.g. Puppeteer missing for `engine: 'html'`). |
 | `INVALID_STYLE_MAPPING` / `INVALID_STYLE_MAP_TAG` | generate | A `styleMap` entry/tag was invalid and ignored. |
 | `TEMPLATE_UNSUPPORTED_FORMAT` / `TEMPLATE_FIELD_MISSING` | template | The template format is unsupported / a `{{field}}` had no value under `onMissing: 'error'`. |
@@ -1105,8 +1106,9 @@ LaTeX is supported in both directions, zero extra dependencies, in Node and the 
 
 **Parsing.** A `.tex` file (or `.latex`/`.ltx`) parses into the same AST as every other format, so a
 paper converts to DOCX, ODT, HTML, Markdown, EPUB or chunks like any Word document would. So does a
-**project zip**, such as Overleaf's "Download source": the main file (`main.tex`, else the top-level
-`.tex` with a `\documentclass`) is read, and its `\input`/`\include`/`\subfile` files and
+**project zip**, such as Overleaf's "Download source": the main file (a `.tex` no other file includes
+and not a `subfiles`/`standalone` part: the shallowest `main.tex`, else the shallowest with a
+`\documentclass`) is read, and its `\input`/`\include`/`\subfile` files and
 `\includegraphics` images are taken from the archive (respecting `\graphicspath`). Nothing is ever
 read from the filesystem, and no path can leave the project.
 
@@ -1121,20 +1123,20 @@ const project = await OfficeParser.parseOffice('overleaf-project.zip', { extract
 | LaTeX | AST |
 |---|---|
 | `\section` ... `\subparagraph`, `\chapter`, `\part` | `heading` nodes, `\label`s as heading ids |
-| `\textbf`, `\emph`, `\underline`, `\sout`, `\texttt`, `\textsc`, `\textcolor`, `\hl`, `\large`, `{\bfseries ...}`, accents, ligatures | formatted text runs |
+| `\textbf`, `\emph`, `\underline`, `\sout`, `\texttt`, `\textcolor`, `\hl`, `\large`, `{\bfseries ...}`, `\MakeUppercase`, accents, ligatures | formatted text runs (small caps are not a run format: `\textsc` keeps its text) |
 | `itemize`, `enumerate` (nested, `\setcounter`), `description`, `\item[$\square$]` | lists, definition lists, task items |
 | `tabular`, `tabularx`, `longtable`, `\multicolumn`, `\multirow`, `\cellcolor`, booktabs | `table` with `colSpan`/`rowSpan`, alignment and cell colours |
 | `figure`/`table` floats, `\caption`, `\includegraphics` | images (bytes from a project zip or a `filecontents` block; a PDF that is only a picture, as the generator carries images, becomes that JPEG or PNG) and captions |
 | `filecontents`, `filecontents*` | the file it writes, as compiling does (a file already there is kept unless `overwrite`), for `\input` and `\includegraphics` to read |
-| `$...$`, `\[...\]`, `equation`, `align`, `gather` | math, as LaTeX, with your macros expanded |
+| `$...$`, `\[...\]`, `equation`, `align`, `gather` | math, as LaTeX, with your macros (and `\DeclareMathOperator`, `\DeclarePairedDelimiter`) expanded and comments dropped |
 | `\footnote`, `\endnote` | `note` nodes |
-| `\href`, `\url`, `\ref`, `\eqref`, `\nameref`, `\hyperref` | links; references resolve to section, table, figure and equation numbers |
-| `\cite` and `thebibliography` | citations and the bibliography list |
+| `\href`, `\url`, `\ref`, `\eqref`, `\nameref`, `\autoref`, `\cref`, `\hyperref` | links; references resolve to section, table, figure and equation numbers (`\autoref` and `\cref` with their names: "section 1") |
+| `\cite`, `thebibliography`, `\bibliography`/`\printbibliography` | citations and the bibliography list: from a project's `.bib` (its cited entries), or its `.bbl` when it ships one; without the file, the cited keys, and the file is reported |
 | `verbatim`, `lstlisting`, `minted`, `\verb` | `code` nodes with their language |
 | `quote`, `quotation`, `verse` | quotes |
 | `% <!-- ... -->` lines | a source `comment` node (the form the generator writes a Markdown/HTML `<!-- -->` in); other `%` comments are dropped |
 | `fancyhdr` headers and footers | `ast.auxiliary` |
-| `\maketitle`, beamer `\titlepage` | a title block where it stands: a `heading` styled `Title`, then `Author` and `Date` lines (beamer adds `Subtitle`), `\thanks` as footnotes |
+| `\maketitle`, beamer `\titlepage` | a title block where it stands: a `heading` styled `Title`, then `Author`, `Institute` and `Date` lines (beamer adds `Subtitle`), `\thanks` as footnotes |
 | `\title`, `\author`, `\date`, `\hypersetup{pdf...}` | `ast.metadata` (`pdftitle`/`pdfauthor` win over `\title`/`\author`) |
 | `beamer` frames, `\framesubtitle`, `\note`, overlays | `slide` nodes with speaker notes |
 | `\newcommand`, `\renewcommand`, `\def`, `\newenvironment`, `\NewDocumentCommand`/`\NewDocumentEnvironment` (`m o O s t d D r R v b` arguments, `\IfBooleanTF`, `\IfNoValueTF`) | expanded; `expl3` code blocks are skipped |
@@ -1142,7 +1144,7 @@ const project = await OfficeParser.parseOffice('overleaf-project.zip', { extract
 | `\newtheorem` (shared counters, numbering within sections, `\theoremstyle`), thmtools `\declaretheorem`, `proof` | "**Theorem 2.1** (Note)**.**" before the body (italic in the `plain` style), proofs ending in □; `\ref` reads theorem numbers. Theorem environments a class provides (Springer's llncs, svjour) need no `\newtheorem`, and one defined in a package the parser cannot see is headed but unnumbered; beamer's are titled blocks |
 | babel/polyglossia: `\foreignlanguage`, `\text<language>`, `otherlanguage`, language environments, `\babeltags` | their text; the main language (babel's `main=` or last language, polyglossia's `\setdefaultlanguage`) becomes `metadata.language` unless `pdflang` states it |
 | `\keywords`, `keywords`/`IEEEkeywords` environments; amsart `\address`, `\email`, `\urladdr`, `\subjclass`; IEEEtran author blocks, `\IEEEPARstart`; KOMA-Script `\minisec`, `\dictum`; `\epigraph` | `metadata.keywords` (and the printed "Keywords:" line), `nativeProperties`, authors' names in `metadata.author`, text |
-| `\bf`, `\it`, `\tt`, `\sl`, `\sf`, `\rm`, `\sc`, `\documentstyle` (LaTeX 2.09) | formatted text runs, the document class |
+| `\bf`, `\it`, `\tt`, `\sl`, `\sf`, `\rm`, `\documentstyle` (LaTeX 2.09) | formatted text runs, the document class |
 | `inputenc` encodings (`latin1`, `latin9`, `cp1252`, `koi8-r`, ...), a `% !TEX encoding` line | the file decoded in that encoding (an undeclared 8-bit file reads as Windows-1252), included files too |
 
 The parser reads LaTeX (and LaTeX 2.09). Plain TeX's `\bye`, `\beginsection` and glue are understood, and a ConTeXt
@@ -1637,14 +1639,14 @@ writeFileSync('paper.zip', zip as Uint8Array);
 | Headings | `\section` ... `\subparagraph` (`\chapter` first in `report`/`book`), unnumbered unless `numberSections`; heading ids and linked bookmarks become `\label`s |
 | Run formatting | `\textbf`, `\textit`, `\uline`/`\sout` (`ulem`), `\textsuperscript`/`\textsubscript`, `\textcolor`, a word-wrapping highlight, `\texttt` for monospace fonts, `\fontsize` for sizes that differ from the body size |
 | Lists | nested `itemize`/`enumerate` rebuilt from the flat list items (continued numbering kept), task items as check boxes, definition lists as `description` |
-| Tables | `longtable` (page-breaking, header row repeated) or `tabular` where a `longtable` cannot go; ruled grid, `\multicolumn`/`\multirow` merges, column alignment and cell colours. A table wider than 16 columns continues below itself in bands of 16 |
-| Links, citations | `\href` (scheme-checked), `\hyperref` for internal links whose target exists, `\cite{key}` |
+| Tables | `longtable` (page-breaking, header row repeated) or `tabular` where a `longtable` cannot go; ruled grid, `\multicolumn`/`\multirow` merges, column alignment (each column's most common, a cell that differs in a `\multicolumn{1}` of its own) and cell colours. A table wider than 16 columns continues below itself in bands of 16 |
+| Links, citations | `\href` (scheme-checked), `\hyperref` for internal links whose target exists, `\cite{key}`; a bibliography (a numbered list anchored by the cited keys, as the parser reads one) as `thebibliography`, and citations with no entry in it reported (`CITATIONS_NOT_RESOLVED`) |
 | Notes, comments | `\footnote` (deferred to `\footnotetext` inside a `tabular`), `\endnote` (`endnotes` package), review comments as LaTeX `%` comments, and a hidden `<!-- -->` note as `% <!-- ... -->` lines |
-| Code, math | `lstlisting` for a language `listings` knows, `verbatim` otherwise; math as live LaTeX after a safety check |
-| Images, charts, embeds | `\includegraphics` at natural size, bounded to the line and page, of a PNG or JPEG carried inside the `.tex` (below) or, in a bundle, a file under `images/`; an image the source referred to only by a plain relative path keeps that path (`\includegraphics{figures/diagram}`; spaces are fine, and a URL's `%20`-style escapes are decoded to the file name), while a web image, or a path that is absolute or leaves the document's folder, becomes a link, since TeX cannot fetch the one and must not read the other; charts as a data table; embeds as a link |
-| Slides | `beamer` frames (the slide's first heading is the frame title, speaker notes become `\note`, long slides continue on another frame) |
+| Code, math | `lstlisting` for a language `listings` knows, `verbatim` otherwise; math as live LaTeX after a safety check, loading the packages its commands come from (`bm`, `mathtools`, `cancel`, `mathrsfs`, `siunitx`, `mhchem`, ...), KaTeX's and MathJax's own macros (`\R`) written as LaTeX, and a command nothing loaded defines printing its own name (reported as `CONTENT_NOT_REPRESENTABLE`) |
+| Images, charts, embeds | `\includegraphics` at natural size, bounded to the line and page, of a PNG or JPEG carried inside the `.tex` (below) or, in a bundle, a file under `images/`; an image the source referred to only by a plain relative path keeps that path (`\includegraphics{figures/diagram}`; spaces are fine, and a URL's `%20`-style escapes are decoded to the file name), while a web image, or a path that is absolute or leaves the document's folder, becomes a link, since TeX cannot fetch the one and must not read the other; alternative text as the `alt` key; a caption as `\captionof`; charts as a data table; embeds as a link |
+| Slides | `beamer` frames (the slide's first heading is the frame title, a lower-level heading right under it `\framesubtitle`, speaker notes become `\note`, long slides continue on another frame); a heading between slides is a `\section` |
 | Page header/footer | `fancyhdr` |
-| Title block | a heading styled `Title` (a Word title, or a parsed `\maketitle`) and the `Author`/`Date` lines right after it: `\maketitle` where it stands (a `\titlepage` frame in beamer), printing only those lines |
+| Title block | a heading styled `Title` (a Word title, or a parsed `\maketitle`) and the `Author`/`Date` lines right after it (and `Subtitle`/`Institute` in beamer): `\maketitle` where it stands (a `\titlepage` frame in beamer), printing only those lines |
 | Metadata | the PDF metadata via `\hypersetup` (custom properties included); `\title`/`\author`/`\date` from the title block when there is one, else from the metadata |
 
 **Safety.** LaTeX is a programming language, so every piece of document text is escaped, URLs are scheme-checked (the same allowlist as the DOCX/ODT generators) and percent-encoded, image paths are reduced to a safe file name inside `images/`, and a code block that contains its own end marker is not put in a verbatim environment. Math is the one place document content is emitted as live LaTeX; an expression that uses a command able to read or write files, run programs, or redefine commands (`\input`, `\write18`, `\openin`, `\catcode`, `\def`, ...), or that is structurally unbalanced, is written as literal text instead, with a `MATH_WRITTEN_AS_TEXT` warning. Compile untrusted output without `--shell-escape`, as you would any LaTeX you did not write.
@@ -1908,8 +1910,8 @@ For a full debugging guide, visit the [Live Documentation](https://harshankur.gi
 2. **PDF Images**: Extracted and re-encoded as PNG (`pdf_image_p<page>_<n>.png`, `image/png`) on both Node and the browser, since a PDF stores image data in formats no viewer opens directly. v7 emitted BMP; code that filters attachments by `.bmp` must be updated.
 3. **PDF structure without tags**: Tables, lists and headings come from the PDF's tag tree when present. For untagged PDFs they are recovered geometrically, which is best-effort: complex float-beside-text layouts and tables without a tag tree may not separate perfectly. Column reading order, paragraphs and word spacing are handled on both paths.
 4. **PDF text decoration and spans**: text colour is extracted by default (`pdfParserConfig.extractTextColor`); set it `false` to skip the extra operator-list pass on a throughput-focused text path. Underline and strikethrough are still not extracted: they are drawn as separate graphics operators rather than carried as text properties. Vertical (top-to-bottom) writing is read but not laid out spatially. Table cell `colSpan`/`rowSpan` are recovered best-effort on the tagged path, from the geometry of the empty placeholder cells the tag tree pads a merge with; untagged PDFs expose no spans.
-5. **LaTeX input** is interpreted, not compiled: officeParser reads the document the way a converter does (structure, text, formatting, macros you define) rather than running TeX, so drawings (TikZ, pgfplots, `picture`) are omitted, packages are not loaded (their commands keep their text when unknown), and `\cite` keys stay as keys unless the document has a `thebibliography` (`.bib` files are not processed).
-6. **LaTeX output** is a faithful conversion, not a typesetting clone of the source: named font families are not carried over (only monospace), images in formats LaTeX cannot include (GIF, BMP, TIFF, WebP, SVG, EMF) are packaged but drawn as placeholders, `\cite` keys are emitted without a bibliography (add your own `.bib`), and very wide spreadsheets continue in 16-column bands.
+5. **LaTeX input** is interpreted, not compiled: officeParser reads the document the way a converter does (structure, text, formatting, macros you define) rather than running TeX, so drawings (TikZ, pgfplots, `picture`) are omitted, packages are not loaded (their commands keep their text when unknown), and `\cite` keys stay as keys in the text (a bibliography lists each cited `.bib` entry as authors, title, where it appeared and year, not in the style the document chose).
+6. **LaTeX output** is a faithful conversion, not a typesetting clone of the source: named font families are not carried over (only monospace), images in formats LaTeX cannot include (GIF, BMP, TIFF, WebP, SVG, EMF) are packaged but drawn as placeholders, `\cite` keys with no bibliography entry in the document are emitted as they are (add your own `.bib`; `CITATIONS_NOT_RESOLVED` names them), and very wide spreadsheets continue in 16-column bands.
 
 ---
 

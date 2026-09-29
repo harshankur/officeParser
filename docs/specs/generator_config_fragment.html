@@ -724,7 +724,10 @@ await ast.to('md', {
         <code>\multicolumn</code>/<code>\multirow</code> merges (a table wider than 16 columns continues below itself in
         bands), footnotes/endnotes <code>\footnote</code>/<code>\endnote</code>, review comments LaTeX <code>%</code> comments,
         code <code>lstlisting</code>/<code>verbatim</code>, page headers <code>fancyhdr</code>, and slides
-        <code>beamer</code> frames with speaker notes as <code>\note</code>.</p>
+        <code>beamer</code> frames with speaker notes as <code>\note</code>. A bibliography is written as
+        <code>thebibliography</code>, so its citations resolve; a citation with no entry is reported
+        (<code>CITATIONS_NOT_RESOLVED</code>). Math loads the packages its commands come from (<code>bm</code>,
+        <code>mathtools</code>, <code>siunitx</code>, ...), and a command nothing loaded defines prints its own name.</p>
     <p><strong>Safety.</strong> All document text is escaped, URLs are scheme-checked and percent-encoded, and image
         paths are reduced to safe names under <code>images/</code>. Math is the one place content is emitted as live
         LaTeX; an expression that uses a command able to read or write files, run programs or redefine commands, or
