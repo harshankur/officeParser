@@ -4411,6 +4411,22 @@ async function testHtmlBrowserReading(): Promise<void> {
     assert.deepStrictEqual(listComments.map(n => n.type), ['comment', 'list', 'list'], 'HTML: a comment between items does not part the list');
     assert.ok(isSourceCommentNode(listComments[1].children![1]), 'HTML: the comment ends the item before it');
 
+    // ── Footnotes in each writer's markup ──
+    const notesOf = (nodes: OfficeContentNode[]) => collectAllNodes({ content: nodes } as any).flatMap(n => (n.notes ?? []).map(note => `${(note.metadata as any)?.noteId}:${note.text}`));
+    for (const [writer, src, expected] of [
+        ['GitHub', '<p>Claim<sup><a href="#user-content-fn-1" id="user-content-fnref-1" data-footnote-ref>1</a></sup>.</p><section data-footnotes class="footnotes"><h2 class="sr-only">Footnotes</h2><ol><li id="user-content-fn-1"><p>Source text here. <a href="#user-content-fnref-1" data-footnote-backref>↩</a></p></li></ol></section>', '1:Source text here.'],
+        ['Pandoc', '<p>Text<a href="#fn1" class="footnote-ref" id="fnref1" role="doc-noteref"><sup>1</sup></a>.</p><section class="footnotes" role="doc-endnotes"><hr /><ol><li id="fn1"><p>The note.<a href="#fnref1" class="footnote-back" role="doc-backlink">↩︎</a></p></li></ol></section>', '1:The note.'],
+        ['markdown-it', '<p>Here<sup class="footnote-ref"><a href="#fn1" id="fnref1">[1]</a></sup>.</p><section class="footnotes"><ol class="footnotes-list"><li id="fn1" class="footnote-item"><p>Note body <a href="#fnref1" class="footnote-backref">↩︎</a></p></li></ol></section>', '1:Note body'],
+        ['EPUB 3', '<p>See<a epub:type="noteref" href="#n1">1</a>.</p><aside epub:type="footnote" id="n1"><p>Aside note.</p></aside>', 'n1:Aside note.'],
+    ] as const) {
+        const nodes = await read(src);
+        assert.deepStrictEqual(notesOf(nodes), [expected], `HTML: a ${writer} footnote is a note (${shape(nodes)})`);
+        // (Its text is in the note alone, not also in the body; its back-link is in neither.)
+        assert.ok(!JSON.stringify(nodes).includes('↩') && !shape(nodes).includes(expected.split(':')[1]), `HTML: the ${writer} note's text is in its note alone (${shape(nodes)})`);
+    }
+    assert.strictEqual(shape(await read('<section data-footnotes><p>Plain content</p></section>')), 'paragraph("Plain content")', 'HTML: a footnotes section with no note in it is content');
+    assert.strictEqual(shape(await read('<p>See<a epub:type="noteref" href="#n1">1</a></p><aside epub:type="footnote" id="n2"><p>Uncited.</p></aside>')), 'paragraph("See" "1") paragraph("Uncited.")', 'HTML: an uncited aside stays content, a link to no note a link');
+
     console.log('  HTML/EPUB reading and writing: All assertions passed ✓');
 }
 

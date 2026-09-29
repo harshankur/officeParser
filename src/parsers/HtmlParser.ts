@@ -317,6 +317,9 @@ const selfNodePlaceholder: OfficeContentNode = { type: 'text', text: '' };
 /** Plain text of parsed content nodes, leaving out source comments: a hidden note is not text. */
 const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
 
+/** plainTextOf at every depth: the text of a note holding paragraphs (GitHub's), which has none of its own. */
+const nodesText = (nodes: OfficeContentNode[], depth = 0): string => nodes.map(n => (isSourceComment(n) ? ''
+    : n.children?.length && depth < MAX_HTML_NESTING_DEPTH ? nodesText(n.children, depth + 1) : n.text || '')).join('');
 
 /**
  * Presents an `HtmlNode` as a `MathNode` for the shared MathML converter.
@@ -1009,16 +1012,73 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
         return undefined;
     };
 
-    // Populated from a <section data-footnotes> block (found and parsed before the main
-    // body loop, since references can appear anywhere earlier in the document) and
-    // consulted by parseChildren's <sup data-footnote-ref> handling below.
+    // Populated from the document's footnote definitions (found and parsed before the main body loop,
+    // since references can appear anywhere earlier in the document; see readFootnotes below) and
+    // consulted by parseChildren's footnote-reference handling below.
     const footnoteDefinitions = new Map<string, OfficeContentNode[]>();
-    // Keys a `<sup data-footnote-ref>` actually consumed, so definitions in the section that no
-    // reference points at (orphans) can be recovered at the end instead of silently dropped.
+    // Each definition's note id (GitHub's `user-content-fn-1` is note `1`) and kind, by key.
+    const footnoteIds = new Map<string, string>();
+    const footnoteTypes = new Map<string, 'footnote' | 'endnote'>();
+    // The elements definitions were read from, and the footnotes sections that held them: left out of the text.
+    const footnoteElements = new Set<HtmlNode>();
+    // Keys a reference actually consumed, so definitions in the section that no reference points at
+    // (orphans) can be recovered at the end instead of silently dropped.
     const referencedFootnoteKeys = new Set<string>();
     // One note node per key, shared by every reference to it: a node (and its text) built per reference
     // let a small file refer to one large note thousands of times and fill the heap.
     const noteNodesByKey = new Map<string, OfficeContentNode>();
+    // Set while a definition is read: a back-link in it (to its reference) is plumbing, not the note's text.
+    let readingFootnote = 0;
+    const hasToken = (value: string | undefined, token: string): boolean => !!value && value.split(/\s+/).includes(token);
+    /** A note's back-link to its reference: this library's, GitHub's, Pandoc's and markdown-it's. */
+    const isFootnoteBackLink = (node: HtmlNode): boolean => node.tagName === 'a' && (
+        (node.attributes?.href || '').startsWith('#footnote-ref-') || node.attributes?.['data-footnote-backref'] !== undefined
+        || node.attributes?.role === 'doc-backlink' || hasToken(node.attributes?.class, 'footnote-back') || hasToken(node.attributes?.class, 'footnote-backref'));
+    /** Whether `link` is marked as a reference to a note (`inMarkedSup`: it is all a `<sup class="footnote-ref">` holds). */
+    const isNoteReferenceLink = (link: HtmlNode, inMarkedSup: boolean): boolean => link.tagName === 'a' && (inMarkedSup
+        || link.attributes?.['data-footnote-ref'] !== undefined || link.attributes?.role === 'doc-noteref'
+        || hasToken(link.attributes?.['epub:type'], 'noteref') || hasToken(link.attributes?.class, 'footnote-ref'));
+    /** The one element `node` holds, with nothing but whitespace and comments beside it. */
+    const soleElementChild = (node: HtmlNode): HtmlNode | undefined => {
+        let sole: HtmlNode | undefined;
+        for (const child of node.children) {
+            if (child.type === 'comment' || (child.type === 'text' && !/[^\t\n\f\r ]/.test(child.text || ''))) continue;
+            if (child.type !== 'element' || sole) return undefined;
+            sole = child;
+        }
+        return sole;
+    };
+    /** The link a footnote reference is, if `node` is one of the link forms (bare, or all a `<sup>` holds). */
+    const referenceLinkOf = (node: HtmlNode): HtmlNode | undefined => {
+        const link = node.tagName === 'a' ? node : node.tagName === 'sup' ? soleElementChild(node) : undefined;
+        return link && isNoteReferenceLink(link, link !== node && hasToken(node.attributes?.class, 'footnote-ref')) ? link : undefined;
+    };
+    /**
+     * The key of the note `node` refers to, when it is a footnote reference: this library's `<sup
+     * data-footnote-ref="KEY">`, or a link marked as one (see isNoteReferenceLink) to a definition read.
+     * A link to no definition stays a link.
+     */
+    const footnoteReferenceKey = (node: HtmlNode): string | undefined => {
+        if (node.type !== 'element') return undefined;
+        if (node.tagName === 'sup' && node.attributes?.['data-footnote-ref'] !== undefined) return node.attributes['data-footnote-ref'];
+        const href = referenceLinkOf(node)?.attributes?.href;
+        return href?.startsWith('#') && footnoteDefinitions.has(href.slice(1)) ? href.slice(1) : undefined;
+    };
+    /** The note a reference to `key` shares (see noteNodesByKey). */
+    const noteFor = (key: string): OfficeContentNode => {
+        let noteNode = noteNodesByKey.get(key);
+        if (!noteNode) {
+            const definition = footnoteDefinitions.get(key);
+            noteNode = {
+                type: 'note',
+                text: nodesText(definition || []),
+                children: definition || [],
+                metadata: { noteType: footnoteTypes.get(key) ?? 'footnote', noteId: footnoteIds.get(key) ?? key }
+            };
+            noteNodesByKey.set(key, noteNode);
+        }
+        return noteNode;
+    };
 
     // --- Generic attribute pass-through (htmlParserConfig.preserveAttributes) ---------------
     // Captures attributes no typed metadata field consumed, so they can be replayed on
@@ -1230,23 +1290,13 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     }
                     // Footnote/endnote reference: attach as .notes on the preceding node
                     // instead of inserting a visible node, matching WordParser's convention.
-                    if (child.type === 'element' && child.tagName === 'sup' && child.attributes?.['data-footnote-ref'] !== undefined) {
-                        const key = child.attributes['data-footnote-ref'];
+                    const key = footnoteReferenceKey(child);
+                    if (key !== undefined) {
                         referencedFootnoteKeys.add(key);
                         // ignoreNotes drops footnotes at parse time (as in DOCX/ODT/PDF): skip the marker
                         // and attach nothing. The orphan sweep below is likewise skipped.
                         if (config.ignoreNotes) continue;
-                        let noteNode = noteNodesByKey.get(key);
-                        if (!noteNode) {
-                            const definition = footnoteDefinitions.get(key);
-                            noteNode = {
-                                type: 'note',
-                                text: plainTextOf(definition || []),
-                                children: definition || [],
-                                metadata: { noteType: 'footnote', noteId: key }
-                            };
-                            noteNodesByKey.set(key, noteNode);
-                        }
+                        const noteNode = noteFor(key);
                         if (kids.length > 0) {
                             const target = kids[kids.length - 1];
                             if (!target.notes) target.notes = [];
@@ -1376,13 +1426,13 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 return null;
             }
 
-            // Footnotes section: its definitions were already extracted up front (see
-            // footnoteDefinitions below), so skip it here wherever it appears in the tree -
-            // it isn't necessarily a direct child of <body> (e.g. it may be nested inside
-            // a non-standalone HtmlGenerator output's wrapping <div>).
-            if (tagName === 'section' && node.attributes?.['data-footnotes'] !== undefined) {
-                return null;
-            }
+            // A footnotes section definitions were read from, and a note read as one (an EPUB's cited
+            // <aside>): their notes were read up front (see readFootnotes below), so they are skipped here
+            // wherever they appear in the tree (a non-standalone HtmlGenerator output wraps its section in a
+            // <div>). A section that gave no definition is content.
+            if (footnoteElements.has(node)) return null;
+            // A note's back-link to its reference, read with the note, is plumbing, not its text.
+            if (readingFootnote > 0 && isFootnoteBackLink(node)) return null;
 
             // Math. Two accepted shapes, disambiguated by the `data-math` value:
             //   1. This library's own output - `data-math="inline|block"` names the mode, and the
@@ -2026,47 +2076,100 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
         return null;
     };
 
-    // Extract <section data-footnotes> up front so its definitions are available to
-    // <sup data-footnote-ref> references encountered anywhere earlier in the body.
-    const findFootnotesSection = (n: HtmlNode): HtmlNode | undefined => {
-        if (n.tagName === 'section' && n.attributes?.['data-footnotes'] !== undefined) return n;
-        for (const child of n.children) {
-            const found = findFootnotesSection(child);
-            if (found) return found;
-        }
-        return undefined;
-    };
-    const footnotesSectionNode = findFootnotesSection(body);
-    if (footnotesSectionNode) {
-        for (const item of footnotesSectionNode.children) {
-            if (item.type !== 'element') continue;
-            const key = item.attributes?.['data-footnote-id'];
-            if (!key) continue;
+    // Footnotes, in the markup of each writer that gives them, read up front so their definitions are
+    // there for references anywhere before them:
+    //  - this library's: `<sup data-footnote-ref="KEY">` citing `<div data-footnote-id="KEY">` in a
+    //    `<section data-footnotes>`;
+    //  - GitHub's, Pandoc's and markdown-it's: a link marked as a reference (`<a data-footnote-ref
+    //    href="#user-content-fn-1">`, `<a class="footnote-ref" href="#fn1">`, `role="doc-noteref"`), bare
+    //    or all a `<sup>` holds, citing an item of a footnotes section's list (`<section data-footnotes>`,
+    //    `class="footnotes"`, `role="doc-endnotes"`), `<li id="user-content-fn-1">`, at any depth;
+    //  - EPUB 3's: `<a epub:type="noteref" href="#n1">` citing an `<aside epub:type="footnote" id="n1">`
+    //    (or `role="doc-footnote"`), wherever it stands: read as a note when a reference cites it.
+    // A footnotes section is left out of the text only when definitions were read from it: GitHub's was
+    // left out whatever it held (its items carry no data-footnote-id), and every note in it was lost.
+    const readFootnotes = (): void => {
+        const isFootnotesSection = (n: HtmlNode): boolean => n.attributes?.['data-footnotes'] !== undefined || n.attributes?.role === 'doc-endnotes'
+            || (['section', 'div', 'aside', 'ol'].includes(n.tagName!) && hasToken(n.attributes?.class, 'footnotes'));
+        const noteKind = (n: HtmlNode): 'footnote' | 'endnote' | undefined => {
+            if (!n.attributes?.id) return undefined;
+            const types = (n.attributes['epub:type'] ?? '').split(/\s+/);
+            if (types.includes('footnote') || n.attributes.role === 'doc-footnote') return 'footnote';
+            if (types.includes('endnote') || types.includes('rearnote') || n.attributes.role === 'doc-endnote') return 'endnote';
+            return undefined;
+        };
+        const sections: HtmlNode[] = [];
+        const notes: HtmlNode[] = [];
+        const cited = new Set<string>();
+        const scan = (n: HtmlNode, depth: number, inSection: boolean): void => {
+            for (const child of n.children) {
+                if (child.type !== 'element') continue;
+                const href = referenceLinkOf(child)?.attributes?.href;
+                if (href?.startsWith('#')) cited.add(href.slice(1));
+                let within = inSection;
+                if (!inSection && isFootnotesSection(child)) { sections.push(child); within = true; }
+                else if (!inSection && noteKind(child)) notes.push(child);
+                if (depth < MAX_HTML_NESTING_DEPTH) scan(child, depth + 1, within);
+            }
+        };
+        scan(body, 0, false);
 
-            // Strip the generated back-reference link ("↩") - it's round-trip plumbing,
-            // not part of the footnote's actual content.
-            const isBackLink = (c: HtmlNode) => c.tagName === 'a' && (c.attributes?.href || '').startsWith('#footnote-ref-');
-            const filteredChildren = item.children.filter(c => !isBackLink(c));
-            // With whitespace kept as written, the one space written before the back-link is the
+        const read = (key: string, item: HtmlNode, kind: 'footnote' | 'endnote', id: string): void => {
+            if (footnoteDefinitions.has(key)) return;
+            // With whitespace kept as written, the one space written before this library's back-link is the
             // writer's, not the note's: left in, it grew by one each save.
-            const backLinkAt = item.children.findIndex(isBackLink);
-            const beforeBackLink = backLinkAt > 0 ? item.children[backLinkAt - 1] : undefined;
+            const children = item.children.slice();
+            const backLinkAt = children.findIndex(isFootnoteBackLink);
+            const beforeBackLink = backLinkAt > 0 ? children[backLinkAt - 1] : undefined;
             if (config.preserveXmlWhitespace && beforeBackLink?.type === 'text' && beforeBackLink.text?.endsWith(' ')) {
-                filteredChildren[filteredChildren.indexOf(beforeBackLink)] = { ...beforeBackLink, text: beforeBackLink.text.slice(0, -1) };
+                children[backLinkAt - 1] = { ...beforeBackLink, text: beforeBackLink.text.slice(0, -1) };
             }
             const contentNodes: OfficeContentNode[] = [];
-            for (const child of filteredChildren) {
-                const parsed = parseNode(child);
-                if (parsed) {
-                    if (Array.isArray(parsed)) appendAll(contentNodes, parsed);
-                    else contentNodes.push(parsed);
+            readingFootnote++;
+            try {
+                for (const child of children) {
+                    const parsed = parseNode(child);
+                    if (parsed) {
+                        if (Array.isArray(parsed)) appendAll(contentNodes, parsed);
+                        else contentNodes.push(parsed);
+                    }
                 }
+            } finally {
+                readingFootnote--;
             }
             // The space written before the back-link ended the note's text once the link was left out,
             // and grew by one each save: the definition's edges are trimmed as a block's are.
             footnoteDefinitions.set(key, config.preserveXmlWhitespace ? contentNodes : trimBlockEdges(collapseSpacesAcrossNodes(contentNodes)));
+            footnoteIds.set(key, id);
+            footnoteTypes.set(key, kind);
+            footnoteElements.add(item);
+        };
+        for (const section of sections) {
+            // A section's definitions: each outermost element naming its key (`data-footnote-id`) and each
+            // outermost list item with an id (GitHub's `user-content-fn-1` is note `1`, Pandoc's `fn1` too).
+            let found = false;
+            const collect = (n: HtmlNode, depth: number): void => {
+                for (const child of n.children) {
+                    if (child.type !== 'element') continue;
+                    const key = child.attributes?.['data-footnote-id'] || (child.tagName === 'li' ? child.attributes?.id : undefined);
+                    if (key) {
+                        const id = child.attributes?.['data-footnote-id'] ? key : key.replace(/^user-content-/, '').replace(/^fn-?(?=.)/, '');
+                        read(key, child, 'footnote', id);
+                        found = true;
+                    } else if (depth < MAX_HTML_NESTING_DEPTH) {
+                        collect(child, depth + 1);
+                    }
+                }
+            };
+            collect(section, 0);
+            if (found) footnoteElements.add(section);
         }
-    }
+        for (const note of notes) {
+            const key = note.attributes!.id;
+            if (cited.has(key)) read(key, note, noteKind(note)!, key);
+        }
+    };
+    readFootnotes();
     // Inline content written directly in the body (text, and inline elements such as <b> or <a>) is one
     // paragraph per run between blocks, as a browser lays it out in an anonymous block: not one
     // paragraph for each piece of text.
@@ -2124,9 +2227,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
         if (referencedFootnoteKeys.has(key)) continue;
         content.push({
             type: 'note',
-            text: plainTextOf(definition || []),
+            text: nodesText(definition || []),
             children: definition || [],
-            metadata: { noteType: 'footnote', noteId: key, unreferenced: true },
+            metadata: { noteType: footnoteTypes.get(key) ?? 'footnote', noteId: footnoteIds.get(key) ?? key, unreferenced: true },
         });
     }
 

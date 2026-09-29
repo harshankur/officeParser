@@ -3913,8 +3913,10 @@ async function htmlReadingTests() {
         ['raw text holding other end tags', '<script>a</style></scripty></script><xmp>b</textarea></xmp>', '', 5000],
         ['stray less-than signs', 'a < b <5 <', '', 10000],
         ['scripts between words', ' <script></script> <b>w</b>', '<p>', 5000],
+        ['GitHub footnote references', '<sup><a data-footnote-ref href="#fn-1">1</a></sup>', '', 5000],
     ] as const) {
-        await scalesLinearly(`html: ${label}`, n => html(prefix + unit.repeat(n)), size);
+        const ending = label === 'GitHub footnote references' ? '<section data-footnotes><ol><li id="fn-1"><p>n <a data-footnote-backref href="#r">b</a></p></li></ol></section>' : '';
+        await scalesLinearly(`html: ${label}`, n => html(prefix + unit.repeat(n) + ending), size);
     }
 
 
