@@ -4811,6 +4811,138 @@ async function testHtmlBrowserReading(): Promise<void> {
     console.log('  HTML/EPUB reading and writing: All assertions passed ✓');
 }
 
+/**
+ * Markdown read as CommonMark reads it where 8.1.0's review found it read otherwise: inline content
+ * across a paragraph's line ends, emphasis paired by the flanking rules, reference definitions, a
+ * byte order mark, loose lists, definition lists, wrappers, front matter lists, closed headings and
+ * fenced-div admonitions; and the writer's output for each reading back as itself.
+ */
+async function testMarkdownReading(): Promise<void> {
+    const parse = (src: string) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md', onWarning: () => {} } as any);
+    const md = async (src: string) => ((await (await parse(src)).to('md', { generateIds: false } as any)).value as string).trim();
+    const write = async (content: any[], mdConfig: any = {}) => ((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content } as any, 'md', { generateIds: false, mdConfig, onWarning: () => {} } as any)).value as string).trim();
+    // The runs of a paragraph as text with its emphasis marked: {B:..}, {I:..}, {BI:..}; links {L:..}.
+    const runs = (nodes: OfficeContentNode[] = []) => {
+        let out = '', flags = '', text = '';
+        const flush = () => { if (text) out += flags ? `{${flags}:${text}}` : text; text = ''; };
+        for (const n of nodes) {
+            if (n.type !== 'text') { flush(); flags = ''; out += `<${n.type}>`; continue; }
+            const f = `${n.formatting?.bold ? 'B' : ''}${n.formatting?.italic ? 'I' : ''}${n.formatting?.font === 'monospace' ? 'C' : ''}${(n.metadata as any)?.link ? 'L' : ''}`;
+            if (f !== flags) { flush(); flags = f; }
+            text += n.text;
+        }
+        flush();
+        return out;
+    };
+    const first = async (src: string) => runs((await parse(src)).content[0]?.children);
+    const T = (text: string, formatting?: any, metadata?: any) => ({ type: 'text', text, ...(formatting && { formatting }), ...(metadata && { metadata }) });
+    const br = { type: 'break', metadata: { breakType: 'carriageReturn' } };
+
+    // A byte order mark starting the file is no text.
+    const bom = await parse('\uFEFF# Title\n\n- a\n');
+    assert.deepStrictEqual(bom.content.map(n => n.type), ['heading', 'list'], 'MD: a byte order mark does not make the first block text');
+    assert.strictEqual(bom.content[0].text, 'Title', 'MD: the heading after a byte order mark');
+
+    // Reference definitions after a heading, a rule or each other, with the target or title on the next line.
+    assert.strictEqual(await first('See [docs].\n\n## Links\n[docs]: https://d.example\n'), 'See {L:docs}.', 'MD: a definition after a heading');
+    assert.strictEqual(await first('[a], [b] and [c]\n\n---\n[a]:\n  http://a\n[b]: http://b\n  "B title"\n[c]: <http://c/x y>\n'), '{L:a}, {L:b} and {L:c}', 'MD: definitions after a rule, target and title on the next line');
+    const titled = (await parse('[b]\n\n[b]: http://b\n  "B title"')).content[0].children![0].metadata as any;
+    assert.deepStrictEqual([titled.link, titled.title], ['http://b', 'B title'], 'MD: a definition\'s title reaches its links');
+    assert.strictEqual(await first('Text [x]\n[x]: http://x'), 'Text [x] [x]: http://x', 'MD: a definition cannot interrupt a paragraph');
+    assert.strictEqual(await first('[Foo  Bar]\n\n[foo bar]: http://f'), '{L:Foo  Bar}', 'MD: labels match with whitespace collapsed and case folded');
+    assert.strictEqual(((await parse('[d](<./my docs/x.md>)')).content[0].children![0].metadata as any).link, './my docs/x.md', 'MD: angle brackets are not part of a link target');
+
+    // Inline content across a paragraph's line ends.
+    assert.strictEqual(await first('See the [official\ndocumentation](https://e.com) and *a long\nphrase* here.'), 'See the {L:official documentation} and {I:a long phrase} here.', 'MD: a link and emphasis across a line end');
+    assert.strictEqual(await md('See the [official\ndocumentation](https://e.com) and *a long\nphrase* here.'), 'See the [official documentation](https://e.com) and *a long phrase* here.', 'MD: a link and emphasis across a line end are written back');
+    assert.strictEqual(await first('a `code\nspan` b <b>bold\ntext</b> c'), 'a {C:code span} b {B:bold text} c', 'MD: a code span and an element across a line end');
+    const logo = await parse('<a href="https://x">\n  <img src="logo.png" alt="Logo">\n</a>');
+    assert.strictEqual(await md('<a href="https://x">\n  <img src="logo.png" alt="Logo">\n</a>'), '[![Logo](logo.png)](https://x)', 'MD: a linked logo on lines of its own');
+    assert.ok(logo.content[0].children!.some(n => n.type === 'image' && (n.metadata as any).link === 'https://x'), 'MD: the logo carries its link');
+    assert.strictEqual(await first('a  \nb\\\nc \nd'), 'a<break>b<break>c d', 'MD: hard breaks (two spaces, a backslash) and a soft break');
+    assert.strictEqual(await md('- item with *a long\n  phrase* and [a\n  link](http://x)'), '- item with *a long phrase* and [a link](http://x)', 'MD: a list item\'s continuation lines are one text with it');
+
+    // Emphasis paired as CommonMark pairs it.
+    for (const [src, expected] of [
+        ['*Note: this is **very** important*', '{I:Note: this is }{BI:very}{I: important}'], ['*foo**bar**baz*', '{I:foo}{BI:bar}{I:baz}'],
+        ['**foo*bar*baz**', '{B:foo}{BI:bar}{B:baz}'], ['*foo**bar*', '{I:foo**bar}'], ['***foo** bar*', '{BI:foo}{I: bar}'],
+        ['foo***bar***baz', 'foo{BI:bar}baz'], ['*(*foo*)*', '{I:(foo)}'], ['_foo_bar_baz_', '{I:foo_bar_baz}'], ['foo_bar_', 'foo_bar_'],
+        ['__foo, __bar__, baz__', '{B:foo, bar, baz}'], ['**foo*', '*{I:foo}'], ['*foo *bar*', '*foo {I:bar}'], ['a * foo bar*', 'a * foo bar*'],
+        ['5 * 3 * 2', '5 * 3 * 2'], ['*a `*`*', '{I:a }{IC:*}'], ['[see *this*] here', '[see {I:this}] here'],
+        // What earlier versions wrote, read as they read it.
+        ['**Note: **body and **more**', '{B:Note: }body and {B:more}'], ['*Source:*Data', '{I:Source:}Data'], ['**`x`****.**', '{BC:x}{B:.}'], ['say**"hi"**', 'say{B:"hi"}'],
+        // Math does not swallow the closer of emphasis around it.
+        ['_$data_: support [$data references](#r)', '{I:$data}: support {L:$data references}'], ['*a* and $x*y$ here', '{I:a} and <code> here'],
+    ] as const) {
+        assert.strictEqual(await first(src), expected, `MD: emphasis in ${JSON.stringify(src)}`);
+    }
+    assert.strictEqual(await md('*Note: this is **very** important*'), '*Note: this is* ***very*** *important*', 'MD: italic around bold is written back');
+    // Delimiters CommonMark would not read are written as elements, which read back the same.
+    for (const [content, expected, back] of [
+        [[T('Source:', { italic: true }), T('Data')], '<em>Source:</em>Data', '{I:Source:}Data'],
+        [[T('x', { bold: true, font: 'monospace' }), T('.', { bold: true })], '**`x`**<strong>.</strong>', '{BC:x}{B:.}'],
+        [[T('say'), T('"hi"', { bold: true })], 'say<strong>"hi"</strong>', 'say{B:"hi"}'],
+        [[T('a'), T('b', { bold: true, strikethrough: true }), T('c')], 'a<del><strong>b</strong></del>c', null],
+    ] as const) {
+        const out = await write([{ type: 'paragraph', children: content }]);
+        assert.strictEqual(out, expected, `MD: emphasis CommonMark cannot read as delimiters is written as elements (${expected})`);
+        if (back) assert.strictEqual(await first(out), back, `MD: ${expected} reads back`);
+    }
+    assert.strictEqual(await write([{ type: 'paragraph', children: [T('Source:', { italic: true }), T('Data')] }], { fallbackToHtml: false }), '*Source:*Data', 'MD: without the HTML fallback, the delimiters (read back leniently)');
+    assert.strictEqual(await md('x \\\ny'), 'x  \ny', 'MD: spaces before a line break are not written');
+
+    // Abbreviations match whole words, the longest at a place, e.g. followed by a space.
+    const abbr = await parse('HTML5 and HTML 5 and HTML, e.g. this.\n\n*[HTML]: Hyper\n*[HTML 5]: Five\n*[e.g.]: for example');
+    assert.deepStrictEqual(abbr.content[0].children!.filter(n => (n.metadata as any)?.abbreviationTitle).map(n => [n.text, (n.metadata as any).abbreviationTitle]),
+        [['HTML 5', 'Five'], ['HTML', 'Hyper'], ['e.g.', 'for example']], 'MD: abbreviations match whole words, the longest first');
+    const noted = await parse('The HTML spec[^1].\n\n[^1]: Note.\n\n*[HTML]: Hyper');
+    assert.ok(noted.content[0].children!.some(n => n.notes?.length), 'MD: a note stays on text an abbreviation was split out of');
+
+    // HTML in capitals is HTML; PascalCase tags are MDX components.
+    assert.strictEqual(await first('Logo: <IMG SRC="a.png" /> end <B>x</B> a<BR/>b'), 'Logo: <image> end {B:x} a<break>b', 'MD: HTML written in capitals');
+    assert.strictEqual(await first('Text <Callout type="x">inner *md*</Callout> and <Chart />.'), 'Text inner {I:md} and .', 'MD: MDX components are still stripped');
+
+    // A heading's line break, and closed headings.
+    const heading = await write([{ type: 'heading', metadata: { level: 1 }, children: [T('Annual Report'), br, T('2024')] }]);
+    assert.strictEqual(heading, '# Annual Report<br>2024', 'MD: a line break in a heading stays on its line');
+    assert.deepStrictEqual((await parse(heading)).content.map(n => [n.type, n.children?.map(c => c.type).join()]), [['heading', 'text,break,text']], 'MD: a heading\'s line break reads back');
+    assert.strictEqual(await write([{ type: 'heading', metadata: { level: 1 }, children: [T('A'), br, T('B')] }], { fallbackToHtml: { itemLineBreaks: false } }), '# A B', 'MD: without the fallback, a space');
+    assert.deepStrictEqual((await parse('## Section ##\n\n### ###\n\n## C \\##\n\n## Title ## {#t}')).content.map(n => n.text), ['Section', '', 'C ##', 'Title'], 'MD: a closing sequence of # is no text');
+    assert.strictEqual(await md('## Issue \\#'), '## Issue \\#', 'MD: a heading ending in # is written escaped');
+
+    // Definition lists: several terms for a definition, and a term starting with a colon.
+    for (const html of ['<dl><dt>A</dt><dt>B</dt><dd>d</dd></dl>', '<dl><dt>:root</dt><dd>the root</dd></dl>']) {
+        const ast = await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any);
+        const out = (await ast.to('md')).value as string;
+        const back = await parse(out);
+        assert.deepStrictEqual(back.content[0].children!.map(n => [n.type, runs(n.children)]), ast.content[0].children!.map(n => [n.type, runs(n.children)]), `MD: a definition list reads back (${out})`);
+    }
+
+    // A loose list is one list, numbered on.
+    const loose = await parse('1. a\n\n1. b\n\n1. c\n\n- x\n\n* y');
+    assert.deepStrictEqual(loose.content.map(n => [(n.metadata as any).listId, (n.metadata as any).itemIndex]), [['md-list-1', 0], ['md-list-1', 1], ['md-list-1', 2], ['md-list-2', 0], ['md-list-3', 0]], 'MD: a loose list goes on across blank lines, another marker starts another');
+    assert.strictEqual(await md('1. a\n\n1. b\n\n1. c'), '1. a\n2. b\n3. c', 'MD: a loose list is numbered on');
+
+    // A paragraph shaped like a table stays a paragraph.
+    for (const lines of [['Name | Age', '-----|----', 'Bob | 42'], ['x | y', ':-- | --:']]) {
+        const out = await write([{ type: 'paragraph', children: lines.flatMap((line, i) => (i ? [br, T(line)] : [T(line)])) }]);
+        const back = await parse(out);
+        assert.deepStrictEqual([back.content[0].type, back.content[0].children!.filter(n => n.type === 'text').map(n => n.text).join('')], ['paragraph', lines.join('')], `MD: a paragraph shaped like a table (${out})`);
+    }
+
+    // Wrapper tags standing alone, front matter lists, fenced-div admonitions, empty alt text.
+    const wrapped = await parse('<div class="x">\n\nHello\n\n</div>\n\n<div align="center" markdown="1">\n\n# Title\n\n<p>\n\nText\n\n</p>\n\n</div>\n\nAfter');
+    assert.deepStrictEqual(wrapped.content.map(n => [n.type, n.text ?? runs(n.children), (n.metadata as any)?.alignment]), [['paragraph', 'Hello', undefined], ['heading', 'Title', 'center'], ['paragraph', 'Text', 'center'], ['paragraph', 'After', undefined]], 'MD: wrapper tags standing alone are no paragraphs, and align what they hold');
+    const yaml = await parse('---\ntitle: T\ntags:\n  - a\n  - "b c"\n---\n\nBody');
+    assert.deepStrictEqual(yaml.metadata.customProperties?.tags, ['a', 'b c'], 'MD: a front matter block sequence is a list');
+    assert.ok(((await yaml.to('md')).value as string).includes('tags: [a, b c]'), 'MD: a front matter list is written back');
+    const pandoc = await OfficeGenerator.generate(await parse('> [!WARNING]\n> Body'), 'md', { mdConfig: { dialect: 'pandoc' } } as any);
+    const pandocBack = await parse(pandoc.value as string);
+    assert.deepStrictEqual([pandoc.value, pandocBack.content[0].type, (pandocBack.content[0].metadata as any).admonitionType, (pandocBack.content[0].metadata as any).sourceSyntax], ['::: {.warning}\nBody\n:::', 'admonition', 'warning', 'pandoc'], 'MD: a Pandoc admonition reads back');
+    const alt = await write([{ type: 'paragraph', children: [{ type: 'image', metadata: { url: 'a.png' } }] }]);
+    assert.deepStrictEqual([alt, ((await parse(alt)).content[0].children![0].metadata as any).altText], ['![](a.png)', ''], 'MD: a picture with no alt text has none written');
+}
+
 async function runTests(): Promise<void> {
     console.log('Starting exhaustive officeParser test suite...');
     let passed = 0;
@@ -4819,6 +4951,7 @@ async function runTests(): Promise<void> {
     const tests: Array<[string, () => Promise<void>]> = [
         ['Markdown', testMarkdown],
         ['Markdown round trips', testMarkdownRoundTrips],
+        ['Markdown reading', testMarkdownReading],
         ['Second review', testSecondReview],
         ['Image links', testImageLinks],
         ['DOCX reading review', testDocxReadingReview],
