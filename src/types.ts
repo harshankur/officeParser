@@ -1169,15 +1169,17 @@ export interface CommonGeneratorConfig {
      * otherwise a compact reference to the attachment name; Markdown also emits the
      * `IMAGE_NOT_INLINED` warning so a caller can ship the file alongside the output. Fragment HTML
      * instead keeps `<img src="name">`, a reference an HTML consumer can resolve, and never falls
-     * back to text. Standalone HTML always inlines, whatever this value is: a standalone document
-     * has nowhere else to resolve the image from. Plain text never inlines at all, so for it the cap
-     * only decides whether a large image contributes its recognized text (over the cap) or the
-     * `[Image: name]` placeholder (under it).
+     * back to text. Standalone HTML inlines whatever this value is (a standalone document has nowhere
+     * else to resolve the image from), within the document's budget of 128 MB of inlined pictures in
+     * all, past which a picture is a name reference with an `IMAGE_NOT_INLINED` warning; the budget
+     * applies to every format that inlines, whatever this value. Plain text never inlines at all, so
+     * for it the cap only decides whether a large image contributes its recognized text (over the
+     * cap) or the `[Image: name]` placeholder (under it).
      *
      * This guards against pathologically large single lines. A scanned PDF page, for instance, is
      * one big image; inlined as a multi-megabyte `data:` URI it can overflow downstream Markdown
-     * parsers. Set to `0` to disable inlining entirely (always reference), or `Infinity` to always
-     * inline regardless of size.
+     * parsers. Set to `0` to disable inlining entirely (always reference), or `Infinity` to inline
+     * regardless of each picture's size (within the document's budget above).
      *
      * Defaults to 1500000 (about 1.5 MB of image data). Note the `data:` URI itself is roughly a
      * third larger, since base64 encodes 3 bytes as 4 characters.
@@ -1424,8 +1426,8 @@ export interface HtmlGeneratorConfig {
      * (an empty `<span data-html-comment="…">` instead of `<!-- … -->`, since an editor's DOM parser
      * discards real comment nodes).
      *
-     * Off by default; the default output is byte-identical to previous releases. The widened
-     * `HtmlParser` reads every shape this emits, so output stays self-round-trippable.
+     * Off by default, which writes none of these shapes. The widened `HtmlParser` reads every shape
+     * this emits, so output stays self-round-trippable.
      */
     sourceAttributes?: boolean;
     /**
