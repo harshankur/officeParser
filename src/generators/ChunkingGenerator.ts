@@ -5,6 +5,7 @@ import {
 } from '../defaults.js';
 import {
     ChunkingConfig,
+    CodeMetadata,
     ConversionResult,
     DeepRequired,
     DocumentStructureChunkingConfig,
@@ -78,9 +79,13 @@ function collectNodeText(node: OfficeContentNode, context: ChunkTextContext): st
         const descendantNotes = collectDescendantNoteText(node, context);
         if (descendantNotes) out += '\n' + descendantNotes;
     } else if (node.children && node.children.length > 0) {
+        // A block starts a line, and what follows it starts another; math in a line of text is no block.
+        let afterBlock = false;
         for (const child of node.children) {
-            if (out && BLOCK_NODE_TYPES.has(child.type)) out += '\n';
+            const block = BLOCK_NODE_TYPES.has(child.type) && !(child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math === 'inline');
+            if (out && (block || afterBlock) && !out.endsWith('\n')) out += '\n';
             out += collectNodeText(child, context);
+            afterBlock = block;
         }
     }
     if (node.notes && node.notes.length > 0) {

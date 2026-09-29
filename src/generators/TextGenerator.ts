@@ -1,4 +1,4 @@
-import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNodeType, OfficeParserAST } from '../types.js';
+import { CodeMetadata, ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNodeType, OfficeParserAST } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { clampRepeat, median } from '../utils/numberUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
@@ -20,6 +20,7 @@ const CELL_SEPARATOR = '\t';
  */
 const TEXT_NODE_CLASS: Readonly<Record<OfficeContentNodeType, 'block' | 'inline'>> = {
     paragraph: 'block', heading: 'block', row: 'block', sheet: 'block', slide: 'block', note: 'block',
+    // A code node is a block, unless it is math in a line of text (see isInlineMath).
     list: 'block', table: 'block', code: 'block',
     // A definition's term and description are lines of their own, and an admonition's text ends its
     // line (they ran into each other and into the paragraph after them).
@@ -28,6 +29,9 @@ const TEXT_NODE_CLASS: Readonly<Record<OfficeContentNodeType, 'block' | 'inline'
     break: 'inline', comment: 'inline', header: 'inline', footer: 'inline', slideMaster: 'inline',
     embed: 'inline',
 };
+
+/** Math in a line of text (`$x^2$`): a `code` node, but not a block (it broke its line before it). */
+const isInlineMath = (node: OfficeContentNode): boolean => node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math === 'inline';
 
 /** The widest a laid-out table's column is padded to (see TextGenerator.renderTable). */
 const LAYOUT_COLUMN_WIDTH = 256;
@@ -78,9 +82,15 @@ export class TextGenerator extends BaseGenerator<'text'> {
             // chart's data series (it lives in `node.text`); this drops it when charts are turned off.
             if (node.type === 'chart' && this.config.includeCharts === false) return '';
 
-            // Return raw text for text nodes
-            if (node.type === 'text' || node.type === 'code') {
+            // Return raw text for text nodes, and for math in a line of text
+            if (node.type === 'text' || (node.type === 'code' && isInlineMath(node))) {
                 return node.text || '';
+            }
+            // A code block or display equation is a block: it ends its line (it ran into the paragraph
+            // after it: `code onePara after`).
+            if (node.type === 'code') {
+                const code = node.text || '';
+                return code === '' || code.endsWith(newline) ? code : code + newline;
             }
 
             // Handle explicit breaks
@@ -224,7 +234,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
      */
     protected override childSeparator(previous: string, child: OfficeContentNode): string {
         const newline = this.config.textConfig.newlineDelimiter;
-        return TEXT_NODE_CLASS[child.type] === 'block' && previous && !previous.endsWith(newline) ? newline : '';
+        return TEXT_NODE_CLASS[child.type] === 'block' && !isInlineMath(child) && previous && !previous.endsWith(newline) ? newline : '';
     }
 
     /**

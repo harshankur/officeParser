@@ -1430,6 +1430,18 @@ async function testGeneratedOutput(): Promise<void> {
     assert.strictEqual(JSON.stringify(unknownAst), unknownBefore, 'Generated output: the AST is not changed');
     assert.strictEqual((await OfficeGenerator.generate(unknownAst, 'md')).value, 'before **inline unknown**\n\nloose\n\ninside unknown\n\ntext only\n\n| c1 | cell unknown |\n| --- | --- |\n| row in tbody |  |', 'Generated output: unknown node types in Markdown');
 
+    // Math in a line of text stays in the line in plain text and chunks (a code node, it was taken for a
+    // block and broke the line before it: "Let \nx^2 be positive"), and a code block ends its line (it
+    // ran into the paragraph after it: "blockAfter").
+    for (const [source, type] of [['Let $x^2$ be positive.\n\n```\nblock\n```\nAfter\n', 'md'], ['\\documentclass{article}\\begin{document}Let $x^2$ be positive.\n\n\\begin{verbatim}\nblock\n\\end{verbatim}\nAfter\n\\end{document}', 'tex']] as const) {
+        const mathAst = await OfficeParser.parseOffice(Buffer.from(source), { fileType: type });
+        assert.strictEqual((await mathAst.to('text')).value, 'Let x^2 be positive.\nblock\nAfter', `Generated output: ${type} inline math and a code block in plain text`);
+        const mathChunks = (await mathAst.to('chunks')).value as any[];
+        assert.ok(mathChunks.some(c => c.text === 'Let x^2 be positive.'), `Generated output: ${type} inline math in a chunk (${JSON.stringify(mathChunks.map(c => c.text))})`);
+    }
+    const preThenParagraph = await parseHtml('<pre>code one</pre><p>Para after</p>');
+    assert.strictEqual((await preThenParagraph.to('text')).value, 'code one\nPara after', 'Generated output: a code block ends its line in plain text');
+
     console.log('  Generated output: All assertions passed ✓');
 }
 
