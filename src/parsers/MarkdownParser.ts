@@ -90,45 +90,6 @@ function newlineCursor(text: string): (from: number) => number {
 }
 
 /**
- * Paragraph lines, with the lines a code span runs across joined into one, each line end in it read
- * as a space, as CommonMark reads a line end inside a code span, so a span an editor wrapped
- * (`` x `a `` then `` b` y ``) is code rather than two backticks of text. A backtick run not escaped
- * with a backslash opens a span that the next run of as many backticks closes, on its line or a
- * later one (codeSpanCloser, so linear); a line joined earlier (for a comment or display math) stays
- * whole.
- */
-function joinCodeSpanLines(lines: string[]): string[] {
-    if (lines.length < 2 || !lines.some(line => line.includes('`'))) return lines;
-    const text = lines.join('\n');
-    // Where each line after the first starts, less one: the newline joining it to the previous.
-    const breaks: number[] = [];
-    for (let i = 0, at = -1; i < lines.length - 1; i++) breaks.push(at += lines[i].length + 1);
-    const close = codeSpanCloser(text);
-    const joined = new Set<number>();
-    let b = 0;
-    for (let i = 0; i < text.length; i++) {
-        if (text[i] === '\\' && i + 1 < text.length && text[i + 1] !== '\n') { i++; continue; }
-        if (text[i] !== '`') continue;
-        let end = i + 1;
-        while (text[end] === '`') end++;
-        const closeAt = close(end, end - i);
-        if (closeAt === -1) { i = end - 1; continue; }
-        while (b < breaks.length && breaks[b] < i) b++;
-        while (b < breaks.length && breaks[b] < closeAt) joined.add(b++);
-        i = closeAt + (end - i) - 1;
-    }
-    if (joined.size === 0) return lines;
-    const out: string[] = [];
-    let current = lines[0];
-    for (let k = 1; k < lines.length; k++) {
-        if (joined.has(k - 1)) current += ` ${lines[k]}`;
-        else { out.push(current); current = lines[k]; }
-    }
-    out.push(current);
-    return out;
-}
-
-/**
  * Paragraph lines, with the lines a comment spans joined back into one (with their line breaks), so a
  * comment that opens on one line and closes on a later one is parsed as one comment rather than as
  * visible text. An opener inside a code span on its line (after an odd number of backticks) is not a
@@ -235,12 +196,6 @@ function splitUrlTitle(raw: string): { url: string; title?: string } {
 /** A link target without the angle brackets that let it hold spaces (`<./my docs/a.md>`), which are not part of it. */
 const unbracketTarget = (target: string): string => (/^<[^<>\n]*>$/.test(target) ? target.slice(1, -1) : target);
 
-/** ASCII punctuation, the characters a backslash escapes in CommonMark. */
-const ASCII_PUNCTUATION = /[!-/:-@[-`{-~]/;
-
-/** A letter, digit or other character that is neither whitespace nor ASCII punctuation (a word character, for emphasis). */
-const isWordCharacter = (char: string | undefined): boolean => char !== undefined && !/\s/.test(char) && !ASCII_PUNCTUATION.test(char);
-
 /**
  * For one text, a function giving where the code span opened by a run of `length` backticks ending
  * at `from` closes (the index of the closing run), or -1. As CommonMark reads it, a code span closes
@@ -272,60 +227,164 @@ function codeSpanCloser(text: string): (from: number, length: number) => number 
     };
 }
 
+/** Whether a character next to a delimiter run is whitespace, as emphasis reads it: the text's edge (undefined) is. */
+const isFlankingSpace = (char: string | undefined): boolean => char === undefined || /\s/.test(char);
+
+/** Whether a character next to a delimiter run is punctuation or a symbol (Unicode P or S), as CommonMark reads it. */
+const isFlankingPunctuation = (char: string | undefined): boolean => char !== undefined && /[\p{P}\p{S}]/u.test(char);
+
+/** The character (a whole surrogate pair) ending at index `i` of `text`, or undefined at its start. */
+const characterBefore = (text: string, i: number): string | undefined => {
+    if (i <= 0) return undefined;
+    return i >= 2 && /[\uDC00-\uDFFF]/.test(text[i - 1]) && /[\uD800-\uDBFF]/.test(text[i - 2]) ? text.slice(i - 2, i) : text[i - 1];
+};
+
+/** The character (a whole surrogate pair) starting at index `i` of `text`, or undefined at its end. */
+const characterAt = (text: string, i: number): string | undefined => {
+    const code = text.codePointAt(i);
+    return code === undefined ? undefined : String.fromCodePoint(code);
+};
+
+/** What a matched pair of delimiter runs makes of the text between them. */
+type EmphasisFlag = 'bold' | 'italic' | 'strikethrough' | 'highlight';
+
 /**
- * For one text, a function giving where the underscore emphasis opened by a run of `length`
- * underscores ending at `from` closes (the index of the closing run), or -1. As CommonMark has it
- * for `_`, the closer is a run of exactly as many underscores later on the same line, not preceded
- * by whitespace and not followed by a word character, so an underscore inside a word (snake_case)
- * never closes emphasis. A line found to hold no closer for a length is remembered, so a line full
- * of openers costs time linear in its length.
+ * A run of `*` or `_`, or a `~~` or `==`, that may open or close emphasis, strikethrough or a
+ * highlight (see matchEmphasis). `remaining` of its characters are still text once it is matched;
+ * `opened` and `closed` list, in the order they were matched, what it opens (with characters from its
+ * end) and closes (with characters from its start). `previous` and `next` link the runs not removed.
  */
-function underscoreCloser(text: string): (from: number, length: number) => number {
-    const newlineFrom = newlineCursor(text);
-    const noCloserBefore = [0, 0, 0, 0];
-    return (from, length) => {
-        if (from < noCloserBefore[length]) return -1;
-        const newline = newlineFrom(from);
-        const lineEnd = newline === -1 ? text.length : newline;
-        for (let start = text.indexOf('_', from + 1); start !== -1 && start < lineEnd; start = text.indexOf('_', start + 1)) {
-            let end = start + 1;
-            while (text[end] === '_') end++;
-            if (end - start === length && !/\s/.test(text[start - 1]) && !isWordCharacter(text[end])) return start;
-            start = end - 1;
-        }
-        noCloserBefore[length] = lineEnd;
-        return -1;
-    };
+interface DelimiterRun {
+    char: string;
+    length: number;
+    remaining: number;
+    canOpen: boolean;
+    canClose: boolean;
+    /** It cannot close or open only for what stands beside it, so it may in the second pass (see matchEmphasis). */
+    closesLate: boolean;
+    opensLate: boolean;
+    /** Punctuation on both sides (`**` in ``**`a`****.**``), where the rule of three is not applied (see matchEmphasis). */
+    enclosed: boolean;
+    opened: EmphasisFlag[];
+    closed: EmphasisFlag[];
+    previous: number;
+    next: number;
+    removed: boolean;
 }
 
 /**
- * For one text, a function giving where the emphasis (`*`), strikethrough (`~~`) or highlight (`==`)
- * opened by a run of `char` ending at `from` closes: the start of the first run of at least `length`
- * of them later on its line, after at least one character, that is not escaped with a backslash (so
- * `**a\***` is bold `a*`), or -1. (An opener is a run not followed by whitespace, so `5 * 3 * 2` holds
- * none. A closer may follow whitespace, which CommonMark does not allow, because this library's
- * earlier versions wrote a run's trailing space inside its delimiters, `**Note: **body`, and files
- * saved that way keep their bold.) As for underscores, a line found to hold no closer for a length is
- * remembered, so a line full of openers that never close costs time linear in it.
+ * The delimiter run `run` found at `start` in `text`, with what it can do by CommonMark's flanking
+ * rules, or null when it can do nothing (it is text). A run is left-flanking when it is not followed
+ * by whitespace and, if followed by punctuation, is preceded by whitespace or punctuation, and
+ * right-flanking the other way about. `*`, `~~` and `==` open when left-flanking and close when
+ * right-flanking; `_` opens only when it is also not right-flanking or is preceded by punctuation, and
+ * closes likewise, so an underscore inside a word (snake_case) does neither. `~` and `=` form runs of
+ * exactly two.
  */
-function delimiterCloser(text: string, char: string): (from: number, length: number) => number {
-    const newlineFrom = newlineCursor(text);
-    const noCloserBefore: number[] = [];
-    return (from, length) => {
-        if (from < (noCloserBefore[length] ?? -1)) return -1;
-        const newline = newlineFrom(from);
-        const lineEnd = newline === -1 ? text.length : newline;
-        for (let i = from; i < lineEnd; i++) {
-            if (text[i] === '\\') { i++; continue; }
-            if (text[i] !== char) continue;
-            let end = i + 1;
-            while (end < lineEnd && text[end] === char) end++;
-            if (end - i >= length && i > from) return i;
-            i = end - 1;
-        }
-        noCloserBefore[length] = lineEnd;
-        return -1;
+function delimiterRun(text: string, start: number, run: string): DelimiterRun | null {
+    const char = run[0];
+    if ((char === '~' || char === '=') && run.length !== 2) return null;
+    const before = characterBefore(text, start);
+    const after = characterAt(text, start + run.length);
+    const left = !isFlankingSpace(after) && (!isFlankingPunctuation(after) || isFlankingSpace(before) || isFlankingPunctuation(before));
+    const right = !isFlankingSpace(before) && (!isFlankingPunctuation(before) || isFlankingSpace(after) || isFlankingPunctuation(after));
+    const canOpen = char === '_' ? left && (!right || isFlankingPunctuation(before)) : left;
+    const canClose = char === '_' ? right && (!left || isFlankingPunctuation(after)) : right;
+    // (Not a `_` run: the earlier versions wrote underscores around trimmed text only.)
+    const closesLate = char !== '_' && !canClose && before !== undefined;
+    const opensLate = char !== '_' && !canOpen && !isFlankingSpace(after);
+    if (!canOpen && !canClose && !closesLate && !opensLate) return null;
+    const enclosed = isFlankingPunctuation(before) && isFlankingPunctuation(after);
+    return { char, length: run.length, remaining: run.length, canOpen, canClose, closesLate, opensLate, enclosed, opened: [], closed: [], previous: -1, next: -1, removed: false };
+}
+
+/**
+ * Whether `text` from `start` to `end` holds a delimiter run of one of the characters in `openers`
+ * that may close (in either pass of matchEmphasis). Runs are read whole, and an escaped character is
+ * no delimiter.
+ */
+function closesEmphasisWithin(text: string, start: number, end: number, openers: Set<string>): boolean {
+    for (let i = start; i < end; i++) {
+        if (text[i] === '\\') { i++; continue; }
+        if (!openers.has(text[i])) continue;
+        let runEnd = i + 1;
+        while (text[runEnd] === text[i]) runEnd++;
+        const run = delimiterRun(text, i, text.slice(i, runEnd));
+        if (run && (run.canClose || run.closesLate)) return true;
+        i = runEnd - 1;
+    }
+    return false;
+}
+
+/**
+ * Pairs delimiter runs (listed in text order) into emphasis, strikethrough and highlights, as
+ * CommonMark's "process emphasis" does. Each run that can close, in turn, closes the nearest earlier
+ * run of its character that can open, unless the rule of three rules the pair out (when either can
+ * both open and close, their lengths may not sum to a multiple of three unless both are multiples of
+ * three). That rule keeps `*a**b**c*` italic around bold; it is not applied to a run with punctuation
+ * on both sides, which only ever closes one run and opens the next (``**`a`****.**``, as this library
+ * wrote bold code followed by bold text, which was read so before). A pair uses two characters of each run (bold, strikethrough, a highlight) or one (italic),
+ * a closer with characters left closes again, and the runs between the two are text: `*a **b** c*`
+ * is italic with bold inside. Where a closer finds no opener, later closers of its kind stop their
+ * search below it, and a run is removed at most once, so the time is linear in the number of runs.
+ *
+ * Then the same again over the runs left, where a run that is not left-flanking only for what stands
+ * beside it opens too, and one not right-flanking closes too (`**Note: **body` is bold `Note: `, and
+ * `*Source:*Data` italic `Source:`): this library's earlier versions wrote a run's edge whitespace
+ * and punctuation inside its delimiters, and read them back so, and files saved so keep their
+ * formatting. It is a second pass rather than a looser rule so that what CommonMark pairs, it still
+ * pairs as CommonMark does (`*a *b*` is `a`, then italic `b`).
+ */
+function matchEmphasis(runs: DelimiterRun[]): void {
+    runs.forEach((run, i) => { run.previous = i - 1; run.next = i + 1 < runs.length ? i + 1 : -1; });
+    const remove = (i: number) => {
+        const run = runs[i];
+        if (run.previous !== -1) runs[run.previous].next = run.next;
+        if (run.next !== -1) runs[run.next].previous = run.previous;
+        run.removed = true;
     };
+    for (const late of [false, true]) {
+        // Per kind of closer (its character, whether it can also open, its length modulo three): the
+        // run at or below which no opener for it was found.
+        const floors = new Map<string, number>();
+        for (let c = 0; c < runs.length;) {
+            const closer = runs[c];
+            if (closer.removed || !(closer.canClose || (late && closer.closesLate))) { c++; continue; }
+            const emphasis = closer.char === '*' || closer.char === '_';
+            const closerOpens = closer.canOpen || (late && closer.opensLate);
+            const kind = `${closer.char}${closerOpens ? 1 : 0}${closer.length % 3}`;
+            const floor = floors.get(kind) ?? -1;
+            let o = closer.previous;
+            for (; o > floor; o = runs[o].previous) {
+                const opener = runs[o];
+                if (!(opener.canOpen || (late && opener.opensLate)) || opener.char !== closer.char) continue;
+                const either = (closerOpens && !closer.enclosed) || ((opener.canClose || (late && opener.closesLate)) && !opener.enclosed);
+                if (emphasis && either && (opener.length + closer.length) % 3 === 0 && !(opener.length % 3 === 0 && closer.length % 3 === 0)) continue;
+                break;
+            }
+            if (o <= floor) {
+                floors.set(kind, closer.previous);
+                // A run that can open stays, and in the first pass every run, for the second.
+                if (late && !closer.canOpen && !closer.opensLate) remove(c);
+                c++;
+                continue;
+            }
+            const opener = runs[o];
+            const use = emphasis && (opener.remaining < 2 || closer.remaining < 2) ? 1 : 2;
+            const flag: EmphasisFlag = closer.char === '~' ? 'strikethrough' : closer.char === '=' ? 'highlight' : use === 2 ? 'bold' : 'italic';
+            opener.remaining -= use;
+            opener.opened.push(flag);
+            closer.remaining -= use;
+            closer.closed.push(flag);
+            for (let k = closer.previous; k !== o;) {
+                const previous = runs[k].previous;
+                remove(k);
+                k = previous;
+            }
+            if (opener.remaining === 0) remove(o);
+            if (closer.remaining === 0) { remove(c); c++; }
+        }
+    }
 }
 
 /**
@@ -601,9 +660,9 @@ function codeSpanContent(raw: string): string {
     return text.length > 2 && text.startsWith(' ') && text.endsWith(' ') && /[^ ]/.test(text) ? text.slice(1, -1) : text;
 }
 
-/** Link text: characters, backslash escapes, and bracket pairs nested up to three deep. */
+/** Link text: characters (line ends too), backslash escapes, and bracket pairs nested up to three deep. */
 const LINK_TEXT = (() => {
-    const unit = String.raw`[^\[\]\\\n]|\\[^\n]`;
+    const unit = String.raw`[^\[\]\\]|\\[\s\S]`;
     let text = `(?:${unit})*`;
     for (let depth = 0; depth < 3; depth++) text = `(?:${unit}|\\[${text}\\])*`;
     return text;
@@ -665,10 +724,9 @@ const htmlCloser = (tag: string): RegExp => {
  *   optional attribute list (`{width=50%}`). The target may hold parenthesis pairs (LINK_DESTINATION)
  *   and stops at its first unpaired `)` (or at a following `](`), except that a quoted title after a
  *   target without spaces may hold `(`, `)` and brackets.
- * - `stars` (`*`, `**`, `***`), `tildes` (`~~`) and `equals` (`==`): the opener of emphasis,
- *   strikethrough or a highlight, a run not followed by whitespace; see delimiterCloser.
- * - `underscores`: the opener of `_italic_`, `__bold__` or `___both___`, a run of one to three
- *   underscores that is not inside a word (CommonMark's rule for `_`); see underscoreCloser.
+ * - `stars`, `underscores`, `tildes` and `equals`: a run of `*` or `_`, or a `~~` or `==`, which may
+ *   open or close emphasis, strikethrough or a highlight. They are paired once the whole text is read
+ *   (see delimiterRun and matchEmphasis), as CommonMark pairs them.
  * - `codeFence`: a backtick run, the opener of a code span; see codeSpanCloser.
  * - `underline`/`subscript`/`superscript`/`spanStyle`+`spanContent`: HTML-style inline formatting,
  *   each ending before another opening tag of its kind.
@@ -684,33 +742,35 @@ const htmlCloser = (tag: string): RegExp => {
  *   otherwise match its inner `$...$`), and `mathInline` (`$...$`, with no whitespace just inside
  *   either `$`, the Pandoc/KaTeX heuristic that keeps "$5 and $10" as text).
  *
- * Every alternative stops scanning early, so a paragraph costs time in proportion to its length
- * however it is written: link text holds no stray `[`, a target stops at its first `)`, labels hold
- * no `[`, an HTML-style span stops at another opening tag of its kind, an attribute list is at most
- * 1000 characters, and the closers of code spans and underscore emphasis are looked up rather than
- * scanned for. Nothing else is capped, so a long link or span is still a link or span.
+ * A paragraph is read as one text, its line ends in it, so any of these may run across lines (a
+ * target, a label's id, a title and inline math may not). Every alternative stops scanning early, so a
+ * paragraph costs time in proportion to its length however it is written: link text holds no stray
+ * `[`, a target stops at its first `)`, labels hold no `[`, an HTML-style span stops at another opening
+ * tag of its kind, an attribute list is at most 1000 characters, and the closers of code spans are
+ * looked up rather than scanned for. Nothing else is capped, so a long link or span is still a link or
+ * span.
  */
 const INLINE_TOKENS = [
     String.raw`\\(?<esc>[!-\/:-@\[-\x60{-~])`,
     String.raw`(?<imgBang>!?)\[(?<imgAlt>${LINK_TEXT})\]\((?<imgUrl>[^\s()\[\]]*\s+(?:"(?:[^"\\\n]|\\[^\n])*"|'(?:[^'\\\n]|\\[^\n])*')\s*|${LINK_DESTINATION})\)(?:\{(?<imgAttrs>[^}\n]{0,1000})\})?`,
-    String.raw`(?<stars>\*{1,3})(?![\s*])`,
-    String.raw`(?<!(?:^|[^\\])_)(?<![^\s!-\/:-@\[-\x60{-~])(?<underscores>_{1,3})(?![\s_])`,
-    String.raw`(?<tildes>~~)(?![\s~])`,
-    String.raw`(?<equals>==)(?![\s=])`,
+    String.raw`(?<stars>\*+)`,
+    String.raw`(?<underscores>_+)`,
+    String.raw`(?<tildes>~+)`,
+    String.raw`(?<equals>=+)`,
     String.raw`(?<codeFence>\x60+)`,
-    String.raw`<u>(?<underline>(?:(?!<u>).)+?)<\/u>`,
-    String.raw`<sub>(?<subscript>(?:(?!<sub>).)+?)<\/sub>`,
-    String.raw`<sup>(?<superscript>(?:(?!<sup>).)+?)<\/sup>`,
+    String.raw`<u>(?<underline>(?:(?!<u>)[\s\S])+?)<\/u>`,
+    String.raw`<sub>(?<subscript>(?:(?!<sub>)[\s\S])+?)<\/sub>`,
+    String.raw`<sup>(?<superscript>(?:(?!<sup>)[\s\S])+?)<\/sup>`,
     String.raw`(?<lineBreak><br\s*\/?>)`,
     String.raw`(?<anchorTag><a\s[^<>\n]*>[ \t]*<\/a>)`,
     String.raw`(?<htmlComment><!--)`,
-    String.raw`<span\s+style="(?<spanStyle>[^"\n]*)">(?<spanContent>(?:(?!<span[\s>]).)+?)<\/span>`,
+    String.raw`<span\s+style="(?<spanStyle>[^"\n]*)">(?<spanContent>(?:(?!<span[\s>])[\s\S])+?)<\/span>`,
     String.raw`<(?<htmlTag>[a-zA-Z][a-zA-Z0-9]*)(?<htmlAttrs>\s[^<>]{0,1000})?>`,
     String.raw`\[\^(?<footnoteId>[^\[\]\n]+)\]`,
     String.raw`\[@(?<citationKey>[a-zA-Z0-9_:.-]+)\]`,
     String.raw`\[\[(?<wikiPage>[^\[\]|\n]+)(?:\|(?<wikiAlias>[^\[\]\n]+))?\]\]`,
-    String.raw`(?<refBang>!?)\[(?<refText>[^\[\]\n]*)\]\[(?<refId>[^\[\]\n]*)\]`,
-    String.raw`(?<shortBang>!?)\[(?<shortText>[^\[\]\n]+)\]`,
+    String.raw`(?<refBang>!?)\[(?<refText>[^\[\]]*)\]\[(?<refId>[^\[\]]*)\]`,
+    String.raw`(?<shortBang>!?)\[(?<shortText>[^\[\]]+)\]`,
     String.raw`<(?<autolinkUrl>(?:https?|mailto):[^\s<>]+)>`,
     String.raw`<(?<autolinkEmail>[\w.!#$%&'*+\/=?^\x60{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)>`,
     String.raw`\$\$(?!\$)(?<mathDisplay>(?:\\[\s\S]|[^$\\])+?)\$\$`,
@@ -1199,10 +1259,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // Everywhere else (a heading, list item, table cell, quote, note, or inside emphasis) a block
     // cannot go, so it is inline math there.
     const parseInline = (text: string, currentFormatting: TextFormatting = {}, displayMath = false): OfficeContentNode[] => {
-        const nodes: OfficeContentNode[] = [];
         // Text of this call's own, with its character references decoded (`&amp;` is `&`). Once: what a
-        // nested call returns (emphasis, a link's text) it decoded already, and decoding that again
-        // turned a literal `&amp;quot;` inside `**...**` into `"`.
+        // nested call returns (a link's text, an element's content) it decoded already, and decoding
+        // that again turned a literal `&amp;quot;` inside `<b>...</b>` into `"`.
         const plainText = (t: string): OfficeContentNode => ({ type: 'text', text: currentFormatting.font === 'monospace' ? t : decodeCharacterReferences(t), formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined });
 
         // Builds the same image/link node shape regardless of whether the URL came from
@@ -1228,8 +1287,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
             return { type: 'image', metadata: { url, altText, title, ...attrs } as ImageMetadata };
         };
-        const buildLinkOrImageNodes = (isImage: boolean, altText: string, rawUrl: string, attrsStr?: string): OfficeContentNode[] => {
-            const { url, title } = splitUrlTitle(rawUrl);
+        const buildLinkOrImageNodes = (isImage: boolean, altText: string, { url, title }: { url: string; title?: string }, attrsStr?: string): OfficeContentNode[] => {
             if (isImage) {
                 // Alt text is plain text, decoded as a Markdown renderer decodes it; a Pandoc-style
                 // attribute list may follow the image, e.g. {width=50% .centered}.
@@ -1272,7 +1330,26 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const content = parseInline(inner, { ...currentFormatting, ...element });
             if (tag === 'a') {
                 const href = attrs.get('href');
-                if (href !== undefined) return applyLink(content, href, attrs.get('title') || undefined);
+                if (href !== undefined) {
+                    // Whitespace at either end of what the link holds (the line ends around a logo
+                    // written `<a href>`, `<img>`, `</a>` on lines of their own) stands beside it: a
+                    // linked space was a link of its own on the next save.
+                    // (Only around other content, and not from a run a note is on.)
+                    const movable = (node: OfficeContentNode | undefined): node is OfficeContentNode & { text: string } =>
+                        content.length > 1 && node?.type === 'text' && typeof node.text === 'string' && !node.notes?.length;
+                    let before = '', after = '';
+                    const first = content[0];
+                    if (movable(first)) {
+                        before = first.text.slice(0, first.text.length - trimStartChars(first.text, ASCII_WHITESPACE).length);
+                        if (before === first.text) content.shift(); else if (before) first.text = first.text.slice(before.length);
+                    }
+                    const last = content[content.length - 1];
+                    if (movable(last)) {
+                        after = last.text.slice(trimEndChars(last.text, ASCII_WHITESPACE).length);
+                        if (after === last.text) content.pop(); else if (after) last.text = last.text.slice(0, -after.length);
+                    }
+                    return [...(before ? [plainText(before)] : []), ...applyLink(content, href, attrs.get('title') || undefined), ...(after ? [plainText(after)] : [])];
+                }
                 const id = attrs.get('id') || attrs.get('name');
                 return id ? [anchorMark([id]), ...content] : content;
             }
@@ -1298,18 +1375,29 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         };
 
         // The tokenizer (see INLINE_TOKENS) finds the next inline construct; text between constructs
-        // is plain text. A backtick run, a run of underscores and a comment's `<!--` are matched as
-        // openers only: where each closes is looked up (codeSpanCloser, underscoreCloser, commentAt),
-        // in time linear in the text however many never close. An opener with no closer is ordinary
-        // text, left in its run. The tokenizer is shared by every call (compiling it for each piece of
-        // text doubled the time of a document of short paragraphs); each search sets where it starts,
-        // so the nested calls made while handling a match cannot disturb this one.
+        // is plain text. A backtick run and a comment's `<!--` are matched as openers only: where each
+        // closes is looked up (codeSpanCloser, commentAt), in time linear in the text however many
+        // never close. An opener with no closer is ordinary text, left in its run. A run of emphasis
+        // delimiters is set aside and paired once the whole text is read (matchEmphasis), so emphasis
+        // may hold links, code and other emphasis, and run across a line end. The tokenizer is shared by
+        // every call (compiling it for each piece of text doubled the time of a document of short
+        // paragraphs); each search sets where it starts, so the nested calls made while handling a match
+        // cannot disturb this one.
+        //
+        // What the scan finds, in order: stretches of plain text (as offsets into `text`), finished
+        // nodes, delimiter runs, and footnotes (which go to the node before them).
+        const items: ({ start: number; end: number } | { node: OfficeContentNode } | { run: DelimiterRun } | { note: OfficeContentNode })[] = [];
+        const runs: DelimiterRun[] = [];
+        // The characters of emphasis that may be open where the scan stands: per character, the runs so
+        // far that only open less those that only close (not below none), a count rather than a pairing.
+        const openCounts = new Map<string, number>();
+        const openers = new Set<string>();
+        const push = (found: OfficeContentNode | OfficeContentNode[]) => {
+            if (Array.isArray(found)) for (const node of found) items.push({ node });
+            else items.push({ node: found });
+        };
         const closeCodeSpan = codeSpanCloser(text);
-        const closeUnderscores = underscoreCloser(text);
-        const closeStars = delimiterCloser(text, '*');
-        const closeTildes = delimiterCloser(text, '~');
-        const closeEquals = delimiterCloser(text, '=');
-        let lastIndex = 0; // end of the text already emitted
+        let lastIndex = 0; // end of the text already taken
         let next = 0; // where the next search starts
         const closes: CommentCloseCache = { at: -1, from: Number.MAX_SAFE_INTEGER };
 
@@ -1319,6 +1407,30 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             if (!match) break;
             next = INLINE_TOKEN_REGEX.lastIndex;
             const g = match.groups!;
+            const delimiters = g.stars ?? g.underscores ?? g.tildes ?? g.equals;
+            if (delimiters !== undefined) {
+                // A run that can neither open nor close is text, left in its stretch.
+                const run = delimiterRun(text, match.index, delimiters);
+                if (!run) continue;
+                if (match.index > lastIndex) items.push({ start: lastIndex, end: match.index });
+                items.push({ run });
+                runs.push(run);
+                const count = openCounts.get(run.char) ?? 0;
+                const opens = run.canOpen || run.opensLate, closes = run.canClose || run.closesLate;
+                const now = opens && !closes ? count + 1 : closes && !opens ? Math.max(0, count - 1) : count;
+                openCounts.set(run.char, now);
+                if (now > 0) openers.add(run.char); else openers.delete(run.char);
+                lastIndex = next;
+                continue;
+            }
+            // Math does not run past the closer of emphasis opened before it (`_$data_: ... [$x`): a
+            // `$` read as the start of math there swallowed the closer and the text after it, where
+            // the text is emphasis. Its `$` is then text. (Emphasis closed before it does not count:
+            // `*a* and $x*y$` is math.)
+            if ((g.mathInline !== undefined || g.mathDisplay !== undefined) && openers.size && closesEmphasisWithin(text, match.index + 1, next - 1, openers)) {
+                next = match.index + 1;
+                continue;
+            }
             let comment: { body: string; end: number } | null = null;
             if (g.htmlComment !== undefined) {
                 comment = commentAt(text, match.index, closes);
@@ -1331,26 +1443,21 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 if (!id) { next = match.index + 2; continue; }
                 anchorIds = [id];
             }
-            let closeAt = -1;
-            // The stars of a run that open emphasis: as many as a closing run allows, from three down,
-            // the rest are text (`***a**` is a star, then bold `a`).
-            let starLength = 0;
-            if (g.codeFence !== undefined || g.underscores !== undefined) {
-                const run = g.codeFence ?? g.underscores;
-                closeAt = g.codeFence !== undefined ? closeCodeSpan(next, run.length) : closeUnderscores(next, run.length);
-                if (closeAt === -1) continue;
-                next = closeAt + run.length;
-            } else if (g.stars !== undefined) {
-                for (starLength = g.stars.length; starLength > 0; starLength--) {
-                    closeAt = closeStars(next, starLength);
-                    if (closeAt !== -1) break;
+            // A reference to no definition is text: its brackets, and what they hold read as any text
+            // is (`[see *this*]` keeps its emphasis).
+            if (g.refText !== undefined || g.shortText !== undefined) {
+                const label = normalizeLabel(g.refText !== undefined ? (g.refId || g.refText) : g.shortText);
+                const def = linkDefinitions.get(label);
+                if (!def || !expandReference(`link:${label}`, def.url.length + (def.title?.length ?? 0))) {
+                    next = match.index + (g.refBang || g.shortBang ? 2 : 1);
+                    continue;
                 }
+            }
+            let closeAt = -1;
+            if (g.codeFence !== undefined) {
+                closeAt = closeCodeSpan(next, g.codeFence.length);
                 if (closeAt === -1) continue;
-                next = closeAt + starLength;
-            } else if (g.tildes !== undefined || g.equals !== undefined) {
-                closeAt = (g.tildes !== undefined ? closeTildes : closeEquals)(next, 2);
-                if (closeAt === -1) continue;
-                next = closeAt + 2;
+                next = closeAt + g.codeFence.length;
             } else if (g.htmlTag !== undefined) {
                 // Not an element it reads, a picture with no source, or an element never closed: text.
                 const tag = g.htmlTag.toLowerCase();
@@ -1362,46 +1469,29 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     next = close.at + close.length;
                 }
             }
-            const constructStart = g.stars !== undefined ? match.index + g.stars.length - starLength : match.index;
-            if (constructStart > lastIndex) {
-                nodes.push(plainText(text.substring(lastIndex, constructStart)));
-            }
+            if (match.index > lastIndex) items.push({ start: lastIndex, end: match.index });
 
             if (g.esc !== undefined) { // Backslash-escaped punctuation
-                nodes.push(plainText(g.esc));
+                push(plainText(g.esc));
             } else if (g.imgAlt !== undefined) { // Image or Link
-                appendAll(nodes, buildLinkOrImageNodes(g.imgBang === '!', g.imgAlt, g.imgUrl, g.imgAttrs));
-            } else if (g.stars !== undefined) { // Italic (*), bold (**), or both (***)
-                const formatting: TextFormatting = { ...currentFormatting };
-                if (starLength >= 2) formatting.bold = true;
-                if (starLength !== 2) formatting.italic = true;
-                appendAll(nodes, parseInline(text.slice(match.index + g.stars.length, closeAt), formatting));
-            } else if (g.underscores !== undefined) { // Italic (_), bold (__), or both (___)
-                const formatting: TextFormatting = { ...currentFormatting };
-                if (g.underscores.length !== 2) formatting.italic = true;
-                if (g.underscores.length >= 2) formatting.bold = true;
-                appendAll(nodes, parseInline(text.slice(match.index + g.underscores.length, closeAt), formatting));
-            } else if (g.tildes !== undefined) { // Strikethrough
-                appendAll(nodes, parseInline(text.slice(match.index + 2, closeAt), { ...currentFormatting, strikethrough: true }));
-            } else if (g.equals !== undefined) { // ==highlight== (Obsidian/extended); additive on import
-                appendAll(nodes, parseInline(text.slice(match.index + 2, closeAt), { ...currentFormatting, backgroundColor: '#ffff00' }));
+                push(buildLinkOrImageNodes(g.imgBang === '!', g.imgAlt, splitUrlTitle(g.imgUrl), g.imgAttrs));
             } else if (g.codeFence !== undefined) { // Inline code, closed by a run of as many backticks
-                nodes.push({ type: 'text', text: codeSpanContent(text.slice(match.index + g.codeFence.length, closeAt)), formatting: { ...currentFormatting, font: 'monospace' } });
+                push({ type: 'text', text: codeSpanContent(text.slice(match.index + g.codeFence.length, closeAt)), formatting: { ...currentFormatting, font: 'monospace' } });
             } else if (g.underline !== undefined) { // Underline
-                appendAll(nodes, parseInline(g.underline, { ...currentFormatting, underline: true }));
+                push(parseInline(g.underline, { ...currentFormatting, underline: true }));
             } else if (g.subscript !== undefined) { // Subscript
-                appendAll(nodes, parseInline(g.subscript, { ...currentFormatting, subscript: true }));
+                push(parseInline(g.subscript, { ...currentFormatting, subscript: true }));
             } else if (g.superscript !== undefined) { // Superscript
-                appendAll(nodes, parseInline(g.superscript, { ...currentFormatting, superscript: true }));
+                push(parseInline(g.superscript, { ...currentFormatting, superscript: true }));
             } else if (g.htmlTag !== undefined) { // Raw inline HTML: an element, or a picture (see inlineHtml)
-                appendAll(nodes, inlineHtml(g.htmlTag.toLowerCase(), g.htmlAttrs ?? '', closeAt === -1 ? '' : text.slice(match.index + match[0].length, closeAt)));
+                push(inlineHtml(g.htmlTag.toLowerCase(), g.htmlAttrs ?? '', closeAt === -1 ? '' : text.slice(match.index + match[0].length, closeAt)));
             } else if (g.anchorTag !== undefined) { // An empty anchor: an id (see resolveAnchorMarks)
-                nodes.push(anchorMark(anchorIds));
+                push(anchorMark(anchorIds));
             } else if (g.lineBreak !== undefined) { // Raw inline <br>/<br/>/<br /> - a hard line break.
                 // MarkdownGenerator emits a raw <br> for a line break inside a table cell (a GFM pipe
                 // cell can't hold a newline), so the parser must read it back symmetrically as a break
                 // node instead of escaping it to literal `&lt;br&gt;` text and destroying it.
-                nodes.push({ type: 'break', metadata: { breakType: 'carriageReturn' } as BreakMetadata });
+                push({ type: 'break', metadata: { breakType: 'carriageReturn' } as BreakMetadata });
             } else if (g.spanContent !== undefined) { // Inline styled span: color / highlight / font-size
                 const style = g.spanStyle || '';
                 const styled: TextFormatting = { ...currentFormatting };
@@ -1417,7 +1507,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 if (background) styled.backgroundColor = background;
                 const size = prop('font-size');
                 if (size) styled.size = size;
-                appendAll(nodes, parseInline(g.spanContent, styled));
+                push(parseInline(g.spanContent, styled));
             } else if (g.footnoteId !== undefined) { // Footnote reference
                 const noteId = g.footnoteId;
                 // ignoreNotes drops footnotes at parse time (as in DOCX/ODT/PDF): swallow the marker and
@@ -1425,70 +1515,126 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 // before skipping. The orphan sweep below is likewise skipped.
                 if (config.ignoreNotes) { lastIndex = next; continue; }
                 const noteNode = footnoteNode(noteId);
-                // Notes attach to the preceding text node (matches WordParser's convention);
-                // fall back to an empty text node if the reference opens the inline run. A reference
-                // that would make a note contain itself stays text.
-                if (!noteNode) {
-                    nodes.push(plainText(match[0]));
-                } else if (nodes.length > 0) {
-                    const target = nodes[nodes.length - 1];
-                    if (!target.notes) target.notes = [];
-                    target.notes.push(noteNode);
-                } else {
-                    nodes.push({ type: 'text', text: '', notes: [noteNode] });
-                }
+                // Notes attach to the node before them (matches WordParser's convention; see below). A
+                // reference that would make a note contain itself stays text.
+                if (noteNode) items.push({ note: noteNode });
+                else push(plainText(match[0]));
             } else if (g.citationKey !== undefined) { // Citation reference
-                nodes.push({ type: 'text', text: g.citationKey, metadata: { citationKey: g.citationKey } as TextMetadata });
+                push({ type: 'text', text: g.citationKey, metadata: { citationKey: g.citationKey } as TextMetadata });
             } else if (g.wikiPage !== undefined) { // Wikilink
                 const page = g.wikiPage.trim();
                 const alias = g.wikiAlias?.trim();
-                nodes.push({ type: 'text', text: alias || page, metadata: { link: page, linkType: 'internal', wikilink: true } as TextMetadata });
-            } else if (g.refText !== undefined) { // Explicit/collapsed reference link or image: [text][ref] / [text][]
-                const isImage = g.refBang === '!';
-                const label = g.refText;
-                const refId = normalizeLabel(g.refId || label);
-                const def = linkDefinitions.get(refId);
-                if (def && expandReference(`link:${refId}`, def.url.length + (def.title?.length ?? 0))) {
-                    appendAll(nodes, buildLinkOrImageNodes(isImage, label, def.url));
-                } else {
-                    // Not a known reference - preserve the literal bracketed text unchanged.
-                    nodes.push(plainText(text.substring(match.index, match.index + match[0].length)));
-                }
-            } else if (g.shortText !== undefined) { // Shortcut reference: [text]
-                const isImage = g.shortBang === '!';
-                const label = g.shortText;
-                const def = linkDefinitions.get(normalizeLabel(label));
-                if (def && expandReference(`link:${normalizeLabel(label)}`, def.url.length + (def.title?.length ?? 0))) {
-                    appendAll(nodes, buildLinkOrImageNodes(isImage, label, def.url));
-                } else {
-                    // Not a known reference - ordinary bracketed prose, preserve unchanged.
-                    nodes.push(plainText(`${g.shortBang}[${label}]`));
-                }
+                push({ type: 'text', text: alias || page, metadata: { link: page, linkType: 'internal', wikilink: true } as TextMetadata });
+            } else if (g.refText !== undefined || g.shortText !== undefined) { // A reference link or picture: [text][ref], [text][], [text]
+                const def = linkDefinitions.get(normalizeLabel(g.refText !== undefined ? (g.refId || g.refText) : g.shortText))!;
+                push(buildLinkOrImageNodes((g.refBang || g.shortBang) === '!', g.refText ?? g.shortText, def));
             } else if (g.autolinkUrl !== undefined) { // <url> autolink
                 // Its references decoded in the target too, as in the text (CommonMark reads them in URLs):
                 // left in the target, `&amp;` was written back as `&amp;amp;`.
                 const url = decodeCharacterReferences(g.autolinkUrl);
-                nodes.push({ type: 'text', text: url, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined, metadata: { link: url, linkType: 'external' } as TextMetadata });
+                push({ type: 'text', text: url, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined, metadata: { link: url, linkType: 'external' } as TextMetadata });
             } else if (g.autolinkEmail !== undefined) { // <address> autolink: a mail link (CommonMark)
-                nodes.push({ type: 'text', text: g.autolinkEmail, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined, metadata: { link: `mailto:${g.autolinkEmail}`, linkType: 'external' } as TextMetadata });
+                push({ type: 'text', text: g.autolinkEmail, formatting: Object.keys(currentFormatting).length > 0 ? { ...currentFormatting } : undefined, metadata: { link: `mailto:${g.autolinkEmail}`, linkType: 'external' } as TextMetadata });
             } else if (g.mathDisplay !== undefined) { // Display math inside the text
                 // As KaTeX, MathJax, GitLab and Pandoc read it: display math, wherever it is written.
-                if (!g.mathDisplay.trim()) nodes.push(plainText(match[0]));
-                else nodes.push({ type: 'code', text: g.mathDisplay.trim(), metadata: { math: displayMath ? 'block' : 'inline' } as CodeMetadata });
+                if (!g.mathDisplay.trim()) push(plainText(match[0]));
+                else push({ type: 'code', text: g.mathDisplay.trim(), metadata: { math: displayMath ? 'block' : 'inline' } as CodeMetadata });
             } else if (g.mathInline !== undefined) { // Inline math
-                nodes.push({ type: 'code', text: g.mathInline, metadata: { math: 'inline' } as CodeMetadata });
+                push({ type: 'code', text: g.mathInline, metadata: { math: 'inline' } as CodeMetadata });
             } else if (comment) { // Inline source comment: a hidden note, kept verbatim
-                nodes.push({ type: 'comment', text: comment.body, metadata: { sourceSyntax: 'html' } as CommentMetadata });
+                push({ type: 'comment', text: comment.body, metadata: { sourceSyntax: 'html' } as CommentMetadata });
             }
 
             lastIndex = next;
         }
+        if (lastIndex < text.length) items.push({ start: lastIndex, end: text.length });
 
-        if (lastIndex < text.length) {
-            nodes.push(plainText(text.substring(lastIndex)));
+        matchEmphasis(runs);
+
+        // The nodes, in order: each run's matched characters open or close the formatting they give
+        // what is between them (bold, italic, strikethrough, highlight, counted, as they nest), and its
+        // other characters are text. Plain text under one formatting is one run of text.
+        const nodes: OfficeContentNode[] = [];
+        const open: Record<EmphasisFlag, number> = { bold: 0, italic: 0, strikethrough: 0, highlight: 0 };
+        let emphasis: TextFormatting | undefined; // what the open runs give, when any is open
+        const updateEmphasis = () => {
+            emphasis = open.bold || open.italic || open.strikethrough || open.highlight ? {
+                ...(open.bold && { bold: true }), ...(open.italic && { italic: true }),
+                ...(open.strikethrough && { strikethrough: true }), ...(open.highlight && { backgroundColor: '#ffff00' }),
+            } : undefined;
+        };
+        let pending = '';
+        const flush = () => {
+            if (!pending) return;
+            appendAll(nodes, textNodes(pending, emphasis ? { ...currentFormatting, ...emphasis } : currentFormatting));
+            pending = '';
+        };
+        for (const item of items) {
+            if ('start' in item) {
+                pending += text.slice(item.start, item.end);
+            } else if ('run' in item) {
+                const { run } = item;
+                if (run.closed.length) {
+                    flush();
+                    for (const flag of run.closed) open[flag]--;
+                    updateEmphasis();
+                }
+                pending += run.char.repeat(run.remaining);
+                if (run.opened.length) {
+                    flush();
+                    for (const flag of run.opened) open[flag]++;
+                    updateEmphasis();
+                }
+            } else if ('note' in item) {
+                // After the text before it: on that text's last node, else on an empty run of its own.
+                flush();
+                const target = nodes[nodes.length - 1];
+                if (target) (target.notes ??= []).push(item.note);
+                else nodes.push({ type: 'text', text: '', notes: [item.note] });
+            } else {
+                flush();
+                const { node } = item;
+                if (emphasis && node.type === 'text') node.formatting = { ...node.formatting, ...emphasis };
+                // Display math in emphasis is inline: a block cannot go there.
+                else if (emphasis && node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math === 'block') node.metadata = { ...node.metadata, math: 'inline' } as CodeMetadata;
+                nodes.push(node);
+            }
         }
+        flush();
 
         return applyAbbreviations(nodes);
+    };
+
+    /**
+     * Text read under `formatting` (its character references decoded, unless it is code), as nodes:
+     * a line end in it is a soft break, a space (with the spaces and tabs around it), or, after two or
+     * more spaces or a backslash that is not itself escaped, a line break. (A line's leading spaces and
+     * tabs are taken off before; see splitParagraphLines.)
+     */
+    const textNodes = (raw: string, formatting: TextFormatting): OfficeContentNode[] => {
+        const node = (t: string): OfficeContentNode => ({ type: 'text', text: formatting.font === 'monospace' ? t : decodeCharacterReferences(t), formatting: Object.keys(formatting).length > 0 ? { ...formatting } : undefined });
+        if (!raw.includes('\n')) return [node(raw)];
+        const out: OfficeContentNode[] = [];
+        let current = '';
+        let start = 0;
+        for (let end = raw.indexOf('\n'); ; end = raw.indexOf('\n', start)) {
+            const line = raw.slice(start, end === -1 ? raw.length : end);
+            if (end === -1) { current += line; break; }
+            // Found from the end: an end-anchored pattern retried every run of spaces in the line,
+            // quadratic in a long one.
+            const spaces = line.length - trimEndChars(line, ' ').length;
+            if (spaces >= 2 || (spaces === 0 && line.endsWith('\\') && !isEscapedAt(line, line.length - 1))) {
+                current += line.slice(0, spaces >= 2 ? -spaces : -1);
+                if (current) out.push(node(current));
+                current = '';
+                out.push({ type: 'break', metadata: { breakType: 'carriageReturn' } as BreakMetadata });
+            } else {
+                current += `${trimEndChars(line, ' \t')} `;
+            }
+            start = end + 1;
+        }
+        if (current) out.push(node(current));
+        return out;
     };
 
     const escapeRegExpChars = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1536,54 +1682,13 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return result;
     };
 
-    // Splits a paragraph-shaped block's internal lines into inline-parsed content,
-    // inserting a real 'break' node for a hard line break (a line ending in 2+ trailing
-    // spaces or a trailing backslash) instead of collapsing it to a space. A plain single
-    // newline with no such marker is still a soft break and collapses to a space,
-    // unchanged from before - CommonMark itself renders a soft break as a space/newline.
-    const splitParagraphLines = (block: string): OfficeContentNode[] => {
-        // A continuation line's leading spaces and tabs are not part of the text (CommonMark); a
-        // comment's lines, joined first, keep theirs.
-        const lines = joinCodeSpanLines(joinDisplayMathLines(joinCommentLines(block.split('\n'))
-            .map((line, i) => (i === 0 ? line : trimStartChars(line, ' \t')))));
-        const children: OfficeContentNode[] = [];
-        lines.forEach((line, i) => {
-            // Two or more trailing spaces, or a trailing backslash that is not itself escaped (a
-            // line ending in an escaped `\\` has no break), found from the end: an end-anchored
-            // pattern retried every run of spaces in the line, quadratic in a long one.
-            const spaces = line.length - trimEndChars(line, ' ').length;
-            // On the last line a backslash has no line end to break, and is text.
-            const backslash = spaces === 0 && i < lines.length - 1 && line.endsWith('\\') && !isEscapedAt(line, line.length - 1);
-            const hardBreak = spaces >= 2 || backslash;
-            appendAll(children, parseInline(spaces >= 2 ? line.slice(0, -spaces) : backslash ? line.slice(0, -1) : line, {}, true));
-            if (i < lines.length - 1) {
-                if (hardBreak) {
-                    children.push({ type: 'break', metadata: { breakType: 'carriageReturn' } as BreakMetadata });
-                } else {
-                    children.push({ type: 'text', text: ' ' });
-                }
-            }
-        });
-        return children;
-    };
-
-    // A `$$` opened on one line of a paragraph and closed on a later one is one display equation:
-    // those lines are rejoined so the inline tokenizer sees the whole of it. An unescaped `$$` count
-    // that stays odd to the end of the paragraph leaves the lines as they are (literal text).
-    const joinDisplayMathLines = (lines: string[]): string[] => {
-        // Counted outside code spans, where a `$$` is literal.
-        const opens = (line: string) => ((line.replace(/(`+)[^`]*?\1/g, '').match(/(?<!\\)\$\$/g) || []).length % 2) === 1;
-        const out: string[] = [];
-        for (let i = 0; i < lines.length; i++) {
-            if (!opens(lines[i])) { out.push(lines[i]); continue; }
-            let j = i + 1;
-            while (j < lines.length && !opens(lines[j])) j++;
-            if (j >= lines.length) { out.push(lines[i]); continue; }
-            out.push(lines.slice(i, j + 1).join('\n'));
-            i = j;
-        }
-        return out;
-    };
+    // A paragraph's inline content, read as one text across its lines as CommonMark reads it, so
+    // emphasis, a link, a code span or an inline element that an editor wrapped onto the next line is
+    // still that construct: a line end is a soft break or a line break (see textNodes). A continuation
+    // line's leading spaces and tabs are not part of the text (CommonMark); a comment's lines, joined
+    // first, keep theirs.
+    const splitParagraphLines = (block: string): OfficeContentNode[] =>
+        parseInline(joinCommentLines(block.split('\n')).map((line, i) => (i === 0 ? line : trimStartChars(line, ' \t'))).join('\n'), {}, true);
 
     // A paragraph's children with its display math lifted out as blocks: the text before it, the
     // equation on its own, the text after it (as the LaTeX parser treats display math, which sits in
@@ -2352,17 +2457,23 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             // 2-space (hand-written), 4-space (this generator's own output), or
             // tab-indented (normalized to a 4-column stop) nested lists.
             const indentStack: number[] = [];
-            // The most recently pushed list-item node, so a following indented
-            // continuation line (see the sub-splitter above) can be merged into it
-            // instead of being silently dropped.
-            let lastListNode: OfficeContentNode | undefined;
-            // Items that took continuation lines; their text is set once, after the block.
-            const continued = new Set<OfficeContentNode>();
+            // The item being read and its lines: its text and indented continuation lines (see the
+            // sub-splitter above), read as one text when the item ends, as a paragraph's lines are,
+            // so emphasis or a link may run from one line to the next.
+            let item: { node: OfficeContentNode; lines: string[] } | undefined;
+            const endItem = () => {
+                if (!item) return;
+                const children = parseInline(trimEndChars(item.lines.join('\n'), ASCII_WHITESPACE));
+                item.node.children = children;
+                item.node.text = plainTextOf(children);
+                item = undefined;
+            };
 
             for (const line of lines) {
                 // A marker alone on its line is an empty item.
                 const match = line.match(/^([ \t]*)([-*+]|\d+[.)])(?:[ \t]+(.*))?$/);
                 if (match) {
+                    endItem();
                     const rawIndent = match[1].replace(/\t/g, '    ').length;
                     while (indentStack.length > 0 && rawIndent <= indentStack[indentStack.length - 1]) {
                         indentStack.pop();
@@ -2416,10 +2527,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     const itemAnchorIds = itemAnchors ? [...itemAnchors[0].matchAll(/<a\s[^>]*\b(?:name|id)="([^"]*)"/gi)].map(m => m[1]).filter(Boolean) : [];
                     if (itemAnchorIds.length > 0) itemText = itemText.slice(itemAnchors![0].length);
 
-                    const children = parseInline(itemText);
                     const listNode: OfficeContentNode = {
                         type: 'list',
-                        text: plainTextOf(children),
+                        text: '',
                         metadata: {
                             listType,
                             indentation: level,
@@ -2430,23 +2540,17 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                             checked,
                             ...(itemAnchorIds.length > 0 && { anchorIds: itemAnchorIds })
                         } as ListMetadata,
-                        children
+                        children: []
                     };
                     content.push(listNode);
-                    lastListNode = listNode;
-                } else if (lastListNode && trimAsciiWhitespace(line).length > 0 && /^(?: {2,}|\t)/.test(line)) {
-                    // Indented continuation line: merge its inline content into the
-                    // previous item rather than dropping it. Scoped to a single such
-                    // line (no nested code/blockquote/sub-list/multi-paragraph items).
-                    // Appended in place, and the item's text set once below: rebuilding the children
-                    // and their text for every line made an item of many lines quadratic.
-                    const children = lastListNode.children ?? (lastListNode.children = []);
-                    children.push({ type: 'text', text: ' ' });
-                    appendAll(children, parseInline(trimAsciiWhitespace(line)));
-                    continued.add(lastListNode);
+                    item = { node: listNode, lines: [itemText] };
+                } else if (item && trimAsciiWhitespace(line).length > 0 && /^(?: {2,}|\t)/.test(line)) {
+                    // Indented continuation line: part of the item's text (only lines of text: no
+                    // nested code, quote or paragraph).
+                    item.lines.push(trimStartChars(line, ' \t'));
                 }
             }
-            for (const item of continued) item.text = plainTextOf(item.children ?? []);
+            endItem();
             continue;
         }
 

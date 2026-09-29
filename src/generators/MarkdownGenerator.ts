@@ -80,6 +80,24 @@ const codeSpan = (text: string): string => {
     return `${fence}${pad}${text}${pad}${fence}`;
 };
 
+/** Whether a character is punctuation or a symbol (Unicode P or S), as CommonMark's flanking rule reads it. */
+const isPunctuationCharacter = (char: string | undefined): boolean => !!char && /[\p{P}\p{S}]/u.test(char);
+
+/** Whether a character is a word character for CommonMark's flanking rule: neither whitespace nor punctuation. */
+const isWordCharacter = (char: string | undefined): boolean => !!char && !/\s/.test(char) && !isPunctuationCharacter(char);
+
+/** The character (a whole surrogate pair) starting at index `i` of `text`, or undefined at its end. */
+const characterAt = (text: string, i: number): string | undefined => {
+    const code = text.codePointAt(i);
+    return code === undefined ? undefined : String.fromCodePoint(code);
+};
+
+/** The character (a whole surrogate pair) ending at index `i` of `text`, or undefined at its start. */
+const characterBefore = (text: string, i: number): string | undefined => {
+    if (i <= 0) return undefined;
+    return i >= 2 && /[\uDC00-\uDFFF]/.test(text[i - 1]) && /[\uD800-\uDBFF]/.test(text[i - 2]) ? text.slice(i - 2, i) : text[i - 1];
+};
+
 /** Nodes whose children are a line of text (in Markdown, a line break goes only in one of these, or in a node holding text directly). */
 const LINE_HOLDERS = new Set(['paragraph', 'heading', 'list', 'cell', 'definitionTerm', 'definitionDescription']);
 
@@ -537,6 +555,20 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         return first === undefined || /[\s!-/:-@[-`{-~]/.test(first);
     }
 
+    /**
+     * Whether what the next sibling writes starts with a word character (neither whitespace nor
+     * punctuation), right where the node being rendered ends with no whitespace of its own: plain text
+     * starting with one. A sibling written formatted, linked or as anything but text starts with a
+     * delimiter, a bracket or a tag, which are punctuation.
+     */
+    private nextSiblingStartsWithWord(trail: string): boolean {
+        const next = this.nextSibling;
+        const meta = next?.metadata as TextMetadata | undefined;
+        if (trail || !next || next.type !== 'text' || meta?.link || meta?.citationKey) return false;
+        if (this.config.includeFormatting && next.formatting && this.markdownFormattingKey(next.formatting) !== this.markdownFormattingKey({})) return false;
+        return isWordCharacter(characterAt(next.text || '', 0));
+    }
+
     /** Converts a document-supplied date to an ISO string, or '' if invalid
      *  (a malformed date would otherwise throw a RangeError and abort generation). */
     private toIsoDate(value: unknown): string {
@@ -642,9 +674,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // <script>) when the Markdown is rendered to HTML.
                     // Where a paragraph line starts, its leading spaces are dropped, as a reader drops
                     // them (four would make it a code block).
-                    // So are the spaces ending a line before a block in the paragraph (a code block, a rule).
+                    // So are the spaces ending a line before a block in the paragraph (a code block, a
+                    // rule) or a line break (a reader takes them as part of the break).
                     let source = this.atLineStart ? (node.text || '').replace(/^[ \t]+/, '') : node.text || '';
-                    if (this.nextSibling && isBlockInLine(this.nextSibling)) source = trimEndChars(source, ' \t');
+                    if (this.nextSibling && (isBlockInLine(this.nextSibling) || isLineBreak(this.nextSibling))) source = trimEndChars(source, ' \t');
                     let text = markdownEscapeInline(source, this.atLineStart);
                     if (this.config.includeFormatting && node.formatting) {
                         // Inline code: re-wrap the RAW text in backticks. The content is literal
@@ -675,9 +708,6 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                             && !/[^\s!-/:-@[-^`{-~]/.test(lead ? ' ' : this.previousOutputChar || ' ')
                             && this.nextSiblingStartsCleanly(trail);
                         const emphasisAsterisk = this.resolvedDialect.emphasisMarker === 'asterisk' || !underscoresFit;
-                        if (core && node.formatting.bold && !this.inImplicitBold) text = emphasisAsterisk ? `**${text}**` : `__${text}__`;
-                        if (core && node.formatting.italic) text = emphasisAsterisk ? `*${text}*` : `_${text}_`;
-                        if (core && node.formatting.strikethrough && this.resolvedDialect.strikethrough !== 'none') text = `~~${text}~~`;
                         // `==text==` highlight, in dialects that define it (Obsidian/extended). A plain
                         // highlight (the default yellow) always becomes `==text==`; a highlight carrying
                         // a SPECIFIC colour stays a background-color <span> when `inlineFormatting` is on,
@@ -687,7 +717,27 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         const isDefaultHighlight = node.formatting.backgroundColor === '#ffff00';
                         const emitHighlightMark = !!node.formatting.backgroundColor && this.resolvedDialect.highlight !== 'none'
                             && (isDefaultHighlight || !this.resolvedFallbackToHtml.inlineFormatting);
-                        if (emitHighlightMark && core) text = `==${text}==`;
+                        const emphasis = !!core && ((node.formatting.bold && !this.inImplicitBold) || !!node.formatting.italic);
+                        const strike = !!core && !!node.formatting.strikethrough && this.resolvedDialect.strikethrough !== 'none';
+                        const highlight = !!core && emitHighlightMark;
+                        // CommonMark reads a delimiter run with punctuation on its inner side only where
+                        // whitespace or punctuation stands on its outer side (`*Source:*Data` and
+                        // ``a**`b`**`` hold no emphasis), and reads a run right after the previous
+                        // run's closing one of its character as one run with it (``**`a`****.**`` is
+                        // bold with `****` in it). There, where the fallback allows it, the formatting is
+                        // written as the HTML elements that read back the same. (The inner side of an
+                        // outer run is the run inside it; an HTML wrapper is punctuation.)
+                        const runs = (emphasis ? 1 : 0) + (strike ? 1 : 0) + (highlight ? 1 : 0);
+                        const wrapped = this.resolvedFallbackToHtml.textFormatting && !!(node.formatting.underline || node.formatting.subscript || node.formatting.superscript);
+                        const outerDelimiter = highlight ? '=' : strike ? '~' : emphasisAsterisk ? '*' : '_';
+                        const asElements = runs > 0 && !wrapped && this.resolvedFallbackToHtml.textFormatting
+                            && ((!lead && this.previousOutputChar === outerDelimiter)
+                                || ((runs > 1 || isPunctuationCharacter(characterAt(core, 0))) && isWordCharacter(lead ? ' ' : this.previousOutputChar))
+                                || ((runs > 1 || isPunctuationCharacter(characterBefore(core, core.length))) && this.nextSiblingStartsWithWord(trail)));
+                        if (core && node.formatting.bold && !this.inImplicitBold) text = asElements ? `<strong>${text}</strong>` : emphasisAsterisk ? `**${text}**` : `__${text}__`;
+                        if (core && node.formatting.italic) text = asElements ? `<em>${text}</em>` : emphasisAsterisk ? `*${text}*` : `_${text}_`;
+                        if (strike) text = asElements ? `<del>${text}</del>` : `~~${text}~~`;
+                        if (highlight) text = asElements ? `<mark>${text}</mark>` : `==${text}==`;
                         text = lead + text + trail;
 
                         // Use HTML tags for formatting not natively supported by standard Markdown
