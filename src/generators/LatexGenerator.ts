@@ -1695,6 +1695,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (mode === 'ocr-text-only') return this.ocrMarkup(ocr, block);
 
         const alt = meta?.altText || '';
+        // graphicx's `alt` key holds the picture's alternative text wherever it stands (a tagged PDF reads it).
+        const altKey = alt ? `alt={${escapeLatex(alt, ' ')}}` : '';
+        const options = (...keys: string[]) => keys.filter(Boolean).join(',');
         let img = '';
         const dataUri = !meta?.attachmentName && meta?.url && /^\s*data:/i.test(meta.url) ? meta.url : null;
         if (meta?.attachmentName || dataUri) {
@@ -1702,7 +1705,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             if (ref?.includable) {
                 this.uses.graphics = true;
                 // A carried image states its size (bb), so the DVI engines need not run extractbb for it.
-                img = `\\includegraphics[${ref.bb ? `bb=${ref.bb},` : ''}${this.imageSize(node, ref.intrinsic)}]{${ref.path}}`;
+                img = `\\includegraphics[${options(ref.bb ? `bb=${ref.bb}` : '', this.imageSize(node, ref.intrinsic), altKey)}]{${ref.path}}`;
             } else if (ref) {
                 this.warnOnce(`image:${ref.mime}`, OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: `${ref.mime} image`, format: 'tex' });
                 img = `\\fbox{${escapeLatex(`Image: ${alt || ref.path}`, ' ')}}`;
@@ -1714,8 +1717,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 // page) stays a reference to that file, as in the source; the warning names it.
                 this.uses.graphics = true;
                 this.externalImages.add(path);
-                const size = this.imageSize(node, null, true);
-                const include = `\\includegraphics${size ? `[${size}]` : ''}{${path}}`;
+                const keys = options(this.imageSize(node, null, true), altKey);
+                const include = `\\includegraphics${keys ? `[${keys}]` : ''}{${path}}`;
                 // A bundle promises a zip that compiles as is, but it cannot contain a file the source
                 // only named. There the image is drawn when the file has been added beside the .tex,
                 // and a labelled box stands in otherwise.
@@ -1764,11 +1767,10 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const meta = node.metadata as ImageMetadata | undefined;
         const img = this.imageMarkup(node, true);
         if (!img) return '';
-        const alt = meta?.altText && this.imageMode() !== 'ocr-text-only' ? latexComment(`alt: ${meta.altText}`) : '';
         const anchors = this.anchorsFor(node, true);
         const align = this.config.includeFormatting === false ? undefined : meta?.align;
         const body = align === 'center' ? `{\\centering ${img}\\par}` : align === 'right' ? `{\\raggedleft ${img}\\par}` : img;
-        return `${this.commentsBefore(node)}${alt}${anchors}${body}`;
+        return `${this.commentsBefore(node)}${anchors}${body}`;
     }
 
     // ── code, breaks, admonitions, embeds ────────────────────────────────────────────────────────

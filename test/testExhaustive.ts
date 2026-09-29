@@ -2104,7 +2104,7 @@ async function testLatexGeneration(): Promise<void> {
     assert.ok(docxTex.includes('\\usepackage{endnotes}') && /\\endnote\{Endnotes are typically/.test(docxTex) && docxTex.includes('\\theendnotes\n\n\\end{document}'), 'TEX docx: endnotes via the endnotes package');
     assert.ok(/\\footnote\{In paged media/.test(docxTex), 'TEX docx: footnote body without the note run size');
     // The image travels inside the .tex: a filecontents* block writes it as a PDF, which \includegraphics reads.
-    const carriedImage = /\\includegraphics\[bb=0 0 810 810,width=\{\\ifdim [\d.]+pt>\\linewidth\\linewidth\\else [\d.]+pt\\fi\},height=\{[^}]+\},keepaspectratio\]\{(image-[0-9a-f]{8}\.pdf)\}/.exec(docxTex);
+    const carriedImage = /\\includegraphics\[bb=0 0 810 810,width=\{\\ifdim [\d.]+pt>\\linewidth\\linewidth\\else [\d.]+pt\\fi\},height=\{[^}]+\},keepaspectratio,alt=\{[^}]*\}\]\{(image-[0-9a-f]{8}\.pdf)\}/.exec(docxTex);
     assert.ok(carriedImage, 'TEX docx: image bounded to the line and page, carried as a PDF of its stated size');
     const carriedBlock = new RegExp(`\\\\begin\\{filecontents\\*\\}\\{${carriedImage![1].replace('.', '\\.')}\\}\\n([^]*?)\\n\\\\end\\{filecontents\\*\\}`).exec(docxTex);
     assert.ok(carriedBlock && docxTex.indexOf(carriedBlock[0]) < docxTex.indexOf('\\begin{document}'), 'TEX docx: the image is carried in a filecontents* block in the preamble');
@@ -2258,7 +2258,7 @@ async function testLatexGeneration(): Promise<void> {
     // the file is added, and a labelled box stands in otherwise.
     assert.ok(strFromU8(refZip['main.tex']).includes('\\IfFileExists{pics/a.png}{\\includegraphics{pics/a.png}}{\\fbox{Image: pics/a.png}}'), 'TEX refs: a bundle guards a path-referenced image with \\IfFileExists');
     const noExt = unzipSync((await (await OfficeParser.parseOffice(Buffer.from('![d](figures/diagram)'), { fileType: 'md' } as any)).to('tex', { texConfig: { bundle: true } } as any)).value as Uint8Array);
-    assert.ok(strFromU8(noExt['main.tex']).includes('\\IfFileExists{figures/diagram}{\\includegraphics{figures/diagram}}{\\IfFileExists{figures/diagram.pdf}{'), 'TEX refs: a path without an extension probes the graphics extensions');
+    assert.ok(strFromU8(noExt['main.tex']).includes('\\IfFileExists{figures/diagram}{\\includegraphics[alt={d}]{figures/diagram}}{\\IfFileExists{figures/diagram.pdf}{'), 'TEX refs: a path without an extension probes the graphics extensions');
     assert.ok(refZipWarn.some(w => w.code === 'IMAGES_NOT_BUNDLED' && w.message.includes(`('pics/a.png')`)), 'TEX refs: a bundle still names the image it has no data to package');
     // Admonition, embed, page break, sheet, header/footer, Unicode.
     assert.ok(stex.includes('\\textbf{\\textcolor{hex9A6700}{Careful}}\\par\nbody'), 'TEX synthetic: admonition title and colour');
@@ -2313,6 +2313,12 @@ async function testLatexGeneration(): Promise<void> {
     const sBraces = sLive.replace(/\\[{}]/g, '');
     assert.strictEqual((sBraces.match(/\{/g) || []).length, (sBraces.match(/\}/g) || []).length, 'TEX synthetic: braces balance');
     assert.strictEqual((sLive.match(/\\begin\{/g) || []).length, (sLive.match(/\\end\{/g) || []).length, 'TEX synthetic: environments balance');
+
+    // An image's alternative text is graphicx's `alt` key, inline as well as on its own line, and parses back.
+    const altMd = await OfficeParser.parseOffice(Buffer.from('Text ![A cat, [photo]](cat.png) more\n\n![Block alt](dog.png)\n'), { fileType: 'md' } as any);
+    const altTex = (await altMd.to('tex', { onWarning: () => {} } as any)).value as string;
+    assert.ok(altTex.includes('Text \\includegraphics[alt={A cat, {[}photo{]}}]{cat.png} more') && altTex.includes('\\includegraphics[alt={Block alt}]{dog.png}') && !altTex.includes('% alt:'), 'TEX: alt text as the alt key');
+    assert.deepStrictEqual(collectAllNodes(await OfficeParser.parseOffice(Buffer.from(altTex), { fileType: 'tex', onWarning: () => {} } as any)).filter(n => n.type === 'image').map(n => (n.metadata as any).altText), ['A cat, [photo]', 'Block alt'], 'TEX round trip: inline and block alt text');
 
     // Column alignment is what most of a column's own cells have, a merged cell not voting; a cell that
     // differs from its column (or is merged) is written with its own alignment, so every cell parses back as it was.
