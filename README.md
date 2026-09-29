@@ -895,7 +895,7 @@ formatting: {
 > (ODF's `fo:font-weight="normal"`, DOCX's `<w:b w:val="0"/>`). Code resolving inheritance itself
 > must test `=== undefined`, not truthiness, or it will treat "explicitly off" as "unspecified".
 
-### 6. Break Nodes (DOCX and ODF)
+### 6. Break Nodes (DOCX, ODF and LaTeX)
 
 When `includeBreakNodes: true`, break elements appear as nodes:
 
@@ -911,7 +911,7 @@ Break Node (type: 'break')
 > Break nodes have no `text` property, but `ast.to('text')` automatically converts them to the configured newline delimiter.
 
 > [!NOTE]
-> `includeBreakNodes` gates DOCX/ODF only (where a break is otherwise invisible layout). **HTML and
+> `includeBreakNodes` gates DOCX, ODF and LaTeX only (where a break is otherwise invisible layout). **HTML and
 > Markdown always emit break nodes regardless of the flag**, because a break is explicit content there:
 > a `<br>`/hard line break becomes a `carriageReturn` break, and `<hr>`/`---` a `thematic` break (a
 > Markdown `\f`-style page break maps to `page`).
@@ -1811,6 +1811,9 @@ await officeParser.terminateOcr(); // immediate exit
 > [!TIP]
 > The built-in CLI (`npx officeparser ...`) handles this automatically.
 > Only call it manually in your own scripts.
+
+A parse still recognizing an image when `terminateOcr()` is called keeps its other content: that image's
+recognition fails with the `OCR_TERMINATED` error code, which the parse reports as an `OCR_FAILED` warning.
 
 ---
 

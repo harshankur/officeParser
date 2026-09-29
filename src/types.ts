@@ -155,10 +155,11 @@ export enum OfficeWarningType {
     /** A config option was passed that this version does not recognize (e.g. a key renamed in a major release); it had no effect */
     UNRECOGNIZED_CONFIG_OPTION = 'UNRECOGNIZED_CONFIG_OPTION',
     /**
-     * A generator option was given a value it does not accept (a document class, paper format,
+     * An option was given a value it does not accept (a generator's document class, paper format,
      * margin, PDF engine, HTML stylesheet mode, Markdown dialect or chunking choice that is not one of its
-     * choices). The option's default was used instead; the message names the option, the value and
-     * what it accepts.
+     * choices; `texParserConfig.today` that is not text; a parse's `csvDelimiter` or `newlineDelimiter`
+     * that output cannot safely carry over). The option's default was used instead; the message names
+     * the option, the value and what it accepts.
      */
     INVALID_CONFIG_VALUE = 'INVALID_CONFIG_VALUE',
     /** A math expression used an unsafe LaTeX command or was malformed, so it was written to LaTeX output as literal text rather than typeset math */
