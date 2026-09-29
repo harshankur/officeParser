@@ -102,7 +102,7 @@ const SECTIONING = ['part', 'chapter', 'section', 'subsection', 'subsubsection',
 
 /** Display-math environments, read as block math. Numbered or multi-line ones keep their environment in the LaTeX. */
 const DISPLAY_MATH_ENVS = new Set(['equation', 'equation*', 'align', 'align*', 'gather', 'gather*', 'multline', 'multline*',
-    'flalign', 'flalign*', 'alignat', 'alignat*', 'eqnarray', 'eqnarray*', 'displaymath', 'math', 'dmath', 'dmath*']);
+    'flalign', 'flalign*', 'alignat', 'alignat*', 'eqnarray', 'eqnarray*', 'displaymath', 'dmath', 'dmath*']);
 /** Of those, the ones that are just `\[...\]`: their body alone is the formula. */
 const PLAIN_DISPLAY_MATH_ENVS = new Set(['equation*', 'displaymath', 'dmath*']);
 
@@ -822,6 +822,8 @@ interface ParseState {
     link?: { url: string; internal: boolean };
     /** Inside a moving context (a heading title): line breaks read as spaces. */
     inline?: boolean;
+    /** Inside `\\MakeUppercase`/`\\uppercase` (or the lowercase ones): text is set in that case. */
+    textCase?: 'upper' | 'lower';
 }
 
 const cloneState = (s: ParseState): ParseState => ({ ...s, fmt: { ...s.fmt } });
@@ -1160,6 +1162,7 @@ class LatexReader {
 
     private addText(flow: Flow, s: string, literal = false): void {
         if (!s) return;
+        if (this.state.textCase) s = this.state.textCase === 'upper' ? s.toUpperCase() : s.toLowerCase();
         const mono = this.state.fmt.font === 'monospace';
         if (flow.pendingState && (!this.sameRunState(flow.pendingState, this.state) || literal !== flow.pendingMono)) this.flushText(flow);
         if (!flow.pendingState) { flow.pendingState = cloneState(this.state); flow.pendingMono = literal || mono; }
@@ -2042,9 +2045,10 @@ class LatexReader {
         if (this.conditional(sc, name) || this.setSwitch(sc, name) || this.testCommand(sc, name)) return;
 
         if (own(SYMBOLS, name)) {
-            if (name === '-' || name === ',') this.addText(flow, SYMBOLS[name]);
-            else if (SYMBOLS[name] === '' ) { /* spacing no-op */ }
-            else this.addText(flow, SYMBOLS[name]);
+            // What a symbol command prints is that character, never part of an input ligature (TeX
+            // forms those from the characters typed): `\textasciigrave{}x\textasciigrave{}` is `x`
+            // between grave accents, not between quotation marks.
+            if (SYMBOLS[name]) this.addText(flow, SYMBOLS[name], true);
             return;
         }
         if (own(ACCENTS, name)) {
@@ -2095,8 +2099,9 @@ class LatexReader {
             }
             case 'label': this.addLabel(flow, (sc.readRawGroup() ?? '').trim()); return;
             case 'caption': case 'captionof': {
-                if (name === 'captionof') sc.readRawGroup();
+                // (`\\captionof*{figure}{...}`: the star comes before the float type.)
                 sc.readStar();
+                if (name === 'captionof') sc.readRawGroup();
                 sc.readRawOptional();
                 const raw = sc.readRawGroup();
                 this.endParagraph(flow);
@@ -2206,11 +2211,16 @@ class LatexReader {
             }
             case 'ref': case 'autoref': case 'cref': case 'Cref': case 'eqref': case 'pageref': case 'nameref': case 'vref': case 'Autoref': {
                 sc.readStar();
-                const label = (sc.readRawGroup() ?? '').trim();
-                const node: OfficeContentNode = { type: 'text', text: label, ...this.runFormatting() };
-                if (!this.config.ignoreInternalLinks) node.metadata = { link: `#${label}`, linkType: 'internal' } as TextMetadata;
-                this.refs.push({ node, label, kind: name });
-                this.addInline(flow, node);
+                const raw = (sc.readRawGroup() ?? '').trim();
+                // cleveref takes a list of labels (`\cref{a,b}`): each is referred to ("section 1 and section 2").
+                const labels = name === 'cref' || name === 'Cref' ? raw.split(',').map(l => l.trim()).filter(Boolean) : [raw];
+                labels.forEach((label, k) => {
+                    if (k > 0) this.addText(flow, k === labels.length - 1 ? ' and ' : ', ');
+                    const node: OfficeContentNode = { type: 'text', text: label, ...this.runFormatting() };
+                    if (!this.config.ignoreInternalLinks) node.metadata = { link: `#${label}`, linkType: 'internal' } as TextMetadata;
+                    this.refs.push({ node, label, kind: name });
+                    this.addInline(flow, node);
+                });
                 return;
             }
             case 'hyperref': {
@@ -2650,6 +2660,8 @@ class LatexReader {
             case 'textsuperscript': s.fmt.superscript = true; delete s.fmt.subscript; break;
             case 'textsubscript': s.fmt.subscript = true; delete s.fmt.superscript; break;
             case 'hl': s.fmt.backgroundColor = '#FFFF00'; break;
+            case 'MakeUppercase': case 'uppercase': s.textCase = 'upper'; break;
+            case 'MakeLowercase': case 'lowercase': s.textCase = 'lower'; break;
         }
     }
 
@@ -2877,6 +2889,7 @@ class LatexReader {
         const raw = sc.readRawGroup() ?? '';
         const level = this.headingLevel(name);
         const node = this.headingNode(raw, level);
+        (node as any).__kind = name;
         if (!star && this.numbered && name !== 'part' && level <= 3) {
             this.sectionNumbers = this.sectionNumbers.slice(0, level);
             while (this.sectionNumbers.length < level) this.sectionNumbers.push(0);
@@ -3048,17 +3061,19 @@ class LatexReader {
         if (env === 'description') { sc.readRawOptional(); return this.description(sc, flow, env); }
         if (env === 'thebibliography') { sc.readRawGroup(); return this.bibliography(sc, flow, env); }
         if (VERBATIM_ENVS.has(env)) { this.verbatim(sc, flow, env); return; }
+        // The `math` environment is `$...$` spelled out: inline math, in the paragraph around it.
+        if (env === 'math') { this.addInlineMath(flow, withoutComments(sc.readRawEnvBody(env))); return; }
         if (DISPLAY_MATH_ENVS.has(env)) {
             // TeX drops a comment in a formula as anywhere else (`$...$` loses its comments as it is
             // read): kept, it was typeset as text (`\%`), and an unbalanced brace in one made the
             // whole formula fail the generator's check.
             const body = withoutComments(sc.readRawEnvBody(env));
             // A numbered equation's labels resolve to its number for \ref/\eqref.
-            if (!env.endsWith('*') && env !== 'displaymath' && env !== 'math') {
+            if (!env.endsWith('*') && env !== 'displaymath') {
                 const number = String(++this.equationNumber);
-                for (const m of body.matchAll(/\\label\s*\{([^}]*)\}/g)) this.labelTargets.set(m[1].trim(), { type: 'code', __number: number } as any);
+                for (const m of body.matchAll(/\\label\s*\{([^}]*)\}/g)) this.labelTargets.set(m[1].trim(), { type: 'code', __number: number, __kind: 'equation' } as any);
             }
-            this.addBlockMath(flow, PLAIN_DISPLAY_MATH_ENVS.has(env) || env === 'math' || env === 'displaymath' ? body : `\\begin{${env}}${body}\\end{${env}}`);
+            this.addBlockMath(flow, PLAIN_DISPLAY_MATH_ENVS.has(env) || env === 'displaymath' ? body : `\\begin{${env}}${body}\\end{${env}}`);
             return;
         }
         if (own(TABLE_ENVS, env)) { this.table(sc, flow, env); return; }
@@ -3225,6 +3240,7 @@ class LatexReader {
             // Labels in the theorem name it: a `\ref` to one reads the theorem's number.
             // A label on something numbered of its own inside it (an equation, a nested theorem) keeps that.
             (first as any).__number = number;
+            (first as any).__kind = def.title;
             for (const id of this.labelLog.slice(labelsBefore)) {
                 const t = this.labelTargets.get(id);
                 if (!t || (t.type === 'paragraph' && !(t as any).__number)) this.labelTargets.set(id, first);
@@ -3476,11 +3492,11 @@ class LatexReader {
         const caption = inner.find(b => (b.metadata as any)?.style === 'Caption');
         if (caption) {
             const n = String(this.floatNumbers[kind] = (this.floatNumbers[kind] ?? 0) + 1);
-            if (main) (main as any).__number = n;
+            if (main) Object.assign(main, { __number: n, __kind: kind });
             else {
                 // A float with nothing the AST can hold (a TikZ drawing, which is omitted) keeps its
                 // caption, which then carries the float's number: a label in the float reads it.
-                (caption as any).__number = n;
+                Object.assign(caption, { __number: n, __kind: kind });
                 for (const id of this.labelLog.slice(labelsBefore)) {
                     const t = this.labelTargets.get(id);
                     if (!t || (inner.includes(t) && (t.metadata as any)?.style === 'Caption') || (t.type === 'paragraph' && !(t as any).__number && !t.text)) this.labelTargets.set(id, caption);
@@ -3538,7 +3554,7 @@ class LatexReader {
                     : `${n[0]}(${alph(n[1])})${roman(n[2])}${d >= 4 ? alph(n[3]).toUpperCase() : ''}`;
                 for (const id of this.labelLog.slice(labelsBefore)) {
                     const t = this.labelTargets.get(id);
-                    if (!t || (t.type === 'paragraph' && !(t as any).__number)) this.labelTargets.set(id, { type: 'list', __number: number } as any);
+                    if (!t || (t.type === 'paragraph' && !(t as any).__number)) this.labelTargets.set(id, { type: 'list', __number: number, __kind: 'item' } as any);
                 }
             }
             const blocks = itemFlow.blocks;
@@ -3991,6 +4007,27 @@ class LatexReader {
         return out;
     }
 
+    /**
+     * The name `\autoref` (hyperref's `\...autorefname`), `\cref` or `\Cref` (cleveref's default
+     * `\crefname`/`\Crefname`) puts before a reference to a numbered `kind` of thing (a sectioning
+     * command's name, `figure`, `table`, `equation`, `item`, or a theorem's title). Undefined for any
+     * other reference command.
+     */
+    private referenceName(command: string, kind: string | undefined): string | undefined {
+        const form = ['autoref', 'Autoref', 'cref', 'Cref'].indexOf(command);
+        if (form < 0 || !kind) return undefined;
+        const names: Record<string, string[]> = {
+            part: ['Part', 'Part', 'part', 'Part'], chapter: ['chapter', 'Chapter', 'chapter', 'Chapter'], section: ['section', 'Section', 'section', 'Section'],
+            subsection: ['subsection', 'Subsection', 'section', 'Section'], subsubsection: ['subsubsection', 'Subsubsection', 'section', 'Section'],
+            paragraph: ['paragraph', 'Paragraph', 'paragraph', 'Paragraph'], subparagraph: ['subparagraph', 'Subparagraph', 'subparagraph', 'Subparagraph'],
+            figure: ['Figure', 'Figure', 'fig.', 'Figure'], table: ['Table', 'Table', 'table', 'Table'], equation: ['Equation', 'Equation', 'eq.', 'Equation'],
+            item: ['item', 'Item', 'item', 'Item'],
+        };
+        if (own(names, kind)) return names[kind][form];
+        // A theorem-like environment is named by its title ("Theorem", "Lemma"), lowercase in `\cref`.
+        return form === 2 ? kind.toLowerCase() : kind;
+    }
+
     /** Fills in the text of `\ref`s now that every label is known. */
     private resolveRefs(): void {
         // A reference repeats its target's name or number: after the first to a label, each is charged
@@ -4004,7 +4041,10 @@ class LatexReader {
             let text = kind === 'nameref' ? (title ?? label) : (number ?? title ?? label);
             if (!referenced.has(label)) referenced.add(label);
             else if (takeRepeats(this.config, 1, text.length) === 0) text = repeatPreview(text);
-            if (kind === 'eqref') text = `(${text})`;
+            // hyperref's \autoref and cleveref's \cref/\Cref name what they refer to ("section 1", "Figure 2").
+            const named = number !== undefined ? this.referenceName(kind, (target as any)?.__kind) : undefined;
+            if (kind === 'eqref' || (named !== undefined && (target as any)?.__kind === 'equation' && /^[cC]ref$/.test(kind))) text = `(${text})`;
+            if (named) text = `${named}\u00A0${text}`;
             node.text = text;
         }
         // A resolved reference changes the text of whatever holds it: derive each enclosing node's text
@@ -4022,7 +4062,7 @@ class LatexReader {
             return dirty;
         };
         if (refNodes.size && this.docFlow) for (const b of this.docFlow.blocks) refresh(b);
-        const strip = (nodes: OfficeContentNode[]) => { for (const n of nodes) { delete (n as any).__number; if (n.children) strip(n.children); } };
+        const strip = (nodes: OfficeContentNode[]) => { for (const n of nodes) { delete (n as any).__number; delete (n as any).__kind; if (n.children) strip(n.children); } };
         if (this.docFlow) strip(this.docFlow.blocks);
     }
 

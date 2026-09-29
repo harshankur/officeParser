@@ -166,7 +166,7 @@ type TableSlot =
 /** Packages the body turned out to need, decided while rendering and read when writing the preamble. */
 interface PackageUse {
     math: boolean; amssymb: boolean; graphics: boolean; tables: boolean; longtable: boolean; multirow: boolean;
-    ulem: boolean; xcolor: boolean; colortbl: boolean; listings: boolean; endnotes: boolean; paragraphFix: boolean;
+    ulem: boolean; xcolor: boolean; colortbl: boolean; listings: boolean; endnotes: boolean; paragraphFix: boolean; captionof: boolean;
 }
 
 /**
@@ -255,7 +255,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     private readonly uses: PackageUse = {
         math: false, amssymb: false, graphics: false, tables: false, longtable: false, multirow: false,
-        ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false,
+        ulem: false, xcolor: false, colortbl: false, listings: false, endnotes: false, paragraphFix: false, captionof: false,
     };
 
     /** Image files the output refers to by path (written into a bundle); `includable` when `\includegraphics` draws one. */
@@ -598,6 +598,13 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             const override = await this.handleOnNode(node);
             if (override === false) continue;
             if (typeof override === 'string') { blocks.push(override); prevPaginated = null; continue; }
+            // A figure's or table's caption: `\captionof` for the table next to it, else the picture.
+            if (node.type === 'paragraph' && (node.metadata as ParagraphMetadata | undefined)?.style === 'Caption' && this.ctx.sections) {
+                const [prev, next] = [items[i - 1]?.type, items[i + 1]?.type];
+                const kind = next === 'table' || next === 'sheet' ? 'table' : prev === 'image' ? 'figure' : prev === 'table' || prev === 'sheet' ? 'table' : 'figure';
+                const caption = await this.caption(node, kind);
+                if (caption) { blocks.push(caption); prevPaginated = null; continue; }
+            }
             // A top-level heading over a bibliography is the heading thebibliography prints (see bibliographyList).
             if (node.type === 'heading' && this.ctx.sections && !this.beamer && ((node.metadata as HeadingMetadata)?.level ?? 1) === 1) {
                 let end = i + 1;
@@ -682,6 +689,22 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         body = this.alignParagraph(body, node.metadata as any);
         if (tag === 'blockquote') body = `\\begin{quote}\n${body}\n\\end{quote}`;
         return `${comments}${anchors}${body}`;
+    }
+
+    /**
+     * A caption paragraph (a LaTeX float's `\caption`, what the parser reads it as) as `\captionof`
+     * (`capt-of`), which numbers it as the figure's or table's caption, so it parses back as one. Not in
+     * beamer, and '' for a caption whose text is numbered already (a Word caption, "Figure 1: ..."),
+     * which stays a paragraph.
+     */
+    private async caption(node: OfficeContentNode, kind: 'figure' | 'table'): Promise<string> {
+        if (this.beamer) return '';
+        const text = this.getNodeText(node).trim();
+        if (!text || /^(figure|fig\.?|table|tab\.?|listing|chart|exhibit|abbildung|tabelle|tableau|tabla|figura)\s*[\dIVXivx]/i.test(text)) return '';
+        const runs = (await this.withCtx({ moving: true, display: false, verbatim: false, sections: false, longtable: false }, async () => (await this.renderInline(this.inlineChildren(node))) + await this.notesFor(node))).trim();
+        if (!runs) return '';
+        this.uses.captionof = true;
+        return `${this.commentsBefore(node)}${this.anchorsFor(node, true)}\\captionof{${kind}}{${runs}}`;
     }
 
     /**
@@ -2223,6 +2246,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (u.xcolor && !this.beamer) lines.push(u.colortbl ? '\\usepackage[table]{xcolor}' : '\\usepackage{xcolor}');
         if (u.listings) lines.push('\\usepackage{listings}');
         if (u.endnotes) lines.push('\\usepackage{endnotes}');
+        if (u.captionof) lines.push('\\usepackage{capt-of}');
         return lines;
     }
 

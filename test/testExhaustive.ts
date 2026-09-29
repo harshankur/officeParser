@@ -2844,6 +2844,24 @@ c &= d
         [[['Title', 'T'], ['Author', 'A, B'], ['Institute', 'Uni, Lab']], 'Uni, Lab'], 'TEX parse: \\institute in the title block');
     assert.ok(/\\author\{A, B\}\n\\institute\{Uni, Lab\}\n/.test((await institute.ast.to('tex')).value as string), 'TEX beamer: the institute line regenerates as \\institute');
 
+    // \autoref, \cref and \Cref name what they refer to; \MakeUppercase and \lowercase set their text's
+    // case; a symbol command's character is never part of an input ligature; the math environment is inline.
+    const namedRefs = await texOf(String.raw`\documentclass{article}\usepackage{hyperref,cleveref}\newtheorem{lemma}{Lemma}\begin{document}
+\section{Intro}\label{sec:i}\begin{figure}\includegraphics{a.png}\caption{Fig}\label{fig:a}\end{figure}\begin{equation}x\label{eq:x}\end{equation}\begin{lemma}\label{lem:l}L.\end{lemma}
+See \autoref{sec:i}, \autoref{fig:a}, \cref{fig:a,eq:x}, \Cref{sec:i}, \cref{lem:l} and \ref{fig:a}.
+\MakeUppercase{shout} \lowercase{QUIET}. \textasciigrave{}x\textasciigrave{} \textquotesingle{}q\textquotesingle{} and \begin{math}a+b\end{math} inline.\end{document}`, { onWarning: () => {} });
+    const namedParas = namedRefs.paras.slice(-1);
+    assert.deepStrictEqual(namedParas, ['See section\u00A01, Figure\u00A01, fig.\u00A01 and eq.\u00A0(1), Section\u00A01, lemma\u00A01 and 1. SHOUT quiet. `x` \'q\' and a+b inline.'], `TEX parse: named references, text case, symbols, inline math environment (${JSON.stringify(namedParas)})`);
+    // A caption regenerates as \captionof (capt-of), so it parses back as a caption; a Word caption,
+    // numbered in its text already, stays a paragraph.
+    const captioned = await texOf(String.raw`\begin{document}\begin{table}\caption{Results}\begin{tabular}{l}a\\\end{tabular}\end{table}\begin{figure}\includegraphics{x.png}\caption{A picture}\end{figure}\end{document}`, { onWarning: () => {} });
+    const captionTex = (await captioned.ast.to('tex', { onWarning: () => {} } as any)).value as string;
+    assert.ok(captionTex.includes('\\usepackage{capt-of}') && captionTex.includes('\\captionof{table}{Results}') && captionTex.includes('\\captionof{figure}{A picture}'), 'TEX: captions as \\captionof, typed by the table or picture beside them');
+    const captionsBack = collectAllNodes(await OfficeParser.parseOffice(Buffer.from(captionTex), { fileType: 'tex', onWarning: () => {} } as any)).filter(n => (n.metadata as any)?.style === 'Caption').map(n => n.text);
+    assert.deepStrictEqual(captionsBack, ['Results', 'A picture'], 'TEX round trip: captions stay captions');
+    const wordCaption: any = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', metadata: { style: 'Caption' }, children: [{ type: 'text', text: 'Figure 1: Sales' }] }] };
+    assert.ok(!((await OfficeGenerator.generate(wordCaption, 'tex', {})).value as string).includes('captionof'), 'TEX: a caption numbered in its text stays a paragraph');
+
     // \today prints the date of the parse (as LaTeX prints the date of the compile), in the document's
     // language, or the text texParserConfig.today sets; it is never dropped.
     const dateIn = (tag: string) => new Intl.DateTimeFormat(tag, { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date());
