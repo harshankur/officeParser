@@ -1,7 +1,6 @@
 import { ChartData, OfficeParserConfig } from "../types";
 import { parseXmlString, getElementsByTagName, getDirectChildren, getFirstElementByTagName, getChildElements } from "./xmlUtils";
 import { repeatPreview, takeRepeats } from "./repeatUtils";
-import { appendAll } from "./nodeListUtils";
 
 /**
  * Extracts a single text element located at:
@@ -167,6 +166,27 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
 const copiesWhole = (config: OfficeParserConfig | undefined, copies: number, text: string | undefined): number =>
     copies <= 1 || !text ? copies : 1 + takeRepeats(config ?? {}, copies - 1, text.length);
 
+/** What holds a table's rows besides the table itself. */
+const ROW_GROUPS = new Set(["table:table-header-rows", "table:table-rows", "table:table-row-group"]);
+
+/** A table's rows in document order, those in row groups (nested ones too) included, each read once. */
+const tableRows = (table: Element): Element[] => {
+    const rows: Element[] = [];
+    // Children still to read, last first: a group's are put in its place.
+    const pending: Node[] = [];
+    for (let i = table.childNodes.length - 1; i >= 0; i--) pending.push(table.childNodes[i]);
+    while (pending.length > 0) {
+        const node = pending.pop()!;
+        if (node.nodeType !== 1) continue;
+        const element = node as Element;
+        if (element.tagName === "table:table-row") rows.push(element);
+        else if (ROW_GROUPS.has(element.tagName)) {
+            for (let i = element.childNodes.length - 1; i >= 0; i--) pending.push(element.childNodes[i]);
+        }
+    }
+    return rows;
+};
+
 const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): ChartData => {
     const xml = xmlBuffer.toString("utf8");
     const dom = parseXmlString(xml, { config });
@@ -180,13 +200,10 @@ const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): Ch
     const labels: string[] = [];
 
     if (table) {
-        // Chart with embedded data table (common in ODP presentations)
-        let rows: Element[] = [];
-        const headerRowsNode = getDirectChildren(table, "table:table-header-rows")[0];
-        if (headerRowsNode) {
-            appendAll(rows, getDirectChildren(headerRowsNode, "table:table-row"));
-        }
-        appendAll(rows, getDirectChildren(table, "table:table-row"));
+        // Chart with embedded data table (common in ODP presentations). Its rows in document order,
+        // including those in row groups: LibreOffice writes the data rows in `table:table-rows`, and
+        // read from the table's own rows alone, its charts had series names and no values.
+        const rows = tableRows(table);
 
         if (rows.length > 0) {
             // Header row for series names
@@ -298,8 +315,11 @@ const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): Ch
  * @param xmlBuffer Chart XML buffer
  */
 export const extractChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): ChartData => {
-    const head = xmlBuffer.toString("utf8", 0, 500);
-    if (head.includes("urn:oasis:names:tc:opendocument:xmlns:chart:1.0")) {
+    // An ODF part declares the OpenDocument namespaces on its root, which LibreOffice writes with some
+    // forty declarations: looked for in the first 500 bytes, its chart namespace (past byte 750) was
+    // missed and every LibreOffice chart was read as OpenXML, empty.
+    const head = xmlBuffer.toString("utf8", 0, 64 * 1024);
+    if (head.includes("urn:oasis:names:tc:opendocument:xmlns:")) {
         return extractOdfChartData(xmlBuffer, config);
     } else {
         return extractOpenXmlChartData(xmlBuffer, config);

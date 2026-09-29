@@ -205,6 +205,19 @@ const FALLBACK_NOT_SHOWN: ReadonlySet<string> = new Set(['office:annotation', 't
  * was taken for the outer one's.
  */
 const frameChild = (frame: Element, tag: string): Element | undefined => getDirectChildren(frame, tag)[0];
+
+/**
+ * A row's cells in order, those a merge covers (`table:covered-table-cell`) included, so a reader
+ * counts their columns: skipped, the cells after a merge took its columns (shifted left).
+ */
+const rowCells = (row: Element): Element[] => {
+    const cells: Element[] = [];
+    for (let i = 0; i < (row.childNodes?.length ?? 0); i++) {
+        const child = row.childNodes[i];
+        if (isElement(child) && (child.tagName === 'table:table-cell' || child.tagName === 'table:covered-table-cell')) cells.push(child);
+    }
+    return cells;
+};
 /** A cell's comment is its own node (its body is not the cell's text). */
 const CELL_SKIP = new Set(['office:annotation']);
 
@@ -666,13 +679,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         children.push({ type: 'break', metadata: { breakType: 'lastRenderedPage' } as BreakMetadata });
                     }
                 } else if (tagName === 'text:line-break') {
-                    // Line break
+                    // A line break: a `break` node, as a DOCX `w:br` and an HTML `<br>` are, whatever
+                    // includeBreakNodes says (a typed line break is content). As a "\n" text run, only
+                    // the text, ODT and LaTeX writers showed it: Markdown and HTML wrote a space, and
+                    // RTF and DOCX joined the words.
                     fullText += '\n';
                     children.push({
-                        type: 'text',
-                        text: '\n',
+                        type: 'break',
                         formatting: parentFormatting,
-                        metadata: { ...(linkMetadata || {}), isLineBreak: true } as any
+                        metadata: { breakType: 'textWrapping', ...(linkMetadata || {}) } as BreakMetadata
                     });
                 } else if (tagName === 'text:span') {
                     // Formatted text span
@@ -1051,7 +1066,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         let currentChildren: OfficeContentNode[] = [];
 
         for (const child of pContent.children) {
-            if (child.type === "text" && (child.metadata as any)?.isLineBreak) {
+            if (child.type === "break" && (child.metadata as BreakMetadata | undefined)?.breakType === 'textWrapping') {
                 segments.push({ text: currentText, children: currentChildren });
                 currentText = "";
                 currentChildren = [];
@@ -1109,8 +1124,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         for (const { row, isHeader } of tableRows) {
             checkAbortSignal(config.abortSignal);
             const cells: OfficeContentNode[] = [];
-            // Use getDirectChildren to avoid nested table cells
-            const tableCells = getDirectChildren(row, "table:table-cell");
+            // The row's own cells (not nested tables'), covered ones included (see rowCells)
+            const tableCells = rowCells(row);
             const rowsRepeated = toRepeatCount(row.getAttribute("table:number-rows-repeated"));
 
             let colIndex = 0;
@@ -1118,10 +1133,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             let rowWeight = 0;
 
             for (const cell of tableCells) {
+                const colsRepeated = toRepeatCount(cell.getAttribute("table:number-columns-repeated"));
+                // A cell a merge covers holds its column: the next cell's is after it.
+                if (cell.tagName === "table:covered-table-cell") {
+                    colIndex += colsRepeated;
+                    continue;
+                }
                 const cellChildren: OfficeContentNode[] = [];
                 // Built without reading back what it holds, which would copy all of it per paragraph.
                 const cellTextParts = new TextBuilder();
-                const colsRepeated = toRepeatCount(cell.getAttribute("table:number-columns-repeated"));
                 const colSpan = cellSpan(cell.getAttribute("table:number-columns-spanned"), MAX_COL_SPAN);
                 const rowSpan = cellSpan(cell.getAttribute("table:number-rows-spanned"), MAX_ROW_SPAN);
 
@@ -1775,7 +1795,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         checkAbortSignal(config.abortSignal);
                         const row = tableRows[r];
                         const cells: OfficeContentNode[] = [];
-                        const tableCells = getDirectChildren(row, "table:table-cell");
+                        const tableCells = rowCells(row);
 
                         let colIndex = 0;
                         const rowsRepeated = toRepeatCount(row.getAttribute("table:number-rows-repeated"));
@@ -1785,6 +1805,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         for (let c = 0; c < tableCells.length; c++) {
                             const cell = tableCells[c];
                             const colsRepeated = toRepeatCount(cell.getAttribute("table:number-columns-repeated"));
+                            // A cell a merge covers holds its column (see rowCells).
+                            if (cell.tagName === "table:covered-table-cell") {
+                                colIndex += colsRepeated;
+                                continue;
+                            }
+                            const colSpan = cellSpan(cell.getAttribute("table:number-columns-spanned"), MAX_COL_SPAN);
+                            const rowSpan = cellSpan(cell.getAttribute("table:number-rows-spanned"), MAX_ROW_SPAN);
 
                             // ODS cell notes are `<office:annotation>` children of the cell; extract them
                             // as comments. Their inner text:p must be kept out of the cell's own text
@@ -1808,7 +1835,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 const inline = parseInlineContent(para, styleMap, config, notes, paragraphStyleMap, {}, undefined, xmlString, false);
                                 cellText += inline.text;
                                 const shown = inline.text.trim() !== '';
-                                for (const child of inline.children) if (shown || child.notes || child.comments) children.push(child);
+                                // A paragraph after another is a line of its own: its runs followed the
+                                // last one's, so a cell of "Line one" and "Line two" read "Line oneLine two".
+                                const kept = inline.children.filter(child => shown || child.notes || child.comments);
+                                if (kept.length > 0 && children.length > 0) children.push({ type: 'break', metadata: { breakType: 'textWrapping' } as BreakMetadata });
+                                for (const child of kept) children.push(child);
 
                                 if (p < ps.length - 1) cellText += "\n";
                             }
@@ -1923,7 +1954,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                         type: 'cell',
                                         text: cellText,
                                         children: children,
-                                        metadata: { row: rowIndex, col: colIndex } as CellMetadata
+                                        metadata: {
+                                            row: rowIndex,
+                                            col: colIndex,
+                                            // Merged cells: the spans were not read, so the merge was lost.
+                                            ...(colSpan > 1 ? { colSpan } : {}),
+                                            ...(rowSpan > 1 ? { rowSpan } : {}),
+                                        } as CellMetadata
                                     };
                                     if (config.includeRawContent) {
                                         cellNode.rawContent = k === 0 ? cellRaw : chargeRawContent(cellRaw, config);

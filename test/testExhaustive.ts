@@ -2189,6 +2189,42 @@ async function testOdtGeneration(): Promise<void> {
 
     await testOdtInlineRuns();
     await testOdtNoteReferences();
+    await testOdfCellsAndCharts();
+}
+
+/**
+ * ODF reading: merged cells keep the cells after them in their columns, a cell's paragraphs and a line
+ * break are lines, and a chart LibreOffice writes (its namespaces past the first 500 bytes, its data
+ * rows in `table:table-rows`) has its data.
+ */
+async function testOdfCellsAndCharts(): Promise<void> {
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0"';
+    const pkg = (kind: 'text' | 'spreadsheet', body: string, extra: Record<string, string> = {}) => Buffer.from(zipSync({
+        mimetype: strToU8(`application/vnd.oasis.opendocument.${kind}`),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:${kind}>${body}</office:${kind}></office:body></office:document-content>`),
+        ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, strToU8(v)])),
+    }));
+    const c = (t: string, attrs = '') => `<table:table-cell office:value-type="string"${attrs}><text:p>${t}</text:p></table:table-cell>`;
+    const cellsOf = (rows: OfficeContentNode[]) => rows.filter(r => r.type === 'row').map(r => (r.children ?? []).map(x => [x.text, (x.metadata as any)?.col, (x.metadata as any)?.colSpan ?? 1, (x.metadata as any)?.rowSpan ?? 1]));
+    const merged = `<table:table-row>${c('A1', ' table:number-columns-spanned="2" table:number-rows-spanned="2"')}<table:covered-table-cell/>${c('C1')}</table:table-row><table:table-row><table:covered-table-cell table:number-columns-repeated="2"/>${c('C2')}</table:table-row>`;
+    const ods = await OfficeParser.parseOffice(pkg('spreadsheet', `<table:table table:name="S">${merged}<table:table-row><table:table-cell office:value-type="string"><text:p>Line one</text:p><text:p>Line two</text:p></table:table-cell></table:table-row></table:table>`), { fileType: 'ods' } as any);
+    assert.deepStrictEqual(cellsOf(ods.content[0].children ?? []), [[['A1', 0, 2, 2], ['C1', 2, 1, 1]], [['C2', 2, 1, 1]], [['Line one\nLine two', 0, 1, 1]]], 'ODS: merged cells keep their spans, and the cells after them their columns');
+    assert.ok(((await ods.to('text')).value as string).includes('Line one\nLine two'), 'ODS: a cell\'s paragraphs are lines (they ran together)');
+    const odt = await OfficeParser.parseOffice(pkg('text', `<table:table table:name="T">${merged}</table:table><text:p>First<text:line-break/>Second</text:p>`), { fileType: 'odt' } as any);
+    assert.deepStrictEqual(cellsOf(odt.content[0].children ?? []), [[['A1', 0, 2, 2], ['C1', 2, 1, 1]], [['C2', 2, 1, 1]]], 'ODT: a covered cell holds its column');
+    // A line break is a break node, which every writer shows as one.
+    assert.deepStrictEqual(odt.content[1].children?.map(n => [n.type, n.text ?? (n.metadata as any)?.breakType]), [['text', 'First'], ['break', 'textWrapping'], ['text', 'Second']], 'ODT: text:line-break is a break node');
+    assert.ok(((await odt.to('md')).value as string).includes('First  \nSecond'), 'ODT: a line break is a Markdown hard break');
+    assert.ok(((await odt.to('html')).value as string).includes('First<br>'), 'ODT: a line break is an HTML <br>');
+    assert.ok(((await odt.to('rtf')).value as string).includes('First}\\line'), 'ODT: a line break is an RTF \\line');
+
+    // A chart object as LibreOffice writes it.
+    const declarations = Array.from({ length: 30 }, (_, i) => `xmlns:ns${i}="urn:example:namespace:number:${i}"`).join(' ');
+    const chartXml = `<?xml version="1.0" encoding="UTF-8"?><office:document-content ${declarations} ${NS}><office:body><office:chart><chart:chart chart:class="chart:bar"><chart:title><text:p>My Chart</text:p></chart:title><table:table table:name="local-table"><table:table-header-rows><table:table-row><table:table-cell><text:p/></table:table-cell>${c('Sales')}${c('Costs')}</table:table-row></table:table-header-rows><table:table-rows><table:table-row>${c('Q1')}<table:table-cell office:value-type="float" office:value="10"><text:p>10</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="7"><text:p>7</text:p></table:table-cell></table:table-row></table:table-rows></table:table></chart:chart></office:chart></office:body></office:document-content>`;
+    assert.ok(chartXml.indexOf('opendocument:xmlns:chart') > 500, 'ODF chart fixture: the chart namespace is past byte 500');
+    const withChart = await OfficeParser.parseOffice(pkg('text', '<text:p><draw:frame draw:name="c"><draw:object xlink:href="./Object 1"/></draw:frame></text:p>', { 'Object 1/content.xml': chartXml }), { fileType: 'odt', extractAttachments: true } as any);
+    const chart = withChart.attachments.find(a => a.chartData)?.chartData;
+    assert.deepStrictEqual(chart && { title: chart.title, labels: chart.labels, series: chart.dataSets.map(d => [d.name, d.values]) }, { title: 'My Chart', labels: ['Q1'], series: [['Sales', ['10']], ['Costs', ['7']]] }, 'ODF: a LibreOffice chart has its title, labels and values');
 }
 
 /**

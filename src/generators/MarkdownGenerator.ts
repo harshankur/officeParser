@@ -83,8 +83,16 @@ const codeSpan = (text: string): string => {
 /** Nodes whose children are a line of text (in Markdown, a line break goes only in one of these, or in a node holding text directly). */
 const LINE_HOLDERS = new Set(['paragraph', 'heading', 'list', 'cell', 'definitionTerm', 'definitionDescription']);
 
+/**
+ * A line break's type: a carriage return, or a text-wrapping break (a DOCX `w:br`, an ODF
+ * `text:line-break`; the type a break without one has). Written as a bare newline, a text-wrapping
+ * break joined its lines with a space.
+ */
+const isLineBreakType = (breakType: BreakMetadata['breakType'] | undefined): boolean =>
+    breakType === undefined || breakType === 'carriageReturn' || breakType === 'textWrapping';
+
 const isLineBreak = (node: OfficeContentNode): boolean =>
-    node.type === 'break' && (node.metadata as BreakMetadata | undefined)?.breakType === 'carriageReturn';
+    node.type === 'break' && isLineBreakType((node.metadata as BreakMetadata | undefined)?.breakType);
 
 /** A text node of whitespace alone, carrying nothing. */
 const isBlankRun = (node: OfficeContentNode): boolean =>
@@ -950,7 +958,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     // Where the break starts a line (after another break), two trailing spaces would
                     // make a whitespace-only line, which ends the paragraph: a backslash does not.
                     // Among blocks (no line of text around it) a line break is nothing Markdown can show.
-                    if (meta?.breakType === 'carriageReturn') return this.lineDepth === 0 ? '' : this.atLineStart ? '\\\n' : '  \n';
+                    if (isLineBreakType(meta?.breakType)) return this.lineDepth === 0 ? '' : this.atLineStart ? '\\\n' : '  \n';
                     // A rule is a block, blank lines around it: `a---b` in a paragraph was text. In a list
                     // item, cell or definition (one line of Markdown) it cannot be one, and is a line break.
                     if (meta?.breakType === 'thematic') return this.inOneLine ? `${this.deferAnchors(meta)}\n` : `${this.anchorsBefore(meta) || '\n\n'}---\n\n`;
