@@ -456,7 +456,7 @@ export interface CommonOfficeParserConfig {
      * Applies to Word page, column and last-rendered-page breaks (`w:br w:type`, `w:lastRenderedPageBreak`),
      * ODF (`fo:break-before`/`fo:break-after`, `text:soft-page-break`) and LaTeX (`\newpage`, `\clearpage`),
      * where breaks are otherwise invisible. A line break the author typed is content and always a `break`
-     * node: Word's `w:br` (text wrapping) and `w:cr`, HTML's `<br>`, a Markdown hard break; so are HTML and
+     * node: Word's `w:br` (text wrapping) and `w:cr`, ODF's `text:line-break`, HTML's `<br>`, a Markdown hard break; so are HTML and
      * Markdown's `<hr>`/`---` (a `thematic`/`page` break). This flag does not gate those.
      */
     includeBreakNodes?: boolean;
