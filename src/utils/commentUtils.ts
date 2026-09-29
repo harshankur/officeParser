@@ -1,4 +1,4 @@
-import { mapNodeLists } from './nodeListUtils.js';
+import { mapNodeLists, NodeMemo, nodeMemo } from './nodeListUtils.js';
 import { CommentMetadata, OfficeContentNode, OfficeParserAST } from '../types.js';
 
 /**
@@ -10,12 +10,13 @@ export function isSourceComment(node: OfficeContentNode): boolean {
 }
 
 /** Recursively drop source comments from a node list. Lists and nodes that don't change are returned as-is. */
-function pruneSourceComments(nodes: OfficeContentNode[], done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode[] {
-    let changed = false;
-    const out: OfficeContentNode[] = [];
-    for (const node of nodes) {
+function pruneSourceComments(nodes: OfficeContentNode[], done: NodeMemo<OfficeContentNode>): OfficeContentNode[] {
+    // Copied at its first change only: a list most passes leave as it is.
+    let out: OfficeContentNode[] | undefined;
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
         if (isSourceComment(node)) {
-            changed = true;
+            out ??= nodes.slice(0, i);
             continue;
         }
         // Each node once, its result shared: a note every reference holds stays one note (copied per
@@ -34,19 +35,19 @@ function pruneSourceComments(nodes: OfficeContentNode[], done: Map<OfficeContent
             }
             done.set(node, next);
         }
-        if (next !== node) changed = true;
-        out.push(next);
+        if (next !== node) out ??= nodes.slice(0, i);
+        out?.push(next);
     }
-    return changed ? out : nodes;
+    return out ?? nodes;
 }
 
 /**
  * The AST without source comments, for an output format that has no hidden-comment construct: a source
  * comment is a note the author hid, so it is left out rather than rendered as visible content. Returns
  * `ast` itself (same object, `.to()` intact) when there are none; otherwise a shallow copy with a pruned
- * `content`. The input is never mutated.
+ * `content`. The input is never mutated. A `tree` (see sharedNodeVisits) is read without a memo.
  */
-export function withoutSourceComments<T extends OfficeParserAST>(ast: T): T {
-    const seen = new Map();
+export function withoutSourceComments<T extends OfficeParserAST>(ast: T, options: { tree?: boolean } = {}): T {
+    const seen = nodeMemo<OfficeContentNode>(options.tree);
     return mapNodeLists(ast, nodes => pruneSourceComments(nodes, seen));
 }

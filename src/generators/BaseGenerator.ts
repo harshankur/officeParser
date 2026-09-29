@@ -4,7 +4,7 @@ import { checkAbortSignal, getWarningMessage } from '../utils/errorUtils.js';
 import { resolveImageMode } from '../utils/officeGenUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
 import { isSourceComment } from '../utils/commentUtils.js';
-import { MAX_SHEET_GRID_GAPS } from '../utils/sheetGridUtils.js';
+import { gridPositionsFor } from '../utils/sheetGridUtils.js';
 import { MAX_LAYOUT_COLUMNS } from '../utils/tableLayout.js';
 
 /** The most cells one chart's data table holds in DOCX, ODT and LaTeX output (see BaseGenerator.chartTable). */
@@ -26,15 +26,10 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     private readonly collectedNoteSet = new Set<OfficeContentNode>();
     private readonly writtenComments = new Set<OfficeContentNode>();
     private inlinedImageBytes = 0;
-    private paddingCellsLeft = MAX_SHEET_GRID_GAPS;
+    private paddingCellsLeft: number;
+    private paddingLimit: number;
+    private gridLimitWarned = false;
 
-    /**
-     * How many of `missing` empty cells a row may be padded with to reach its table's width, taken from
-     * the document's budget (the grid budget's size, see sheetGridUtils). Rows are padded to the widest:
-     * one row of 10,000 cells over 10,000 rows of one made 100 million positions from 4 KB, in a table
-     * the grid budget had already laid out as tightly as it could. Past the budget a row keeps the cells
-     * it has; Markdown, CSV and LaTeX read a short row as ending in empty cells.
-     */
     /**
      * A chart's data as DOCX, ODT and LaTeX write it: a header of series names, then a row per label.
      * The table is labels x series, which a 9.6 KB PPTX made nine million cells (the process ran out of
@@ -62,15 +57,25 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
 
     /** Whether `positions` more grid positions (rows a sparse sheet fills back in) fit the same budget, all or none. */
     protected takeGridPositions(positions: number): boolean {
-        if (!(positions >= 0) || positions > this.paddingCellsLeft) return false;
+        if (!(positions >= 0)) return false;
+        if (positions > this.paddingCellsLeft) { this.warnGridLimit({ rowsNotFilled: true }); return false; }
         this.paddingCellsLeft -= positions;
         return true;
     }
 
+    /**
+     * How many of `missing` empty cells a row may be padded with to reach its table's width, taken from
+     * the document's budget (the grid budget's size, see gridPositionsFor). Rows are padded to the widest:
+     * one row of 10,000 cells over 10,000 rows of one made 100 million positions from 4 KB, in a table
+     * the grid budget had already laid out as tightly as it could. Past the budget a row keeps the cells
+     * it has, which is reported once (TABLE_GRID_LIMIT_EXCEEDED); Markdown, CSV and LaTeX read a short
+     * row as ending in empty cells.
+     */
     protected padWithinBudget(missing: number): number {
         if (!(missing > 0)) return 0;
         const allowed = Math.min(missing, this.paddingCellsLeft);
         this.paddingCellsLeft -= allowed;
+        if (allowed < missing) this.warnGridLimit({ unpadded: true });
         return allowed;
     }
 
@@ -134,6 +139,22 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         this.config = resolveGeneratorConfig(destination, ast.config, config, issue => this.messages.push(issue));
         this.ast = ast;
         this.styleMapper = new StyleMapper(this.config.styleMap, this.config.ignoreDefaultStyleMap, this.config);
+        this.paddingCellsLeft = this.paddingLimit = gridPositionsFor(ast);
+    }
+
+    /**
+     * Reports that `tables` of the document's tables were laid out closer before writing, to fit the grid
+     * budget (see withBoundedSheetGrids): their cells no longer stand where the document put them.
+     */
+    public reportTablesLaidOut(tables: number): void {
+        this.warn(OfficeWarningType.TABLE_GRID_LIMIT_EXCEEDED, { laidOut: tables, limit: this.paddingLimit });
+    }
+
+    /** Reports, once per output, that the grid budget left rows unpadded or a sparse sheet's empty rows unwritten. */
+    private warnGridLimit(info: { unpadded?: boolean; rowsNotFilled?: boolean }): void {
+        if (this.gridLimitWarned) return;
+        this.gridLimitWarned = true;
+        this.warn(OfficeWarningType.TABLE_GRID_LIMIT_EXCEEDED, { ...info, limit: this.paddingLimit });
     }
 
     /**

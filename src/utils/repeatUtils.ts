@@ -11,6 +11,7 @@
 
 import { OfficeAttachment, OfficeContentNode, OfficeParserConfig, OfficeWarningType } from '../types.js';
 import { logWarning } from './errorUtils.js';
+import { documentBytesOf, REPEATED_CHARACTERS_PER_BYTE } from './budgetUtils.js';
 
 /**
  * What a copy may weigh without charge: short values repeat in every real document (a category in
@@ -19,11 +20,18 @@ import { logWarning } from './errorUtils.js';
 export const REPEAT_ALLOWANCE = 64;
 const DEFAULT_MAX_REPEATED_CONTENT = 16 * 1024 * 1024;
 
+/**
+ * What one parse may repeat in all: `decompressionLimits.maxRepeatedContent` (16 MB by default), plus
+ * REPEATED_CHARACTERS_PER_BYTE for each byte of the document (see budgetUtils).
+ */
+export const maxRepeatedContentOf = (config: OfficeParserConfig): number =>
+    (config.decompressionLimits?.maxRepeatedContent ?? DEFAULT_MAX_REPEATED_CONTENT) + REPEATED_CHARACTERS_PER_BYTE * documentBytesOf(config);
+
 /** What each parse (its config object) may still repeat. */
 const budgets = new WeakMap<object, { left: number; warned: boolean }>();
 const budgetOf = (config: OfficeParserConfig): { left: number; warned: boolean } => {
     let budget = budgets.get(config);
-    if (!budget) budgets.set(config, budget = { left: config.decompressionLimits?.maxRepeatedContent ?? DEFAULT_MAX_REPEATED_CONTENT, warned: false });
+    if (!budget) budgets.set(config, budget = { left: maxRepeatedContentOf(config), warned: false });
     return budget;
 };
 
@@ -41,7 +49,7 @@ export const takeRepeats = (config: OfficeParserConfig, copies: number, weight: 
     budget.left -= granted * cost;
     if (granted < copies && !budget.warned) {
         budget.warned = true;
-        logWarning(OfficeWarningType.REPEATED_CONTENT_LIMIT_EXCEEDED, config, config.decompressionLimits?.maxRepeatedContent ?? DEFAULT_MAX_REPEATED_CONTENT);
+        logWarning(OfficeWarningType.REPEATED_CONTENT_LIMIT_EXCEEDED, config, maxRepeatedContentOf(config));
     }
     return granted;
 };

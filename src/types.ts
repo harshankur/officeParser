@@ -122,6 +122,13 @@ export enum OfficeWarningType {
     ALT_CHUNK_NOT_READ = 'ALT_CHUNK_NOT_READ',
     /** A metadata override could not be represented in the destination format's vocabulary */
     METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE',
+    /**
+     * A document's tables held more empty grid positions than one output may fill (a million, plus 16 for
+     * each byte of the document it was parsed from): a table's cells were laid out closer, so they no
+     * longer stand in the rows and columns the document put them in, or short rows were not padded to
+     * their table's width, or a sparse sheet's empty rows were not written.
+     */
+    TABLE_GRID_LIMIT_EXCEEDED = 'TABLE_GRID_LIMIT_EXCEEDED',
     /** A content feature (e.g. math, an embedded object) has no faithful representation in the destination format and was downgraded or dropped */
     CONTENT_NOT_REPRESENTABLE = 'CONTENT_NOT_REPRESENTABLE',
     /** A styleMap output.tag was not an allowed element name and was ignored */

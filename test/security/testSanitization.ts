@@ -1420,13 +1420,16 @@ async function odfRepeatExpansionTests() {
     };
 
     const LIMIT = 5000;
+    // The limit grows by one cell per byte of the document (a large workbook is not cut short for its
+    // size), so a file of a few hundred bytes gets a few hundred more than LIMIT.
+    const limitFor = (buf: Buffer) => LIMIT + buf.length;
 
     // Single axis: a huge column repeat on a non-empty cell.
     const cols = build(ODS, `<office:spreadsheet><table:table table:name="S"><table:table-row>` +
         `<table:table-cell table:number-columns-repeated="5000000"><text:p>X</text:p></table:table-cell>` +
         `</table:table-row></table:table></office:spreadsheet>`);
     const rc = await parse(cols, 'ods', LIMIT);
-    check('odf: column repeat is bounded', rc.cells <= LIMIT, `materialized ${rc.cells} cells against a limit of ${LIMIT}`);
+    check('odf: column repeat is bounded', rc.cells <= limitFor(cols), `materialized ${rc.cells} cells against a limit of ${limitFor(cols)}`);
     check('odf: column clamp warns', rc.warned, 'truncation must not be silent');
 
     // Both axes: this is the combination that exhausted memory, since each row repetition
@@ -1436,7 +1439,7 @@ async function odfRepeatExpansionTests() {
         `<table:table-cell table:number-columns-repeated="10000"><text:p>X</text:p></table:table-cell>` +
         `</table:table-row></table:table></office:spreadsheet>`);
     const rb = await parse(both, 'ods', LIMIT);
-    check('odf: rows x cols product is bounded', rb.cells <= LIMIT, `materialized ${rb.cells} cells against a limit of ${LIMIT}`);
+    check('odf: rows x cols product is bounded', rb.cells <= limitFor(both), `materialized ${rb.cells} cells against a limit of ${limitFor(both)}`);
 
     // ODT/ODP keep empty cells on purpose (the grid is structural), so they have no empty-cell
     // skip and the budget is the only thing bounding them.
@@ -1444,7 +1447,7 @@ async function odfRepeatExpansionTests() {
         `<table:table-cell table:number-columns-repeated="5000000"/>` +
         `</table:table-row></table:table></office:text>`);
     const ro = await parse(odt, 'odt', LIMIT);
-    check('odf: ODT empty-cell repeat is bounded', ro.cells <= LIMIT, `materialized ${ro.cells} cells`);
+    check('odf: ODT empty-cell repeat is bounded', ro.cells <= limitFor(odt), `materialized ${ro.cells} cells`);
 
     // MANY tables, each with a huge repeat. The budget is per document, so splitting the
     // expansion across tables must not multiply past the cap - the earlier single-table tests
@@ -1454,8 +1457,8 @@ async function odfRepeatExpansionTests() {
          `table:number-columns-repeated="1000000"><text:p>X</text:p></table:table-cell>` +
          `</table:table-row></table:table>`).repeat(20) + '</office:text>');
     const rm = await parse(manyTables, 'odt', LIMIT);
-    check('odf: budget is per-document, not per-table', rm.cells <= LIMIT,
-        `20 tables materialized ${rm.cells} cells against a per-document limit of ${LIMIT}`);
+    check('odf: budget is per-document, not per-table', rm.cells <= limitFor(manyTables),
+        `20 tables materialized ${rm.cells} cells against a per-document limit of ${limitFor(manyTables)}`);
 
     // A garbage (non-numeric) repeat must render the cell once, not drain the whole budget and
     // silently drop every legitimate cell that follows it.
@@ -2840,8 +2843,44 @@ async function parserHardeningTests() {
     const large = await warned(repeatedCell(100), 'ods', { decompressionLimits: { maxRepeatedContent: 100_000_000 } });
     const smallCells = cellsOf(small.ast), largeCells = cellsOf(large.ast);
     check('ods: maxRepeatedContent is the limit, and later cells keep their columns', smallCells.length < 10 && largeCells.length === 101 && smallCells[smallCells.length - 1]?.metadata?.col === 100 && !large.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), `${smallCells.length} ${largeCells.length} ${smallCells[smallCells.length - 1]?.metadata?.col}`);
-    const xlsxCells = await warned(xlsxOf({ 'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${'<row><c t="inlineStr"><is><t>x</t></is></c><c><v>1</v></c></row>'.repeat(2500)}</sheetData></worksheet>` }), 'xlsx', { decompressionLimits: { maxTableCells: 1000 } });
-    check('xlsx: a sheet holds maxTableCells cells, with TABLE_CELL_LIMIT_EXCEEDED', cellsOf(xlsxCells.ast).length === 1000 && xlsxCells.codes.includes('TABLE_CELL_LIMIT_EXCEEDED'), `${cellsOf(xlsxCells.ast).length} ${xlsxCells.codes}`);
+    const xlsxCellsDoc = xlsxOf({ 'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${'<row><c t="inlineStr"><is><t>x</t></is></c><c><v>1</v></c></row>'.repeat(2500)}</sheetData></worksheet>` });
+    const xlsxCells = await warned(xlsxCellsDoc, 'xlsx', { decompressionLimits: { maxTableCells: 1000 } });
+    // maxTableCells, plus one cell per byte of the document (see budgetUtils).
+    check('xlsx: a sheet holds maxTableCells cells (plus one a byte), with TABLE_CELL_LIMIT_EXCEEDED', xlsxCellsDoc.length < 4000 && cellsOf(xlsxCells.ast).length === 1000 + xlsxCellsDoc.length && xlsxCells.codes.includes('TABLE_CELL_LIMIT_EXCEEDED'), `${cellsOf(xlsxCells.ast).length} ${xlsxCellsDoc.length} ${xlsxCells.codes}`);
+    // A workbook whose cells do not compress to less than a byte each (every real one) is read whole
+    // under any limit: 4 MB of 1.2 million cells lost its last 200,000 to the default million.
+    const distinctCellsDoc = xlsxOf({ 'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${Array.from({ length: 3000 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}"><v>${(i * 7919) % 100003}.${i % 97}</v></c></row>`).join('')}</sheetData></worksheet>` });
+    const distinctCells = await warned(distinctCellsDoc, 'xlsx', { decompressionLimits: { maxTableCells: 1000 } });
+    check('xlsx: a workbook of more cells than maxTableCells, but fewer than its bytes, is read whole', distinctCellsDoc.length > 2000 && cellsOf(distinctCells.ast).length === 3000 && !distinctCells.codes.includes('TABLE_CELL_LIMIT_EXCEEDED'), `${cellsOf(distinctCells.ast).length} ${distinctCellsDoc.length} ${distinctCells.codes}`);
+
+    // Shared strings are read as the sheets are, without building XML elements: a million distinct
+    // strings (5.5 MB) was refused by the element budget. Plain strings cost an element per eight; a
+    // rich string's runs one each.
+    const sharedStringCells = (n: number) => `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${Array.from({ length: n }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}" t="s"><v>${i}</v></c></row>`).join('')}</sheetData></worksheet>`;
+    const sst = (items: string) => `<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${items}</sst>`;
+    const plainStrings = await warned(xlsxOf({ 'xl/sharedStrings.xml': sst(Array.from({ length: 3000 }, (_, i) => `<si><t>item ${i}</t></si>`).join('')), 'xl/worksheets/sheet1.xml': sharedStringCells(3000) }), 'xlsx', { decompressionLimits: { maxXmlElements: 1000 } });
+    const plainTexts = cellsOf(plainStrings.ast).map((c: any) => c.children?.[0]?.text ?? c.children?.[0]?.children?.[0]?.text);
+    check('xlsx: 3,000 plain shared strings are read within 1,000 elements', !plainStrings.error && plainTexts.length === 3000 && plainTexts[2999] === 'item 2999', `${plainStrings.error} ${plainTexts.length} ${plainTexts[2999]}`);
+    const richStrings = await warned(xlsxOf({ 'xl/sharedStrings.xml': sst('<si><r><t>a</t></r><r><t>b</t></r></si>'.repeat(1000)), 'xl/worksheets/sheet1.xml': sharedStringCells(1) }), 'xlsx', { decompressionLimits: { maxXmlElements: 1000 } });
+    check('xlsx: 2,000 rich runs count against maxXmlElements', /XML element limit exceeded/.test(richStrings.error ?? ''), String(richStrings.error).slice(0, 100));
+    // What an XML reader gives: references decoded, CDATA as written, phonetic readings (`rPh`) not the
+    // text, and a toggle a run turns off (`<b val="0"/>`) off.
+    const readStrings = await warned(xlsxOf({
+        'xl/sharedStrings.xml': sst('<si><t>A &amp; B &#x263A;</t><rPh sb="0" eb="1"><t>PHONETIC</t></rPh></si><si><r><rPr><b val="0"/><i/><sz val="9"/><color rgb="FF112233"/><rFont val="Arial &amp; Co"/></rPr><t xml:space="preserve">plain </t></r><r><rPr><b/><vertAlign val="superscript"/></rPr><t><![CDATA[<bold>]]></t></r></si>'),
+        'xl/worksheets/sheet1.xml': sharedStringCells(2),
+    }), 'xlsx');
+    const readCells = cellsOf(readStrings.ast);
+    const runsOf = (cell: any): any[] => { const out: any[] = []; const walk = (ns: any[]) => ns?.forEach((n: any) => { if (n.type === 'text') out.push(n); else walk(n.children); }); walk(cell?.children); return out; };
+    const [plainRun] = runsOf(readCells[0]);
+    const [first, second] = runsOf(readCells[1]);
+    check('xlsx: a shared string is its text, without its phonetic reading', plainRun?.text === 'A & B \u263A', JSON.stringify(plainRun?.text));
+    check('xlsx: a rich shared string keeps each run and its formatting', first?.text === 'plain ' && !first.formatting?.bold && first.formatting?.italic && first.formatting?.size === '9pt' && first.formatting?.color === '#112233' && first.formatting?.font === 'Arial & Co' && second?.text === '<bold>' && second.formatting?.bold && second.formatting?.superscript, JSON.stringify([first, second]));
+    // The repeat budget grows with the document: maxRepeatedContent plus 16 characters a byte.
+    const repeatedStringDoc = xlsxOf({ 'xl/sharedStrings.xml': sst(`<si><t>${'n'.repeat(500)}</t></si>`), 'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${Array.from({ length: 400 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}" t="s"><v>0</v></c></row>`).join('')}</sheetData></worksheet>` });
+    const repeatedIssues: any[] = [];
+    await parseQuiet(repeatedStringDoc, 'xlsx', { decompressionLimits: { maxRepeatedContent: 1000 }, onWarning: (issue: any) => repeatedIssues.push(issue) });
+    const repeatedLimit = repeatedIssues.find(issue => issue.code === 'REPEATED_CONTENT_LIMIT_EXCEEDED');
+    check('xlsx: maxRepeatedContent grows by 16 characters a byte of the document', repeatedLimit?.message.includes(`(${1000 + 16 * repeatedStringDoc.length} characters`), repeatedLimit?.message.slice(0, 120));
 
     // Plain text lays out a table from its cells once: rendered first and then again, each nested
     // table doubled the work (26 levels took minutes).
@@ -3521,6 +3560,33 @@ async function parserHardeningTests() {
     await refusedQuickly('a table of 1,000 cells along a diagonal, shared 40 times', Array(40).fill(diagonal), 'csv');
     const oneDiagonal = (await OfficeGenerator.generate(astWith([diagonal]) as any, 'csv', { onWarning: () => {} } as any)).value as string;
     check('csv: a table of 1,000 cells along a diagonal is written once', oneDiagonal.length > 1_000_000, `${oneDiagonal.length}`);
+    // A style record every cell of a workbook shares (as a parser gives it) is written, not refused: the
+    // AST holds it once, and at each later cell it weighs only what it weighs past what a cell's own
+    // record may. Counted in full at every cell, 700,000 styled cells were refused.
+    const cellStyle = { bold: true, italic: true, underline: true, strikethrough: true, color: '#1F3864', backgroundColor: '#D9E1F2', size: '10.5pt', font: 'Segoe UI Semibold Condensed', alignment: 'center' };
+    const styledSheet = { type: 'sheet', children: Array.from({ length: 100_000 }, (_, r) => ({ type: 'row', children: Array.from({ length: 7 }, (_, c) => ({ type: 'cell', metadata: { row: r, col: c }, children: [{ type: 'text', text: String(r * 7 + c), formatting: cellStyle }] })) })) };
+    let styledCsv = '', styledError: any;
+    try { styledCsv = (await OfficeGenerator.generate(astWith([styledSheet]) as any, 'csv', { onWarning: () => {} } as any)).value as string; } catch (e) { styledError = e; }
+    check('csv: 700,000 cells sharing one style record are written', !styledError && styledCsv.split('\n').filter(line => /^\d/.test(line)).length === 100_000 && styledCsv.includes('699999'), `${styledError} ${styledCsv.length}`);
+    // A grid too large for the budget is laid out closer, and that is reported, never silent; a parsed
+    // sparse sheet gets the budget its size allows (16 positions a byte) and keeps its columns.
+    const cellsFarApart = { type: 'sheet', children: [{ type: 'row', children: [{ type: 'cell', metadata: { row: 0, col: 0 }, children: [{ type: 'text', text: 'a' }] }] }, { type: 'row', children: [{ type: 'cell', metadata: { row: 5000, col: 5000 }, children: [{ type: 'text', text: 'b' }] }] }] };
+    const gridIssues: string[] = [];
+    const farCsv = (await OfficeGenerator.generate(astWith([cellsFarApart]) as any, 'csv', { onWarning: (issue: any) => gridIssues.push(issue.code) } as any)).value as string;
+    check('csv: cells too far apart for the grid budget are laid out closer, with TABLE_GRID_LIMIT_EXCEEDED', farCsv.length < 100 && gridIssues.includes('TABLE_GRID_LIMIT_EXCEEDED'), `${farCsv.length} ${gridIssues}`);
+    const sparseRows = Array.from({ length: 3000 }, (_, r) => `<table:table-row><table:table-cell office:value-type="string"><text:p>id${r}</text:p></table:table-cell><table:table-cell table:number-columns-repeated="398"/><table:table-cell office:value-type="string"><text:p>v${r}</text:p></table:table-cell></table:table-row>`).join('');
+    const wideSparseSheet = await warned(odfOf('spreadsheet', `<table:table table:name="Data">${sparseRows}</table:table>`), 'ods');
+    const sparseIssues: string[] = [];
+    const sparseCsv = wideSparseSheet.ast ? (await wideSparseSheet.ast.to('csv', { onWarning: (issue: any) => sparseIssues.push(issue.code) } as any)).value as string : '';
+    check('ods: a sparse sheet of 3,000 rows and 400 columns keeps its columns', sparseCsv.split('\n')[0].split(',').length === 400 && !sparseIssues.includes('TABLE_GRID_LIMIT_EXCEEDED'), `${sparseCsv.split('\n')[0].split(',').length} ${sparseIssues}`);
+    // Short rows are padded to their table's width within the budget, and past it that is reported.
+    const tallNarrow = { type: 'table', children: [{ type: 'row', children: Array.from({ length: 13 }, (_, c) => ({ type: 'cell', children: [{ type: 'text', text: 'H' + c }] })) }, ...Array.from({ length: 100_000 }, (_, r) => ({ type: 'row', children: [{ type: 'cell', children: [{ type: 'text', text: String(r) }] }] }))] };
+    const padIssues: string[] = [];
+    await OfficeGenerator.generate(astWith([tallNarrow]) as any, 'csv', { onWarning: (issue: any) => padIssues.push(issue.code) } as any);
+    check('csv: rows left short by the padding budget are reported (TABLE_GRID_LIMIT_EXCEEDED)', padIssues.includes('TABLE_GRID_LIMIT_EXCEEDED'), `${padIssues}`);
+    const parsedNarrow = await warned(Buffer.from(['h0,h1,h2,h3,h4,h5,h6,h7,h8,h9,h10,h11,h12', ...Array.from({ length: 100_000 }, (_, r) => String(r))].join('\n')), 'csv');
+    const narrowCsv = parsedNarrow.ast ? (await parsedNarrow.ast.to('csv')).value as string : '';
+    check('csv: a parsed CSV of 100,000 short rows under a 13-column header is padded whole', narrowCsv.split('\n').filter(Boolean).every(line => line.split(',').length === 13), narrowCsv.slice(-80));
     // A paragraph's text is the text of its runs, not written beside them: a paragraph of 96 MB in one run is written.
     const hugeText = 'x'.repeat(96_000_000);
     const hugeParagraph = (await OfficeGenerator.generate(astWith([{ type: 'paragraph', text: hugeText, children: [{ type: 'text', text: hugeText }] }]) as any, 'text', { onWarning: () => {} } as any)).value as string;

@@ -1,4 +1,4 @@
-import { mapNodeLists } from './nodeListUtils.js';
+import { mapNodeLists, NodeMemo, nodeMemo } from './nodeListUtils.js';
 import { OfficeContentNode, OfficeParserAST } from '../types.js';
 
 /**
@@ -173,7 +173,7 @@ function normalizeRecordOnce(record: Record<string, unknown>, kind: 'formatting'
  * note every reference holds) was read once per path to it, which doubled per level of notes nested in
  * notes, and came out as a copy per reference.
  */
-function normalizeNode(node: OfficeContentNode, done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode {
+function normalizeNode(node: OfficeContentNode, done: NodeMemo<OfficeContentNode>): OfficeContentNode {
     const known = done.get(node);
     if (known) return known;
     done.set(node, node);
@@ -182,7 +182,7 @@ function normalizeNode(node: OfficeContentNode, done: Map<OfficeContentNode, Off
     return result;
 }
 
-function normalizeNodeOnce(node: OfficeContentNode, done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode {
+function normalizeNodeOnce(node: OfficeContentNode, done: NodeMemo<OfficeContentNode>): OfficeContentNode {
     let next: any = node;
     const change = (key: string, value: unknown) => {
         if (next === node) next = { ...node };
@@ -227,14 +227,17 @@ function normalizeAttributes(attributes: Record<string, unknown>): Record<string
     return result;
 }
 
-function normalizeNodes(nodes: OfficeContentNode[], done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode[] {
-    let changed = false;
-    const out = nodes.filter(node => node && typeof node === 'object' && !Array.isArray(node)).map(node => {
+function normalizeNodes(nodes: OfficeContentNode[], done: NodeMemo<OfficeContentNode>): OfficeContentNode[] {
+    // Copied at its first change only: a list most passes leave as it is.
+    let out: OfficeContentNode[] | undefined;
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        if (!node || typeof node !== 'object' || Array.isArray(node)) { out ??= nodes.slice(0, i); continue; }
         const fixed = normalizeNode(node, done);
-        if (fixed !== node) changed = true;
-        return fixed;
-    });
-    return changed || out.length !== nodes.length ? out : nodes;
+        if (fixed !== node) out ??= nodes.slice(0, i);
+        out?.push(fixed);
+    }
+    return out ?? nodes;
 }
 
 /**
@@ -244,10 +247,10 @@ function normalizeNodes(nodes: OfficeContentNode[], done: Map<OfficeContentNode,
  * AST, or JSON) is coerced where it can be and removed where it cannot, so no writer escapes one kind
  * of value and writes another raw (an array's text went into an attribute unescaped) or fails on it.
  * Returns `ast` itself (same object, `.to()` intact) when everything is well typed; the input is never
- * mutated.
+ * mutated. A `tree` (see sharedNodeVisits) is read without a memo.
  */
-export function withWellTypedValues<T extends OfficeParserAST>(ast: T): T {
-    const seen = new Map();
+export function withWellTypedValues<T extends OfficeParserAST>(ast: T, options: { tree?: boolean } = {}): T {
+    const seen = nodeMemo<OfficeContentNode>(options.tree);
     readOnce = newReadOnce();
     try {
         const withNodes = mapNodeLists(ast, nodes => normalizeNodes(nodes, seen));

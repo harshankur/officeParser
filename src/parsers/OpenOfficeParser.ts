@@ -127,9 +127,9 @@ const repeatCell = (c: OfficeContentNode, config: OfficeParserConfig): OfficeCon
     ...(c.rawContent !== undefined ? { rawContent: chargeRawContent(c.rawContent, config) } : {}),
 }) as OfficeContentNode;
 
-/** Resolves the configured cell budget, falling back to the documented default. */
+/** Resolves the configured cell budget (the documented default when not set), plus one cell for each byte of the document (see budgetUtils). */
 const createCellBudget = (config: OfficeParserConfig): CellBudget =>
-    new CellBudget(config.decompressionLimits?.maxTableCells ?? 1000000, config);
+    new CellBudget((config.decompressionLimits?.maxTableCells ?? 1000000) + TABLE_CELLS_PER_BYTE * documentBytesOf(config), config);
 
 /**
  * Coerces a `table:number-*-repeated` attribute to a usable repeat count. A missing, zero,
@@ -251,6 +251,7 @@ const toRepeatCount = (attr: string | null): number => {
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { takeRepeats, valuesLength } from '../utils/repeatUtils.js';
+import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
 import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';

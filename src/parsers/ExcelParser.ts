@@ -29,7 +29,8 @@ import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { attachmentLookup, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
-import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
+import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
+import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
 /** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
@@ -76,6 +77,70 @@ function* xmlElements(xml: string, tag: string): Generator<{ attrs: string; self
 function firstElementContent(xml: string, tag: string): string | undefined {
     for (const element of xmlElements(xml, tag)) return element.content;
     return undefined;
+}
+
+/** An attribute's value in the attributes of an element (see xmlElements), its references decoded. */
+const attributeOf = (attrs: string, name: 'val' | 'rgb'): string | undefined => {
+    const match = (name === 'val' ? /(?:^|\s)val\s*=\s*(?:"([^"]*)"|'([^']*)')/ : /(?:^|\s)rgb\s*=\s*(?:"([^"]*)"|'([^']*)')/).exec(attrs);
+    return match ? decodeXmlEntities(match[1] ?? match[2]) : undefined;
+};
+
+/**
+ * The text an element's XML content holds, as an XML reader gives it: references decoded, line breaks
+ * normalized, CDATA sections as written, and markup inside it left out.
+ */
+const xmlText = (content: string): string => {
+    const decode = (raw: string) => decodeXmlEntities(raw.includes('\r') ? raw.replace(/\r\n?/g, '\n') : raw);
+    if (!content.includes('<')) return decode(content);
+    const parts: string[] = [];
+    let at = 0;
+    while (at < content.length) {
+        const lt = content.indexOf('<', at);
+        if (lt === -1) { parts.push(decode(content.slice(at))); break; }
+        parts.push(decode(content.slice(at, lt)));
+        if (content.startsWith('<![CDATA[', lt)) {
+            const end = content.indexOf(']]>', lt + 9);
+            parts.push(content.slice(lt + 9, end === -1 ? content.length : end));
+            at = end === -1 ? content.length : end + 3;
+        } else {
+            const gt = content.indexOf('>', lt + 1);
+            at = gt === -1 ? content.length : gt + 1;
+        }
+    }
+    return parts.join('');
+};
+
+/**
+ * A rich text run's formatting from its `rPr` content. A toggle (`b`, `i`, `strike`) is on unless its
+ * `val` turns it off (`<b val="0"/>`), and `u` unless it is `none`.
+ */
+function runFormatting(rPr: string): TextFormatting {
+    const formatting: TextFormatting = {};
+    const first = (tag: string) => { for (const element of xmlElements(rPr, tag)) return element; return undefined; };
+    const on = (tag: string, off: RegExp): boolean => {
+        const element = first(tag);
+        if (!element) return false;
+        const val = attributeOf(element.attrs, 'val');
+        return val === undefined || !off.test(val);
+    };
+    if (on('b', /^(0|false|off)$/i)) formatting.bold = true;
+    if (on('i', /^(0|false|off)$/i)) formatting.italic = true;
+    if (on('u', /^none$/i)) formatting.underline = true;
+    if (on('strike', /^(0|false|off)$/i)) formatting.strikethrough = true;
+    const size = first('sz') && attributeOf(first('sz')!.attrs, 'val');
+    if (size) formatting.size = size + 'pt';
+    const color = first('color');
+    const rgb = color && attributeOf(color.attrs, 'rgb');
+    // ARGB (as Excel writes it), or RGB.
+    if (rgb && /^[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$/.test(rgb)) formatting.color = '#' + (rgb.length === 8 ? rgb.slice(2) : rgb);
+    const font = first('rFont');
+    const fontName = font && attributeOf(font.attrs, 'val');
+    if (fontName) formatting.font = fontName;
+    const vertAlign = first('vertAlign');
+    const position = vertAlign && attributeOf(vertAlign.attrs, 'val');
+    if (position === 'subscript') formatting.subscript = true;
+    if (position === 'superscript') formatting.superscript = true;
+    return formatting;
 }
 
 /**
@@ -140,7 +205,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     // Updated to store structured content (rich text runs) or simple string
     const sharedStrings: (string | OfficeContentNode[])[] = [];
     // Cells the document's sheets may still yield (see the sheet loop).
-    const cellLimit = config.decompressionLimits?.maxTableCells ?? 1000000;
+    // One cell more for each byte of the document (see budgetUtils), so a large workbook is not cut short.
+    const cellLimit = (config.decompressionLimits?.maxTableCells ?? 1000000) + TABLE_CELLS_PER_BYTE * documentBytesOf(config);
     let cellsLeft = cellLimit;
     let cellLimitWarned = false;
     // The text of each rich shared string, joined once: joined per cell, a large string many cells
@@ -155,62 +221,33 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const richStringRunWeight = new Map<number, number>();
 
     if (sharedStringsFile) {
-        const xml = parseXmlString(sharedStringsFile.content.toString(), { config });
-        // Each level read as children (see getChildElements): nested `si` or `r` elements, read as
-        // descendants, were read again at each level (1.9 KB took 20 seconds and 800 MB).
-        const siNodes = getChildElements(xml, "si");
-        for (const si of siNodes) {
-            const runNodes = getChildElements(si, "r");
-            if (runNodes.length > 0) {
-                // Rich text with runs
-                const runs: OfficeContentNode[] = [];
-                for (const run of runNodes) {
-                    const tNode = getChildElements(run, "t")[0];
-                    if (tNode) {
-                        const text = tNode.textContent || '';
-                        // Extract run formatting 
-                        const rPr = getChildElements(run, "rPr")[0];
-                        const formatting: TextFormatting = {};
-                        if (rPr) {
-                            if (getChildElements(rPr, "b").length > 0) formatting.bold = true;
-                            if (getChildElements(rPr, "i").length > 0) formatting.italic = true;
-                            if (getChildElements(rPr, "u").length > 0) formatting.underline = true;
-                            if (getChildElements(rPr, "strike").length > 0) formatting.strikethrough = true;
-
-                            const sz = getChildElements(rPr, "sz")[0];
-                            if (sz) formatting.size = sz.getAttribute("val") + 'pt';
-
-                            const color = getChildElements(rPr, "color")[0];
-                            if (color) {
-                                const rgb = color.getAttribute("rgb");
-                                if (rgb) formatting.color = '#' + rgb.substring(2);
-                            }
-
-                            const rFont = getChildElements(rPr, "rFont")[0];
-                            if (rFont) formatting.font = rFont.getAttribute("val") || undefined;
-
-                            const vertAlign = getChildElements(rPr, "vertAlign")[0];
-                            if (vertAlign) {
-                                const val = vertAlign.getAttribute("val");
-                                if (val === "subscript") formatting.subscript = true;
-                                if (val === "superscript") formatting.superscript = true;
-                            }
-                        }
-                        runs.push({
-                            type: 'text',
-                            text: text,
-                            formatting: Object.keys(formatting).length > 0 ? formatting : undefined
-                        });
-                    }
-                }
+        // Read as the sheets are, without building XML elements: a workbook of a million distinct
+        // strings (5.5 MB) made two million elements, a gigabyte of heap, and was refused by the element
+        // budget, where each string is only its text. A rich string's runs become nodes, so they are
+        // charged to the element budget as elements are; a plain string costs an array entry, and eight
+        // of them are charged as one element (an empty `<si/>` is five bytes of a zip's XML).
+        let plainStrings = 0;
+        for (const si of xmlElements(sharedStringsFile.content.toString(), 'si')) {
+            // A string's text and runs come before its phonetic readings (`rPh`), which are not its text.
+            const phonetic = nextElement(si.content, 'rPh', 0);
+            const body = phonetic === -1 ? si.content : si.content.slice(0, phonetic);
+            const runs: OfficeContentNode[] = [];
+            let runCount = 0;
+            for (const run of xmlElements(body, 'r')) {
+                runCount++;
+                const t = firstElementContent(run.content, 't');
+                if (t === undefined) continue;
+                const rPr = firstElementContent(run.content, 'rPr');
+                const formatting = rPr === undefined ? {} : runFormatting(rPr);
+                runs.push({ type: 'text', text: xmlText(t), formatting: Object.keys(formatting).length > 0 ? formatting : undefined });
+            }
+            if (runCount > 0) {
+                takeNodes(runCount, config);
                 sharedStrings.push(runs);
             } else {
-                // Simple text case
-                const tNodes = getChildElements(si, "t");
+                if (++plainStrings % 8 === 0) takeNodes(1, config);
                 let text = '';
-                for (const t of tNodes) {
-                    text += t.textContent || '';
-                }
+                for (const t of xmlElements(body, 't')) text += xmlText(t.content);
                 sharedStrings.push(text);
             }
         }

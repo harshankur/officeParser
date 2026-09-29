@@ -17,6 +17,7 @@ import { withKnownNodeTypes } from './utils/nodeTypeUtils.js';
 import { withBoundedSheetGrids } from './utils/sheetGridUtils.js';
 import { withWellTypedValues } from './utils/valueTypeUtils.js';
 import { getOfficeError } from './utils/errorUtils.js';
+import { documentBytesOf, noteDocumentBytes, REPEATED_CHARACTERS_PER_BYTE } from './utils/budgetUtils.js';
 
 /** Nodes a writer may meet more than once along the AST's paths, beyond what repeated content allows (see sharedNodeVisits). */
 const MAX_SHARED_NODE_VISITS = 4_000_000;
@@ -75,6 +76,7 @@ export class OfficeGenerator {
             return error;
         };
         let input: OfficeParserAST;
+        let laidOut = 0;
         try {
             // Nodes shared along many paths (see sharedNodeVisits) past what the parsers' own sharing
             // reaches are refused before anything reads them along each path: the passes below write a
@@ -83,8 +85,11 @@ export class OfficeGenerator {
             // check after them ran.
             // The parse's repeat budget widens the allowance, a number up to 1 GiB of it: an AST built in
             // code carries a config of its own, and a limit of Infinity (or text) in it turned the check off.
+            // So does the allowance the repeat budget gave for the size of the document parsed (see
+            // budgetUtils): a large workbook repeats what a small one may not.
             const configured: unknown = ast.config?.decompressionLimits?.maxRepeatedContent;
-            const repeatedContent = typeof configured === 'number' && configured >= 0 ? Math.min(configured, 1024 * 1024 * 1024) : 16 * 1024 * 1024;
+            const repeatedContent = (typeof configured === 'number' && configured >= 0 ? Math.min(configured, 1024 * 1024 * 1024) : 16 * 1024 * 1024)
+                + REPEATED_CHARACTERS_PER_BYTE * documentBytesOf(ast);
             const maxVisits = MAX_SHARED_NODE_VISITS + repeatedContent / 16;
             const tooLarge = (): never => { throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, config?.onWarning ? config : ast.config ?? config); };
             // Parsers share records (a spreadsheet's style is one record for every cell given it), which
@@ -92,19 +97,24 @@ export class OfficeGenerator {
             // so a workbook of a million styled cells is written, and output stays within a small
             // multiple of what the AST holds.
             const tooShared = (candidate: OfficeParserAST, weigh?: (node: OfficeContentNode) => number) => {
-                const { extra, held } = sharedNodeVisits(candidate, maxVisits, weigh);
-                return extra > maxVisits + WRITTEN_PER_HELD * held;
+                const visits = sharedNodeVisits(candidate, maxVisits, weigh);
+                if (visits.extra > maxVisits + WRITTEN_PER_HELD * visits.held) tooLarge();
+                return visits;
             };
-            if (tooShared(ast)) tooLarge();
+            const { shared, tree } = tooShared(ast);
             // Writing nodes of unknown types as their content is held to the same number of visits: notes,
-            // which sharedNodeVisits counts once, can hold such nodes along many paths.
-            const known = withKnownNodeTypes(withWellTypedValues(ast), { maxWork: maxVisits, onTooLarge: tooLarge });
-            // Grids are bounded last, so the tables they give are the ones writers get.
+            // which sharedNodeVisits counts once, can hold such nodes along many paths. An AST that shares
+            // nothing (a tree, as parsers give) is read by each pass without a memo of its nodes.
+            const known = withKnownNodeTypes(withWellTypedValues(ast, { tree }), { maxWork: maxVisits, onTooLarge: tooLarge, tree });
+            // Grids are bounded last, so the tables they give are the ones writers get; a table laid out
+            // closer is reported with the output's messages.
             const gridGaps = new Map<OfficeContentNode, number>();
-            input = withBoundedSheetGrids(keepsComments ? known : withoutSourceComments(known), gridGaps);
+            input = withBoundedSheetGrids(keepsComments ? known : withoutSourceComments(known, { tree }), gridGaps, { tree, onLaidOut: tables => { laidOut = tables; } });
+            noteDocumentBytes(input, documentBytesOf(ast));
             // A table's grid is held to the grid budget once, and its empty positions are written along
-            // every path to it: 1,000 cells along a diagonal, shared 1,000 times, filled a billion.
-            if (tooShared(input, node => gridGaps.get(node) ?? 0)) tooLarge();
+            // every path to it: 1,000 cells along a diagonal, shared 1,000 times, filled a billion. An AST
+            // no node of which is reached along two paths (a tree, as parsers give) writes each once.
+            if (shared) tooShared(input, node => gridGaps.get(node) ?? 0);
         } catch (error) {
             throw asNestingError(error);
         }
@@ -148,6 +158,7 @@ export class OfficeGenerator {
                 throw getOfficeError(OfficeErrorType.FORMAT_UNSUPPORTED, config?.onWarning ? config : ast.config ?? config, destination);
         }
 
+        if (laidOut) generator.reportTablesLaidOut(laidOut);
         try {
             return await generator.generate() as ConversionResult<D>;
         } catch (error) {

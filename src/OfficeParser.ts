@@ -50,6 +50,7 @@ import { parseRtf } from './parsers/RtfParser.js';
 import { parseWord } from './parsers/WordParser.js';
 import { BlobLike, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SupportedFileType } from './types.js';
 import { resolveParserConfig } from './utils/configUtils.js';
+import { noteDocumentBytes } from './utils/budgetUtils.js';
 import { assertNode } from './utils/envUtils.js';
 import { checkAbortSignal, getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
@@ -304,6 +305,8 @@ export class OfficeParser {
                 logWarning(OfficeWarningType.OCR_REQUIRES_ATTACHMENTS, internalConfig);
             }
 
+            // The budgets that grow with the document's size (see budgetUtils) read it from the config.
+            noteDocumentBytes(internalConfig, buffer.length);
             let result: OfficeParserAST;
             switch (routedExt) {
                 case 'docx':
@@ -318,7 +321,7 @@ export class OfficeParser {
                 case 'odt':
                 case 'odp':
                 case 'ods':
-                case 'odg':
+                case 'odg': {
                     // The ODF types share one parser, which needs to know which of them
                     // it is looking at. It normally reads that from the archive's mimetype
                     // entry; passing the resolved type along gives it something accurate to
@@ -328,9 +331,11 @@ export class OfficeParser {
                     // returns an already-complete config by reference, so writing to it would
                     // pin the caller's own object to this file's type and misroute every later
                     // parse that reused it.
-                    result = await parseOpenOffice(buffer,
-                        { ...internalConfig, fileType: routedExt as SupportedFileType });
+                    const odfConfig = { ...internalConfig, fileType: routedExt as SupportedFileType };
+                    noteDocumentBytes(odfConfig, buffer.length);
+                    result = await parseOpenOffice(buffer, odfConfig);
                     break;
+                }
                 case 'pdf':
                     result = await parsePdf(buffer, internalConfig);
                     break;
@@ -363,6 +368,8 @@ export class OfficeParser {
             checkAbortSignal(internalConfig.ocrConfig?.abortSignal);
 
             result.warnings = parsingWarnings;
+            // And writers read it from the AST (the grid positions they fill, the content they repeat).
+            noteDocumentBytes(result, buffer.length);
 
             if (callback) callback(result);
             return result;

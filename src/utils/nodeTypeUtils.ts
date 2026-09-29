@@ -1,4 +1,4 @@
-import { mapNodeLists } from './nodeListUtils.js';
+import { mapNodeLists, NodeMemo, nodeMemo } from './nodeListUtils.js';
 import { OfficeContentNode, OfficeContentNodeType, OfficeParserAST } from '../types.js';
 
 /** Every node type the AST defines (a record, so a type added to the union must be added here). */
@@ -43,14 +43,14 @@ const withInherited = (text: OfficeContentNode, inherited: Inherited | undefined
 /** What one replacement of unknown nodes keeps across the AST. */
 interface Pass {
     /** Each known node's result, once (a node the AST shares keeps one result). */
-    known: Map<OfficeContentNode, OfficeContentNode>;
+    known: NodeMemo<OfficeContentNode>;
     /**
      * Each unknown node's content among blocks, in a table or in a row, once: there it takes no formatting
      * from around it, so it is the same wherever the node stands. A node shared through notes lists (which
      * sharedNodeVisits counts once, as writers write a note once) was written again along every path to
      * it: 28 nodes, each holding the next twice in its notes, ended the process out of memory.
      */
-    unknown: Map<OfficeContentNode, Partial<Record<Place, OfficeContentNode[]>>>;
+    unknown: NodeMemo<Partial<Record<Place, OfficeContentNode[]>>>;
     /** Copies this pass made to carry notes and comments, not yet shared: more are added to them in place. */
     owned: WeakSet<OfficeContentNode>;
     /** What writing the content may still cost (nodes carried, copied or written again), and past it. */
@@ -86,19 +86,21 @@ function knownResult(node: OfficeContentNode, pass: Pass): OfficeContentNode {
  * the content is a cell, and in a table a row. Returns `nodes` itself when nothing changes.
  */
 function replaceUnknownNodes(nodes: OfficeContentNode[], place: Place, pass: Pass, inherited?: Inherited): OfficeContentNode[] {
-    let changed = !!inherited;
-    const out: OfficeContentNode[] = [];
-    for (const node of nodes) {
+    // Copied at its first change only (text under a wrapper changes from the first): a list most passes
+    // leave as it is.
+    let out: OfficeContentNode[] | undefined = inherited ? [] : undefined;
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
         if (isKnown(node.type)) {
             const next = knownResult(node, pass);
-            if (next !== node) changed = true;
-            out.push(next.type === 'text' ? withInherited(next, inherited) : next);
+            if (next !== node) out ??= nodes.slice(0, i);
+            out?.push(next.type === 'text' ? withInherited(next, inherited) : next);
             continue;
         }
-        changed = true;
+        out ??= nodes.slice(0, i);
         writeUnknown(node, place, pass, place === 'inline' ? inherited : undefined, out);
     }
-    return changed ? out : nodes;
+    return out ?? nodes;
 }
 
 /**
@@ -233,12 +235,13 @@ function writeUnknown(node: OfficeContentNode, place: Place, pass: Pass, inherit
  * writing unknown nodes' content costs past `maxWork` (nodes carried, copied or written again for
  * shared content) calls `onTooLarge`.
  */
-export function withKnownNodeTypes<T extends OfficeParserAST>(ast: T, limits: { maxWork?: number; onTooLarge?: () => never } = {}): T {
+export function withKnownNodeTypes<T extends OfficeParserAST>(ast: T, limits: { maxWork?: number; onTooLarge?: () => never; tree?: boolean } = {}): T {
     // A node the AST shares (one note every reference to it holds) is read once, not once per path to
-    // it: notes referring to each other twice each took time doubling per level.
+    // it: notes referring to each other twice each took time doubling per level. A `tree` (see
+    // sharedNodeVisits) shares none.
     const pass: Pass = {
-        known: new Map(),
-        unknown: new Map(),
+        known: nodeMemo(limits.tree),
+        unknown: nodeMemo(limits.tree),
         owned: new WeakSet(),
         workLeft: limits.maxWork ?? Infinity,
         onTooLarge: limits.onTooLarge ?? (() => { throw new RangeError('Invalid array length'); }),
