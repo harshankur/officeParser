@@ -913,6 +913,29 @@ async function testRtfDestinations(): Promise<void> {
     assert.deepStrictEqual(linked, ['Link'], 'RTF: a comment inside a link is not linked');
     const tailAfterTable = await parse(String.raw`\trowd\cellx3000\pard\intbl A\cell\row\pard Tail`);
     assert.deepStrictEqual(tailAfterTable.content.map(shape), [['table', [['row', [['cell', [['paragraph', 'A']]]]]]], ['paragraph', 'Tail']], 'RTF: the last paragraph after a table follows it');
+
+    // The writer keeps headers, footers and review comments (they were left out, with no message): an
+    // RTF round trip reads them back, the comment with its author, initials and date.
+    const running = await parse(String.raw`{\header \pard Running head\par}{\footer \pard Page foot\par}\pard Body text{\*\atnid JD}{\*\atnauthor John}\chatn{\*\annotation{\*\atndate 1742938438}\pard\plain Review remark\par} more\par`);
+    const written = await OfficeGenerator.generate(running, 'rtf');
+    assert.deepStrictEqual(written.messages, [], 'RTF: headers, footers and comments are written without a message');
+    const rtfBack = await OfficeParser.parseOffice(Buffer.from(written.value as string, 'latin1'), { fileType: 'rtf' } as any);
+    assert.deepStrictEqual([rtfBack.auxiliary?.headers?.map(n => n.text), rtfBack.auxiliary?.footers?.map(n => n.text)], [['Running head'], ['Page foot']], 'RTF: headers and footers are written');
+    assert.deepStrictEqual(rtfBack.content.map(shape), [['paragraph', 'Body text more']], 'RTF: the body keeps only its own text');
+    const back = collectAllNodes(rtfBack).filter(n => n.type === 'comment');
+    assert.deepStrictEqual(back.map(c => [c.text, c.metadata]), [['Review remark', { author: 'John', initials: 'JD', date: '2026-03-04T05:06:00' }]], 'RTF: a comment is written with its author, initials and date');
+    // A comment on a table cell and one on a table, written inside a table: annotations carry no \intbl
+    // of the table they are in, and the table stays whole.
+    const T = (text: string, extra: any = {}) => ({ type: 'text', text, ...extra }) as OfficeContentNode;
+    const note = (text: string) => ({ type: 'comment', text, metadata: { author: 'A' }, children: [{ type: 'paragraph', text, children: [T(text)] }] }) as OfficeContentNode;
+    const cellComments = await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'table', comments: [note('On table')], children: [{ type: 'row', children: [{ type: 'cell', comments: [note('On cell')], children: [{ type: 'paragraph', children: [T('Cell', { comments: [note('On run')] })] }] }, { type: 'cell', children: [{ type: 'paragraph', children: [T('Other')] }] }] }] },
+        { type: 'paragraph', children: [T('After')] },
+    ] } as any, 'rtf');
+    assert.ok(!/\\annotation[^}]*\\intbl/.test(cellComments.value as string), 'RTF: an annotation in a table carries no \\intbl');
+    const cellBack = await OfficeParser.parseOffice(Buffer.from(cellComments.value as string, 'latin1'), { fileType: 'rtf' } as any);
+    assert.deepStrictEqual(cellBack.content.map(shape).filter(b => b[0] === 'table' || b[1]), [['table', [['row', [['cell', [['paragraph', 'Cell']]], ['cell', [['paragraph', 'Other']]]]]]], ['paragraph', 'After']], 'RTF: comments in a table leave it whole');
+    assert.deepStrictEqual(collectAllNodes(cellBack).filter(n => n.type === 'comment').map(c => c.text).sort(), ['On cell', 'On run', 'On table'], 'RTF: comments on a table, a cell and a run are all written');
 }
 
 /**

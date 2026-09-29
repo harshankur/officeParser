@@ -1,4 +1,4 @@
-import { CodeMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextMetadata } from '../types.js';
+import { CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ListMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, TextMetadata } from '../types.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
@@ -11,6 +11,22 @@ import { clampInt } from '../utils/numberUtils.js';
 
 /** Nodes whose children are a line of text: a picture in one sits in its line. */
 const LINE_HOLDERS = new Set(['paragraph', 'heading', 'list', 'cell', 'definitionTerm', 'definitionDescription']);
+
+/**
+ * A date as the DTTM an annotation's `\atndate` holds (minute, hour, day, month, year since 1900 and
+ * weekday, packed into a signed 32-bit integer); undefined for no date or one DTTM cannot hold. A date
+ * and time without a zone (as RtfParser reads a DTTM back) is kept as it stands, one with a zone is
+ * taken in UTC.
+ */
+function rtfDateTime(date: unknown): number | undefined {
+    if (typeof date !== 'string' || !date) return undefined;
+    const local = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?)?$/.exec(date);
+    const d = local ? new Date(Date.UTC(+local[1], +local[2] - 1, +local[3], +(local[4] ?? 0), +(local[5] ?? 0))) : new Date(date);
+    if (isNaN(d.getTime())) return undefined;
+    const year = d.getUTCFullYear() - 1900;
+    if (year < 0 || year > 511) return undefined;
+    return (d.getUTCMinutes() | (d.getUTCHours() << 6) | (d.getUTCDate() << 11) | ((d.getUTCMonth() + 1) << 16) | (year << 20) | (d.getUTCDay() << 29)) | 0;
+}
 
 /**
  * Generates high-fidelity RTF (Rich Text Format) from an AST.
@@ -39,6 +55,10 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     private usedMonospace = false;
     /** Whether the math-as-source warning was given (once per document). */
     private mathWarned = false;
+    /** The node processor the document is written with, kept so a comment's and a header's blocks are written by it too. */
+    private processor?: (node: OfficeContentNode, childrenOutput: string) => Promise<string>;
+    /** The comments of a block written, to go before it (see processNodeRecursive). */
+    private readonly blockAnnotations = new Map<OfficeContentNode, string>();
 
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'rtf'>) {
         super('rtf', ast, config);
@@ -51,7 +71,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         this.mathWarned = false;
 
         // We first process all nodes to collect colors and analyze structure
-        const bodyContent = await this.renderBody(this.ast);
+        const { running, body: bodyContent } = await this.renderBody(this.ast);
 
         let output = '{\\rtf1\\ansi\\uc1\\deff0\n';
 
@@ -86,7 +106,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             output += '}\n';
         }
 
-        // 4. Body
+        // 4. Header and footer, then the body
+        output += running;
         output += '\\f0\\fs24\n';
         output += bodyContent;
         output += '}';
@@ -121,14 +142,20 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         this.inTable = wasInTable;
         this.inHeading = wasInHeading;
         this.headingUniformSize = wasHeadingSize;
+        // A block's comments, a paragraph of their own before it, in the table around it if any.
+        const refs = this.blockAnnotations.get(node);
+        if (refs !== undefined) {
+            this.blockAnnotations.delete(node);
+            result = `${this.inTable ? '\\pard\\intbl' : '\\pard'} ${refs}\\par\n${result}`;
+        }
         return result;
     }
 
-    private async renderBody(ast: OfficeParserAST): Promise<string> {
+    private async renderBody(ast: OfficeParserAST): Promise<{ running: string; body: string }> {
         let body = '';
         this.inTable = false;
 
-        const processor = async (node: OfficeContentNode, childrenOutput: string): Promise<string> => {
+        const render = async (node: OfficeContentNode, childrenOutput: string): Promise<string> => {
             const mapping = this.getSemanticMapping(node);
             if (mapping) {
                 if (mapping.tag === 'blockquote') {
@@ -392,6 +419,28 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             }
         };
 
+        // A node's review comments (see annotationsFor): a line's open the line, an inline node's follow
+        // it, and a block's are a paragraph of their own before it.
+        const processor = async (node: OfficeContentNode, childrenOutput: string): Promise<string> => {
+            if (!node.comments?.length || node.type === 'comment') return render(node, childrenOutput);
+            const refs = await this.annotationsFor(node);
+            if (!refs) return render(node, childrenOutput);
+            if (LINE_HOLDERS.has(node.type)) return render(node, refs + childrenOutput);
+            const out = await render(node, childrenOutput);
+            if (this.lineDepth > 0 || node.type === 'text') return out + refs;
+            // Placed by processNodeRecursive, once the table this node may be is closed again.
+            this.blockAnnotations.set(node, refs);
+            return out;
+        };
+        this.processor = processor;
+
+        // The header and footer (the AST's auxiliary) first, so a note in one is listed with the body's.
+        // Written into one header and one footer, as DOCX and ODT write them; they were left out.
+        let running = '';
+        for (const [kind, nodes] of [['header', ast.auxiliary?.headers], ['footer', ast.auxiliary?.footers]] as const) {
+            if (nodes?.length) running += `{\\${kind} ${await this.renderApart(nodes)}}\n`;
+        }
+
         for (const node of ast.content) {
             body += await this.processNodeRecursive(node, processor);
         }
@@ -401,7 +450,52 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 body += await this.processNodeRecursive(note, processor);
             }
         }
-        return body;
+        return { running, body };
+    }
+
+    /**
+     * Writes `nodes` as blocks of their own (a comment's, a header's or footer's): outside the table,
+     * heading and line being written where they are referred to, whose `\intbl` or suppressed
+     * formatting is not theirs.
+     */
+    private async renderApart(nodes: OfficeContentNode[]): Promise<string> {
+        const saved = { inTable: this.inTable, inHeading: this.inHeading, headingUniformSize: this.headingUniformSize, lineDepth: this.lineDepth };
+        this.inTable = false;
+        this.inHeading = false;
+        this.headingUniformSize = false;
+        this.lineDepth = 0;
+        let out = '';
+        try {
+            for (const node of nodes) out += await this.processNodeRecursive(node, this.processor!);
+        } finally {
+            this.inTable = saved.inTable;
+            this.inHeading = saved.inHeading;
+            this.headingUniformSize = saved.headingUniformSize;
+            this.lineDepth = saved.lineDepth;
+        }
+        return out;
+    }
+
+    /**
+     * A node's review comments as Word writes them: the author's initials (`\atnid`) and name
+     * (`\atnauthor`), the reference mark (`\chatn`), and the annotation holding the date (`\atndate`)
+     * and the comment's blocks, its last paragraph unended as Word leaves it. Each comment is written
+     * once, at its first reference (see firstWriteOfComment). They were left out, with no message.
+     */
+    private async annotationsFor(node: OfficeContentNode): Promise<string> {
+        let out = '';
+        for (const comment of node.comments ?? []) {
+            if (!comment || isSourceComment(comment) || !this.firstWriteOfComment(comment)) continue;
+            const meta = comment.metadata as CommentMetadata | undefined;
+            const blocks = comment.children?.length ? comment.children : [{ type: 'paragraph', text: comment.text || '', children: [{ type: 'text', text: comment.text || '' }] } as OfficeContentNode];
+            let body = await this.renderApart(blocks);
+            if (body.endsWith('\\par\n')) body = body.slice(0, -'\\par\n'.length);
+            const date = rtfDateTime(meta?.date);
+            out += (typeof meta?.initials === 'string' && meta.initials ? `{\\*\\atnid ${this.escapeRtf(meta.initials)}}` : '')
+                + (typeof meta?.author === 'string' && meta.author ? `{\\*\\atnauthor ${this.escapeRtf(meta.author)}}` : '')
+                + `\\chatn {\\*\\annotation${date !== undefined ? `{\\*\\atndate ${date}}` : ''}${body}}`;
+        }
+        return out;
     }
 
     private getColorIndex(hex: string): number {

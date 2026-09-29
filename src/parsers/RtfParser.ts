@@ -1639,6 +1639,14 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                         ...(annotationAuthor || annotationInitials ? { metadata: { ...(annotationAuthor ? { author: annotationAuthor } : {}), ...(annotationInitials ? { initials: annotationInitials } : {}) } } : {}),
                     };
                     annotationAuthor = annotationInitials = undefined;
+                    // When it was written (`{\*\atndate N}`, a DTTM), among the annotation's own groups.
+                    for (const child of node.content) {
+                        if (child.type !== 'group' || child.destination !== 'atndate') continue;
+                        const param = child.content.find((item): item is RtfControl => item.type === 'control' && item.value === 'atndate')?.param;
+                        const date = dateTimeFromDttm(param ?? Number(extractGroupText(child)));
+                        if (date) redirectedComment.metadata = { ...redirectedComment.metadata, date };
+                        break;
+                    }
                     const holder = currentParagraphChildren.length > 0 ? currentParagraphChildren[currentParagraphChildren.length - 1] : undefined;
                     if (holder) (holder.comments ??= []).push(redirectedComment);
                     else currentParagraphChildren.push({ type: 'text', text: '', comments: [redirectedComment] });
@@ -2186,6 +2194,20 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     return result;
 };
+
+/**
+ * A DTTM (an annotation's `\atndate`: minute, hour, day, month and year since 1900 packed into a 32-bit
+ * integer) as an ISO date and time without a zone, as Word writes it in local time; undefined for a
+ * value that is not one.
+ */
+function dateTimeFromDttm(value: number): string | undefined {
+    if (!Number.isFinite(value) || value === 0) return undefined;
+    const n = value >>> 0;
+    const minute = n & 63, hour = (n >>> 6) & 31, day = (n >>> 11) & 31, month = (n >>> 16) & 15, year = ((n >>> 20) & 511) + 1900;
+    if (minute > 59 || hour > 23 || day < 1 || day > 31 || month < 1 || month > 12) return undefined;
+    const two = (v: number) => String(v).padStart(2, '0');
+    return `${year}-${two(month)}-${two(day)}T${two(hour)}:${two(minute)}:00`;
+}
 
 // Helper to find an RTF group by destination name
 function findRtfGroup(group: RtfGroup, destination: string): RtfGroup | null {

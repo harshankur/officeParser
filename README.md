@@ -802,7 +802,8 @@ image and therefore also needs `extractAttachments: true`.
 Content kept in parts of its own is read where it stands: SmartArt text (as a nested bulleted list, in
 DOCX after the paragraph drawing it), DOCX content controls, text boxes (their paragraphs, lists and
 tables, after the paragraph drawing them) and alternative-format chunks (`w:altChunk`: HTML, MHT, RTF,
-plain text or a DOCX, in the body, headers, footers, notes and comments), and RTF shape text boxes. Text a tracked
+plain text or a DOCX, in the body, headers, footers, notes and comments), and RTF shape text boxes (as
+blocks right after the paragraph the shape is anchored in). Text a tracked
 change deleted or moved away (DOCX, ODT) is not read; insertions are.
 
 ---

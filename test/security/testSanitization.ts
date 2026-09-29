@@ -1123,6 +1123,13 @@ async function rtfUrlTests() {
             `link text was dropped along with the URL: ${rtf.slice(0, 120)}`);
     }
 
+    // A comment's author and initials, and a header's text, are escaped in their destinations: braces
+    // and backslashes in them cannot close the destination or write body text.
+    const annotated = String((await OfficeGenerator.generate({ ...astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'body', comments: [{ type: 'comment', text: 'c}\\par INJECTED{', metadata: { author: 'A}\\par INJECTED{', initials: 'I}{\\b', date: '}{\\par' } }] }] } as any]), auxiliary: { headers: [{ type: 'paragraph', children: [{ type: 'text', text: 'h}\\par INJECTED{' }] }] } } as any, 'rtf')).value);
+    const annotatedBack = await OfficeParser.parseOffice(Buffer.from(annotated, 'latin1'), { fileType: 'rtf' } as any);
+    const annotatedComment = (annotatedBack.content[0]?.children ?? []).flatMap((n: any) => n.comments ?? [])[0];
+    check('rtf: a comment\'s author, initials and text and a header\'s text stay in their destinations', annotatedBack.content.length === 1 && annotatedBack.content[0].text === 'body' && annotatedComment?.metadata?.author === 'A}\\par INJECTED{' && annotatedComment?.metadata?.initials === 'I}{\\b' && annotatedComment?.text === 'c}\\par INJECTED{' && annotatedBack.auxiliary?.headers?.[0]?.text === 'h}\\par INJECTED{', annotated);
+
     // Positive control. Without these the allowlist could be "reject everything" and still pass.
     for (const url of ['https://example.com/a?b=1', 'http://x.test/p', 'mailto:a@b.test', 'tel:+123', '#anchor', 'relative/path.html']) {
         const rtf = await rtfFor(url);
