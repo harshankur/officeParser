@@ -1007,12 +1007,13 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     return `${this.renderAnchors(node.metadata)}${childrenOutput}`;
 
                 case 'break': {
-                    // A hard line break (CommonMark: two trailing spaces before the newline)
-                    // round-trips back to a distinct 'break' node on reparse. A thematic break
-                    // emits `---` as its own block (the top-level loop supplies the surrounding
-                    // blank lines), so a Markdown `---` / HTML `<hr>` survives a save instead of
-                    // collapsing to whitespace. Every other breakType - notably 'page', which
-                    // Markdown has no syntax for - keeps emitting a bare newline, unchanged.
+                    // A line break (isLineBreak: a typed one, `carriageReturn` or `textWrapping`) is a
+                    // hard line break (CommonMark: two trailing spaces before the newline), which
+                    // round-trips back to a distinct 'break' node on reparse; a bare newline was a soft
+                    // break, read back as a space. A thematic break emits `---` as its own block (the
+                    // top-level loop supplies the surrounding blank lines), so a Markdown `---` / HTML
+                    // `<hr>` survives a save instead of collapsing to whitespace. Every other breakType -
+                    // notably 'page', which Markdown has no syntax for - keeps emitting a bare newline.
                     const meta = node.metadata as BreakMetadata | undefined;
                     // Where the break starts a line (after another break), two trailing spaces would
                     // make a whitespace-only line, which ends the paragraph: a backslash does not.

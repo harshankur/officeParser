@@ -4890,6 +4890,12 @@ async function testMarkdownReading(): Promise<void> {
     }
     assert.strictEqual(await write([{ type: 'paragraph', children: [T('Source:', { italic: true }), T('Data')] }], { fallbackToHtml: false }), '*Source:*Data', 'MD: without the HTML fallback, the delimiters (read back leniently)');
     assert.strictEqual(await md('x \\\ny'), 'x  \ny', 'MD: spaces before a line break are not written');
+    // A typed line break (DOCX `w:br`: `textWrapping`, the type a break without one has) is a hard break.
+    for (const breakNode of [{ type: 'break', metadata: { breakType: 'textWrapping' } }, { type: 'break' }]) {
+        const out = await write([{ type: 'paragraph', children: [T('Line one'), breakNode, T('Line two')] }]);
+        assert.deepStrictEqual([out, runs((await parse(out)).content[0].children)], ['Line one  \nLine two', 'Line one<break>Line two'], `MD: a ${(breakNode as any).metadata?.breakType ?? 'typeless'} break is a line break`);
+    }
+    assert.strictEqual(await write([{ type: 'paragraph', children: [T('a'), { type: 'break', metadata: { breakType: 'page' } }, T('b')] }]), 'a\nb', 'MD: a page break in a paragraph is still a line end');
 
     // Abbreviations match whole words, the longest at a place, e.g. followed by a space.
     const abbr = await parse('HTML5 and HTML 5 and HTML, e.g. this.\n\n*[HTML]: Hyper\n*[HTML 5]: Five\n*[e.g.]: for example');
