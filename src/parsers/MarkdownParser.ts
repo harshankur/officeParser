@@ -387,6 +387,83 @@ function matchEmphasis(runs: DelimiterRun[]): void {
     }
 }
 
+/** The units abbreviations are matched in: a run of letters, marks, digits and connectors (a word), or any other one character. */
+const ABBREVIATION_UNIT = /[\p{L}\p{M}\p{N}\p{Pc}]+|[\s\S]/gu;
+
+/**
+ * A function finding the abbreviations (Markdown Extra's `*[HTML]: ...`) named by `keys` in a text:
+ * where one stands as whole words (never starting or ending inside a run of letters or digits), the
+ * longest starting at the leftmost place, then the same in the rest after it. The keys are read into
+ * an Aho-Corasick automaton of their words backwards, once per document, which gives the longest key
+ * starting at each word in one backward scan, so a text costs time linear in its length however many
+ * keys there are (a pattern alternating every key tried each of them at every place of every text,
+ * built again for each: 10,000 of them over 10,000 lines took 12 seconds).
+ */
+function abbreviationFinder(keys: Iterable<string>): (text: string) => { start: number; end: number }[] {
+    const unitIds = new Map<string, number>();
+    // Per unit, the node it leads to from each node that has such a child.
+    const children = new Map<number, Map<number, number>>();
+    const parents: number[] = [0];
+    const units: number[] = [-1];
+    const depths: number[] = [0];
+    // The number of units of the key a node completes (0 for none).
+    const keyUnits: number[] = [0];
+    for (const key of keys) {
+        const words = key.match(ABBREVIATION_UNIT) ?? [];
+        let node = 0;
+        for (let w = words.length - 1; w >= 0; w--) {
+            let unit = unitIds.get(words[w]);
+            if (unit === undefined) unitIds.set(words[w], unit = unitIds.size);
+            const edges = children.get(unit) ?? children.set(unit, new Map()).get(unit)!;
+            let child = edges.get(node);
+            if (child === undefined) {
+                edges.set(node, child = parents.length);
+                parents.push(node);
+                units.push(unit);
+                depths.push(depths[node] + 1);
+                keyUnits.push(0);
+            }
+            node = child;
+        }
+        if (words.length) keyUnits[node] = words.length;
+    }
+    // Failure links and, per node, the longest key its match ends with, in order of depth (a node's
+    // failure is shallower than it).
+    const byDepth = [...parents.keys()].sort((a, b) => depths[a] - depths[b]);
+    const failure = new Int32Array(parents.length);
+    const longest = new Int32Array(parents.length);
+    for (const node of byDepth) {
+        if (node === 0) continue;
+        const edges = children.get(units[node])!;
+        let fallback = failure[parents[node]];
+        while (parents[node] !== 0 && fallback !== 0 && !edges.has(fallback)) fallback = failure[fallback];
+        failure[node] = parents[node] === 0 ? 0 : edges.get(fallback) ?? 0;
+        longest[node] = keyUnits[node] || longest[failure[node]];
+    }
+    return text => {
+        const words = [...text.matchAll(ABBREVIATION_UNIT)];
+        // The number of units of the longest key starting at each unit.
+        const starting = new Int32Array(words.length);
+        let state = 0;
+        for (let w = words.length - 1; w >= 0; w--) {
+            const unit = unitIds.get(words[w][0]);
+            const edges = unit === undefined ? undefined : children.get(unit);
+            if (!edges) { state = 0; continue; }
+            while (state !== 0 && !edges.has(state)) state = failure[state];
+            state = edges.get(state) ?? 0;
+            starting[w] = longest[state];
+        }
+        const found: { start: number; end: number }[] = [];
+        for (let w = 0; w < words.length;) {
+            if (!starting[w]) { w++; continue; }
+            const last = words[w + starting[w] - 1];
+            found.push({ start: words[w].index!, end: last.index! + last[0].length });
+            w += starting[w];
+        }
+        return found;
+    };
+}
+
 /**
  * The cells of a pipe-table row, as GFM splits it: at each `|` not escaped with a backslash, with an
  * escaped `\|` read as `|` (in code spans too); the pipes at either end bound the row rather than
@@ -1637,47 +1714,39 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return out;
     };
 
-    const escapeRegExpChars = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // The finder of abbreviations, built once for the document when a text is first read (the
+    // definitions are all read before any text is).
+    let findAbbreviations: ((text: string) => { start: number; end: number }[]) | undefined;
 
     // Splits abbreviation occurrences out of plain text nodes so they carry
     // TextMetadata.abbreviationTitle, rendered as <abbr title> in HTML/editor output.
     const applyAbbreviations = (nodes: OfficeContentNode[]): OfficeContentNode[] => {
         if (abbreviationDefinitions.size === 0) return nodes;
-        const pattern = new RegExp(`\\b(${[...abbreviationDefinitions.keys()].map(escapeRegExpChars).join('|')})\\b`, 'g');
+        findAbbreviations ??= abbreviationFinder(abbreviationDefinitions.keys());
 
         const result: OfficeContentNode[] = [];
         for (const node of nodes) {
-            if (node.type !== 'text' || !node.text || node.metadata) {
+            const found = node.type !== 'text' || !node.text || node.metadata ? [] : findAbbreviations(node.text);
+            if (found.length === 0) {
                 result.push(node);
                 continue;
             }
-
+            const text = node.text!;
             let lastIndex = 0;
-            let match: RegExpExecArray | null;
-            let matched = false;
-            pattern.lastIndex = 0;
-            while ((match = pattern.exec(node.text)) !== null) {
-                matched = true;
-                if (match.index > lastIndex) {
-                    result.push({ type: 'text', text: node.text.substring(lastIndex, match.index), formatting: node.formatting });
-                }
-                const title = abbreviationDefinitions.get(match[0]) ?? '';
+            for (const { start, end } of found) {
+                if (start > lastIndex) result.push({ type: 'text', text: text.substring(lastIndex, start), formatting: node.formatting });
+                const abbreviation = text.substring(start, end);
+                const title = abbreviationDefinitions.get(abbreviation) ?? '';
                 result.push({
                     type: 'text',
-                    text: match[0],
+                    text: abbreviation,
                     formatting: node.formatting,
-                    ...(expandReference(`abbr:${match[0]}`, title.length) && { metadata: { abbreviationTitle: title } as TextMetadata }),
+                    ...(expandReference(`abbr:${abbreviation}`, title.length) && { metadata: { abbreviationTitle: title } as TextMetadata }),
                 });
-                lastIndex = pattern.lastIndex;
+                lastIndex = end;
             }
-
-            if (!matched) {
-                result.push(node);
-                continue;
-            }
-            if (lastIndex < node.text.length) {
-                result.push({ type: 'text', text: node.text.substring(lastIndex), formatting: node.formatting });
-            }
+            if (lastIndex < text.length) result.push({ type: 'text', text: text.substring(lastIndex), formatting: node.formatting, ...(node.notes && { notes: node.notes }) });
+            else if (node.notes) result[result.length - 1].notes = node.notes;
         }
         return result;
     };
