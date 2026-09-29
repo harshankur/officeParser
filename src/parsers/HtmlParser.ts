@@ -27,38 +27,93 @@ interface HtmlNode {
     parent?: HtmlNode;
     /** Elements between this one and the root, set while the tree is built. */
     depth?: number;
+    /** Whether the element is open while the tree is built (see parseHtmlTree's formatting elements). */
+    open?: boolean;
+    /** Whether opening it started a new run of formatting to carry (a table cell, a caption, an object). */
+    marksFormatting?: boolean;
+}
+
+/** What the tree builder gives: the tree, its <head> element, and the attributes of <html> and <body>. */
+interface HtmlTree {
+    /**
+     * The document: what a browser puts in <body>, and <head> among it. The <html> and <body> start tags
+     * build no element (a browser has one of each, whatever the markup), so content before or after
+     * them, which a browser moves into <body>, is not lost outside it.
+     */
+    root: HtmlNode;
+    head?: HtmlNode;
+    htmlAttributes: Record<string, string>;
+    bodyAttributes: Record<string, string>;
 }
 
 /**
- * HTML's optional end tags (omitted `</p>`, `</li>`, `</td>`...), as a browser reads them. For an
- * opening tag, either the open elements it closes (`closes`: the outermost of them found walking up
- * from the current element before a `stop` element, with everything inside it), or, for a
- * row, a cell or a table section, the element it belongs directly under (`under`: everything inside the
- * nearest of them is closed, so a new row ends the previous row, a new cell the previous cell).
+ * HTML's "special" elements: an end tag of another element that would close one of these is ignored,
+ * and a list item or definition ends the one before it only when no other of them stands between.
  */
-type ImpliedEnd = { closes: Set<string>; stop: Set<string> } | { under: Set<string> };
-const IMPLIED_END: Record<string, ImpliedEnd> = (() => {
-    const pScope = new Set(['applet', 'button', 'caption', 'html', 'marquee', 'object', 'table', 'td', 'template', 'th']);
-    const closesP = { closes: new Set(['p']), stop: pScope };
-    const rules: Record<string, ImpliedEnd> = {};
-    for (const tag of ['address', 'article', 'aside', 'blockquote', 'details', 'dialog', 'div', 'dl', 'fieldset', 'figcaption', 'figure',
-        'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'main', 'menu', 'nav', 'ol', 'p', 'pre', 'section', 'table', 'ul']) {
-        rules[tag] = closesP;
-    }
-    // A list item or definition closes the previous one (and an open paragraph inside it).
-    rules.li = { closes: new Set(['li', 'p']), stop: new Set([...pScope, 'ul', 'ol', 'menu']) };
-    rules.dt = rules.dd = { closes: new Set(['dt', 'dd', 'p']), stop: new Set([...pScope, 'dl']) };
-    rules.option = { closes: new Set(['option']), stop: new Set(['select', 'datalist', 'optgroup']) };
-    // A link cannot hold a link: a browser ends an open one where another starts (so no text is given
-    // its links' metadata again at every level of nesting).
-    rules.a = { closes: new Set(['a']), stop: new Set(['applet', 'caption', 'html', 'marquee', 'object', 'td', 'template', 'th']) };
-    rules.optgroup = { closes: new Set(['option', 'optgroup']), stop: new Set(['select']) };
-    // A row goes directly under its table or table section, a cell under its row, a section under its table.
-    rules.tr = { under: new Set(['table', 'thead', 'tbody', 'tfoot']) };
-    rules.td = rules.th = { under: new Set(['tr']) };
-    rules.thead = rules.tbody = rules.tfoot = { under: new Set(['table']) };
-    return rules;
-})();
+const SPECIAL_ELEMENTS = new Set(['address', 'applet', 'area', 'article', 'aside', 'base', 'basefont', 'bgsound', 'blockquote', 'body', 'br',
+    'button', 'caption', 'center', 'col', 'colgroup', 'dd', 'details', 'dialog', 'dir', 'div', 'dl', 'dt', 'embed', 'fieldset', 'figcaption',
+    'figure', 'footer', 'form', 'frame', 'frameset', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hgroup', 'hr', 'html', 'iframe',
+    'img', 'input', 'keygen', 'li', 'link', 'listing', 'main', 'marquee', 'menu', 'meta', 'nav', 'noembed', 'noframes', 'noscript', 'object',
+    'ol', 'p', 'param', 'plaintext', 'pre', 'script', 'search', 'section', 'select', 'source', 'style', 'summary', 'table', 'tbody', 'td',
+    'template', 'textarea', 'tfoot', 'th', 'thead', 'title', 'tr', 'track', 'ul', 'wbr', 'xmp']);
+
+/** Special elements a list item or definition is ended across (`<li><div><li>` ends the first item). */
+const ITEM_TRANSPARENT = new Set(['address', 'div', 'p']);
+
+/**
+ * The elements an end tag (or an implied end) does not reach past: HTML's scopes. An end tag whose
+ * element has one of these open inside it is ignored, so `</b>` in a table cell does not end a `<b>`
+ * outside the table, and `</td>` in a table nested in a cell does not end the outer cell.
+ */
+const DEFAULT_SCOPE = ['applet', 'caption', 'marquee', 'object', 'table', 'td', 'template', 'th'];
+const BUTTON_SCOPE = [...DEFAULT_SCOPE, 'button'];
+const LIST_ITEM_SCOPE = [...DEFAULT_SCOPE, 'ol', 'ul'];
+const TABLE_SCOPE = ['table', 'template'];
+
+/** Elements whose end tag is read in table scope (it does not reach past a table nested inside). */
+const TABLE_SCOPED_ENDS = new Set(['caption', 'colgroup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr']);
+
+/** A table's parts: outside a table, a browser reads their tags as nothing (what they hold stays). */
+const TABLE_PARTS = new Set(['caption', 'col', 'colgroup', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr']);
+
+/** Start tags that end an open paragraph (`<p>a<div>` is a paragraph, then a division). */
+const CLOSES_PARAGRAPH = new Set(['address', 'article', 'aside', 'blockquote', 'center', 'details', 'dialog', 'dir', 'div', 'dl', 'fieldset',
+    'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'li', 'dd', 'dt', 'listing', 'main',
+    'menu', 'nav', 'ol', 'p', 'pre', 'search', 'section', 'summary', 'table', 'ul', 'xmp']);
+
+/** What <head> holds: any other start tag (or text) ends it, as a browser reads it. */
+const HEAD_CONTENT = new Set(['base', 'basefont', 'bgsound', 'link', 'meta', 'noframes', 'noscript', 'script', 'style', 'template', 'title']);
+
+/** Elements that hold nothing, whether or not their tag is written self-closed. */
+const VOID_ELEMENTS = new Set(['area', 'base', 'basefont', 'bgsound', 'br', 'col', 'embed', 'hr', 'img', 'input', 'keygen', 'link', 'meta',
+    'param', 'source', 'track', 'wbr']);
+
+/**
+ * Elements whose content is text up to their end tag, never markup: raw text (`<script>`, `<style>`,
+ * `<xmp>`...; `<noscript>` too, as a browser running scripts reads it) and, with its character
+ * references, `<title>` and `<textarea>`. Read as markup, `<textarea><b>x</b></textarea>` was bold text.
+ */
+const RAW_TEXT_ELEMENTS = new Set(['iframe', 'noembed', 'noframes', 'noscript', 'script', 'style', 'xmp']);
+const ESCAPABLE_RAW_TEXT_ELEMENTS = new Set(['textarea', 'title']);
+
+/**
+ * HTML's formatting elements. One a paragraph's end closes is opened again where the text goes on, as
+ * a browser does (`<p><b>bold<p>still bold</b>`): it is carried, until its end tag, within the cell,
+ * caption or object it was opened in.
+ */
+const FORMATTING_ELEMENTS = new Set(['a', 'b', 'big', 'code', 'em', 'font', 'i', 'nobr', 's', 'small', 'strike', 'strong', 'tt', 'u']);
+const FORMATTING_BOUNDARIES = new Set(['applet', 'caption', 'marquee', 'object', 'td', 'template', 'th']);
+
+/**
+ * The most formatting elements carried at once (the oldest is let go past it): each is opened again
+ * wherever text follows its implied end, so the number bounds the elements that a few bytes of markup
+ * make. Browsers carry any number; no document keeps more than a few open.
+ */
+const MAX_CARRIED_FORMATTING = 16;
+
+/** Start tags before which carried formatting is not opened again (blocks, table parts, head content, raw text). */
+const OPENS_NO_FORMATTING = new Set([...CLOSES_PARAGRAPH, ...TABLE_PARTS, ...HEAD_CONTENT, 'frame', 'frameset', 'head', 'iframe', 'noembed',
+    'param', 'plaintext', 'source', 'textarea', 'track']);
 
 /**
  * What HtmlGenerator writes in a picture's caption: nothing, or the picture's attachment name (a file
@@ -128,12 +183,22 @@ const preformattedText = (node: HtmlNode): string => {
     return out;
 };
 
-/** Plain text of parsed content nodes, leaving out source comments: a hidden note is not text. */
 /**
- * Elements laid out inline: whitespace between two of them, or between one and text, is a visible
- * space, where whitespace between blocks is only layout.
+ * Elements not laid out inline: blocks, a table's parts, and what is not shown (the document's head,
+ * scripts). Every other element is inline (`<math>`, `<button>`, `<nobr>`, Word's `<o:p>`, a custom
+ * element): whitespace between two inline elements, or between one and text, is a visible space, where
+ * whitespace between blocks is only layout. A list of the inline elements instead left out every
+ * element it did not name, and ran `<em>word</em> <math>` together.
  */
-const INLINE_ELEMENTS = new Set(['a', 'abbr', 'b', 'bdi', 'bdo', 'big', 'cite', 'code', 'data', 'del', 'dfn', 'em', 'font', 'i', 'img', 'ins', 'kbd', 'label', 'mark', 'q', 's', 'samp', 'small', 'span', 'strike', 'strong', 'sub', 'sup', 'time', 'tt', 'u', 'var']);
+const NOT_INLINE_ELEMENTS = new Set([...BLOCK_LEVEL_TAGS, ...TABLE_PARTS, ...HEAD_CONTENT, 'root', 'head', 'dir', 'frame', 'frameset',
+    'iframe', 'legend', 'listing', 'noembed', 'optgroup', 'option', 'param', 'plaintext', 'search', 'source', 'template', 'track', 'xmp']);
+
+/** Elements never shown (the document's head, scripts, templates): read as nothing wherever they stand. */
+const HIDDEN_ELEMENTS = new Set([...HEAD_CONTENT, 'head', 'noembed']);
+
+/** Whether `node` is an element laid out inline (see NOT_INLINE_ELEMENTS); display MathML is a block. */
+const isInlineElement = (node: HtmlNode): boolean => node.type === 'element' && !NOT_INLINE_ELEMENTS.has(node.tagName ?? '')
+    && !(node.tagName === 'math' && (node.attributes?.display === 'block' || node.attributes?.mode === 'display'));
 
 /**
  * Collapses a text node's whitespace as HTML renders it: each run of ASCII whitespace becomes one
@@ -170,18 +235,17 @@ const collapseSpacesAcrossNodes = (nodes: OfficeContentNode[]): OfficeContentNod
  * `&nbsp;`); between inline content it is kept as it is. Null when none of it shows.
  */
 function visibleText(parent: HtmlNode, i: number): string | null {
-    // The sibling next to children[i] in direction `step`, passing over comments.
+    // The sibling next to children[i] in direction `step`, passing over comments and what is not shown
+    // (`word <script>...</script> <b>more</b>` shows one space between the words, not none).
     const sibling = (step: number): HtmlNode | undefined => {
         let j = i + step;
-        while (parent.children[j]?.type === 'comment') j += step;
+        while (parent.children[j] && (parent.children[j].type === 'comment' || HIDDEN_ELEMENTS.has(parent.children[j].tagName ?? ''))) j += step;
         return parent.children[j];
     };
     const isBreak = (sib: HtmlNode | undefined) => sib?.type === 'element' && sib.tagName === 'br';
     // Inline content: text, an inline element, or (at the edge of an inline element such as `<b> </b>`)
     // whatever lies beyond it.
-    const isInline = (sib: HtmlNode | undefined) => sib === undefined
-        ? INLINE_ELEMENTS.has(parent.tagName ?? '')
-        : sib.type === 'text' || (sib.type === 'element' && INLINE_ELEMENTS.has(sib.tagName ?? ''));
+    const isInline = (sib: HtmlNode | undefined) => sib === undefined ? isInlineElement(parent) : sib.type === 'text' || isInlineElement(sib);
     let text = collapseWhitespace(decodeEntities(parent.children[i].text || ''));
     if (isBreak(sibling(-1))) text = text.replace(/^ /, '');
     if (isBreak(sibling(1))) text = text.replace(/ $/, '');
@@ -250,7 +314,9 @@ const markedBefore = (ids: string[], nodes: OfficeContentNode[]): OfficeContentN
 /** Holds a list item's place at the start of its nested lists until the item itself is built. */
 const selfNodePlaceholder: OfficeContentNode = { type: 'text', text: '' };
 
+/** Plain text of parsed content nodes, leaving out source comments: a hidden note is not text. */
 const plainTextOf = (nodes: OfficeContentNode[]): string => nodes.map(n => (isSourceComment(n) ? '' : n.text || '')).join('');
+
 
 /**
  * Presents an `HtmlNode` as a `MathNode` for the shared MathML converter.
@@ -380,11 +446,47 @@ const firstFontFamily = (fontFamily: string): string => {
     return first.trim();
 };
 
-const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveComments: boolean = false): HtmlNode => {
-    const root: HtmlNode = { type: 'element', tagName: 'root', children: [], attributes: {}, depth: 0 };
+/** Whether `ch` is an ASCII letter: after `<` (or `</`) it starts a tag; anything else is text or a declaration. */
+const isAsciiLetter = (ch: string | undefined): boolean => ch !== undefined && ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z'));
+
+/** `attributes` without `id` and `name`, for an element opened again in another place (its ids are the first one's). */
+const withoutIds = (attributes: Record<string, string>): Record<string, string> => {
+    if (!('id' in attributes) && !('name' in attributes)) return attributes;
+    const rest: Record<string, string> = Object.create(null);
+    for (const key in attributes) if (key !== 'id' && key !== 'name') rest[key] = attributes[key];
+    return rest;
+};
+
+/**
+ * Builds the element tree of an HTML (or XHTML) document as a browser does, in one pass:
+ *  - markup declarations and processing instructions (`<!DOCTYPE html>`, `<?xml ...?>`, Word's
+ *    conditional markers `<![if !supportLists]>` and `<![endif]>`) are read as nothing, and a `<` that
+ *    starts no tag (`a < b`) is text. A tag's name is everything up to a space, `/` or `>`, so Word's
+ *    `<o:p>` and an EPUB's `<m:math>` are elements (their names were read as text);
+ *  - a comment ends where HTML ends one (`<!-->`, `<!--->`, `--!>`); CDATA is text, as XHTML reads it;
+ *  - `<script>`, `<style>`, `<xmp>`, `<iframe>`, `<noscript>`... hold text up to their end tag, and
+ *    `<title>` and `<textarea>` text with its character references, never markup;
+ *  - end tags a browser leaves out are implied: a block ends a paragraph, an item the item before it,
+ *    a heading an open heading, a cell the cell before it (never one of a table outside it), and a cell
+ *    written directly in a table is given its row;
+ *  - an end tag does not reach past the scope it stands in (`</b>` in a table cell leaves a `<b>` outside
+ *    the table open; `</span>` does not end a `<div>` opened inside it);
+ *  - a formatting element (b, i, a, font...) ended with the paragraph it stood in is opened again where
+ *    text goes on, until its own end tag (`<p><b>bold<p>still bold</b>`);
+ *  - `<html>` and `<body>` build no element: their attributes are kept, and what a browser moves into
+ *    the body (content before `<body>` or after `</body>`) stays in the document. `<head>` ends at the
+ *    first element or text that is not head content.
+ */
+const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveComments: boolean = false): HtmlTree => {
+    const root: HtmlNode = { type: 'element', tagName: 'root', children: [], attributes: {}, depth: 0, open: true };
+    const htmlAttributes: Record<string, string> = Object.create(null);
+    const bodyAttributes: Record<string, string> = Object.create(null);
+    let head: HtmlNode | undefined;
+    // Once content is read (or <body> opens), a later <head> is no head.
+    let bodyStarted = false;
     let current = root;
     let cursor = 0;
-    // Where the next `</script>` and `</style>` start at or after the cursor (-1: nowhere).
+    // Where the next end tag of each raw-text element starts at or after the cursor (-1: nowhere).
     const closeTagAt = new Map<string, number>();
     // Text joins the text node before it, when nothing but markup read as nothing (a comment, an end
     // tag closing nothing, a declaration) stands between them, as a browser shows it: a node each, `a`
@@ -394,42 +496,102 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
     // or an implied end finds the element it closes from these, where each walked up the open elements
     // (up to 256): 16 million end tags closing nothing (63 KB of EPUB) took 17 seconds, and 2 million
     // paragraphs under 250 divs, 55. Every move of `current` goes through `closeTo` or `open`, so each
-    // element is pushed and popped once.
+    // element is pushed and popped once. The open special elements, and those that stop a list item's
+    // implied end, are kept the same way.
     const openByName = new Map<string, HtmlNode[]>();
+    const openSpecial: HtmlNode[] = [];
+    const openItemStops: HtmlNode[] = [];
+    // The formatting elements to carry (see FORMATTING_ELEMENTS): each with the attributes it is opened
+    // again with; null marks where a cell, caption or object began, which nothing before it crosses.
+    const formatting: ({ node: HtmlNode; attributes: Record<string, string> } | null)[] = [];
+    // How many elements carrying formatting may still be opened again: a quarter of the document's
+    // length, about what its own markup could make, so hostile markup cannot multiply them.
+    let reopenLeft = (html.length >> 2) + 64;
+
+    const stackTop = (name: string): HtmlNode | undefined => {
+        const stack = openByName.get(name);
+        return stack?.[stack.length - 1];
+    };
     const closeTo = (ancestor: HtmlNode): void => {
-        for (let n: HtmlNode | undefined = current; n && n !== ancestor; n = n.parent) openByName.get(n.tagName!)?.pop();
+        for (let n: HtmlNode | undefined = current; n && n !== ancestor; n = n.parent) {
+            openByName.get(n.tagName!)?.pop();
+            if (SPECIAL_ELEMENTS.has(n.tagName!)) {
+                openSpecial.pop();
+                if (!ITEM_TRANSPARENT.has(n.tagName!)) openItemStops.pop();
+            }
+            n.open = false;
+            // Formatting carried within a cell (or caption, object) ends with it.
+            if (n.marksFormatting) while (formatting.length && formatting.pop() !== null);
+        }
         current = ancestor;
     };
     const open = (node: HtmlNode): void => {
         let stack = openByName.get(node.tagName!);
         if (!stack) openByName.set(node.tagName!, stack = []);
         stack.push(node);
+        if (SPECIAL_ELEMENTS.has(node.tagName!)) {
+            openSpecial.push(node);
+            if (!ITEM_TRANSPARENT.has(node.tagName!)) openItemStops.push(node);
+        }
+        node.open = true;
         current = node;
     };
+    const insert = (tagName: string, attributes: Record<string, string>): HtmlNode => {
+        const node: HtmlNode = { type: 'element', tagName, attributes, children: [], parent: current, depth: (current.depth ?? 0) + 1 };
+        // Nesting deeper than the parser reads is refused here, with the typed error, before any
+        // walk of the tree could run out of stack on it.
+        if (node.depth! > MAX_HTML_NESTING_DEPTH) throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, config);
+        current.children.push(node);
+        return node;
+    };
     /** The innermost open element named in `names`, if any. */
-    const innermostOf = (names: ReadonlySet<string>): HtmlNode | undefined => {
+    const innermostOf = (names: Iterable<string>): HtmlNode | undefined => {
         let found: HtmlNode | undefined;
         for (const name of names) {
-            const stack = openByName.get(name);
-            const top = stack?.[stack.length - 1];
+            const top = stackTop(name);
             if (top && (!found || top.depth! > found.depth!)) found = top;
         }
         return found;
     };
-    /** The outermost open element named in `names` that is deeper than `depth`, if any. */
-    const outermostBelow = (names: ReadonlySet<string>, depth: number): HtmlNode | undefined => {
-        let found: HtmlNode | undefined;
-        for (const name of names) {
-            const stack = openByName.get(name);
-            if (!stack?.length) continue;
-            // Depths grow along the stack: the first deeper than `depth`, by bisection.
-            let low = 0, high = stack.length;
-            while (low < high) { const mid = (low + high) >> 1; if (stack[mid].depth! > depth) high = mid; else low = mid + 1; }
-            const candidate = stack[low];
-            if (candidate && (!found || candidate.depth! < found.depth!)) found = candidate;
+    /** Whether no element of `scope` is open inside `target` (an end tag or implied end reaches it). */
+    const inScope = (target: HtmlNode, scope: readonly string[]): boolean => {
+        for (const name of scope) {
+            const top = stackTop(name);
+            if (top && top !== target && top.depth! > target.depth!) return false;
         }
-        return found;
+        return true;
     };
+    /** The open paragraph in button scope, which a block's start tag ends. */
+    const closeParagraph = (): void => {
+        const paragraph = stackTop('p');
+        if (paragraph && inScope(paragraph, BUTTON_SCOPE)) closeTo(paragraph.parent!);
+    };
+    /** Where in `formatting` the last `tagName` carried in the current cell (or the document) is, else -1. */
+    const carriedIndex = (tagName: string): number => {
+        for (let k = formatting.length - 1; k >= 0 && formatting[k] !== null; k--) if (formatting[k]!.node.tagName === tagName) return k;
+        return -1;
+    };
+    const carry = (node: HtmlNode): void => {
+        let count = 0;
+        let oldest = -1;
+        for (let k = formatting.length - 1; k >= 0 && formatting[k] !== null; k--) { count++; oldest = k; }
+        if (count >= MAX_CARRIED_FORMATTING) formatting.splice(oldest, 1);
+        formatting.push({ node, attributes: withoutIds(node.attributes ?? {}) });
+    };
+    /** The carried formatting elements that are no longer open, opened again at `current` (HTML's reconstruction). */
+    const reopenFormatting = (): void => {
+        let k = formatting.length - 1;
+        if (k < 0 || formatting[k] === null || formatting[k]!.node.open) return;
+        while (k > 0 && formatting[k - 1] !== null && !formatting[k - 1]!.node.open) k--;
+        for (; k < formatting.length && reopenLeft > 0; k++, reopenLeft--) {
+            const entry = formatting[k]!;
+            const again = insert(entry.node.tagName!, entry.attributes);
+            open(again);
+            formatting[k] = { node: again, attributes: entry.attributes };
+        }
+    };
+    const inForeignContent = (): boolean => !!stackTop('svg') || !!stackTop('math');
+
     // A quote-aware scan that finds no '>' outside quotes runs to the end of the document. The quote
     // state each failed scan was in (none, `"` or `'`), carried forward a character at a time, tells a
     // later scan starting in the same state, at the same place, that it would fail too: two states never
@@ -450,9 +612,184 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
         return failingStates.includes('');
     };
     const pushText = (text: string): void => {
+        // Text ends the head (a browser moves it into the body), and goes on in the formatting carried to it.
+        if (/[^\t\n\f\r ]/.test(text) && !stackTop('template')) {
+            if (head?.open) closeTo(head.parent!);
+            bodyStarted = true;
+        }
+        reopenFormatting();
         const last = current.children[current.children.length - 1];
         if (last?.type === 'text') last.text += text;
         else current.children.push({ type: 'text', text, children: [], parent: current });
+    };
+    /** The end of a comment starting at `start` (`<!--`) and where reading goes on, as HTML ends one. */
+    const commentEnd = (start: number): { end: number; next: number } => {
+        const body = start + 4;
+        // `<!-->` and `<!--->` are empty comments.
+        if (html[body] === '>') return { end: body, next: body + 1 };
+        if (html.startsWith('->', body)) return { end: body, next: body + 2 };
+        let at = html.indexOf('--', body);
+        while (at !== -1 && html[at + 2] !== '>' && !(html[at + 2] === '!' && html[at + 3] === '>')) at = html.indexOf('--', at + 1);
+        if (at === -1) return { end: -1, next: html.length };
+        return { end: at, next: at + (html[at + 2] === '>' ? 3 : 4) };
+    };
+    /**
+     * The text of a raw-text element opened at the cursor, up to its end tag (`</script`, whatever its
+     * case, followed by a space, `/` or `>`). The end tag found is kept while it lies ahead, and one never
+     * found is not looked for again: each unclosed tag searched the rest of the document, which took
+     * seconds for a few hundred kilobytes of them. Left open when there is none (what follows is read as
+     * markup, not swallowed).
+     */
+    const readRawText = (node: HtmlNode, escapable: boolean): void => {
+        const tagName = node.tagName!;
+        const known = closeTagAt.get(tagName);
+        let closeAt = known;
+        if (known === undefined || (known !== -1 && known < cursor)) {
+            const closeRe = new RegExp(`</${tagName}(?=[\\t\\n\\f\\r />])`, 'gi');
+            closeRe.lastIndex = cursor;
+            closeAt = closeRe.exec(html)?.index ?? -1;
+            closeTagAt.set(tagName, closeAt);
+        }
+        if (closeAt === undefined || closeAt === -1) return;
+        const text = html.substring(cursor, closeAt);
+        // Raw text keeps its `&` as written (`<xmp>&amp;</xmp>` shows `&amp;`): text nodes are decoded when read.
+        if (text) node.children.push({ type: 'text', text: escapable ? text : text.replace(/&/g, '&amp;'), children: [], parent: node });
+        const end = html.indexOf('>', closeAt);
+        cursor = end === -1 ? html.length : end + 1;
+        closeTo(node.parent!);
+    };
+
+    const startTag = (rawName: string, attrString: string, selfClosing: boolean): void => {
+        const foreign = inForeignContent();
+        const tagName = rawName === 'image' && !foreign ? 'img' : rawName;
+        // One <html> and one <body>, whatever the markup: their attributes are kept, the first of each name.
+        if (tagName === 'html' || tagName === 'body') {
+            const into = tagName === 'html' ? htmlAttributes : bodyAttributes;
+            const attributes = parseAttributes(attrString);
+            for (const key in attributes) if (!(key in into)) into[key] = attributes[key];
+            if (tagName === 'body') {
+                if (head?.open) closeTo(head.parent!);
+                bodyStarted = true;
+            }
+            return;
+        }
+        if (tagName === 'head') {
+            if (!head && !bodyStarted && current === root) open(head = insert('head', parseAttributes(attrString)));
+            return;
+        }
+        // (A template's content is its own: it ends nothing around it.)
+        if (!HEAD_CONTENT.has(tagName) && !stackTop('template')) {
+            if (head?.open) closeTo(head.parent!);
+            bodyStarted = true;
+        }
+        const table = stackTop('table');
+        if (TABLE_PARTS.has(tagName) && !foreign) {
+            // Outside a table a table's part is read as nothing, as a browser reads it: what it holds stays.
+            if (!table) return;
+            const section = innermostOf(['tbody', 'thead', 'tfoot']);
+            const tableSection = section && section.depth! > table.depth! ? section : table;
+            if (tagName === 'td' || tagName === 'th') {
+                // A cell goes in its table's open row; one written directly in a table (or a section) is given
+                // a row, as a browser gives it. The row is never one of a table outside this one.
+                const row = stackTop('tr');
+                if (row && row.depth! > table.depth!) closeTo(row);
+                else {
+                    closeTo(tableSection);
+                    open(insert('tr', Object.create(null)));
+                }
+            } else if (tagName === 'tr') {
+                closeTo(tableSection);
+            } else if (tagName === 'col') {
+                const group = stackTop('colgroup');
+                closeTo(group && group.depth! > table.depth! ? group : table);
+            } else {
+                closeTo(table);
+            }
+        } else if (tagName === 'table' && table && !foreign) {
+            // A table started in a table, not in one of its cells, ends that table first.
+            const cell = innermostOf(['td', 'th', 'caption']);
+            if (!cell || cell.depth! < table.depth!) closeTo(table.parent!);
+            else closeParagraph();
+        } else if (CLOSES_PARAGRAPH.has(tagName) && !foreign) {
+            if (tagName === 'li' || tagName === 'dd' || tagName === 'dt') {
+                // An item ends the item before it, unless a block other than a division or paragraph stands between.
+                const stop = openItemStops[openItemStops.length - 1];
+                if (stop && (tagName === 'li' ? stop.tagName === 'li' : stop.tagName === 'dd' || stop.tagName === 'dt')) closeTo(stop.parent!);
+            }
+            closeParagraph();
+            // A heading ends a heading it would otherwise be written in (`<h1>A<h2>B` is two headings).
+            if (/^h[1-6]$/.test(tagName) && /^h[1-6]$/.test(current.tagName ?? '')) closeTo(current.parent!);
+        } else if (tagName === 'option' || tagName === 'optgroup') {
+            const option = stackTop('option');
+            if (option && current === option) closeTo(option.parent!);
+            const group = stackTop('optgroup');
+            if (tagName === 'optgroup' && group && current === group) closeTo(group.parent!);
+        } else if (tagName === 'button') {
+            const button = stackTop('button');
+            if (button && inScope(button, DEFAULT_SCOPE)) closeTo(button.parent!);
+        } else if (tagName === 'a') {
+            // A link cannot hold a link: an open one ends where another starts (so no text is given its
+            // links' metadata again at every level of nesting).
+            const k = carriedIndex('a');
+            if (k !== -1) {
+                const link = formatting[k]!.node;
+                formatting.splice(k, 1);
+                if (link.open) closeTo(link.parent!);
+            }
+        }
+        if (!OPENS_NO_FORMATTING.has(tagName)) reopenFormatting();
+        const node = insert(tagName, parseAttributes(attrString));
+        if (selfClosing || VOID_ELEMENTS.has(tagName)) return;
+        open(node);
+        if (FORMATTING_BOUNDARIES.has(tagName)) {
+            node.marksFormatting = true;
+            formatting.push(null);
+        }
+        if (FORMATTING_ELEMENTS.has(tagName)) carry(node);
+        // In SVG or MathML only a script or a style is raw text (an SVG <title> is an element).
+        if (RAW_TEXT_ELEMENTS.has(tagName) && (!foreign || tagName === 'script' || tagName === 'style')) readRawText(node, false);
+        else if (ESCAPABLE_RAW_TEXT_ELEMENTS.has(tagName) && !foreign) readRawText(node, true);
+    };
+
+    const endTag = (tagName: string): void => {
+        // The one <html> and <body> are never ended: what follows their end tags is still the document's.
+        if (tagName === 'html' || tagName === 'body') return;
+        if (tagName === 'br') return startTag('br', '', true);
+        if (tagName === 'head') {
+            if (head?.open) closeTo(head.parent!);
+            return;
+        }
+        if (/^h[1-6]$/.test(tagName)) {
+            // Any heading's end tag ends the open heading, whatever its level.
+            const heading = innermostOf(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+            if (heading && inScope(heading, DEFAULT_SCOPE)) closeTo(heading.parent!);
+            return;
+        }
+        if (FORMATTING_ELEMENTS.has(tagName)) {
+            const k = carriedIndex(tagName);
+            if (k !== -1) {
+                const element = formatting[k]!.node;
+                if (!element.open) {
+                    formatting.splice(k, 1);
+                } else if (inScope(element, DEFAULT_SCOPE)) {
+                    formatting.splice(k, 1);
+                    closeTo(element.parent!);
+                }
+                return;
+            }
+        }
+        const target = stackTop(tagName);
+        if (!target) return;
+        if (TABLE_SCOPED_ENDS.has(tagName)) {
+            if (!inScope(target, TABLE_SCOPE)) return;
+        } else if (SPECIAL_ELEMENTS.has(tagName)) {
+            if (!inScope(target, tagName === 'p' ? BUTTON_SCOPE : tagName === 'li' ? LIST_ITEM_SCOPE : DEFAULT_SCOPE)) return;
+        } else {
+            // Any other element's end tag ends it only when no special element (a block) is open inside it.
+            const special = openSpecial[openSpecial.length - 1];
+            if (special && special.depth! > target.depth!) return;
+        }
+        closeTo(target.parent!);
     };
 
     while (cursor < html.length) {
@@ -468,18 +805,50 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
             const text = html.substring(cursor, tagStart);
             if (text) pushText(text);
         }
+        cursor = tagStart;
 
         if (html.startsWith('<!--', tagStart)) {
-            const commentEnd = html.indexOf('-->', tagStart + 4);
+            const { end, next: resume } = commentEnd(tagStart);
             // Kept as a node only when asked (HtmlParserConfig.preserveComments). A conditional comment
             // (`<!--[if ...]>`, `<!--<![endif]-->`) is an Office/IE directive, not an authored note: never kept.
-            if (preserveComments && commentEnd !== -1) {
-                const body = html.substring(tagStart + 4, commentEnd);
+            if (preserveComments && end !== -1) {
+                const body = html.substring(tagStart + 4, end);
                 if (!/^\[if\b/i.test(body) && !/<!\[endif\]$/i.test(body)) {
                     current.children.push({ type: 'comment', text: body, children: [], parent: current });
                 }
             }
-            cursor = commentEnd !== -1 ? commentEnd + 3 : html.length;
+            cursor = resume;
+            continue;
+        }
+        const next = html[tagStart + 1];
+        if (next === '!' || next === '?') {
+            if (html.startsWith('<![CDATA[', tagStart)) {
+                // A CDATA section is its text, as XHTML reads it (an EPUB's chapters are XHTML).
+                const end = html.indexOf(']]>', tagStart + 9);
+                const text = html.substring(tagStart + 9, end === -1 ? html.length : end);
+                if (text) pushText(text.replace(/&/g, '&amp;'));
+                cursor = end === -1 ? html.length : end + 3;
+                continue;
+            }
+            // A declaration or processing instruction (`<!DOCTYPE html>`, `<?xml ...?>`, Word's conditional
+            // markers `<![if !supportLists]>` and `<![endif]>`): markup read as nothing, as a browser reads
+            // it, and what stands between the markers is kept.
+            const end = html.indexOf('>', tagStart + 2);
+            cursor = end === -1 ? html.length : end + 1;
+            continue;
+        }
+        if (next === '/') {
+            const after = html[tagStart + 2];
+            if (!isAsciiLetter(after)) {
+                // `</>` is nothing; `</` and anything but a letter is a declaration to its `>`, as a browser reads it.
+                const end = after === '>' ? tagStart + 2 : html.indexOf('>', tagStart + 2);
+                cursor = end === -1 ? html.length : end + 1;
+                continue;
+            }
+        } else if (!isAsciiLetter(next)) {
+            // A `<` that starts no tag (`a < b`, `<5`) is text.
+            pushText('<');
+            cursor = tagStart + 1;
             continue;
         }
 
@@ -508,12 +877,9 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
             }
         }
         if (tagEndIdx === -1) {
-            // The quote-aware scan ran to the end without closing the tag. That is almost always an
-            // unbalanced quote from a stray unescaped '<' in prose (e.g. "a < b's weight"), not a
-            // genuinely truncated tag. Retry naively for the next literal '>': the resulting
-            // pseudo-tag is then dropped, so a malformed run degrades exactly as it did before the
-            // quote-aware scan existed instead of swallowing the rest of the document into one text
-            // node. Well-formed input with balanced quotes never reaches here.
+            // The quote-aware scan ran to the end without closing the tag: an unbalanced quote in a tag.
+            // Retry naively for the next literal '>', so a malformed tag degrades to a tag instead of
+            // swallowing the rest of the document into one text node.
             tagEndIdx = html.indexOf('>', tagStart);
         }
         if (tagEndIdx === -1) {
@@ -525,82 +891,18 @@ const parseHtmlTree = (html: string, config: FullOfficeParserConfig, preserveCom
         cursor = tagEndIdx + 1;
 
         const isClosing = tagContent.startsWith('/');
-        const isSelfClosing = tagContent.endsWith('/');
+        const isSelfClosing = !isClosing && tagContent.endsWith('/');
         const tagCore = tagContent.replace(/^\/|\/$/g, '').trim();
+        // The name runs to a space or `/`: any other character is part of it (`o:p`, `m:math`, `my-element`).
+        const nameEnd = tagCore.search(/[\t\n\f\r /]/);
+        const tagName = (nameEnd === -1 ? tagCore : tagCore.substring(0, nameEnd)).toLowerCase();
+        const attrString = nameEnd === -1 ? '' : tagCore.substring(nameEnd);
 
-        const firstSpace = tagCore.search(/\s/);
-        const tagName = (firstSpace === -1 ? tagCore : tagCore.substring(0, firstSpace)).toLowerCase();
-        const attrString = firstSpace === -1 ? '' : tagCore.substring(firstSpace);
-
-        if (!tagName || !tagName.match(/^[a-z0-9\-]+$/)) {
-            // Probably not a real tag, e.g., < 5
-            pushText(`<${tagContent}>`);
-            continue;
-        }
-
-        if (isClosing) {
-            const stack = openByName.get(tagName);
-            const p = stack?.[stack.length - 1];
-            if (p?.parent) closeTo(p.parent);
-        } else {
-            // An omitted end tag, as a browser reads it: this tag closes the element it implies ends.
-            const implied = IMPLIED_END[tagName];
-            if (implied && 'under' in implied) {
-                const under = innermostOf(implied.under);
-                if (under) closeTo(under);
-            } else if (implied) {
-                // The outermost element it closes before a `stop`: a new item closes the item before it
-                // and the paragraph open inside that item (`<dt><p>a<dd>`), not only the paragraph.
-                const closed = outermostBelow(implied.closes, innermostOf(implied.stop)?.depth ?? 0);
-                if (closed) closeTo(closed.parent!);
-            }
-            const node: HtmlNode = {
-                type: 'element',
-                tagName,
-                attributes: parseAttributes(attrString),
-                children: [],
-                parent: current,
-                depth: (current.depth ?? 0) + 1
-            };
-            // Nesting deeper than the parser reads is refused here, with the typed error, before any
-            // walk of the tree could run out of stack on it.
-            if (node.depth! > MAX_HTML_NESTING_DEPTH) throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, config);
-            current.children.push(node);
-
-            const voidElements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr', '!doctype']);
-            if (!isSelfClosing && !voidElements.has(tagName)) {
-                open(node);
-
-                if (tagName === 'script' || tagName === 'style') {
-                    // Case-insensitive search from `cursor` via a sticky-ish regex, instead of
-                    // lower-casing the whole document on every <script>/<style> (was O(n^2)).
-                    // The closing tag found is kept while it lies ahead, and one never found is not
-                    // looked for again: each unclosed tag searched the rest of the document, which
-                    // took seconds for a few hundred kilobytes of them.
-                    const known = closeTagAt.get(tagName);
-                    let closeAt = known;
-                    if (known === undefined || (known !== -1 && known < cursor)) {
-                        const closeRe = new RegExp(`</${tagName}>`, 'gi');
-                        closeRe.lastIndex = cursor;
-                        closeAt = closeRe.exec(html)?.index ?? -1;
-                        closeTagAt.set(tagName, closeAt);
-                    }
-                    if (closeAt !== undefined && closeAt !== -1) {
-                        node.children.push({
-                            type: 'text',
-                            text: html.substring(cursor, closeAt),
-                            children: [],
-                            parent: node
-                        });
-                        cursor = closeAt + tagName.length + 3;
-                        closeTo(node.parent!);
-                    }
-                }
-            }
-        }
+        if (isClosing) endTag(tagName);
+        else startTag(tagName, attrString, isSelfClosing);
     }
 
-    return root;
+    return { root, head, htmlAttributes, bodyAttributes };
 };
 
 /** What a container whose parts are HTML (an EPUB's chapters) tells the reading of each part. */
@@ -614,56 +916,40 @@ export interface HtmlPartContext {
     imageAttachment?: (src: string) => string | undefined;
 }
 
+
+
 export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, part: HtmlPartContext = {}): Promise<OfficeParserAST> => {
     // Honour cancellation requests before the HTML tree is built and traversed.
     // The custom recursive HTML parser can be expensive for large documents;
     // rejecting early here prevents both the parsing and the subsequent AST construction.
     checkAbortSignal(config.abortSignal);
 
-    const textStr = buffer.toString('utf-8');
-    const root = parseHtmlTree(textStr, config, config.htmlParserConfig?.preserveComments === true);
-
-    // Find head and body
-    let head: HtmlNode | undefined;
-    let body: HtmlNode = root;
-
-    const findNode = (node: HtmlNode, tag: string): HtmlNode | undefined => {
-        if (node.tagName === tag) return node;
-        for (const child of node.children) {
-            const found = findNode(child, tag);
-            if (found) return found;
-        }
-        return undefined;
-    };
-
-    const htmlNode = findNode(root, 'html');
-    if (htmlNode) {
-        head = findNode(htmlNode, 'head');
-        body = findNode(htmlNode, 'body') || htmlNode;
-    }
+    const { root, head } = parseHtmlTree(buffer.toString('utf-8'), config, config.htmlParserConfig?.preserveComments === true);
+    // What a browser shows: the document, its <head> passed over (the tree builds no <html> or <body>).
+    const body = root;
 
     const metadata: OfficeMetadata = {};
     const attachments: OfficeAttachment[] = [];
 
+    // The head's <meta> elements.
+    const metaElements = (head?.children ?? []).filter(child => child.tagName === 'meta');
     if (head) {
-        const titleNode = findNode(head, 'title');
+        const titleNode = head.children.find(child => child.tagName === 'title');
         if (titleNode && titleNode.children.length > 0 && titleNode.children[0].text) {
             metadata.title = titleNode.children[0].text;
         }
 
         metadata.nativeProperties = {};
-        for (const child of head.children) {
-            if (child.tagName === 'meta') {
-                const name = child.attributes?.name || child.attributes?.property || child.attributes?.['http-equiv'];
-                if (name) {
-                    setOwn(metadata.nativeProperties, name, child.attributes?.content || '');
-                }
+        for (const child of metaElements) {
+            const name = child.attributes?.name || child.attributes?.property || child.attributes?.['http-equiv'];
+            if (name) {
+                setOwn(metadata.nativeProperties, name, child.attributes?.content || '');
             }
         }
 
         const extractMeta = (name: string): string | undefined => {
-            for (const child of head!.children) {
-                if (child.tagName === 'meta' && (child.attributes?.name === name || child.attributes?.property === name)) {
+            for (const child of metaElements) {
+                if (child.attributes?.name === name || child.attributes?.property === name) {
                     return child.attributes?.content;
                 }
             }
@@ -684,8 +970,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
         // Custom properties
         const customProps: Record<string, string | number | boolean | Date> = {};
-        for (const child of head.children) {
-            if (child.tagName === 'meta' && child.attributes?.name?.startsWith('custom:')) {
+        for (const child of metaElements) {
+            if (child.attributes?.name?.startsWith('custom:')) {
                 const key = child.attributes.name.substring(7);
                 const val = child.attributes.content || '';
                 // Try to infer type
@@ -822,6 +1108,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
         if (node.type === 'element' && node.tagName) {
             const tagName = node.tagName;
+            // What is never shown: the head (read for the metadata), a <title> wherever it stands, scripts,
+            // styles, a <template>'s inert content and <noscript> (read as a browser running scripts reads it).
+            if (HIDDEN_ELEMENTS.has(tagName)) return null;
             const newFormatting = { ...currentFormatting };
 
             if (tagName === 'b' || tagName === 'strong') newFormatting.bold = true;
@@ -974,7 +1263,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         else add(parsed);
                     }
                 }
-                if (collapse && !INLINE_ELEMENTS.has(n.tagName ?? '')) trimBlockEdgesInPlace(kids);
+                if (collapse && !isInlineElement(n)) trimBlockEdgesInPlace(kids);
                 return kids;
             };
 
@@ -1220,10 +1509,10 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
 
             // The caption HtmlGenerator writes under a picture (its file name, which the image node
             // already holds) is a label, not document text: read as text, it grew a paragraph on every
-            // save. Any other caption, and a <figcaption>, is a block of its own, which must not run
-            // into the picture before it.
+            // save. Any other caption, a <figcaption> and a table's <caption> (which the table's branch puts
+            // before it), is a block of its own, which must not run into the picture before it.
             const isClass = (name: string) => (node.attributes?.class || '').split(/\s+/).includes(name);
-            if (tagName === 'figcaption' || (tagName === 'div' && isClass('caption'))) {
+            if (tagName === 'figcaption' || tagName === 'caption' || (tagName === 'div' && isClass('caption'))) {
                 const caption = parseChildren(node, newFormatting, listContext);
                 if (!caption.some(c => c.type !== 'text' || c.text?.trim())) return [];
                 const writersLabel = tagName === 'div' && node.parent?.tagName === 'div' && (node.parent.attributes?.class || '').split(/\s+/).includes('image-container')
@@ -1389,7 +1678,18 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     newListContext.counters[newListContext.level] = 0;
                 }
 
-                return parseChildren(node, currentFormatting, newListContext);
+                // A comment between two items (preserveComments) ends the item before it, where it stood: left
+                // between them, it parted the list in two in every writer.
+                const items = parseChildren(node, currentFormatting, newListContext);
+                if (!items.some(isSourceComment)) return items;
+                const kept: OfficeContentNode[] = [];
+                let lastItem: OfficeContentNode | undefined;
+                for (const item of items) {
+                    if (isSourceComment(item) && lastItem) (lastItem.children ??= []).push(item);
+                    else kept.push(item);
+                    if (item.type === 'list') lastItem = item;
+                }
+                return kept;
             }
             if (tagName === 'li') {
                 if (listContext) {
@@ -1440,21 +1740,32 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const tableAlignAttr = node.attributes?.['data-align'];
                 const tableAlign = (['left', 'center', 'right'] as const).includes(tableAlignAttr as any) ? tableAlignAttr as 'left' | 'center' | 'right' : undefined;
 
+                // What a table holds outside its rows and cells (its <caption>, text or an element written
+                // between rows, a comment) stands before it, where a browser shows it: left among the rows, a
+                // caption became a header row in Markdown and the rest was lost from plain text.
+                const rows: OfficeContentNode[] = [];
+                const before: OfficeContentNode[] = [];
+                for (const child of parseChildren(node, newFormatting, listContext)) (child.type === 'row' ? rows : before).push(child);
                 const tableNode: OfficeContentNode = {
                     type: 'table',
                     metadata: { anchorIds: anchorIds.length > 0 ? anchorIds : undefined, align: tableAlign } as TableMetadata,
-                    children: parseChildren(node, newFormatting, listContext),
+                    children: rows,
                     htmlAttributes: collectHtmlAttributes(node, ['data-align', 'align'])
                 };
                 if (config.includeRawContent) {
                     tableNode.rawContent = '<table>...</table>';
                 }
-                return tableNode;
+                if (!before.length) return tableNode;
+                before.push(tableNode);
+                return before;
             }
             if (tagName === 'tr') {
-                const cells = parseChildren(node, newFormatting, listContext);
+                // What a row holds outside its cells goes before the table (see the table's branch).
+                const cells: OfficeContentNode[] = [];
+                const before: OfficeContentNode[] = [];
+                for (const child of parseChildren(node, newFormatting, listContext)) (child.type === 'cell' ? cells : before).push(child);
                 // The row of column letters over a sheet (HtmlGenerator's) is no row of the sheet.
-                if (!cells.length && node.children.some(isSheetChrome)) return [];
+                if (!cells.length && node.children.some(isSheetChrome)) return before;
                 const rowNode: OfficeContentNode = {
                     type: 'row',
                     children: cells,
@@ -1463,7 +1774,9 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 if (config.includeRawContent) {
                     rowNode.rawContent = '<tr>...</tr>';
                 }
-                return rowNode;
+                if (!before.length) return rowNode;
+                before.push(rowNode);
+                return before;
             }
             if (isSheetChrome(node)) return [];
             if (tagName === 'td' || tagName === 'th') {
@@ -1670,7 +1983,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 }
                 return hrNode;
             }
-            if (tagName === 'pre') {
+            // (`<xmp>` and `<listing>` are the older spellings of a preformatted block; an xmp holds its text as written.)
+            if (tagName === 'pre' || tagName === 'xmp' || tagName === 'listing') {
                 const codeNode = node.children.find(c => c.tagName === 'code');
                 let language;
                 let codeText = '';
@@ -1704,10 +2018,6 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     preNode.rawContent = '<pre>...</pre>';
                 }
                 return preNode;
-            }
-
-            if (tagName === 'script' || tagName === 'style' || tagName === '!doctype') {
-                return null;
             }
 
             return parseChildren(node, newFormatting, listContext);

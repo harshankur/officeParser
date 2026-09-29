@@ -3884,14 +3884,40 @@ async function pdfProcessTests(h: {
  */
 async function htmlReadingTests() {
     console.log('- HTML reading and EPUB writing (linear time)...');
+    // (Each size's faster of two runs, so a pause in a busy machine is not read as the work growing.)
     const scalesLinearly = async (label: string, run: (size: number) => Promise<unknown>, size: number) => {
-        const time = async (n: number) => { const started = performance.now(); await run(n); return performance.now() - started; };
-        await time(size);
+        const once = async (n: number) => { const started = performance.now(); await run(n); return performance.now() - started; };
+        const time = async (n: number) => Math.min(await once(n), await once(n));
+        await once(size);
         const small = await time(size);
         const large = await time(size * 4);
         check(`${label} takes linear time`, large < 5000 && large < Math.max(small, 25) * 10, `${small.toFixed(0)}ms -> ${large.toFixed(0)}ms`);
     };
     const epubOf = (override: string) => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'x' }] }]), 'epub', { onNode: (n: any) => n.type === 'paragraph' ? override : undefined, onWarning: () => {} } as any);
+
+    const html = (src: string) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'html', onWarning: () => {} } as any).catch(() => undefined);
+    const distinctBolds = Array.from({ length: 40 }, (_, k) => `<b data-k="${k}">`).join('');
+    for (const [label, unit, prefix, size] of [
+        // Formatting carried into each paragraph: at most MAX_CARRIED_FORMATTING at a time, and a budget of them in all.
+        ['paragraphs after 40 distinct unclosed formatting elements', '<p>x', `<p>${distinctBolds}`, 5000],
+        ['formatting elements each closed by a paragraph', '<p><b data-a="1"><i>x', '', 5000],
+        ['misnested formatting end tags', '<b>1<i>2</b>3</i>', '', 5000],
+        ['end tags outside their scope', '</b></td></tr></span></li></p>', '<b><table><tr><td><span><li><p>x', 5000],
+        ['list items under 200 divisions', '<li>x', '<div>'.repeat(200), 5000],
+        ['cells written directly in tables', '<table><td>x</table>', '', 2500],
+        ['text and paragraphs between table rows', 'x<p>y</p><tr><td>z</td></tr>', '<table>', 2500],
+        ['headings in headings', '<h1>a<h2>b', '', 5000],
+        ['declarations and bogus end tags', '<!x><?y?></ z><![if a]>w<![endif]>', '', 5000],
+        ['comment ends', '<!-- a -- b --!><!--><!--->', '', 5000],
+        ['textareas and titles', '<textarea>a</textarea><title>t</title>', '', 5000],
+        ['raw text holding other end tags', '<script>a</style></scripty></script><xmp>b</textarea></xmp>', '', 5000],
+        ['stray less-than signs', 'a < b <5 <', '', 10000],
+        ['scripts between words', ' <script></script> <b>w</b>', '<p>', 5000],
+    ] as const) {
+        await scalesLinearly(`html: ${label}`, n => html(prefix + unit.repeat(n)), size);
+    }
+
+
 
     // EPUB: each </p> is paired with its <p> in one pass, nested or not, and an unclosed comment ends the scan.
     await scalesLinearly('epub: paragraphs holding tables holding paragraphs, repeated,', n => epubOf('<p>a<table><tr><td><p>b</p></td></tr></table>c</p>'.repeat(n)), 5000);

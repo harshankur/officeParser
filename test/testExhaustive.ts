@@ -4365,6 +4365,52 @@ async function testHtmlBrowserReading(): Promise<void> {
     // HTML reads a number past the last code point as U+FFFD, as it reads NUL and a surrogate.
     assert.strictEqual(collectAllNodes(await parse('<p>&#0;&#xD800;&#1114112;&#x80;</p>')).find(n => n.type === 'text')?.text, '\uFFFD\uFFFD\uFFFD\u20AC', 'HTML: out-of-range numeric references read as U+FFFD');
 
+    // ── The tree, as a browser builds it ──
+    const shape = (nodes: OfficeContentNode[]): string => nodes.map(n => n.type === 'text'
+        ? JSON.stringify(n.text) + (n.formatting?.bold ? 'B' : '') + (n.formatting?.italic ? 'I' : '')
+        : `${n.type}(${shape(n.children ?? [])})`).join(' ');
+    const read = async (src: string | Buffer, extra: object = {}) => (await parse(src, 'html', extra)).content;
+    const isSourceCommentNode = (n: OfficeContentNode | undefined) => n?.type === 'comment' && (n.metadata as any)?.sourceSyntax === 'html';
+    const plainOf = (nodes: OfficeContentNode[]) => collectAllNodes({ content: nodes } as any).map(n => n.text ?? '').join(' ');
+    // Markup declarations and prefixed names: Word's <o:p> and conditional markers, a DOCTYPE or XML
+    // declaration before a fragment, an EPUB's <m:math>, are markup, never text.
+    assert.strictEqual(shape(await read('<p>First item<o:p></o:p></p><p><![if !supportLists]>·<![endif]>List text</p>')), 'paragraph("First item") paragraph("·List text")', 'HTML: Word markup is read as markup');
+    assert.strictEqual(shape(await read('<!DOCTYPE html><?xml version="1.0"?><p>x</p>')), 'paragraph("x")', 'HTML: declarations are read as nothing');
+    const prefixedMath = await read('<p>x <m:math><m:mi>y</m:mi></m:math> z</p>');
+    assert.ok(collectAllNodes({ content: prefixedMath } as any).some(n => n.type === 'code' && n.text === 'y' && (n.metadata as any)?.math === 'inline'), 'HTML: prefixed MathML is math');
+    assert.strictEqual(shape(await read('<p>a < b <i>c</i> and 5<6</p>')), 'paragraph("a < b " "c"I " and 5<6")', 'HTML: a < that starts no tag is text, and the tags after it are tags');
+    assert.strictEqual(shape(await read('<p>a<!-->b<!--->c<!-- x --!>d</p>')), 'paragraph("abcd")', 'HTML: comments end where HTML ends them');
+    assert.strictEqual(shape(await read('<p>a<textarea><b>x</b> &amp;</textarea></p><title>T</title><noscript><p>Enable JS</p></noscript><template><p>inert</p></template><p>b</p>')),
+        'paragraph("a" "<b>x</b> &") paragraph("b")', 'HTML: textarea holds text, and title, noscript and template are not shown');
+    // A cell's implied end never reaches a table outside its own; a cell written in a table is given a row.
+    const nested = await read('<table><tr><td>outer<table><td>inner</td></table>after</td></tr></table>');
+    assert.strictEqual(shape(nested), 'table(row(cell("outer" table(row(cell("inner"))) "after")))', `HTML: a nested table's cell stays in it (${shape(nested)})`);
+    assert.strictEqual(shape(await read('<b>bold<table><tr><td>x</b>y</td></tr></table>z')), 'paragraph("bold"B) table(row(cell("xy"B))) paragraph("z"B)', 'HTML: </b> in a cell does not end a <b> outside its table');
+    // Formatting a paragraph's implied end closed goes on in the next paragraph, until its end tag.
+    assert.strictEqual(shape(await read('<p><b>bold<p>still bold</b> after</p>')), 'paragraph("bold"B) paragraph("still bold"B " after")', 'HTML: formatting is carried across an implied paragraph end');
+    assert.strictEqual(shape(await read('<b>1<i>2</b>3</i>4')), 'paragraph("1"B "2"BI "3"I "4")', 'HTML: misnested formatting');
+    assert.strictEqual(shape(await read('<h1>A<h2>B</h2>')), 'heading("A") heading("B")', 'HTML: a heading ends an open heading');
+    assert.strictEqual(shape(await read('<span>a<div>b</span>c</div>d')), 'paragraph("a") paragraph("bc") paragraph("d")', 'HTML: an end tag does not end a block opened inside it');
+    assert.strictEqual(shape(await read('<html><head><title>T</title></head><p>before</p><body><p>in</p></body></html><p>after</p>')), 'paragraph("before") paragraph("in") paragraph("after")', 'HTML: content outside <body> is the body\'s');
+    // Whitespace next to any inline element is a space (MathML, a custom element, Word's <o:p>), and
+    // an element never shown between words leaves the space.
+    const spaced = await read('<p><em>word</em> <math><mi>x</mi></math> <my-el>c</my-el> <o:p>o</o:p> <a href="#x">x</a> <script>1</script> <b>y</b></p>');
+    assert.strictEqual(collectAllNodes({ content: spaced } as any).filter(n => n.type === 'text' || n.type === 'code').map(n => n.text).join(''), 'word x c o x y', 'HTML: whitespace next to inline elements is kept');
+    // Linear time and bounded work are checked in test/security (htmlReadingTests).
+
+    // ── Tables: a caption, and what stands between rows, go before the table ──
+    assert.strictEqual(shape(await read('<table><caption>Table 1: Sales</caption><thead><tr><th>A<th>B<tbody><tr><td>1<td>2</table>')),
+        'paragraph("Table 1: Sales") table(row(cell("A") cell("B")) row(cell("1") cell("2")))', 'HTML: a caption is a paragraph before its table');
+    assert.strictEqual(shape(await read('<table><tr><td>a</td></tr>stray text<p>para</p></table>')), 'paragraph("stray text") paragraph("para") table(row(cell("a")))', 'HTML: stray content stands before the table');
+    // Comments (preserveComments): between rows, before the table; between list items, at the end of the item before.
+    const commented = { htmlParserConfig: { preserveComments: true } };
+    const tableComments = await read('<table><!-- a --><tr><th>A</th></tr><!-- b --><tr><td>1</td></tr></table>', commented);
+    assert.deepStrictEqual(tableComments.map(n => n.type), ['comment', 'comment', 'table'], 'HTML: comments among rows stand before the table');
+    assert.ok((String((await OfficeGenerator.generate({ type: 'html', metadata: {}, attachments: [], content: tableComments } as any, 'md')).value)).includes('| A |\n| --- |\n| 1 |'), 'MD: the table keeps its header row');
+    const listComments = await read('<ul><!-- first --><li>a</li><!-- c --><li>b</li></ul>', commented);
+    assert.deepStrictEqual(listComments.map(n => n.type), ['comment', 'list', 'list'], 'HTML: a comment between items does not part the list');
+    assert.ok(isSourceCommentNode(listComments[1].children![1]), 'HTML: the comment ends the item before it');
+
     console.log('  HTML/EPUB reading and writing: All assertions passed ✓');
 }
 
