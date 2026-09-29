@@ -417,8 +417,9 @@ export function markdownEscapePlain(text: string): string {
  * escape what follows it. At the start of a line (the text's own start when `atLineStart`, and after
  * each line break in it), the markers that would begin a block are escaped too: a heading's `#`,
  * `>`, a list item's `-`, `+` or `1.`, a line of only `-` or `=` (a rule or setext underline), and
- * the `:` of a definition or fenced div. An escape is harmless where it was not needed; it always
- * reads back as the character.
+ * the `:` of a definition or fenced div, and the first character of a line shaped like a pipe table's
+ * delimiter row (`--- | ---`, `:-- | --:`), which under paragraph text made the paragraph a table. An
+ * escape is harmless where it was not needed; it always reads back as the character.
  */
 export function markdownEscapeInline(text: string, atLineStart = false): string {
     if (typeof text !== 'string') return '';
@@ -427,6 +428,9 @@ export function markdownEscapeInline(text: string, atLineStart = false): string 
     // underline, a definition's `: ` or a fenced div's `:::`), or the number of an ordered-list item
     // (whose `.` or `)` is then escaped rather than the number). `-8` or `+7` begins nothing.
     const blockMarker = /[ \t]*(?:(#{1,6}(?=[ \t\n]|$)|>|[-+](?=[ \t\n]|$)|-(?=[- \t]*(?:\n|$))|=(?=[= \t]*(?:\n|$))|:(?=[ \t:]))|(\d{1,9})(?=[.)](?:[ \t\n]|$)))/y;
+    // A line of only `-`, `:`, `|`, spaces and tabs (a table's delimiter row if it holds a `-`, and a `:`
+    // or `|`, as a line of `-` alone is a rule or underline above): its first character is escaped.
+    const delimiterRow = /[ \t]*[-:|][-:| \t]*(?=\n|$)/y;
     const reference = /&(?:#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/y;
     // The characters that may need a backslash or an entity: the text between them is copied as one
     // slice (it grew a character at a time, which took a second and a gigabyte of memory for 20 MB).
@@ -451,6 +455,14 @@ export function markdownEscapeInline(text: string, atLineStart = false): string 
                 replace(at, at, '\\');
                 i = blockMarker.lastIndex;
                 continue;
+            }
+            delimiterRow.lastIndex = i;
+            const row = delimiterRow.exec(text)?.[0];
+            if (row && row.includes('-') && /[:|]/.test(row)) {
+                let at = i;
+                while (text[at] === ' ' || text[at] === '\t') at++;
+                replace(at, at, '\\');
+                i = at;
             }
         }
         special.lastIndex = i;
