@@ -2506,20 +2506,20 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             continue;
         }
 
-        // Definition list (Markdown Extra / Pandoc / Kramdown): a term line followed by one or more
-        // ": definition" lines, any number of such groups in the block, e.g.:
+        // Definition list (Markdown Extra / Pandoc / Kramdown): term lines (one or more, each a term,
+        // as Markdown Extra has it) followed by one or more ": definition" lines, any number of such
+        // groups in the block, e.g.:
         //   Term
         //   : Definition of the term.
         //   Another term
-        //   : Its definition.
+        //   A third term
+        //   : The definition of both.
         {
             const lines = block.split('\n');
             const isDefinition = (line: string) => /^:[ \t]+\S/.test(line);
-            let valid = lines.length >= 2;
-            for (let i = 0; valid && i < lines.length; i++) {
-                // A term does not start with `:`, and a definition follows it.
-                if (!isDefinition(lines[i])) valid = !lines[i].startsWith(':') && i + 1 < lines.length && isDefinition(lines[i + 1]);
-            }
+            // It ends with a definition, and no term starts with `:` (the generator escapes one).
+            const valid = lines.length >= 2 && !isDefinition(lines[0]) && isDefinition(lines[lines.length - 1])
+                && lines.every(line => isDefinition(line) || !line.startsWith(':'));
             if (valid) {
                 const children = lines.map((line): OfficeContentNode => (isDefinition(line)
                     ? { type: 'definitionDescription', children: parseInline(line.replace(/^:[ \t]+/, '')) }

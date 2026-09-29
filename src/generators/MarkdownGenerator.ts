@@ -1242,7 +1242,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     }
                     // Its ids start its line, where the parser reads them back as its own.
                     const anchors = this.renderAnchors(node.metadata);
-                    if (node.type === 'definitionTerm') return this.resolvedDialect.definitionLists === 'none' ? `${anchors}**${line}**\n\n` : `${anchors}${line}\n`;
+                    // A term's leading `:` is escaped: a term line starting with one (`:root`) is none.
+                    if (node.type === 'definitionTerm') return this.resolvedDialect.definitionLists === 'none' ? `${anchors}**${line}**\n\n` : `${anchors}${line.startsWith(':') ? '\\' : ''}${line}\n`;
                     return this.resolvedDialect.definitionLists === 'none' ? `${anchors}${line}\n\n` : `: ${anchors}${line}\n`;
                 }
 
