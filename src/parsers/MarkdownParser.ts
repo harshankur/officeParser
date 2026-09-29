@@ -640,6 +640,12 @@ const ANCHOR_HOLDERS = new Set<string>(['paragraph', 'heading', 'list', 'image',
  */
 const HTML_BLOCK_LINE = /(?:^|\n) {0,3}<\/?(?:address|article|aside|blockquote|body|caption|center|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|html|legend|li|main|menu|nav|ol|p|section|summary|table|tbody|td|tfoot|th|thead|tr|ul)(?=[\s/>]|$)/i;
 
+/** The opening tag of a block wrapper standing alone in its block (see parseBlocks): its name and attributes. */
+const WRAPPER_OPEN = /^<(div|p|center|section|article|aside|header|footer|main|nav|figure)(\s[^<>]*)?>$/i;
+
+/** The closing tag of a block wrapper standing alone in its block. */
+const WRAPPER_CLOSE = /^<\/(?:div|p|center|section|article|aside|header|footer|main|nav|figure)\s*>$/i;
+
 /** A table's own tags: a piece holding one is HTML, not Markdown in a cell (see splitIntoBlocks). */
 const TABLE_PART_TAG = /<\/?(?:table|thead|tbody|tfoot|tr|td|th|caption|colgroup|col)\b/i;
 
@@ -2143,6 +2149,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // of a quote or note being read.
     const parseBlocks = async (blocks: string[], content: OfficeContentNode[]): Promise<void> => {
     let currentAlignment: 'left' | 'center' | 'right' | 'justify' | undefined = undefined;
+    // The alignment each wrapper tag standing alone gives what it holds, innermost last (see below).
+    const wrapperAlignments: ('left' | 'center' | 'right' | 'justify' | undefined)[] = [];
     // The last list read: its last item, and its id and each level's counter, marker and indentation,
     // for a list block after it to go on with (see the list branch).
     let previousList: { last: OfficeContentNode; listId: string; counters: Map<number, number>; markers: Map<number, string>; indents: number[] } | undefined;
@@ -2184,14 +2192,22 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             }
         }
 
-        // Check for alignment wrapper start/end
-        const alignStartMatch = block.match(/^<div\s+(?:style="text-align:\s*(left|center|right|justify);?"|align="(left|center|right|justify)")>$/i);
-        if (alignStartMatch) {
-            currentAlignment = (alignStartMatch[1] || alignStartMatch[2]).toLowerCase() as any;
+        // A wrapper tag standing alone (`<div align="center">`, `<p>`, `<center>`, the content after it
+        // between blank lines, then its closing tag) is no content of its own: it gives what it holds
+        // its alignment (its own, or the one around it). Read as an HTML block, it was an empty
+        // paragraph, which took the alignment meant for the content.
+        const wrapperOpen = WRAPPER_OPEN.exec(block);
+        if (wrapperOpen) {
+            const attributes = htmlAttributes(wrapperOpen[2] ?? '');
+            const own = wrapperOpen[1].toLowerCase() === 'center' ? 'center'
+                : (/^(left|center|right|justify)$/i.exec(attributes.get('align') ?? '') ?? /text-align:\s*(left|center|right|justify)\b/i.exec(attributes.get('style') ?? ''))?.[1].toLowerCase();
+            wrapperAlignments.push((own as typeof currentAlignment) ?? currentAlignment);
+            currentAlignment = wrapperAlignments[wrapperAlignments.length - 1];
             continue;
         }
-        if (block.match(/^<\/div>$/i)) {
-            currentAlignment = undefined;
+        if (WRAPPER_CLOSE.test(block)) {
+            wrapperAlignments.pop();
+            currentAlignment = wrapperAlignments[wrapperAlignments.length - 1];
             continue;
         }
 
