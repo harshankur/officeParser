@@ -4427,6 +4427,21 @@ async function testHtmlBrowserReading(): Promise<void> {
     assert.strictEqual(shape(await read('<section data-footnotes><p>Plain content</p></section>')), 'paragraph("Plain content")', 'HTML: a footnotes section with no note in it is content');
     assert.strictEqual(shape(await read('<p>See<a epub:type="noteref" href="#n1">1</a></p><aside epub:type="footnote" id="n2"><p>Uncited.</p></aside>')), 'paragraph("See" "1") paragraph("Uncited.")', 'HTML: an uncited aside stays content, a link to no note a link');
 
+    // ── The document: its title, language, encoding and base ──
+    const titled = await parse('<html lang="fr"><head><title>A &amp;  B\n</title></head><body><p>x</p></body></html>');
+    assert.strictEqual(titled.metadata.title, 'A & B', 'HTML: the title is decoded and its whitespace collapsed');
+    assert.strictEqual(titled.metadata.language, 'fr', 'HTML: <html lang> is the language');
+    assert.ok((await write(titled, 'html', { htmlConfig: { standalone: true } }) as string).includes('<html lang="fr">'), 'HTML: the language is written back');
+    assert.ok(strFromU8(unzipSync(await write(titled, 'epub') as Uint8Array)['OEBPS/content.opf']).includes('<dc:language>fr</dc:language>'), 'EPUB: the language is the book\'s');
+    assert.strictEqual((await parse('<body><title>T</title><p>x</p></body>')).metadata.title, 'T', 'HTML: a title outside the head is the title, not text');
+    const windows1252 = Buffer.concat([Buffer.from('<meta http-equiv="Content-Type" content="text/html; charset=windows-1252"><p>caf'), Buffer.from([0xE9, 0x20, 0x92, 0x71, 0x92]), Buffer.from('</p>')]);
+    assert.strictEqual(collectAllNodes(await parse(windows1252)).find(n => n.type === 'text')?.text, 'café \u2019q\u2019', 'HTML: a page in its declared encoding');
+    assert.strictEqual(collectAllNodes(await parse(Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from('<p>h\u00E9llo</p>', 'utf16le')]))).find(n => n.type === 'text')?.text, 'h\u00E9llo', 'HTML: a UTF-16 page with its byte order mark');
+    assert.strictEqual(collectAllNodes(await parse('<meta charset="windows-1252"><p>\u00E9</p>')).find(n => n.type === 'text')?.text, '\u00E9', 'HTML: UTF-8 bytes stay UTF-8 whatever the page declares');
+    const based = await read('<head><base href="https://example.com/dir/"></head><a href="page.html">p</a> <a href="#frag">f</a> <img src="i.png"> <img srcset="small.png 1x, big.png 2x">');
+    assert.deepStrictEqual(collectAllNodes({ content: based } as any).map(n => (n.metadata as any)?.link ?? (n.metadata as any)?.url).filter(Boolean),
+        ['https://example.com/dir/page.html', '#frag', 'https://example.com/dir/i.png', 'https://example.com/dir/small.png'], 'HTML: <base href> resolves links and pictures; srcset gives a picture');
+
     console.log('  HTML/EPUB reading and writing: All assertions passed ✓');
 }
 

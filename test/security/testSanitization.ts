@@ -3918,8 +3918,8 @@ async function htmlReadingTests() {
         const ending = label === 'GitHub footnote references' ? '<section data-footnotes><ol><li id="fn-1"><p>n <a data-footnote-backref href="#r">b</a></p></li></ol></section>' : '';
         await scalesLinearly(`html: ${label}`, n => html(prefix + unit.repeat(n) + ending), size);
     }
-
-
+    // A page in the encoding it declares is decoded twice at most (once found not UTF-8).
+    await scalesLinearly('html: a windows-1252 page', n => OfficeParser.parseOffice(Buffer.from('<meta charset="windows-1252"><p>' + 'caf\xe9 '.repeat(n), 'latin1'), { fileType: 'html', onWarning: () => {} } as any), 20000);
 
     // EPUB: each </p> is paired with its <p> in one pass, nested or not, and an unclosed comment ends the scan.
     await scalesLinearly('epub: paragraphs holding tables holding paragraphs, repeated,', n => epubOf('<p>a<table><tr><td><p>b</p></td></tr></table>c</p>'.repeat(n)), 5000);

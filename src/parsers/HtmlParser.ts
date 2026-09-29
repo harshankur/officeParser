@@ -919,7 +919,59 @@ export interface HtmlPartContext {
     imageAttachment?: (src: string) => string | undefined;
 }
 
+/** The first picture a `srcset` names (`a.png 1x, b.png 2x` names a.png), for an <img> with no `src`. */
+const firstSrcsetUrl = (srcset: string | undefined): string | undefined => {
+    const url = /^[\s,]*(\S+)/.exec(srcset ?? '')?.[1];
+    if (!url) return undefined;
+    // Its trailing commas are the list's (counted from the end: a pattern for them retried every comma in the URL).
+    let end = url.length;
+    while (end > 0 && url[end - 1] === ',') end--;
+    return url.slice(0, end) || undefined;
+};
 
+/**
+ * The encoding a document declares in `start` (its first 1024 bytes, one character each): an XML
+ * declaration's, else the first `<meta charset>` or `<meta http-equiv="Content-Type" content="...;
+ * charset=...">`. A meta naming UTF-16 is read as UTF-8, as a browser reads it (a page read as ASCII
+ * cannot be UTF-16).
+ */
+const declaredEncoding = (start: string): string | undefined => {
+    const label = (name: string): string => {
+        const lower = name.trim().toLowerCase();
+        return /^utf-?16/.test(lower) ? 'utf-8' : lower === 'x-user-defined' ? 'windows-1252' : lower;
+    };
+    const xml = /^\s*<\?xml\s[^>]*?\bencoding\s*=\s*["']([^"']+)["']/i.exec(start);
+    if (xml) return label(xml[1]);
+    for (const meta of start.matchAll(/<meta\b[^>]*>/gi)) {
+        const charset = /\bcharset\s*=\s*["']?\s*([^"'\s;/>]+)/i.exec(meta[0]);
+        if (charset) return label(charset[1]);
+    }
+    return undefined;
+};
+
+/**
+ * A document's text from its bytes: in the encoding its byte order mark names; else as UTF-8 when the
+ * bytes are UTF-8, whatever the document declares (a page saved as UTF-8 under a stale declaration, and
+ * text a container hands over already decoded); else in the encoding the document declares (see
+ * declaredEncoding), as a browser finds it. Read as UTF-8 whatever it was, a windows-1252 page lost
+ * each accented letter, and a UTF-16 one was unreadable. An encoding this runtime cannot decode, or
+ * none declared, leaves UTF-8, each byte it cannot read a U+FFFD.
+ */
+const decodeHtmlBytes = (buffer: Buffer): string => {
+    if (buffer[0] === 0xFE && buffer[1] === 0xFF) return new TextDecoder('utf-16be').decode(buffer);
+    if (buffer[0] === 0xFF && buffer[1] === 0xFE) return new TextDecoder('utf-16le').decode(buffer);
+    if (buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) return new TextDecoder('utf-8').decode(buffer);
+    try {
+        return new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    } catch { /* not UTF-8: read in the encoding the document declares */ }
+    const declared = declaredEncoding(Buffer.from(buffer.subarray(0, 1024)).toString('latin1'));
+    if (declared) {
+        try {
+            return new TextDecoder(declared).decode(buffer);
+        } catch { /* an encoding this runtime does not decode */ }
+    }
+    return new TextDecoder('utf-8').decode(buffer);
+};
 
 export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, part: HtmlPartContext = {}): Promise<OfficeParserAST> => {
     // Honour cancellation requests before the HTML tree is built and traversed.
@@ -927,21 +979,45 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
     // rejecting early here prevents both the parsing and the subsequent AST construction.
     checkAbortSignal(config.abortSignal);
 
-    const { root, head } = parseHtmlTree(buffer.toString('utf-8'), config, config.htmlParserConfig?.preserveComments === true);
+    const { root, head, htmlAttributes, bodyAttributes } = parseHtmlTree(decodeHtmlBytes(buffer), config, config.htmlParserConfig?.preserveComments === true);
     // What a browser shows: the document, its <head> passed over (the tree builds no <html> or <body>).
     const body = root;
+
+    /** The first element `matches` accepts, in document order, outside SVG and MathML (whose <title> is their own). */
+    const firstElement = (node: HtmlNode, matches: (element: HtmlNode) => boolean, depth = 0): HtmlNode | undefined => {
+        for (const child of node.children) {
+            if (child.type !== 'element') continue;
+            if (matches(child)) return child;
+            if (child.tagName === 'svg' || child.tagName === 'math' || depth >= MAX_HTML_NESTING_DEPTH) continue;
+            const found = firstElement(child, matches, depth + 1);
+            if (found) return found;
+        }
+        return undefined;
+    };
 
     const metadata: OfficeMetadata = {};
     const attachments: OfficeAttachment[] = [];
 
-    // The head's <meta> elements.
-    const metaElements = (head?.children ?? []).filter(child => child.tagName === 'meta');
-    if (head) {
-        const titleNode = head.children.find(child => child.tagName === 'title');
-        if (titleNode && titleNode.children.length > 0 && titleNode.children[0].text) {
-            metadata.title = titleNode.children[0].text;
-        }
+    // The title is the first <title>, wherever a page put it, as a browser reads it: its character
+    // references decoded and its whitespace collapsed (`A &amp;  B` was kept as written).
+    const titleNode = firstElement(root, element => element.tagName === 'title');
+    const title = titleNode ? collapseWhitespace(decodeEntities(rawChildText(titleNode))).trim() : '';
+    if (title) metadata.title = title;
+    // The document's language, from <html lang> (or XHTML's xml:lang), else <body>'s.
+    const language = [htmlAttributes.lang, htmlAttributes['xml:lang'], bodyAttributes.lang, bodyAttributes['xml:lang']].find(value => value?.trim());
+    if (language) metadata.language = language.trim();
+    // A <base href> resolves the document's relative links and pictures, as it does in a browser.
+    const baseHref = firstElement(root, element => element.tagName === 'base' && !!element.attributes?.href)?.attributes?.href;
+    let base: URL | undefined;
+    try { base = baseHref ? new URL(baseHref) : undefined; } catch { base = undefined; }
+    const resolveUrl = (url: string): string => {
+        if (!base || !url || url.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(url)) return url;
+        try { return new URL(url, base).href; } catch { return url; }
+    };
 
+    // The head's <meta> elements, and those a page without a head wrote before its content.
+    const metaElements = [...(head?.children ?? []), ...root.children].filter(child => child.tagName === 'meta');
+    if (head || metaElements.length) {
         metadata.nativeProperties = {};
         for (const child of metaElements) {
             const name = child.attributes?.name || child.attributes?.property || child.attributes?.['http-equiv'];
@@ -1862,7 +1938,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 return cellNode;
             }
             if (tagName === 'img') {
-                const src = node.attributes?.src;
+                // A picture given only by a `srcset` (as responsive pages give one) is its first candidate.
+                const src = node.attributes?.src || firstSrcsetUrl(node.attributes?.srcset);
                 const alt = node.attributes?.alt;
 
                 // Attribute-driven editors render data-width/data-align, falling back to
@@ -1947,7 +2024,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     imageNode = {
                         type: 'image',
                         metadata: {
-                            url: src,
+                            url: src && resolveUrl(src),
                             altText: alt,
                             title: node.attributes?.title,
                             anchorIds: anchorIds.length > 0 ? anchorIds : undefined,
@@ -1963,7 +2040,7 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 return imageNode;
             }
             if (tagName === 'a') {
-                const href = node.attributes?.href;
+                const href = node.attributes?.href && resolveUrl(node.attributes.href);
                 const wikilinkPage = node.attributes?.['data-wikilink-page'];
                 const children = parseChildren(node, newFormatting, listContext);
                 // A named anchor with no target (`<a id="x"></a>`, `<a name="sec">Title</a>`) marks a
