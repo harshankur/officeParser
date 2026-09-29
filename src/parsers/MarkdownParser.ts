@@ -551,11 +551,30 @@ function splitHeadingAnchor(rest: string): { text: string; anchor?: string } {
 }
 
 /**
+ * The names of HTML's elements (current and obsolete ones a browser still renders): a tag of one of
+ * them written in capitals (`<IMG SRC>`, `<B>`, `<BR/>`, older HTML's way) is HTML, not a component.
+ */
+const HTML_ELEMENT_NAMES = new Set([
+    'a', 'abbr', 'acronym', 'address', 'area', 'article', 'aside', 'audio', 'b', 'base', 'basefont', 'bdi', 'bdo', 'big', 'blink',
+    'blockquote', 'body', 'br', 'button', 'canvas', 'caption', 'center', 'cite', 'code', 'col', 'colgroup', 'data', 'datalist', 'dd',
+    'del', 'details', 'dfn', 'dialog', 'dir', 'div', 'dl', 'dt', 'em', 'embed', 'fieldset', 'figcaption', 'figure', 'font', 'footer',
+    'form', 'frame', 'frameset', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hgroup', 'hr', 'html', 'i', 'iframe', 'img',
+    'input', 'ins', 'kbd', 'label', 'legend', 'li', 'link', 'main', 'map', 'mark', 'marquee', 'menu', 'meta', 'meter', 'nav', 'nobr',
+    'noscript', 'object', 'ol', 'optgroup', 'option', 'output', 'p', 'param', 'picture', 'pre', 'progress', 'q', 'rp', 'rt', 'ruby', 's',
+    'samp', 'script', 'search', 'section', 'select', 'slot', 'small', 'source', 'span', 'strike', 'strong', 'style', 'sub', 'summary',
+    'sup', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot', 'th', 'thead', 'time', 'title', 'tr', 'track', 'tt', 'u', 'ul',
+    'var', 'video', 'wbr',
+]);
+
+/**
  * MDX components removed, their content kept (parse-only: MDX is never written back). A component is
- * a tag whose name starts with a capital, as React and MDX tell it from HTML. `<Component ... />` goes,
- * and `<Component ...>inner</Component>` becomes `inner`, nested ones too. A tag inside a code span on its line (after an odd
- * number of backticks) is code, and one with no matching closing tag is text. One scan finds the tags
- * and pairs each closing tag with the latest open one of its name, so the time is linear in the text.
+ * a tag whose name starts with a capital, as React and MDX tell it from HTML, and that is not an HTML
+ * element's name in capitals (see HTML_ELEMENT_NAMES: `<IMG SRC="a.png">` is a picture and `<B>` bold;
+ * they were taken out, the picture with them). `<Component ... />` goes, and
+ * `<Component ...>inner</Component>` becomes `inner`, nested ones too. A tag inside a code span on its
+ * line (after an odd number of backticks) is code, and one with no matching closing tag is text. One
+ * scan finds the tags and pairs each closing tag with the latest open one of its name, so the time is
+ * linear in the text.
  */
 function stripMdxComponents(text: string): string {
     const token = /(`)|(\n)|<(\/?)([A-Z][A-Za-z0-9]*)(?:\s[^<>]*?)?(\/?)>/g;
@@ -567,6 +586,7 @@ function stripMdxComponents(text: string): string {
         if (match[2]) { ticks = 0; continue; }
         if (ticks % 2 === 1) continue;
         const [whole, , , closing, name, selfClosing] = match;
+        if (!/[a-z]/.test(name) && HTML_ELEMENT_NAMES.has(name.toLowerCase())) continue;
         const span = { start: match.index, end: match.index + whole.length };
         if (selfClosing && !closing) removed.push(span);
         else if (!closing) (open.get(name) ?? open.set(name, []).get(name)!).push(span);
@@ -838,8 +858,8 @@ const INLINE_TOKENS = [
     String.raw`<u>(?<underline>(?:(?!<u>)[\s\S])+?)<\/u>`,
     String.raw`<sub>(?<subscript>(?:(?!<sub>)[\s\S])+?)<\/sub>`,
     String.raw`<sup>(?<superscript>(?:(?!<sup>)[\s\S])+?)<\/sup>`,
-    String.raw`(?<lineBreak><br\s*\/?>)`,
-    String.raw`(?<anchorTag><a\s[^<>\n]*>[ \t]*<\/a>)`,
+    String.raw`(?<lineBreak><[bB][rR]\s*\/?>)`,
+    String.raw`(?<anchorTag><[aA]\s[^<>\n]*>[ \t]*<\/[aA]>)`,
     String.raw`(?<htmlComment><!--)`,
     String.raw`<span\s+style="(?<spanStyle>[^"\n]*)">(?<spanContent>(?:(?!<span[\s>])[\s\S])+?)<\/span>`,
     String.raw`<(?<htmlTag>[a-zA-Z][a-zA-Z0-9]*)(?<htmlAttrs>\s[^<>]{0,1000})?>`,
