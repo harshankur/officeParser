@@ -2313,6 +2313,17 @@ async function testLatexGeneration(): Promise<void> {
     assert.strictEqual((sBraces.match(/\{/g) || []).length, (sBraces.match(/\}/g) || []).length, 'TEX synthetic: braces balance');
     assert.strictEqual((sLive.match(/\\begin\{/g) || []).length, (sLive.match(/\\end\{/g) || []).length, 'TEX synthetic: environments balance');
 
+    // Column alignment is what most of a column's own cells have, a merged cell not voting; a cell that
+    // differs from its column (or is merged) is written with its own alignment, so every cell parses back as it was.
+    const alignedHtml = await OfficeParser.parseOffice(Buffer.from('<table><tr><th colspan="2" style="text-align:center">Group</th><th style="text-align:center">Total</th></tr><tr><td>Name</td><td style="text-align:right">12.5</td><td style="text-align:right">100</td></tr><tr><td>Other</td><td style="text-align:right">3.0</td><td style="text-align:right">7</td></tr></table>'), { fileType: 'html' });
+    const alignedTex = (await alignedHtml.to('tex')).value as string;
+    const cellAligns = (a: any) => collectAllNodes(a).filter(n => n.type === 'cell').map(n => (n.metadata as any).align ?? 'left');
+    assert.ok(/\\begin\{longtable\}\{\|>\{\\raggedright\\arraybackslash\}p\{[^}]+\}\|>\{\\raggedleft\\arraybackslash\}p\{[^}]+\}\|>\{\\raggedleft/.test(alignedTex) && /\\multicolumn\{1\}\{>\{\\centering\\arraybackslash\}p\{[^}]+\}\|\}\{Total\}/.test(alignedTex), 'TEX: columns take their cells\' majority alignment; a differing cell its own');
+    assert.deepStrictEqual(cellAligns(await OfficeParser.parseOffice(Buffer.from(alignedTex), { fileType: 'tex' })), cellAligns(alignedHtml), 'TEX round trip: every cell keeps its alignment');
+    const mergedHeader = await OfficeParser.parseOffice(Buffer.from('\\begin{document}\\begin{tabular}{|l|c|r|}\\multicolumn{2}{|c|}{Header} & R \\\\ a & b & c \\\\\\end{tabular}\\end{document}'), { fileType: 'tex' });
+    const mergedBack = await OfficeParser.parseOffice(Buffer.from((await mergedHeader.to('tex')).value as string), { fileType: 'tex' });
+    assert.deepStrictEqual(cellAligns(mergedBack), ['center', 'right', 'left', 'center', 'right'], 'TEX round trip: a centred header over two columns leaves the first column left-aligned');
+
     // Wide tables continue below themselves in bands of 16 columns; a cell spanning a band boundary
     // is clipped, and its remainder is an empty merged cell that keeps the rule above it.
     const wideRow = (r: number) => ({ type: 'row', children: Array.from({ length: 40 }, (_, c) => ({ type: 'cell', metadata: { row: r, col: c }, children: [{ type: 'text', text: `r${r}c${c}` }] })) });

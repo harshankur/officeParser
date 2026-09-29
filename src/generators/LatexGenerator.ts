@@ -1244,20 +1244,33 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         return `${leftRule ? '|' : ''}>{${setup}\\arraybackslash}p{${this.columnWidth(cols, span)}}|`;
     }
 
+    /** A cell's own alignment (`CellMetadata.align`), left when it states none. */
+    private cellAlign(cell: OfficeContentNode): 'left' | 'center' | 'right' {
+        const a = (cell.metadata as any)?.align;
+        return a === 'center' || a === 'right' ? a : 'left';
+    }
+
     /**
-     * Per-column alignment, read off the first row's cells (`CellMetadata.align`, which a Markdown
-     * pipe table's separator row sets and HTML's `align`/`text-align` carry). Null when no column
-     * is aligned, so the common case keeps one compact repeated column type.
+     * Per-column alignment (`CellMetadata.align`, which a Markdown pipe table's separator row sets, a
+     * LaTeX column specification gives and HTML's `align`/`text-align` carry): the alignment most of
+     * the column's own cells have, a tie going to the one met first. A merged cell does not vote (a
+     * centred header over a left and a right column is no evidence for either), and a cell that differs
+     * from its column is written with its own (see renderSlot). Null when every column is left-aligned,
+     * so the common case keeps one compact repeated column type.
      */
-    private columnAlignments(grid: TableSlot[][], cols: number): (string | undefined)[] | null {
+    private columnAlignments(grid: TableSlot[][], cols: number): ('left' | 'center' | 'right')[] | null {
         if (this.config.includeFormatting === false || grid.length === 0) return null;
-        const aligns: (string | undefined)[] = new Array(cols).fill(undefined);
-        for (const slot of grid[0]) {
-            if (slot.kind !== 'cell') continue;
-            const a = (slot.cell.metadata as any)?.align;
-            if (a === 'center' || a === 'right' || a === 'left') for (let k = 0; k < slot.colSpan; k++) aligns[slot.col + k] = a;
+        const votes = Array.from({ length: cols }, () => ({ left: 0, center: 0, right: 0, first: [] as ('left' | 'center' | 'right')[] }));
+        for (const row of grid) {
+            for (const slot of row) {
+                if (slot.kind !== 'cell' || slot.colSpan !== 1 || slot.col >= cols) continue;
+                const a = this.cellAlign(slot.cell);
+                const v = votes[slot.col];
+                if (v[a]++ === 0) v.first.push(a);
+            }
         }
-        return aligns.some(a => a === 'center' || a === 'right') ? aligns : null;
+        const aligns = votes.map(v => v.first.reduce<'left' | 'center' | 'right'>((best, a) => (v[a] > v[best] ? a : best), v.first[0] ?? 'left'));
+        return aligns.some(a => a !== 'left') ? aligns : null;
     }
 
     private async table(node: OfficeContentNode, rowsOverride?: OfficeContentNode[]): Promise<string> {
@@ -1382,12 +1395,17 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         return segments.join('');
     }
 
-    private async renderSlot(slot: TableSlot, cols: number, notes: RenderContext['notes'], align: string | undefined): Promise<string> {
+    /**
+     * One position of a row. A merged cell is set with its own alignment, and so is a cell whose
+     * alignment differs from its column's (`columnAlign`), in a `\multicolumn{1}` of its own.
+     */
+    private async renderSlot(slot: TableSlot, cols: number, notes: RenderContext['notes'], columnAlign: string | undefined): Promise<string> {
         if (slot.kind === 'empty') return '';
         const firstCol = slot.col === 0;
+        const alignOf = (cell: OfficeContentNode) => (this.config.includeFormatting === false ? 'left' : this.cellAlign(cell));
         if (slot.kind === 'covered' || slot.kind === 'spill') {
             const bg = this.cellBackground(slot.origin);
-            if (slot.colSpan > 1) return `\\multicolumn{${slot.colSpan}}{${this.columnSpec(cols, slot.colSpan, firstCol, align)}}{${bg}}`;
+            if (slot.colSpan > 1) return `\\multicolumn{${slot.colSpan}}{${this.columnSpec(cols, slot.colSpan, firstCol, alignOf(slot.origin))}}{${bg}}`;
             return bg;
         }
         const override = await this.handleOnNode(slot.cell);
@@ -1403,7 +1421,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             content = `\\multirow{${slot.rowSpan}}{=}{${content}}`;
         }
         content = this.cellBackground(slot.cell) + content;
-        if (slot.colSpan > 1) return `\\multicolumn{${slot.colSpan}}{${this.columnSpec(cols, slot.colSpan, firstCol, align)}}{${content}}`;
+        const own = alignOf(slot.cell);
+        if (slot.colSpan > 1 || own !== (columnAlign ?? 'left')) return `\\multicolumn{${slot.colSpan}}{${this.columnSpec(cols, slot.colSpan, firstCol, own)}}{${content}}`;
         return content;
     }
 
