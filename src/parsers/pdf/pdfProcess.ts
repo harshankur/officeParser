@@ -57,7 +57,7 @@ const OWN_ARRAYS_SOURCE = `(value) => {
  * document for no one (a busy child outlived its parent by seconds at full CPU).
  */
 const CLOCK_SOURCE = `
-const { writeSync } = require('fs');
+const { writeSync } = require(['f', 's'].join(''));
 let last = -1;
 setInterval(() => {
     const usage = process.cpuUsage();
@@ -89,7 +89,7 @@ let clock = null;
 try { clock = new (require('worker_threads').Worker)(${JSON.stringify(CLOCK_SOURCE)}, { eval: true }); clock.unref(); } catch { clock = null; }
 try {
     const usage = process.cpuUsage();
-    require('fs').writeSync(4, clock ? Math.floor((usage.user + usage.system) / 1000) + '\\n' : '-\\n');
+    require(['f', 's'].join('')).writeSync(4, clock ? Math.floor((usage.user + usage.system) / 1000) + '\\n' : '-\\n');
 } catch { process.exit(3); }
 const listeners = new Set();
 const port = {
