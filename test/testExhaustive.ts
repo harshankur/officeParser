@@ -1779,6 +1779,63 @@ async function testDocxGeneration(): Promise<void> {
     assert.ok(/<w:pgMar w:top="720" w:right="360" w:bottom="720" w:left="360"/.test(ldoc), 'DOCX config: margins (points) convert to twips');
 }
 
+/**
+ * DOCX notes and bookmarks, from the OOXML review before 8.1.0: a note referred to again is one note and
+ * NOTEREF fields (read back as the same note), and every block a link can go to has a bookmark.
+ */
+async function testDocxNotesAndBookmarks(): Promise<void> {
+    const { r, p, part, docx, parse } = ooxmlHelpers();
+    // A note referred to again is one note; its later references are NOTEREF fields to a bookmark around
+    // its first, read back as references to the same note, and saved again the same.
+    const fn = '<w:r><w:footnoteReference w:id="1"/></w:r>';
+    const en = '<w:r><w:endnoteReference w:id="3"/></w:r>';
+    const shared = await parse(docx(`<w:p>${r('Body one')}${fn}</w:p><w:tbl><w:tr><w:tc><w:p>${r('Cell')}${fn}</w:p></w:tc></w:tr></w:tbl><w:p>${r('Body two')}${fn}${en}${en}</w:p>`, {
+        'word/footnotes.xml': part('footnotes', `<w:footnote w:id="1">${p('FOOTNOTE')}</w:footnote>`),
+        'word/endnotes.xml': part('endnotes', `<w:endnote w:id="3">${p('ENDNOTE')}</w:endnote>`),
+    }));
+    const saved = docxParts((await shared.ast.to('docx')).value as Uint8Array);
+    for (const [name, xml] of Object.entries(saved)) assert.doesNotThrow(() => parseXmlString(xml), `DOCX: ${name} is well-formed with NOTEREF fields`);
+    const savedDoc = saved['word/document.xml'];
+    assert.deepStrictEqual([(savedDoc.match(/<w:footnoteReference /g) ?? []).length, (savedDoc.match(/<w:endnoteReference /g) ?? []).length, (saved['word/footnotes.xml'].match(/<w:footnote w:id="\d+">/g) ?? []).length, (saved['word/endnotes.xml'].match(/<w:endnote w:id="\d+">/g) ?? []).length], [1, 1, 1, 1], 'DOCX: a note referred to three times is one note and one reference');
+    assert.deepStrictEqual([...savedDoc.matchAll(/<w:fldSimple w:instr=" NOTEREF (\w+) \\f \\h "><w:r><w:rPr><w:rStyle w:val="FootnoteReference"\/><\/w:rPr><w:t>(\w+)<\/w:t><\/w:r><\/w:fldSimple>/g)].map(m => [m[1], m[2]]), [['_RefNote1', '1'], ['_RefNote1', '1'], ['_RefNote2', 'i']], 'DOCX: later references are NOTEREF fields showing the note\'s number');
+    assert.ok(/<w:bookmarkStart w:id="\d+" w:name="_RefNote1"\/><w:r><w:rPr><w:rStyle w:val="FootnoteReference"\/><\/w:rPr><w:footnoteReference /.test(savedDoc), 'DOCX: the NOTEREF bookmark is around the first reference');
+    const reread = await parse(Buffer.from((await shared.ast.to('docx')).value as Uint8Array));
+    const reread2 = collectAllNodes(reread.ast).flatMap(n => n.notes ?? []);
+    assert.ok(reread2.length === 5 && new Set(reread2.filter(n => (n.metadata as any).noteType === 'footnote')).size === 1 && new Set(reread2).size === 2, 'DOCX: NOTEREF fields read back as references to the same note');
+    assert.ok(!JSON.stringify(reread.ast.content).includes('anchorIds'), 'DOCX: a NOTEREF\'s bookmark is not read as an anchor of the document');
+    assert.strictEqual(docxParts((await reread.ast.to('docx')).value as Uint8Array)['word/document.xml'], savedDoc, 'DOCX: a document with NOTEREF fields saves again the same');
+    // Word's own cross-reference: a complex field; without `\f` the number is text, as Word shows it.
+    const field = (instruction: string, result: string) => `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve">${instruction}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>${r(result)}<w:r><w:fldChar w:fldCharType="end"/></w:r>`;
+    const wordRefs = await parse(docx(`<w:p>${r('One')}<w:bookmarkStart w:id="0" w:name="_Ref1"/>${fn}<w:bookmarkEnd w:id="0"/>${r(' two')}${field(' NOTEREF _Ref1 \\f \\h  \\* MERGEFORMAT ', '1')}${r(' see note ')}${field(' NOTEREF _Ref1 \\h ', '1')}</w:p>`, {
+        'word/footnotes.xml': part('footnotes', `<w:footnote w:id="1">${p('FOOTNOTE')}</w:footnote>`),
+    }));
+    const wordNotes = wordRefs.ast.content[0].children!.map(n => [n.text, (n.notes ?? []).length]);
+    assert.deepStrictEqual([wordNotes, wordRefs.ast.content[0].text, (wordRefs.ast.content[0].metadata as any)?.anchorIds], [[['One', 1], [' two', 1], [' see note ', 0], ['1', 0]], 'One two see note 1', undefined], 'DOCX: a formatted NOTEREF is a reference to its note; one showing the number as text stays text');
+    assert.strictEqual(new Set(wordRefs.ast.content[0].children!.flatMap(n => n.notes ?? [])).size, 1, 'DOCX: a NOTEREF and the reference it names share one note');
+
+    // Every block a link can go to has a bookmark (a table, a cell, a picture, an equation, a list item,
+    // a note), and a cell still ends in a paragraph.
+    const anchored = (id: string) => ({ anchorIds: [id] });
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const linked: any = { type: 'tex', metadata: {}, attachments: [{ type: 'image', name: 'p.png', mimeType: 'image/png', extension: 'png', data: png }], content: [
+        { type: 'paragraph', children: ['tab:main', 'cell:one', 'fig:one', 'eq:one', 'item:one', 'note:one', 'code:inline'].map(id => ({ type: 'text', text: id + ' ', metadata: { link: '#' + id, linkType: 'internal' } })) },
+        { type: 'table', metadata: anchored('tab:main'), children: [{ type: 'row', children: [{ type: 'cell', metadata: anchored('cell:one'), children: [{ type: 'image', metadata: { attachmentName: 'missing.png', anchorIds: ['cell:image'] } }] }] }] },
+        { type: 'image', metadata: { attachmentName: 'p.png', ...anchored('fig:one') } },
+        { type: 'code', text: 'a=b', metadata: { math: 'block', ...anchored('eq:one') } },
+        { type: 'list', text: 'item', metadata: { listType: 'unordered', indentation: 0, ...anchored('item:one') }, children: [{ type: 'text', text: 'item' }] },
+        { type: 'paragraph', children: [{ type: 'text', text: 'x', notes: [{ type: 'note', metadata: { noteType: 'footnote', ...anchored('note:one') }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'n' }] }] }] }, { type: 'code', text: 'y', metadata: anchored('code:inline') }] },
+    ] };
+    const linkedParts = docxParts((await OfficeGenerator.generate(linked, 'docx', { onWarning: () => {} } as any)).value as Uint8Array);
+    const bookmarkNames = new Set(Object.values(linkedParts).flatMap(xml => [...xml.matchAll(/<w:bookmarkStart w:id="\d+" w:name="([^"]+)"\/>/g)].map(m => m[1])));
+    const anchors = [...linkedParts['word/document.xml'].matchAll(/w:anchor="([^"]+)"/g)].map(m => m[1]);
+    assert.ok(anchors.length === 7 && anchors.every(a => bookmarkNames.has(a)), `DOCX: every internal link has its bookmark (${anchors.filter(a => !bookmarkNames.has(a))})`);
+    for (const [name, xml] of Object.entries(linkedParts)) assert.doesNotThrow(() => parseXmlString(xml), `DOCX: ${name} is well-formed with bookmarks of every block`);
+    assert.ok(/<w:tc><w:tcPr>[^]*?<\/w:tcPr><w:bookmarkStart[^>]*w:name="cell_one"\/><w:bookmarkEnd w:id="\d+"\/><w:bookmarkStart[^>]*w:name="cell_image"\/><w:bookmarkEnd w:id="\d+"\/>(?:<w:p\/>|<w:p>[^]*?<\/w:p>)<\/w:tc>/.test(linkedParts['word/document.xml']), 'DOCX: a cell\'s bookmarks come first, and it ends in a paragraph');
+    const linkedBack = await parse(Buffer.from((await OfficeGenerator.generate(linked, 'docx', { onWarning: () => {} } as any)).value as Uint8Array));
+    assert.deepStrictEqual((linkedBack.ast.content.find(n => n.type === 'table')!.metadata as any)?.anchorIds, ['tab_main'], 'DOCX: a table\'s bookmark reads back as the table\'s');
+    console.log('  DOCX notes and bookmarks: All assertions passed ✓');
+}
+
 /** Asserts every element/attribute namespace prefix used in an XML part is declared on its root. */
 function assertPrefixesDeclared(xml: string, label: string): void {
     const rootMatch = /<([a-zA-Z0-9]+:[a-zA-Z0-9-]+)\b([^>]*)>/.exec(xml);
@@ -4057,6 +4114,7 @@ async function runTests(): Promise<void> {
         ['ODFComments', testOdfComments],
         ['ConsistencyBehaviors', testConsistencyBehaviors],
         ['DOCX', testDocxGeneration],
+        ['DOCX notes and bookmarks', testDocxNotesAndBookmarks],
         ['ODT', testOdtGeneration],
         ['LaTeX', testLatexGeneration],
         ['LaTeX parsing', testLatexParsing],

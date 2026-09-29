@@ -2568,7 +2568,9 @@ async function parserHardeningTests() {
     for (const format of ['text', 'rtf', 'tex', 'odt', 'chunks', 'html', 'md', 'docx', 'epub'] as const) {
         const out = (await OfficeGenerator.generate(sharedNote.ast!, format, { onWarning: () => {} } as any)).value as any;
         const size = typeof out === 'string' ? out.length : Array.isArray(out) ? JSON.stringify(out).length : Object.values(unzipSync(new Uint8Array(out))).reduce((n: number, f: any) => n + f.length, 0);
-        check(`${format}: a note referred to 2000 times is written once`, size < 400_000, `${size} chars`);
+        // DOCX refers to a note again with a NOTEREF field (about 150 bytes a reference); the note copied
+        // per reference would be 20 MB.
+        check(`${format}: a note referred to 2000 times is written once`, size < (format === 'docx' ? 600_000 : 400_000), `${size} chars`);
     }
 
     // A network path cannot reach a page opened from disk as file://host (SMB, with the user's
@@ -2611,7 +2613,7 @@ async function parserHardeningTests() {
     for (const format of ['text', 'rtf', 'docx', 'odt', 'chunks', 'epub'] as const) {
         const value = (await OfficeGenerator.generate(commentedNote.ast!, format, { onWarning: () => {} } as any)).value as any;
         const size = typeof value === 'string' ? value.length : Array.isArray(value) ? JSON.stringify(value).length : Object.values(unzipSync(new Uint8Array(value))).reduce((n: number, f: any) => n + f.length, 0);
-        check(`${format}: a shared note holding a source comment is written once`, size < 400_000, `${size}`);
+        check(`${format}: a shared note holding a source comment is written once`, size < (format === 'docx' ? 600_000 : 400_000), `${size}`);
     }
     // One picture shown many times: HTML inlines up to a document budget, EPUB packages it once, RTF
     // encodes it without running out of memory.

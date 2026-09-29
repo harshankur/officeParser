@@ -28,6 +28,23 @@ const WML_NS = `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006
     + `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" `
     + `xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"`;
 
+/**
+ * The blocks that write their own bookmarks: inside the paragraph they are, or (a note) at the start of
+ * its text. The rest are written where the block stands (see pointBookmarks).
+ */
+const OWN_BOOKMARKS: ReadonlySet<string> = new Set(['paragraph', 'heading', 'list', 'definitionTerm', 'note']);
+
+/** A note's number as Word shows it: footnotes in arabic numerals, endnotes in lower-case roman ones up to 3999. */
+function noteMark(kind: 'footnote' | 'endnote', number: number): string {
+    if (kind === 'footnote' || number > 3999) return String(number);
+    let out = '';
+    let left = number;
+    for (const [value, numeral] of [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']] as const) {
+        while (left >= value) { out += numeral; left -= value; }
+    }
+    return out;
+}
+
 interface Rel { id: string; type: string; target: string; mode?: string; }
 interface MediaPart { name: string; bytes: Uint8Array; ext: string; contentType: string; }
 interface NoteEntry { key: string; kind: 'footnote' | 'endnote'; node: OfficeContentNode; }
@@ -197,6 +214,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             // later separate list starts fresh instead of continuing the first one's numbering.
             const isBareList = node.type === 'list' && !(node.metadata as any)?.listId;
             if (isBareList && !prevBareList) this.syntheticListRun++;
+            if (!OWN_BOOKMARKS.has(node.type)) out += this.pointBookmarks(node);
             out += await this.renderBlockNode(node, isBareList ? `__run${this.syntheticListRun}` : undefined);
             prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
             prevBareList = isBareList;
@@ -301,6 +319,18 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         return { start, end };
     }
 
+    /**
+     * The bookmarks of a node that writes no paragraph of its own to hold them (a table, a picture, an
+     * equation, a cell, a note), where it stands: an internal link to it (LaTeX's `\ref{tab:main}`)
+     * found no bookmark, as only paragraphs and headings wrote theirs. Each is a point (its start and
+     * end together), valid between blocks, in a cell and in a note, and read back as the next block's.
+     */
+    private pointBookmarks(node: OfficeContentNode): string {
+        if (!(node.metadata as any)?.anchorIds?.length) return '';
+        const { start, end } = this.bookmarksFor(node);
+        return start + end;
+    }
+
     private headingStyle(node: OfficeContentNode): string {
         const level = Math.min(6, Math.max(1, (node.metadata as any)?.level || 1));
         return `Heading${level}`;
@@ -348,7 +378,14 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         return out;
     }
 
+    /** An inline node's runs, around its bookmarks (an equation's or a picture's label). */
     private async inlineNode(node: OfficeContentNode): Promise<string> {
+        if (!(node.metadata as any)?.anchorIds?.length) return this.inlineContent(node);
+        const { start, end } = this.bookmarksFor(node);
+        return start + await this.inlineContent(node) + end;
+    }
+
+    private async inlineContent(node: OfficeContentNode): Promise<string> {
         switch (node.type) {
             case 'text': return this.textRuns(node) + await this.noteRefs(node) + await this.commentRefs(node);
             case 'code': return this.inlineCode(node);
@@ -444,20 +481,50 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     }
 
     /**
-     * Registers a note (once, keyed by content) into the footnotes/endnotes part, rendering its body
-     * with relationships routed to that part, and returns the in-text reference run.
+     * Each note written, at its first reference: its number as Word shows it, and the bookmark around
+     * that reference when the AST refers to the note again (see noteRefField).
+     */
+    private readonly writtenNotes = new Map<OfficeContentNode, { kind: 'footnote' | 'endnote'; number: number; bookmark?: string }>();
+
+    /**
+     * Registers a note into the footnotes/endnotes part at its first reference, rendering its body with
+     * relationships routed to that part, and returns the in-text reference run. A note the AST refers
+     * to again (a parser shares one note among all its references) is referred to as Word does, with a
+     * NOTEREF field to a bookmark around its first reference: a second `w:footnoteReference` to the same
+     * note made Word and LibreOffice show an empty note, or drop the reference.
      */
     private async registerNote(note: OfficeContentNode, kind: 'footnote' | 'endnote'): Promise<string> {
+        const written = this.writtenNotes.get(note);
+        if (written) return this.noteRefField(written);
         const key = this.getFootnoteKey(note);
-        if (!this.noteBodies.has(key)) {
-            (kind === 'endnote' ? this.endnotes : this.footnotes).push({ key, kind, node: note });
-            const owner = kind === 'endnote' ? 'word/endnotes.xml' : 'word/footnotes.xml';
-            const body = (await this.withRelOwner(owner, () => this.renderBlocks(this.bodyBlocks(note)))) || '<w:p/>';
-            this.noteBodies.set(key, this.withNoteMarker(this.styleNoteBody(body), kind));
-        }
+        const notes = kind === 'endnote' ? this.endnotes : this.footnotes;
+        notes.push({ key, kind, node: note });
+        const entry: { kind: 'footnote' | 'endnote'; number: number; bookmark?: { id: number; name: string } } = { kind, number: notes.length };
+        if (this.noteReferences(note) > 1) entry.bookmark = this.mintBookmark(`_RefNote${this.writtenNotes.size + 1}`);
+        // Marked written before its body is, so a reference to the note inside it refers back.
+        this.writtenNotes.set(note, { kind, number: entry.number, bookmark: entry.bookmark?.name });
+        const owner = kind === 'endnote' ? 'word/endnotes.xml' : 'word/footnotes.xml';
+        const body = (await this.withRelOwner(owner, () => this.renderBlocks(this.bodyBlocks(note)))) || '<w:p/>';
+        this.noteBodies.set(key, this.withNoteMarker(this.styleNoteBody(body), kind, this.pointBookmarks(note)));
         const id = this.noteId(key);
         const tag = kind === 'endnote' ? 'w:endnoteReference' : 'w:footnoteReference';
-        return `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><${tag} w:id="${id}"/></w:r>`;
+        const reference = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><${tag} w:id="${id}"/></w:r>`;
+        if (!entry.bookmark) return reference;
+        return `<w:bookmarkStart w:id="${entry.bookmark.id}" w:name="${escapeXml(entry.bookmark.name)}"/>${reference}<w:bookmarkEnd w:id="${entry.bookmark.id}"/>`;
+    }
+
+    /**
+     * A later reference to a written note: a NOTEREF field to the bookmark around its first reference,
+     * formatted as its mark (`\f`) and a link to it (`\h`, unless internal links are ignored), its number
+     * the field's result until Word updates it. A simple field, as small as the reference it stands for:
+     * a note referred to thousands of times is written in size linear in its references. A note the AST
+     * referred to once (a reference outside the content, such as a header's) has no bookmark, and is its
+     * mark alone.
+     */
+    private noteRefField(written: { kind: 'footnote' | 'endnote'; number: number; bookmark?: string }): string {
+        const mark = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:t>${noteMark(written.kind, written.number)}</w:t></w:r>`;
+        if (!written.bookmark) return mark;
+        return `<w:fldSimple w:instr=" NOTEREF ${escapeXml(written.bookmark)} \\f${this.config.ignoreInternalLinks ? '' : ' \\h'} ">${mark}</w:fldSimple>`;
     }
 
     private styleNoteBody(body: string): string {
@@ -465,9 +532,12 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         return body.replace(/<w:p>(?!<w:pPr>)/g, '<w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>');
     }
 
-    /** Prepends the numbered marker run (w:footnoteRef/w:endnoteRef) to the note body's first paragraph. */
-    private withNoteMarker(body: string, kind: 'footnote' | 'endnote'): string {
-        const ref = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:${kind}Ref/></w:r>`;
+    /**
+     * Prepends the numbered marker run (w:footnoteRef/w:endnoteRef) to the note body's first paragraph,
+     * followed by the note's own bookmarks (`anchors`), where a link to the note arrives.
+     */
+    private withNoteMarker(body: string, kind: 'footnote' | 'endnote', anchors = ''): string {
+        const ref = `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:${kind}Ref/></w:r>${anchors}`;
         const m = /^<w:p>(<w:pPr>[\s\S]*?<\/w:pPr>)?/.exec(body);
         if (m) return body.slice(0, m[0].length) + ref + body.slice(m[0].length);
         // The body does not open with a paragraph (a note whose first block is a table). A run is not
@@ -554,9 +624,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         const pPr = this.buildPPr({ style: 'ListParagraph', numPr, meta });
         let prefix = '';
         if (meta?.isTask) prefix = this.run(meta.checked ? '☑ ' : '☐ ', undefined);
+        const bookmarks = this.bookmarksFor(node);
         const blockRefs = (await this.noteRefs(node)) + (await this.commentRefs(node));
         const inner = await this.renderInline(node.children || [{ type: 'text', text: node.text || '' } as OfficeContentNode]);
-        return `<w:p>${pPr}${prefix}${blockRefs}${inner}</w:p>`;
+        return `<w:p>${pPr}${bookmarks.start}${prefix}${blockRefs}${inner}${bookmarks.end}</w:p>`;
     }
 
     private buildNumberingXml(): string {
@@ -639,11 +710,11 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
                 const bg = hexColor(cmeta?.backgroundColor);
                 if (bg) tcPr += `<w:shd w:val="clear" w:color="auto" w:fill="${bg}"/>`;
                 let inner = await this.renderBlocks(cell.children);
-                // A w:tc must end with a w:p: append one only when empty or ending in a nested table.
+                // A w:tc must end with a w:p: append one when it is empty or ends in anything else (a
+                // nested table, a bookmark of a block that wrote nothing).
                 const trimmed = inner.trimEnd();
-                if (!trimmed) inner = '<w:p/>';
-                else if (trimmed.endsWith('</w:tbl>')) inner = trimmed + '<w:p/>';
-                tcs += `<w:tc><w:tcPr>${tcPr}</w:tcPr>${inner}</w:tc>`;
+                inner = trimmed.endsWith('</w:p>') || trimmed.endsWith('<w:p/>') ? trimmed : trimmed + '<w:p/>';
+                tcs += `<w:tc><w:tcPr>${tcPr}</w:tcPr>${this.pointBookmarks(cell)}${inner}</w:tc>`;
             }
             // A w:tr must contain at least one w:tc.
             if (!tcs) tcs = `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p/></w:tc>`;
