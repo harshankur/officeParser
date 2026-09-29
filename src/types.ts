@@ -1924,7 +1924,8 @@ export interface FallbackToHtmlConfig {
      * Multi-paragraph list-item content (an HTML `<li>` with several `<p>` children) joined with
      * `<br>` instead of a space, so it stays on the item's single Markdown line. Block children of
      * an item (a code fence or table inside `<li>`) degrade under this join, the same way they do
-     * inside a table cell under `cellLineBreaks`.
+     * inside a table cell under `cellLineBreaks`. A line break in a heading or a definition list's
+     * term or description, each one Markdown line too, is joined the same way.
      */
     itemLineBreaks?: boolean;
     /**
