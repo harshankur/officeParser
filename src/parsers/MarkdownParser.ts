@@ -796,6 +796,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     checkAbortSignal(config.abortSignal);
 
     let textStr = buffer.toString('utf-8');
+    // A byte order mark starting the file is no text (as a renderer reads it): left in, it stood before
+    // the first block's marker, and a heading or list on the first line was read as a paragraph.
+    if (textStr.charCodeAt(0) === 0xFEFF) textStr = textStr.slice(1);
     textStr = textStr.replace(/\r\n/g, '\n');
 
     const content: OfficeContentNode[] = [];
