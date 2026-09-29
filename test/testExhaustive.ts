@@ -2188,6 +2188,42 @@ async function testOdtGeneration(): Promise<void> {
     assert.ok(/<office:text><text:p\/><\/office:text>/.test(econtent), 'ODT empty: emits one empty paragraph');
 
     await testOdtInlineRuns();
+    await testOdtNoteReferences();
+}
+
+/**
+ * A note cited again (`text:note-ref`) is that note, read back as the same node, never its number as
+ * text; the writer refers to a note only within the part it wrote it in.
+ */
+async function testOdtNoteReferences(): Promise<void> {
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"';
+    const odtOf = (body: string) => Buffer.from(zipSync({ mimetype: strToU8('application/vnd.oasis.opendocument.text'), 'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:text>${body}</office:text></office:body></office:document-content>`) }));
+    const note = (id: string, body: string) => `<text:note text:id="${id}" text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p>${body}</text:p></text:note-body></text:note>`;
+    const ref = (id: string, format = 'text') => `<text:note-ref text:note-class="footnote" text:reference-format="${format}" text:ref-name="${id}">1</text:note-ref>`;
+    const runs = async (body: string, config: any = {}) => {
+        const ast = await OfficeParser.parseOffice(odtOf(body), { fileType: 'odt', ...config } as any);
+        return { ast, runs: (ast.content[0]?.children ?? []).map(n => [n.text, n.notes?.map(x => x.text)]) };
+    };
+    const shared = await runs(`<text:p>First${note('ftn1', 'Shared')} again${ref('ftn1')} end</text:p>`);
+    assert.deepStrictEqual(shared.runs, [['First', ['Shared']], [' again', ['Shared']], [' end', undefined]], 'ODT: a note cited again is that note, not its number');
+    const [first, second] = (shared.ast.content[0].children ?? []).filter(n => n.notes);
+    assert.ok(first.notes![0] === second.notes![0], 'ODT: both citations share the one note node');
+    assert.deepStrictEqual((await runs(`<text:p>Before${ref('ftn1')} then${note('ftn1', 'Later')}</text:p>`)).runs, [['Before', ['Later']], [' then', ['Later']]], 'ODT: a citation before its note is that note too');
+    assert.deepStrictEqual((await runs(`<text:p>A${note('ftn1', 'Shared')} see${ref('ftn1', 'page')}</text:p>`)).runs, [['A', ['Shared']], [' see', undefined], ['1', undefined]], 'ODT: a reference to the page a note is on stays the page');
+    assert.deepStrictEqual((await runs(`<text:p>A${note('ftn1', 'Shared')} again${ref('ftn1')}</text:p>`, { ignoreNotes: true })).runs, [['A', undefined], [' again', undefined]], 'ODT: with notes left out, a note cited again shows nothing');
+    // Hidden text and a script show nothing, even in a paragraph with nothing else.
+    const hidden = await OfficeParser.parseOffice(odtOf('<text:p><text:hidden-text text:condition="true" text:string-value="SECRET">SECRET</text:hidden-text></text:p><text:p><text:script>var SCRIPT = 1;</text:script></text:p><text:p>Shown</text:p>'), { fileType: 'odt' } as any);
+    assert.deepStrictEqual(hidden.content.map(n => n.text).filter(Boolean), ['Shown'], 'ODT: hidden text and a script are not read as text');
+
+    // The writer: a note cited from the header as well as the body is written in full in styles.xml too,
+    // where a reference to its id in content.xml would reach nothing.
+    const shared2 = { type: 'note', text: 'Shared note', metadata: { noteType: 'footnote', noteId: '1' }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'Shared note' }] }] };
+    const written = unzipSync((await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'paragraph', children: [{ type: 'text', text: 'First', notes: [shared2] }, { type: 'text', text: ' again', notes: [shared2] }] },
+    ], auxiliary: { headers: [{ type: 'paragraph', children: [{ type: 'text', text: 'Head', notes: [shared2] }] }] } } as any, 'odt')).value as Uint8Array);
+    const styles = strFromU8(written['styles.xml']), contentXml = strFromU8(written['content.xml']);
+    const ids = (xml: string, tag: string) => [...xml.matchAll(new RegExp(`<text:${tag} [^>]*text:(?:id|ref-name)="([^"]+)"`, 'g'))].map(m => m[1]);
+    assert.deepStrictEqual([ids(contentXml, 'note'), ids(contentXml, 'note-ref'), ids(styles, 'note'), ids(styles, 'note-ref')], [['ftn1'], ['ftn1'], ['ftn1_2'], []], 'ODT: a note is referred to only within the part it is written in');
 }
 
 /**

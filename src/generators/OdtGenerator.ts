@@ -143,7 +143,8 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private frameCounter = 0;
     private commentCounter = 0;
     private footnoteOrd = 0;
-    private readonly writtenNotes = new Map<OfficeContentNode, { id: string; ord: number; cls: 'footnote' | 'endnote' }>();
+    /** Where each note was written: its id and number, in each part (by the part's style registry) it is written in. */
+    private readonly writtenNotes = new Map<OfficeContentNode, { id: string; ord: number; cls: 'footnote' | 'endnote'; part: StyleRegistry }[]>();
     private endnoteOrd = 0;
 
     private usedBookmarkNames = new UniqueNames();
@@ -482,11 +483,17 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     private async note(node: OfficeContentNode, cls: 'footnote' | 'endnote'): Promise<string> {
         // A note referred to again is a reference to it (its number), its text written once: written at
         // every reference, one note a small document refers to thousands of times was copied that often.
+        // Within the part it was written in only (content.xml, or styles.xml for the header and footer):
+        // a reference cannot reach a note in the other part, so there it is written again, once, with
+        // the same number.
         const written = this.writtenNotes.get(node);
-        if (written) return `<text:note-ref text:note-class="${written.cls}" text:reference-format="text" text:ref-name="${written.id}">${written.ord}</text:note-ref>`;
-        const ord = cls === 'footnote' ? ++this.footnoteOrd : ++this.endnoteOrd;
-        const id = `${cls === 'footnote' ? 'ftn' : 'edn'}${ord}`;
-        this.writtenNotes.set(node, { id, ord, cls });
+        const writtenHere = written?.find(w => w.part === this.activeStyles);
+        if (writtenHere) return `<text:note-ref text:note-class="${writtenHere.cls}" text:reference-format="text" text:ref-name="${writtenHere.id}">${writtenHere.ord}</text:note-ref>`;
+        const ord = written ? written[0].ord : cls === 'footnote' ? ++this.footnoteOrd : ++this.endnoteOrd;
+        const id = `${cls === 'footnote' ? 'ftn' : 'edn'}${ord}${written ? `_${written.length + 1}` : ''}`;
+        const entry = { id, ord, cls, part: this.activeStyles };
+        if (written) written.push(entry);
+        else this.writtenNotes.set(node, [entry]);
         const body = this.styleNoteBody((await this.renderBlocks(this.bodyBlocks(node))) || '<text:p/>');
         return `<text:note text:id="${id}" text:note-class="${cls}"><text:note-citation>${ord}</text:note-citation><text:note-body>${body}</text:note-body></text:note>`;
     }

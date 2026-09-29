@@ -155,7 +155,7 @@ interface ParagraphStyleInfo {
  * attached separately, or dropped under `ignoreComments`/`ignoreNotes` - never leaks into the
  * paragraph's own text the way raw `node.textContent` would.
  */
-function textContentSkipping(node: Node, skipTags: Set<string>): string {
+function textContentSkipping(node: Node, skipTags: ReadonlySet<string>): string {
     let out = '';
     const walk = (n: Node) => {
         if (isElement(n) && skipTags.has((n as Element).tagName)) return;
@@ -191,6 +191,13 @@ const ownParagraphs = (container: Element): Element[] => getOutermostElements(co
  * that a paragraph cannot hold.
  */
 const INLINE_NOT_SHOWN: ReadonlySet<string> = new Set(['text:note', 'text:hidden-text', 'text:hidden-paragraph', 'text:script', 'text:number', 'text:p', 'text:h', 'text:list', 'text:section', 'text:tracked-changes']);
+/**
+ * What a paragraph's text, read whole when its content made no runs, leaves out: what shows nothing
+ * (a comment and a note are read on their own, hidden text, a script, tracked changes) and a note's
+ * citation read as the note. The paragraph read as its whole text showed a hidden-text field's or a
+ * script's content.
+ */
+const FALLBACK_NOT_SHOWN: ReadonlySet<string> = new Set(['office:annotation', 'text:note', 'text:note-ref', 'text:hidden-text', 'text:hidden-paragraph', 'text:script', 'text:tracked-changes']);
 /**
  * A frame's own text box, image, table, object, title or description (children of it, as the schema
  * has them): looked up through the frame's whole subtree, frames nested in text boxes took time in
@@ -418,6 +425,22 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     const stylesDom = stylesFile ? parseXmlString(stylesFile.content.toString(), { config }) : undefined;
     const content: OfficeContentNode[] = [];
     const notes: OfficeContentNode[] = [];
+
+    // Notes by their `text:id`, for a reference to one (`text:note-ref`, a note cited again): the ids
+    // the document gives its notes (found first, so a reference before its note is known for one), the
+    // notes read so far, the runs waiting for a note read later, and how many note bodies are being read
+    // (a reference inside one stays its citation, so no note can come to hold itself).
+    const documentNoteIds = new Set<string>();
+    const collectNoteIds = (dom: Document) => {
+        for (const note of getAllElementsByTagName(dom, 'text:note')) {
+            const id = note.getAttribute('text:id');
+            if (id) documentNoteIds.add(id);
+        }
+    };
+    if (stylesDom) collectNoteIds(stylesDom);
+    const notesById = new Map<string, OfficeContentNode>();
+    const runsAwaitingNote = new Map<string, OfficeContentNode[]>();
+    let noteBodyDepth = 0;
 
     // Style Map: styleName -> TextFormatting
     // Inline style parsing (from content.xml automatic styles)
@@ -694,6 +717,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         const noteChildren: OfficeContentNode[] = [];
                         let noteText = '';
 
+                        noteBodyDepth++;
                         for (const np of notePs) {
                             const npContent = parseParagraphContent(np, paragraphStyleMap, styleMap, config, sourceXml);
                             noteText += (noteText ? ' ' : '') + npContent.text;
@@ -709,6 +733,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             };
                             noteChildren.push(npNode);
                         }
+                        noteBodyDepth--;
 
                         const noteNode: OfficeContentNode = {
                             type: 'note',
@@ -730,6 +755,34 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             const emptyTextNode: OfficeContentNode = { type: 'text', text: '' };
                             emptyTextNode.notes = [noteNode];
                             children.push(emptyTextNode);
+                        }
+                        // The note for references to it: those read before it hold it now.
+                        if (noteId && !notesById.has(noteId)) {
+                            notesById.set(noteId, noteNode);
+                            for (const run of runsAwaitingNote.get(noteId) ?? []) (run.notes ??= []).push(noteNode);
+                            runsAwaitingNote.delete(noteId);
+                        }
+                    }
+                } else if (tagName === 'text:note-ref' && documentNoteIds.has(element.getAttribute('text:ref-name') || '')
+                    && (element.getAttribute('text:reference-format') || 'text') === 'text' && (config.ignoreNotes || noteBodyDepth === 0)) {
+                    // A note cited again (LibreOffice's cross-reference to a footnote, and how the ODT
+                    // writer refers to a note it has written): the run before it holds that note, as the
+                    // first citation's does (a parser shares one note node among its references). It
+                    // was read as a field, its number as literal text. With notes left out it shows
+                    // nothing, as a note's own citation does; inside a note it stays its number.
+                    if (!config.ignoreNotes) {
+                        const name = element.getAttribute('text:ref-name') || '';
+                        let run = children[children.length - 1];
+                        if (!run || run.type !== 'text') {
+                            run = { type: 'text', text: '' };
+                            children.push(run);
+                        }
+                        const note = notesById.get(name);
+                        if (note) (run.notes ??= []).push(note);
+                        else {
+                            const waiting = runsAwaitingNote.get(name);
+                            if (waiting) waiting.push(run);
+                            else runsAwaitingNote.set(name, [run]);
                         }
                     }
                 } else if (tagName === 'office:annotation' && !config.ignoreComments) {
@@ -944,7 +997,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         // so an annotation-only or note-only paragraph does not leak the comment/note body into the
         // paragraph text (e.g. when ignoreComments/ignoreNotes skipped building the child node).
         if (content.children.length === 0) {
-            const fullText = textContentSkipping(node, new Set(['office:annotation', 'text:note']));
+            const fullText = textContentSkipping(node, FALLBACK_NOT_SHOWN);
             if (fullText.trim()) {
                 content.text = fullText;
                 content.children.push({
@@ -1257,6 +1310,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         const xml = parseXmlString(xmlString, { config, locator: config.includeRawContent });
         const body = getFirstElementByTagName(xml, "office:body");
         if (!body) return;
+        collectNoteIds(xml);
         // One budget for the entire document. It has to span every table - spreadsheet sheets,
         // ODT/ODP body tables, and nested tables alike - or a file sidesteps the cap simply by
         // splitting a huge repeat expansion across many small tables. `traverse` and the
