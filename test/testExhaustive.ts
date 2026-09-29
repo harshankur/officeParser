@@ -2200,6 +2200,30 @@ async function testOdtGeneration(): Promise<void> {
     await testOdtInlineRuns();
     await testOdtNoteReferences();
     await testOdfCellsAndCharts();
+    await testOdtBookmarks();
+}
+
+/**
+ * Every node with anchors is a link target in ODT: a table (in its first cell), a picture, a code
+ * block, a list item and a cell (in their paragraph), an inline equation (a bookmark's start and end
+ * around it). Only paragraphs and headings wrote theirs.
+ */
+async function testOdtBookmarks(): Promise<void> {
+    const T = (text: string, extra: any = {}) => ({ type: 'text', text, ...extra });
+    const ast: any = { type: 'tex', metadata: {}, attachments: [], content: [
+        { type: 'paragraph', children: [T('See '), T('the table', { metadata: { link: '#tab:main', linkType: 'internal' } }), T(' and '), { type: 'code', text: 'x^2', metadata: { math: 'inline', anchorIds: ['eq:inline'] } }] },
+        { type: 'table', metadata: { anchorIds: ['tab:main'] }, children: [{ type: 'row', children: [{ type: 'cell', metadata: { anchorIds: ['cell:first'] }, children: [{ type: 'paragraph', children: [T('A')] }] }] }] },
+        { type: 'image', metadata: { url: 'https://example.com/p.png', altText: 'pic', anchorIds: ['fig:a'] } },
+        { type: 'code', text: 'let x = 1;', metadata: { anchorIds: ['lst:code'] } },
+        { type: 'list', text: 'Item', metadata: { listType: 'ordered', listId: 'l', indentation: 0, itemIndex: 0, anchorIds: ['item:one'] }, children: [T('Item')] },
+    ] };
+    const content = strFromU8(unzipSync((await OfficeGenerator.generate(ast, 'odt')).value as Uint8Array)['content.xml']);
+    assert.doesNotThrow(() => parseXmlString(content), 'ODT bookmarks: content.xml is well-formed');
+    const marks = [...content.matchAll(/<text:bookmark(?:-start)? text:name="([^"]+)"/g)].map(m => m[1]).sort();
+    assert.deepStrictEqual(marks, ['cell_first', 'eq_inline', 'fig_a', 'item_one', 'lst_code', 'tab_main'], 'ODT: every node with anchors has a bookmark');
+    assert.ok(content.includes('<text:bookmark-end text:name="eq_inline"/>'), 'ODT: an inline node\'s bookmark has an end');
+    assert.ok(/<table:table-cell[^>]*><text:p><text:bookmark text:name="tab_main"\/><text:bookmark text:name="cell_first"\/>A<\/text:p>/.test(content), `ODT: a table's and a cell's bookmarks are in the first cell's paragraph (${content.match(/<table:table-cell.*?<\/table:table-cell>/)?.[0]})`);
+    assert.ok(content.includes('xlink:href="#tab_main"'), 'ODT: the link to the table points at its bookmark');
 }
 
 /**

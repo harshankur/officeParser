@@ -247,7 +247,9 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) {
                 out += `<text:p text:style-name="${this.pageBreakStyle()}"/>`;
             }
-            out += await this.renderBlockNode(node);
+            const block = await this.renderBlockNode(node);
+            // Paragraphs and headings write their own bookmarks; every other block's go in its first paragraph.
+            out += OWN_BOOKMARKS.has(node.type) ? block : this.withBookmarks(block, node);
             prevPaginated = (node.type === 'page' || node.type === 'slide') ? node.type : null;
         }
         return out;
@@ -361,6 +363,42 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         return out;
     }
 
+    /**
+     * A block's bookmarks (see bookmarksFor) in the first paragraph it writes: a table's in its first
+     * cell's, a picture's, code block's or chart's in its own. ODF has bookmarks in paragraphs only, and
+     * only paragraphs and headings wrote theirs, so an internal link to a table, a picture, an equation
+     * or a list item (LaTeX's `\ref{tab:main}` among them) had no target. A block writing no paragraph
+     * has a paragraph of its own for them.
+     */
+    private withBookmarks(xml: string, node: OfficeContentNode): string {
+        const marks = this.bookmarksFor(node);
+        if (!marks) return xml;
+        for (let at = xml.indexOf('<text:'); at >= 0; at = xml.indexOf('<text:', at + 1)) {
+            const tag = xml[at + 6];
+            if ((tag !== 'p' && tag !== 'h') || !/[\s/>]/.test(xml[at + 7] ?? '')) continue;
+            const end = xml.indexOf('>', at);
+            if (end < 0) break;
+            return xml[end - 1] === '/'
+                ? `${xml.slice(0, end - 1)}>${marks}</text:${tag}>${xml.slice(end + 1)}`
+                : xml.slice(0, end + 1) + marks + xml.slice(end + 1);
+        }
+        return `<text:p>${marks}</text:p>${xml}`;
+    }
+
+    /** A node in a line with bookmarks of its own: what it writes between each bookmark's start and end. */
+    private withInlineBookmarks(xml: string, node: OfficeContentNode): string {
+        const raw = (node.metadata as any)?.anchorIds;
+        if (this.config.ignoreInternalLinks || !Array.isArray(raw) || raw.length === 0) return xml;
+        let start = '';
+        let end = '';
+        for (const name of raw) {
+            const minted = xmlText(this.mintBookmark(String(name)));
+            start += `<text:bookmark-start text:name="${minted}"/>`;
+            end = `<text:bookmark-end text:name="${minted}"/>${end}`;
+        }
+        return start + xml + end;
+    }
+
     /** Mints a unique bookmark name; the first claim of a base keeps it, later claims get `_2`. */
     private mintBookmark(rawName: string): string {
         const base = toBookmarkNameRaw(rawName);
@@ -394,6 +432,10 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     }
 
     private async inlineNode(node: OfficeContentNode): Promise<string> {
+        return this.withInlineBookmarks(await this.inlineContent(node), node);
+    }
+
+    private async inlineContent(node: OfficeContentNode): Promise<string> {
         switch (node.type) {
             case 'text': return this.span(node.text || '', node.formatting) + await this.notesFor(node) + await this.commentsFor(node);
             case 'code': return this.inlineCode(node);
@@ -437,7 +479,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
     }
 
     private async hyperlink(link: string, linkType: string | undefined, group: OfficeContentNode[]): Promise<string> {
-        const spans = group.map(n => this.span(n.text || '', n.formatting)).join('');
+        const spans = group.map(n => this.withInlineBookmarks(this.span(n.text || '', n.formatting), n)).join('');
         let trailing = '';
         for (const n of group) trailing += (await this.notesFor(n)) + (await this.commentsFor(n));
         const href = this.linkHref(link, linkType);
@@ -582,7 +624,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             if (meta?.isTask) prefix = this.span(meta.checked ? '☑ ' : '☐ ', undefined);
             const blockRefs = (await this.notesFor(item)) + (await this.commentsFor(item));
             const inner = await this.renderInline(item.children || [{ type: 'text', text: item.text || '' } as OfficeContentNode]);
-            out += `<text:p>${prefix}${blockRefs}${inner}</text:p>`;
+            out += `<text:p>${this.bookmarksFor(item)}${prefix}${blockRefs}${inner}</text:p>`;
         }
         for (let d = depth; d >= 0; d--) out += '</text:list-item></text:list>';
         return out;
@@ -633,6 +675,7 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
                 if (rowSpan > 1) spanAttr += ` table:number-rows-spanned="${rowSpan}"`;
                 let inner = await this.renderBlocks(cell.children);
                 if (!inner.trim()) inner = '<text:p/>';
+                inner = this.withBookmarks(inner, cell);
                 cellsXml += `<table:table-cell table:style-name="${cellStyle}"${spanAttr}>${inner}</table:table-cell>`;
                 for (let k = 1; k < colSpan; k++) cellsXml += '<table:covered-table-cell/>';
             }
@@ -924,6 +967,12 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             + `<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">${files}</manifest:manifest>`;
     }
 }
+
+/**
+ * Blocks that write their bookmarks themselves: through `paragraph()` or `heading()`, a list's items,
+ * and a run, row or cell among blocks, written in a line (see withInlineBookmarks).
+ */
+const OWN_BOOKMARKS: ReadonlySet<string> = new Set(['paragraph', 'heading', 'definitionTerm', 'definitionDescription', 'list', 'text', 'row', 'cell']);
 
 /** Whether a node among blocks belongs in a paragraph's line: a run, a picture, a line break, inline math. */
 function isInlineNode(node: OfficeContentNode): boolean {
