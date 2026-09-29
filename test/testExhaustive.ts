@@ -1598,6 +1598,13 @@ async function testConsistencyBehaviors(): Promise<void> {
     // csvConfig.columnDelimiter still wins over the inherited csvDelimiter.
     const pipe = String((await (await OfficeParser.parseOffice(Buffer.from(tableMd), { fileType: 'md', csvDelimiter: ';' })).to('csv', { csvConfig: { columnDelimiter: '|' } } as any)).value);
     assert.ok(/1\|2/.test(pipe), `csvConfig.columnDelimiter overrides csvDelimiter; got ${JSON.stringify(pipe)}`);
+    // A delimiter of several characters carries over too (it wrote ',' with no word), and one that could
+    // start a formula line or end a row is refused with INVALID_CONFIG_VALUE rather than silently.
+    const doublePipe = String((await (await OfficeParser.parseOffice(Buffer.from(tableMd), { fileType: 'md', csvDelimiter: '||' })).to('csv')).value);
+    assert.ok(/1\|\|2/.test(doublePipe), `a two-character csvDelimiter reaches to('csv'); got ${JSON.stringify(doublePipe)}`);
+    const refusedCodes: string[] = [];
+    const dash = String((await (await OfficeParser.parseOffice(Buffer.from(tableMd), { fileType: 'md', csvDelimiter: '-' })).to('csv', { onWarning: (issue: any) => refusedCodes.push(issue.code) } as any)).value);
+    assert.ok(/1,2/.test(dash) && refusedCodes.includes('INVALID_CONFIG_VALUE'), `a csvDelimiter starting a formula is refused with a warning; got ${JSON.stringify(dash)} ${refusedCodes}`);
 
     // E-1: to('csv') on a document with no table/sheet warns instead of returning '' silently.
     const csvCodes: string[] = [];

@@ -431,42 +431,44 @@ export function resolveGeneratorConfig<D extends string>(
 
 
     // 3. Inherit from AST config if not explicitly provided
+    const refusedDelimiters: { option: string; value: unknown; expected: string; fallback: string }[] = [];
     if (astConfig) {
         if (userConfig?.onWarning === undefined) {
             config.onWarning = astConfig.onWarning || config.onWarning;
         }
 
-        // Inherit newlineDelimiter for text-based generators. Only a short one: an AST (from JSON, say)
-        // carries its own config, and a delimiter is written at every line, so a long one multiplied the
-        // output by the document's line count.
-        const shortDelimiter = (value: unknown): string | undefined => typeof value === 'string' && value.length <= MAX_INHERITED_DELIMITER ? value : undefined;
-        const astNewline = shortDelimiter(astConfig.newlineDelimiter);
-        if (astNewline && ['text', 'md', 'rtf'].includes(destination)) {
-            // If user didn't specify a newline delimiter in their specific config, use AST's
-            if (destination === 'text' && (userConfig as any)?.textConfig?.newlineDelimiter === undefined) {
-                config.textConfig.newlineDelimiter = astNewline;
-            }
-            // For MD and RTF, they use common newline settings or internal defaults.
-            // We ensure the resolved config reflects this if possible, or generators can check astConfig directly.
-            // Since FullGeneratorConfig doesn't have an 'mdConfig', we rely on the generator implementation.
+        // The parse's own delimiters carry over to output a caller did not set them for, within what is
+        // safe to take from an AST's config (an AST from JSON, say, is not the caller). One refused is
+        // reported, so output's delimiter never differs from the parse's without a word.
+        const refused = (option: string, value: unknown, expected: string, fallback: string) => refusedDelimiters.push({ option, value, expected, fallback });
+
+        // A line delimiter for text output, of at most MAX_INHERITED_DELIMITER characters: one is written
+        // at every line, so a long one multiplied the output by the document's line count.
+        const astNewline: unknown = astConfig.newlineDelimiter;
+        if (destination === 'text' && astNewline !== undefined && astNewline !== '\n' && (userConfig as any)?.textConfig?.newlineDelimiter === undefined) {
+            if (typeof astNewline === 'string' && astNewline.length <= MAX_INHERITED_DELIMITER) config.textConfig.newlineDelimiter = astNewline;
+            else refused('newlineDelimiter', astNewline, `text of at most ${MAX_INHERITED_DELIMITER} characters to carry over to text output`, '\n');
         }
 
-        // Inherit the parse-side `csvDelimiter` into CSV output when the user did not set the
-        // generator's `csvConfig.columnDelimiter`, so `parseOffice(f, { csvDelimiter: ';' }).to('csv')`
-        // matches the CLI's `--csvDelimiter=';'` (which wires the same propagation). Precedence:
-        // csvConfig.columnDelimiter > csvDelimiter > ','.
-        // One character from the AST's own config, and none that ends a row or starts a formula: the AST
-        // (built in code, or JSON) is not the caller, and a delimiter of `\n=` wrote a formula line that
-        // no cell of the document held.
-        const astCsvDelim = shortDelimiter(astConfig.csvDelimiter);
-        const safeAstCsvDelim = astCsvDelim && astCsvDelim.length === 1 && !'\r\n"=+-@'.includes(astCsvDelim) ? astCsvDelim : undefined;
-        if (safeAstCsvDelim && destination === 'csv' && (userConfig as any)?.csvConfig?.columnDelimiter === undefined) {
-            config.csvConfig.columnDelimiter = safeAstCsvDelim;
+        // The parse-side `csvDelimiter` into CSV output when the user did not set the generator's
+        // `csvConfig.columnDelimiter`, so `parseOffice(f, { csvDelimiter: ';' }).to('csv')` matches the
+        // CLI's `--csvDelimiter=';'` (which wires the same propagation). Precedence:
+        // csvConfig.columnDelimiter > csvDelimiter > ','. At most MAX_INHERITED_DELIMITER characters,
+        // none that ends a row or quotes a cell, and not starting with one a spreadsheet reads as the start
+        // of a formula (a row whose first cell is empty starts with the delimiter): a delimiter of `\n=`
+        // wrote a formula line that no cell of the document held.
+        const astCsvDelimiter: unknown = astConfig.csvDelimiter;
+        if (destination === 'csv' && astCsvDelimiter !== undefined && astCsvDelimiter !== ',' && (userConfig as any)?.csvConfig?.columnDelimiter === undefined) {
+            const safe = typeof astCsvDelimiter === 'string' && astCsvDelimiter.length > 0 && astCsvDelimiter.length <= MAX_INHERITED_DELIMITER
+                && !/[\r\n"]/.test(astCsvDelimiter) && !'=+-@'.includes(astCsvDelimiter[0]);
+            if (safe) config.csvConfig.columnDelimiter = astCsvDelimiter;
+            else refused('csvDelimiter', astCsvDelimiter, `text of at most ${MAX_INHERITED_DELIMITER} characters with no line break or quote, not starting with =, +, - or @, to carry over to CSV output (set csvConfig.columnDelimiter to use another)`, ',');
         }
     }
 
     resolvedConfig = config;
     if (unknownKeys.length) logWarning(OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION, reporter, { keys: unknownKeys });
+    for (const refusal of refusedDelimiters) logWarning(OfficeWarningType.INVALID_CONFIG_VALUE, reporter, refusal);
     validateHtmlConfigWidth(config.htmlConfig, reporter);
     validateGeneratorChoices(config, reporter);
     return config;
