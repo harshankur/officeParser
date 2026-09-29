@@ -29,7 +29,7 @@ const span = (value: unknown): number =>
  * is still too large (cells scattered along a diagonal, rows each spanning many below), each row's
  * cells follow one another, without spans.
  */
-function boundGrid(node: OfficeContentNode, budget: { left: number }): OfficeContentNode {
+function boundGrid(node: OfficeContentNode, budget: { left: number }, filled?: Map<OfficeContentNode, number>): OfficeContentNode {
     const cells: Cell[] = [];
     let rowIndex = 0;
     // The furthest row a row names itself (a sparse sheet's row with no cells), which a writer fills up to.
@@ -69,6 +69,7 @@ function boundGrid(node: OfficeContentNode, budget: { left: number }): OfficeCon
         const needed = Math.max(fillGaps, laid ? laid.positions - cells.length : Infinity);
         if (needed > budget.left) return false;
         budget.left -= Math.max(0, needed);
+        filled?.set(table, Math.max(0, needed));
         return true;
     };
     if (fits(node, gaps(maxRow + 1, maxCol + 1))) return node;
@@ -131,7 +132,7 @@ function rewrite(node: OfficeContentNode, rewritten: Map<OfficeContentNode, Reco
 }
 
 /** `nodes` with every table and sheet among them, or in them, bounded (see boundGrid); `nodes` when none changed. */
-function boundGrids(nodes: OfficeContentNode[], budget: { left: number }, done: Map<OfficeContentNode, OfficeContentNode>): OfficeContentNode[] {
+function boundGrids(nodes: OfficeContentNode[], budget: { left: number }, done: Map<OfficeContentNode, OfficeContentNode>, filled?: Map<OfficeContentNode, number>): OfficeContentNode[] {
     let changed = false;
     const out = nodes.map(node => {
         // Each node once, its result shared: a node the AST shares (a note every reference holds) was
@@ -143,10 +144,10 @@ function boundGrids(nodes: OfficeContentNode[], budget: { left: number }, done: 
             for (const key of ['children', 'notes', 'comments'] as const) {
                 const list: OfficeContentNode[] | undefined = next[key];
                 if (!list?.length) continue;
-                const bounded = boundGrids(list, budget, done);
+                const bounded = boundGrids(list, budget, done, filled);
                 if (bounded !== list) next = { ...next, [key]: bounded };
             }
-            if (next.type === 'table' || next.type === 'sheet') next = boundGrid(next, budget);
+            if (next.type === 'table' || next.type === 'sheet') next = boundGrid(next, budget, filled);
             done.set(node, next);
         }
         if (next !== node) changed = true;
@@ -160,11 +161,13 @@ function boundGrids(nodes: OfficeContentNode[], budget: { left: number }, done: 
  * laid out closer (see boundGrid), all of the document's grids sharing one budget of empty positions,
  * so no writer fills billions of positions from a few cells, or many sheets each just within a budget
  * of their own. Returns `ast` itself (same object, `.to()` intact) when every grid is within bounds;
- * the input is never mutated.
+ * the input is never mutated. `filled`, when given, takes the empty positions each resulting table or
+ * sheet fills: the budget is charged once for a table the AST shares, which writers write along every
+ * path to it (sharedNodeVisits weighs them there).
  */
-export function withBoundedSheetGrids<T extends OfficeParserAST>(ast: T): T {
+export function withBoundedSheetGrids<T extends OfficeParserAST>(ast: T, filled?: Map<OfficeContentNode, number>): T {
     // One budget for the document's content and its headers, footers, slide masters and outline.
     const budget = { left: MAX_SHEET_GRID_GAPS };
     const done = new Map<OfficeContentNode, OfficeContentNode>();
-    return mapNodeLists(ast, nodes => boundGrids(nodes, budget, done));
+    return mapNodeLists(ast, nodes => boundGrids(nodes, budget, done, filled));
 }

@@ -3509,6 +3509,26 @@ async function parserHardeningTests() {
     await refusedQuickly('10,000 custom properties sharing one list of 10,000 values', [], 'html', { metadata: { customProperties: Object.fromEntries(Array.from({ length: 10000 }, (_, i) => [`p${i}`, sharedValues])) } });
     const sharedSeries = { name: 's', values: Array.from({ length: 100000 }, (_, i) => i), pointLabels: [] };
     await refusedQuickly('1,000 chart series sharing one list of 100,000 values', [{ type: 'chart', metadata: { attachmentName: 'c' } }], 'html', { attachments: [{ type: 'chart', name: 'c', mimeType: 'application/json', data: '', extension: 'json', chartData: { labels: [], dataSets: Array(1000).fill(sharedSeries), rawTexts: [] } }] });
+    // Records are weighed by what writers write at each holder (keys, short values), a list item by its
+    // indentation, and a table by the empty positions its grid fills, at every path to it.
+    const indented = { type: 'list', metadata: { listType: 'unordered', indentation: 64 }, children: [] };
+    await refusedQuickly('a list item indented 64 levels, shared 2,000,000 times', Array(2_000_000).fill(indented), 'md');
+    const longKey = { type: 'paragraph', htmlAttributes: { [`data-${'a'.repeat(65536)}`]: 'v' }, children: [{ type: 'text', text: 'x' }] };
+    await refusedQuickly('an attribute of a 64 KB name, shared by 7,000 paragraphs', Array(7000).fill(longKey), 'html');
+    const shortAttributes = { type: 'paragraph', htmlAttributes: Object.fromEntries(Array.from({ length: 32 }, (_, i) => [`data-k${i}`, 'v'.repeat(64)])), children: [] };
+    await refusedQuickly('32 attributes of 64 characters, shared by 200,000 paragraphs', Array(200_000).fill(shortAttributes), 'html');
+    const diagonal = { type: 'table', children: Array.from({ length: 1000 }, (_, i) => ({ type: 'row', children: [{ type: 'cell', metadata: { row: i, col: i }, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'x' }] }] }] })) };
+    await refusedQuickly('a table of 1,000 cells along a diagonal, shared 40 times', Array(40).fill(diagonal), 'csv');
+    const oneDiagonal = (await OfficeGenerator.generate(astWith([diagonal]) as any, 'csv', { onWarning: () => {} } as any)).value as string;
+    check('csv: a table of 1,000 cells along a diagonal is written once', oneDiagonal.length > 1_000_000, `${oneDiagonal.length}`);
+    // A paragraph's text is the text of its runs, not written beside them: a paragraph of 96 MB in one run is written.
+    const hugeText = 'x'.repeat(96_000_000);
+    const hugeParagraph = (await OfficeGenerator.generate(astWith([{ type: 'paragraph', text: hugeText, children: [{ type: 'text', text: hugeText }] }]) as any, 'text', { onWarning: () => {} } as any)).value as string;
+    check('text: a paragraph of 96 MB in one run is written, not refused as shared', hugeParagraph.length >= 96_000_000, `${hugeParagraph.length}`);
+    // Text layout finds each list's first line from its children's, not by scanning every line under it.
+    let deepList: any = { type: 'list', metadata: { listType: 'unordered' }, children: Array(200_000).fill({ type: 'text', text: 'abcdef', bounds: { x: 10, y: 10, width: 36, height: 10 } }) };
+    for (let i = 1; i < 1000; i++) deepList = { type: 'list', metadata: { listType: 'unordered' }, children: [deepList] };
+    await timed('text: lists nested 1,000 deep over 200,000 placed runs are laid out', () => OfficeGenerator.generate({ ...astWith([{ type: 'page', metadata: { pageWidth: 600, pageHeight: 800 }, children: [deepList] }]), type: 'pdf' } as any, 'text', { onWarning: () => {} } as any));
 }
 
 async function main() {

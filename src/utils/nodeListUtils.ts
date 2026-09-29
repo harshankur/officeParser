@@ -27,13 +27,21 @@ export function mapNodeLists<T extends OfficeParserAST>(ast: T, transform: (node
     return content === ast.content && auxiliary === aux ? ast : { ...ast, content, auxiliary };
 }
 
+/** Four levels of a list item's indentation (text output writes four spaces a level, at most 64 levels) weigh one unit. */
+const indentationWeight = (metadata: unknown): number => {
+    const value = metadata && typeof metadata === 'object' ? (metadata as { indentation?: unknown }).indentation : undefined;
+    const levels = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : 0;
+    return levels > 0 ? Math.min(64, Math.floor(levels)) >> 2 : 0;
+};
+
 /**
  * How much more a writer handles, walking every path through `children` (content and auxiliary), than
- * the AST holds; in units of a node (a node counts 1, and 16 characters of its text, or of a long value
- * in its formatting, metadata or attributes, count 1 more; so does each id, attribute and note or
- * comment reference it holds). A node two parents share is written under each, so an AST built in code
- * whose nodes each hold the next twice doubled a writer's work at every level: 30 levels would take half
- * an hour. The same goes for a list, a record or a value many nodes share, which JSON cannot express but
+ * the AST holds; in units of a node (a node counts 1, and 16 characters of its text count 1 more; so do
+ * each entry of its formatting, metadata and attributes and every 16 characters of their keys and
+ * values, each note or comment reference it holds, four levels of a list item's indentation, and what
+ * `weigh` adds for it, such as the empty positions a table's grid fills). A node two parents share is
+ * written under each, so an AST built in code whose nodes each hold the next twice doubled a writer's
+ * work at every level: 30 levels would take half an hour. The same goes for a list, a record or a value many nodes share, which JSON cannot express but
  * an AST built in code can: one list of 16,000 note references, one array of 3,000 ids or one record of
  * 20,000 keys given to thousands of nodes. What the AST holds counts each node, list and record once;
  * what a writer handles counts them at every path and every node holding them. Parsers share only
@@ -41,9 +49,9 @@ export function mapNodeLists<T extends OfficeParserAST>(ast: T, transform: (node
  * is written once however many nodes hold it, so its content counts once (a slide's notes are written
  * with the slide, so they count at every path to it). Each list and record is read once however many
  * nodes hold it, and a list longer than `limit` (a sparse array of four billion slots) is not read at
- * all: the result is then past `limit`.
+ * all: `extra` is then Infinity. Returns that `extra`, and what the AST `held` in the same units.
  */
-export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number {
+export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity, weigh?: (node: OfficeContentNode) => number): { extra: number; held: number } {
     const along = new Map<OfficeContentNode, number>();
     const listTotals = new Map<unknown[], number>();
     const referenceLists = new Set<unknown[]>();
@@ -66,34 +74,41 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number
         seenStrings.add(value as string);
         return weight;
     };
-    // What a record (formatting, metadata, attributes) or array in one weighs per node holding it; counted
-    // once towards what the AST holds.
+    // What a record (formatting, metadata, attributes) or array weighs per node holding it, as writers
+    // write it at each: one per entry, and one per 16 characters of its keys and strings. Counted once
+    // towards what the AST holds, a long string once by value. Short values were free, and one record of
+    // 32 attributes of 64 characters shared by 200,000 paragraphs made 492 MB of HTML.
     const valueTotal = (value: object): number => {
         const known = valueTotals.get(value);
         if (known !== undefined) return known;
         valueTotals.set(value, 0);
-        let own = 0;
+        let entries = 0;
+        let chars = 0;
+        let heldChars = 0;
         let nested = 0;
+        const text = (item: string) => {
+            chars += item.length;
+            if (item.length <= 64) heldChars += item.length;
+            else if (!seenStrings.has(item)) { seenStrings.add(item); heldChars += item.length; }
+        };
         if (Array.isArray(value)) {
             if (value.length > limit) { tooLong = true; return 0; }
-            own = value.length;
+            entries = value.length;
             for (const item of value) {
                 if (item && typeof item === 'object') nested += valueTotal(item);
-                else { own += stringWeight(item, 64); held += heldWeight(item, 64); }
+                else if (typeof item === 'string') text(item);
             }
         } else {
-            let keys = 0;
             for (const key in value) {
-                keys++;
+                entries++;
+                text(key);
                 const item = (value as Record<string, unknown>)[key];
                 if (item && typeof item === 'object') nested += valueTotal(item);
-                else { own += stringWeight(item, 64); held += heldWeight(item, 64); }
+                else if (typeof item === 'string') text(item);
             }
-            // A record is a few fields: past 32, each weighs.
-            own += Math.max(0, keys - 32);
-            held += Math.max(0, keys - 32);
         }
-        if (Array.isArray(value)) held += value.length;
+        const own = entries + (chars >> 4);
+        held += entries + (heldChars >> 4);
         valueTotals.set(value, own + nested);
         return own + nested;
     };
@@ -165,13 +180,20 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number
         along.set(node, 1);
         // The node itself: its text (and raw source), and what its records and reference lists weigh.
         const raw = (node as { rawContent?: unknown }).rawContent;
-        const own = 1 + stringWeight(node.text, 0) + stringWeight(raw, 0);
-        held += 1 + heldWeight(node.text, 0) + heldWeight(raw, 0);
-        let total = own;
+        // A list item's indentation, which text output writes as four spaces a level (at most 64), and
+        // what the caller weighs a node by: both written at every path to it.
+        const extra = (node.type === 'list' ? indentationWeight(node.metadata) : 0) + (weigh ? weigh(node) : 0);
+        const text = stringWeight(node.text, 0);
+        held += 1 + heldWeight(node.text, 0) + heldWeight(raw, 0) + extra;
+        let total = 1 + stringWeight(raw, 0) + extra;
         for (const record of [node.formatting, node.metadata, (node as { htmlAttributes?: unknown }).htmlAttributes]) {
             if (record && typeof record === 'object') total += valueTotal(record);
         }
-        if (Array.isArray(node.children)) total += listTotal(node.children);
+        // A node's text beside its children is the text they hold (a paragraph's, of its runs), which
+        // writers write in place of them (chunks) or not at all: it weighs what it outweighs them by.
+        // Counted with them, one paragraph of 100 MB counted its text twice and was refused.
+        if (Array.isArray(node.children) && node.children.length) total += Math.max(text, listTotal(node.children));
+        else total += text;
         if (node.type === 'slide' && Array.isArray(node.notes)) total += listTotal(node.notes);
         else if (Array.isArray(node.notes)) total += referencesOf(node.notes);
         if (Array.isArray(node.comments)) total += referencesOf(node.comments);
@@ -185,7 +207,7 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number
     // So can a chart's data (series sharing one list of values), which writers write with the chart. Only
     // the chart data of an attachment is weighed: its file is written once, whatever its size.
     if (Array.isArray(ast.attachments)) {
-        if (ast.attachments.length > limit) return Infinity;
+        if (ast.attachments.length > limit) return { extra: Infinity, held };
         for (const attachment of ast.attachments as unknown[]) {
             const chartData = attachment && typeof attachment === 'object' ? (attachment as { chartData?: unknown }).chartData : undefined;
             if (chartData && typeof chartData === 'object' && !Array.isArray(chartData)) visits += chartTotal(chartData as Record<string, unknown>);
@@ -195,7 +217,7 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number
     const aux = ast.auxiliary as Record<string, unknown> | undefined;
     if (aux && typeof aux === 'object') for (const key of AUXILIARY_LISTS) if (Array.isArray(aux[key])) visits += listTotal(aux[key] as unknown[]);
     while (pending.length) visits += count(pending.pop()!);
-    return tooLong ? Infinity : visits - held;
+    return { extra: tooLong ? Infinity : visits - held, held };
 }
 
 /**

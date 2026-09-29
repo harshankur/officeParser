@@ -276,15 +276,25 @@ export class TextGenerator extends BaseGenerator<'text'> {
 
         interface Atom { text: string; x: number; y: number; w: number; h: number; }
         const atoms: Atom[] = [];
-        const collect = async (n: OfficeContentNode): Promise<void> => {
+        // Of two placed atoms (by index, -1 for none), the one read first: the higher line, or on one
+        // line the one further left.
+        const firstRead = (a: number, b: number): number =>
+            a < 0 ? b : b < 0 ? a : (atoms[b].y < atoms[a].y - 0.5 || (Math.abs(atoms[b].y - atoms[a].y) < 1 && atoms[b].x < atoms[a].x)) ? b : a;
+        const place = (atom: Atom): number => atoms.push(atom) - 1;
+        // Places the atoms of `n`, and returns the one read first (-1 for none): a list folds its marker
+        // into its own, found from its children's, where scanning every atom under each list took time
+        // in the depth of the lists times the atoms.
+        const collect = async (n: OfficeContentNode): Promise<number> => {
             const ov = await this.handleOnNode(n);
-            if (ov === false) return;
+            if (ov === false) return -1;
             if (typeof ov === 'string') {
-                if (n.bounds && ov) atoms.push({ text: ov, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
-                return;
+                return n.bounds && ov ? place({ text: ov, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height }) : -1;
             }
             if (n.type === 'text' && n.bounds && (n.text || '').length) {
-                atoms.push({ text: n.text!, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
+                const own = place({ text: n.text!, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
+                let first = own;
+                for (const c of n.children || []) first = firstRead(first, await collect(c));
+                return first;
             } else if (n.type === 'image') {
                 const mode = this.imageMode();
                 if (mode !== 'none' && n.bounds) {
@@ -294,31 +304,28 @@ export class TextGenerator extends BaseGenerator<'text'> {
                     // output renders its recognized text rather than a placeholder that loses it.
                     const useOcr = !!ocr && (mode === 'ocr-text-only' || (mode === 'image-only' && this.overInlineCap(m?.attachmentName)));
                     const text = useOcr ? ocr : (mode === 'ocr-text-only' ? '' : `[Image: ${m?.altText || m?.attachmentName || 'Untitled'}]`);
-                    if (text) atoms.push({ text, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
+                    if (text) return place({ text, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
                 }
-                return;
+                return -1;
             } else if (n.type === 'list') {
                 // The parser strips the item's marker into metadata; re-synthesize it (as flow mode does)
                 // and fold it into the item's first placed atom so bullets/numbers survive layout mode.
-                const before = atoms.length;
-                for (const c of n.children || []) await collect(c);
-                if (atoms.length > before) {
+                let first = -1;
+                for (const c of n.children || []) first = firstRead(first, await collect(c));
+                if (first >= 0) {
                     const meta = n.metadata as any;
                     const marker = meta?.listType === 'ordered' ? `${(meta.itemIndex ?? 0) + 1}. ` : '- ';
-                    let firstIdx = before;
-                    for (let k = before + 1; k < atoms.length; k++) {
-                        const f = atoms[firstIdx];
-                        if (atoms[k].y < f.y - 0.5 || (Math.abs(atoms[k].y - f.y) < 1 && atoms[k].x < f.x)) firstIdx = k;
-                    }
-                    const f = atoms[firstIdx];
+                    const f = atoms[first];
                     const perChar = f.text.length ? f.w / f.text.length : 6;
                     f.text = marker + f.text;
                     f.x = Math.max(0, f.x - marker.length * perChar);
                     f.w = f.w + marker.length * perChar;
                 }
-                return;
+                return first;
             }
-            for (const c of n.children || []) await collect(c);
+            let first = -1;
+            for (const c of n.children || []) first = firstRead(first, await collect(c));
+            return first;
         };
         for (const c of page.children || []) await collect(c);
 
