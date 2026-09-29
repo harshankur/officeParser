@@ -444,11 +444,12 @@ export interface CommonOfficeParserConfig {
      */
     pdfWorkerSrc?: string;
     /**
-     * Flag to include break nodes in the AST. Default is false.
-     * Applies to Word (`w:br`/`w:cr`) and ODF (`fo:break-before`/`fo:break-after`, `text:soft-page-break`),
-     * where breaks are otherwise invisible. HTML and Markdown always emit `break` nodes (a `<br>`/hard
-     * line break, and `<hr>`/`---` as a `thematic`/`page` break), since a break is content there; this
-     * flag does not gate those.
+     * Flag to include break nodes for layout breaks in the AST. Default is false.
+     * Applies to Word page, column and last-rendered-page breaks (`w:br w:type`, `w:lastRenderedPageBreak`),
+     * ODF (`fo:break-before`/`fo:break-after`, `text:soft-page-break`) and LaTeX (`\newpage`, `\clearpage`),
+     * where breaks are otherwise invisible. A line break the author typed is content and always a `break`
+     * node: Word's `w:br` (text wrapping) and `w:cr`, HTML's `<br>`, a Markdown hard break; so are HTML and
+     * Markdown's `<hr>`/`---` (a `thematic`/`page` break). This flag does not gate those.
      */
     includeBreakNodes?: boolean;
     /**

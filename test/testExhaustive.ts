@@ -4113,6 +4113,15 @@ async function testDocxReadingReview(): Promise<void> {
         const lines = ((await back.to('text')).value as string).split('\n').map(line => line.replace(/^\W+/, '')).filter(Boolean);
         assert.deepStrictEqual(lines.slice(-4), ['Plan', 'Build', 'Ship', 'After'], `${format}: SmartArt items are lines of their own`);
     }
+    // A line break the author typed (w:br, w:cr) and a tab are content, kept whatever includeBreakNodes
+    // says (left out, "Line one<br/>Line two" read "Line oneLine two", and "A<tab>B" read "AB"); a page
+    // break is layout, kept with includeBreakNodes.
+    const breaks = docx('<w:p><w:r><w:t>Line one</w:t><w:br/><w:t>Line two</w:t></w:r></w:p><w:p><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t><w:cr/><w:t>C</w:t></w:r></w:p><w:p><w:r><w:br w:type="page"/></w:r></w:p>');
+    const byDefault = (await parse(breaks)).ast;
+    assert.strictEqual((await byDefault.to('text')).value, 'Line one\nLine two\nA\tB\nC', 'DOCX: line breaks and tabs are kept by default');
+    assert.ok(!collectAllNodes(byDefault).some(n => n.type === 'break' && (n.metadata as any)?.breakType === 'page'), 'DOCX: a page break is not a node by default');
+    assert.ok(collectAllNodes((await parse(breaks, { includeBreakNodes: true })).ast).some(n => n.type === 'break' && (n.metadata as any)?.breakType === 'page'), 'DOCX: a page break is a node with includeBreakNodes');
+    assert.strictEqual((await (await parse(Buffer.from((await byDefault.to('docx')).value as Uint8Array))).ast.to('text')).value, 'Line one\nLine two\nA\tB\nC', 'DOCX: line breaks and tabs round-trip through DOCX');
     console.log('  DOCX reading review: All assertions passed ✓');
 }
 

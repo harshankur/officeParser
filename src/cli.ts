@@ -22,7 +22,7 @@
  *   --includeRawContent       Include raw content in AST (default: false)
  *   --serializeRawContent     Include stringified XML in metadata (default: true)
  *   --preserveXmlWhitespace   Keep raw formatting space (default: false)
- *   --includeBreakNodes       Include break nodes (DOCX, ODF & LaTeX, default: false)
+ *   --includeBreakNodes       Include layout (page, column) break nodes (DOCX, ODF & LaTeX, default: false)
  *   --ignorePageGeometry      Omit per-node bounding boxes and page dimensions (default: false)
  *   --password=secret         Password for an encrypted document (PDF, OOXML, or ODF); or set
  *                             OFFICEPARSER_PASSWORD to keep the secret out of the process list
@@ -375,7 +375,7 @@ if (fileArg && !showHelp) {
     console.log('  --includeRawContent                         Include raw content in AST (default: false)');
     console.log('  --serializeRawContent                       Serialize raw XML content (default: true)');
     console.log('  --preserveXmlWhitespace                     Keep raw formatting space (default: false)');
-    console.log('  --includeBreakNodes                         Include break nodes (DOCX, ODF & LaTeX, default: false)');
+    console.log('  --includeBreakNodes                         Include layout (page, column) break nodes (DOCX, ODF & LaTeX, default: false)');
     console.log('  --ignorePageGeometry                        Omit per-node bounding boxes and page dimensions (default: false)');
     console.log('  --verbose                                   Show full error stack traces and warning logs');
     console.log('  --newlineDelimiter=string                   Delimiter string between blocks/lines (default: \\n)');

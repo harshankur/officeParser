@@ -193,7 +193,10 @@
                 <td><code>includeBreakNodes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Line/Page Break Parsing</strong>: Supported for Word (DOCX), OpenDocument (ODT/ODP/ODS)
+                <td><strong>Layout Break Parsing</strong>: Page, column and last-rendered-page breaks. A line break the author
+                    typed (DOCX <code>w:br</code>/<code>w:cr</code>, LaTeX <code>\\</code>, HTML <code>&lt;br&gt;</code>) is
+                    always a <code>break</code> node, and a DOCX tab a <code>\t</code> in the text, whatever this says.
+                    Supported for Word (DOCX), OpenDocument (ODT/ODP/ODS)
                     and LaTeX (<code>\newpage</code>/<code>\clearpage</code> as <code>page</code> breaks) files. ODF carries page and column breaks on the paragraph style
                     (<code>fo:break-before</code>/<code>fo:break-after</code>) rather than as an inline element, so
                     those surface as breaks emitted around the paragraph. When set to

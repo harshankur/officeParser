@@ -1020,12 +1020,18 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                             field.instruction += (child.textContent || '').slice(0, MAX_FIELD_INSTRUCTION - field.instruction.length);
                         }
                     }
+                    // A tab is a character of the text, whatever column its tab stop sets: left out, "A<tab>B"
+                    // read "AB".
+                    else if (child.tagName === "w:tab" || child.tagName === "tab") {
+                        if (hiddenResults > 0) continue;
+                        text += '\t';
+                        children.push({ type: 'text', text: '\t', formatting } as OfficeContentNode);
+                    }
                     // Break nodes
-                    else if (config.includeBreakNodes &&
-                        (child.tagName === "w:br"
+                    else if (child.tagName === "w:br"
                             || child.tagName === "br"
                             || child.tagName === "w:cr"
-                            || child.tagName === "cr")
+                            || child.tagName === "cr"
                     ) {
                         const brNode = child;
 
@@ -1038,6 +1044,13 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                                 breakType = nodeBreakType as BreakMetadata['breakType'];
                             }
                         }
+                        // A line break the author typed is content, kept whatever includeBreakNodes says, as
+                        // HTML's <br> is: left out, "Line one<br/>Line two" read "Line oneLine two". A page or
+                        // column break is layout, kept with includeBreakNodes.
+                        const lineBreak = breakType === 'textWrapping' || breakType === 'carriageReturn';
+                        if (!lineBreak && !config.includeBreakNodes) continue;
+                        if (lineBreak && hiddenResults > 0) continue;
+                        if (lineBreak) text += '\n';
 
                         let breakClear: BreakMetadata["clear"] = undefined;
                         if (breakType === 'textWrapping' && brNode.getAttribute("w:clear") !== null) {
