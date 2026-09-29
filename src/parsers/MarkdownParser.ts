@@ -1164,23 +1164,27 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // since their body may itself contain blank lines that would otherwise fragment them.
     // The `> [!NOTE]` GitHub form doesn't need this - it's detected inline in the blockquote
     // branch below, since a `>`-prefixed block never contains a real blank line.
-    // A `:::type` line opens one and the next `:::` line closes it; one of an unrecognised type is left
-    // as literal text, its body included. Lines are scanned once, with each line's next closing line
-    // found in advance (a lazy pattern rescanned to the end for every line that opened one unclosed).
+    // A `:::type` line (or Pandoc's `::: {.type}`, which the pandoc dialect writes, or `::: type`; a
+    // fence may be longer than three) opens one and the next `:::` line closes it; one of an
+    // unrecognised type is left as literal text, its body included. Lines are scanned once, with each
+    // line's next closing line found in advance (a lazy pattern rescanned to the end for every line
+    // that opened one unclosed).
     const admonitionBlocks: string[] = [];
     {
         const lines = textStr.split('\n');
         const nextClose = new Int32Array(lines.length + 1).fill(lines.length);
-        for (let i = lines.length - 1; i >= 0; i--) nextClose[i] = /^:::[ \t]*$/.test(lines[i]) ? i : nextClose[i + 1];
+        for (let i = lines.length - 1; i >= 0; i--) nextClose[i] = /^:{3,}[ \t]*$/.test(lines[i]) ? i : nextClose[i + 1];
         const out: string[] = [];
         for (let i = 0; i < lines.length; i++) {
-            const open = /^:::(\w+)[ \t]*$/.exec(lines[i]);
+            // (The class name is taken whole before the rest of the braces: a name and the rest both
+            // taking word characters tried every split of a long name.)
+            const open = /^:{3,}[ \t]*(?:(\w+)|\{[ \t]*\.(\w+)(?!\w)[^{}\n]*\})[ \t]*$/.exec(lines[i]);
             const close = open ? nextClose[i + 1] : lines.length;
             if (open && close < lines.length) {
-                const admonitionType = ADMONITION_TYPE_MAP[open[1].toLowerCase()];
+                const admonitionType = ADMONITION_TYPE_MAP[(open[1] ?? open[2]).toLowerCase()];
                 if (admonitionType) {
                     const id = placeholder('ADMONITION', admonitionBlocks.length);
-                    admonitionBlocks.push(JSON.stringify({ admonitionType, body: lines.slice(i + 1, close).join('\n') }));
+                    admonitionBlocks.push(JSON.stringify({ admonitionType, body: lines.slice(i + 1, close).join('\n'), sourceSyntax: open[2] ? 'pandoc' : 'gitlab' }));
                     out.push('', '', id, '', '');
                 } else {
                     appendAll(out, lines.slice(i, close + 1));
@@ -1842,7 +1846,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
     // Builds an admonition node from its raw body text, read as blocks (paragraphs, lists, headings,
     // tables, code), as the document is.
-    const buildAdmonitionNode = async (admonitionType: AdmonitionMetadata['admonitionType'], body: string, sourceSyntax: 'github' | 'gitlab'): Promise<OfficeContentNode> => {
+    const buildAdmonitionNode = async (admonitionType: AdmonitionMetadata['admonitionType'], body: string, sourceSyntax: AdmonitionMetadata['sourceSyntax']): Promise<OfficeContentNode> => {
         // A fenced block in the body (dequoted, so the top-level pass could not see it) is a code child.
         const children: OfficeContentNode[] = [];
         await parseBlocks(splitIntoBlocks(liftCode(body)), children);
@@ -2414,7 +2418,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         const admonitionIndex = placeholderIndex(block, 'ADMONITION');
         if (admonitionIndex !== null && admonitionIndex < admonitionBlocks.length) {
             const data = JSON.parse(admonitionBlocks[admonitionIndex]);
-            content.push(await buildAdmonitionNode(data.admonitionType, data.body, 'gitlab'));
+            content.push(await buildAdmonitionNode(data.admonitionType, data.body, data.sourceSyntax));
             continue;
         }
 

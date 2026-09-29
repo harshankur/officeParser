@@ -2734,7 +2734,7 @@ export interface EmbedMetadata {
 
 /**
  * Metadata for an admonition/alert node (e.g. GitHub's `> [!NOTE]` or GLFM's `:::note`).
- * `MarkdownParser` accepts both syntaxes (and generates either, plus Pandoc's `::: {.note}`,
+ * `MarkdownParser` accepts these and Pandoc's `::: {.note}` (and generates any of them,
  * depending on `MdGeneratorConfig.dialect`). Children are block content (paragraphs) wrapped by
  * the admonition.
  */
@@ -2742,8 +2742,11 @@ export interface AdmonitionMetadata {
     admonitionType: 'note' | 'tip' | 'important' | 'warning' | 'caution';
     /** Optional custom title; falls back to the type label. */
     title?: string;
-    /** Which concrete input syntax produced this node. Always populated by the parser. */
-    sourceSyntax?: 'github' | 'gitlab';
+    /**
+     * Which concrete input syntax produced this node: `> [!NOTE]` (`'github'`), `:::note`
+     * (`'gitlab'`) or `::: {.note}` (`'pandoc'`). Always populated by the parser.
+     */
+    sourceSyntax?: 'github' | 'gitlab' | 'pandoc';
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
 }
