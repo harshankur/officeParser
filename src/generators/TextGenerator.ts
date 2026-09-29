@@ -33,6 +33,8 @@ const TEXT_NODE_CLASS: Readonly<Record<OfficeContentNodeType, 'block' | 'inline'
 const LAYOUT_COLUMN_WIDTH = 256;
 /** The spaces one document's laid-out tables may add in all to line their columns up. */
 const MAX_LAYOUT_PADDING = 16 * 1024 * 1024;
+/** The widest a page's layout is set, in characters (a page is some hundred wide). */
+const MAX_LAYOUT_COLUMNS = 1000;
 
 /**
  * Generates plain text from an AST.
@@ -335,7 +337,9 @@ export class TextGenerator extends BaseGenerator<'text'> {
         const sortedX = atoms.map(a => a.x).sort((p, q) => p - q);
         const marginX = sortedX[Math.floor(0.02 * sortedX.length)] ?? sortedX[0];
         const pageWidth = (page.metadata as any).pageWidth as number;
-        const maxCols = Math.ceil(pageWidth / charW) * 2;
+        // At most MAX_LAYOUT_COLUMNS: a page's width is the document's own (a MediaBox 200 million points
+        // wide, 2 KB of PDF, padded each line to its runs' positions, 389 MB of text).
+        const maxCols = Math.min(Math.ceil(pageWidth / charW) * 2, MAX_LAYOUT_COLUMNS);
 
         // Cluster atoms into rows by vertical band overlap.
         atoms.sort((a, b) => a.y - b.y || a.x - b.x);
@@ -359,8 +363,14 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 let col = Math.round((a.x - marginX) / charW);
                 if (col < 0) col = 0;
                 if (col > maxCols) col = maxCols;
-                if (col > line.length) {
-                    line += ' '.repeat(col - line.length);
+                // The padding comes out of the document's layout budget (as a table's does); past it, a
+                // run is set off by one space.
+                const pad = col - line.length;
+                if (pad > 0 && this.layoutPaddingLeft >= pad) {
+                    this.layoutPaddingLeft -= pad;
+                    line += ' '.repeat(pad);
+                } else if (pad > 0) {
+                    line += ' ';
                 } else if (line.length > 0) {
                     // The column is at or before the current line end. Only insert a space when this
                     // atom is separated from the previous one by a real horizontal gap; adjacent runs

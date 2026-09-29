@@ -117,6 +117,48 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number
         for (const item of list) if (item && typeof item === 'object' && !writtenOnce.has(item as OfficeContentNode)) { writtenOnce.add(item as OfficeContentNode); pending.push(item as OfficeContentNode); }
         return list.length;
     };
+    // A chart's data as writers read it (see normalizeAttachments): its labels and texts, and each
+    // series' name, values and point labels, one level deep (an entry that is a list is written empty).
+    // Each list, series and chart is counted once towards what the AST holds.
+    const chartTotals = new Map<object, number>();
+    const entriesTotal = (list: unknown): number => {
+        if (typeof list === 'string') return stringWeight(list, 64);
+        if (!Array.isArray(list)) return 0;
+        const known = chartTotals.get(list);
+        if (known !== undefined) return known;
+        chartTotals.set(list, 0);
+        if (list.length > limit) { tooLong = true; return 0; }
+        let total = list.length;
+        held += list.length;
+        for (const item of list) if (typeof item === 'string') { total += stringWeight(item, 64); held += heldWeight(item, 64); }
+        chartTotals.set(list, total);
+        return total;
+    };
+    const chartTotal = (chart: Record<string, unknown>): number => {
+        const known = chartTotals.get(chart);
+        if (known !== undefined) return known;
+        chartTotals.set(chart, 0);
+        let total = entriesTotal(chart.labels) + entriesTotal(chart.rawTexts) + entriesTotal(chart.title) + entriesTotal(chart.xAxisTitle) + entriesTotal(chart.yAxisTitle);
+        const dataSets = chart.dataSets;
+        if (Array.isArray(dataSets)) {
+            if (dataSets.length > limit) { tooLong = true; return 0; }
+            total += dataSets.length;
+            held += dataSets.length;
+            for (const series of dataSets) {
+                if (!series || typeof series !== 'object') continue;
+                let own = chartTotals.get(series);
+                if (own === undefined) {
+                    chartTotals.set(series, 0);
+                    const { name, values, pointLabels } = series as Record<string, unknown>;
+                    own = entriesTotal(name) + entriesTotal(values) + entriesTotal(pointLabels);
+                    chartTotals.set(series, own);
+                }
+                total += own;
+            }
+        }
+        chartTotals.set(chart, total);
+        return total;
+    };
     const count = (node: OfficeContentNode): number => {
         const known = along.get(node);
         if (known !== undefined) return known;
@@ -137,6 +179,18 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity): number
         return total;
     };
     let visits = 0;
+    // The document's own metadata is written once, but a record in it (its custom properties) can share
+    // a list or a long string across thousands of keys, each written out.
+    if (ast.metadata && typeof ast.metadata === 'object') visits += valueTotal(ast.metadata);
+    // So can a chart's data (series sharing one list of values), which writers write with the chart. Only
+    // the chart data of an attachment is weighed: its file is written once, whatever its size.
+    if (Array.isArray(ast.attachments)) {
+        if (ast.attachments.length > limit) return Infinity;
+        for (const attachment of ast.attachments as unknown[]) {
+            const chartData = attachment && typeof attachment === 'object' ? (attachment as { chartData?: unknown }).chartData : undefined;
+            if (chartData && typeof chartData === 'object' && !Array.isArray(chartData)) visits += chartTotal(chartData as Record<string, unknown>);
+        }
+    }
     if (Array.isArray(ast.content)) visits += listTotal(ast.content);
     const aux = ast.auxiliary as Record<string, unknown> | undefined;
     if (aux && typeof aux === 'object') for (const key of AUXILIARY_LISTS) if (Array.isArray(aux[key])) visits += listTotal(aux[key] as unknown[]);

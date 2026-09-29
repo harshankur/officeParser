@@ -3486,6 +3486,29 @@ async function parserHardeningTests() {
     const longPaths: Record<string, string> = { 'Obj/content.xml': '' };
     for (let i = 0; i < 20; i++) longPaths[`${i}/${'a/'.repeat(30000)}content.xml`] = '';
     await timed('odt: 20 parts of 30,000 folders each are indexed', () => parseQuiet(odfOf('text', '<text:p><draw:frame><draw:object xlink:href="./Obj"/></draw:frame></text:p>', longPaths), 'odt'));
+    // Text layout: a page's line is set at most 1,000 columns wide, and its padding draws on a budget.
+    const farApart = Array.from({ length: 2000 }, (_, i) => [{ type: 'text', text: 'abcdef', bounds: { x: 0, y: i * 20, width: 12, height: 10 } }, { type: 'text', text: 'ghijkl', bounds: { x: 1_000_000, y: i * 20, width: 12, height: 10 } }]).flat();
+    const laidOut = (await OfficeGenerator.generate({ ...astWith([{ type: 'page', metadata: { pageNumber: 1, pageWidth: 2_000_000, pageHeight: 50_000 }, children: farApart }]), type: 'pdf' } as any, 'text', { onWarning: () => {} } as any)).value as string;
+    check('text: 2,000 lines of two runs a million points apart are laid out narrow', laidOut.length < 4_000_000 && laidOut.includes('ghijkl'), `${laidOut.length}`);
+    // One picture shown many times is decoded and embedded once per document.
+    const { deflateSync: deflatePng, crc32 } = require('zlib') as typeof import('zlib');
+    const pngChunk = (kind: string, data: Buffer) => { const length = Buffer.alloc(4); length.writeUInt32BE(data.length); const body = Buffer.concat([Buffer.from(kind), data]); const sum = Buffer.alloc(4); sum.writeUInt32BE(crc32(body) >>> 0); return Buffer.concat([length, body, sum]); };
+    const noisePng = (side: number) => {
+        const raw = Buffer.alloc((side * 3 + 1) * side);
+        for (let i = 0; i < raw.length; i++) raw[i] = i % (side * 3 + 1) === 0 ? 0 : (i * 2654435761) >>> 24;
+        const header = Buffer.alloc(13); header.writeUInt32BE(side, 0); header.writeUInt32BE(side, 4); header[8] = 8; header[9] = 2;
+        return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), pngChunk('IHDR', header), pngChunk('IDAT', deflatePng(raw, { level: 1 })), pngChunk('IEND', Buffer.alloc(0))]);
+    };
+    const picture = noisePng(400).toString('base64');
+    const onePictureShown = (times: number) => ({ ...astWith(Array.from({ length: times }, () => ({ type: 'image', metadata: { attachmentName: 'a.png' } }))), attachments: [{ type: 'image', name: 'a.png', mimeType: 'image/png', extension: 'png', data: picture }] }) as any;
+    const nativePdf = (await OfficeGenerator.generate(onePictureShown(100), 'pdf', { onWarning: () => {}, pdfConfig: { engine: 'native' } } as any)).value as Uint8Array;
+    check('pdf (native): a picture shown 100 times is embedded once', nativePdf.byteLength < 3 * picture.length, `${nativePdf.byteLength} vs ${picture.length}`);
+    await timed('docx, odt: a picture shown 5,000 times is decoded once', async () => { for (const format of ['docx', 'odt'] as const) await OfficeGenerator.generate(onePictureShown(5000), format, { onWarning: () => {} } as any); });
+    // The document's custom properties and a chart's data are weighed per key and per series.
+    const sharedValues = Array.from({ length: 10000 }, (_, i) => `v${i}`);
+    await refusedQuickly('10,000 custom properties sharing one list of 10,000 values', [], 'html', { metadata: { customProperties: Object.fromEntries(Array.from({ length: 10000 }, (_, i) => [`p${i}`, sharedValues])) } });
+    const sharedSeries = { name: 's', values: Array.from({ length: 100000 }, (_, i) => i), pointLabels: [] };
+    await refusedQuickly('1,000 chart series sharing one list of 100,000 values', [{ type: 'chart', metadata: { attachmentName: 'c' } }], 'html', { attachments: [{ type: 'chart', name: 'c', mimeType: 'application/json', data: '', extension: 'json', chartData: { labels: [], dataSets: Array(1000).fill(sharedSeries), rawTexts: [] } }] });
 }
 
 async function main() {

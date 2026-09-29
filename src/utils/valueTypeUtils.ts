@@ -35,13 +35,14 @@ const MAX_JOINED_LENGTH = 65536;
  */
 interface ReadOnce {
     joinedLists: WeakMap<unknown[], string>;
+    stringLists: WeakMap<unknown[], string[]>;
     idLists: WeakMap<unknown[], string[] | null>;
     records: { formatting: WeakMap<object, Record<string, unknown>>; metadata: WeakMap<object, Record<string, unknown>> };
     attributes: WeakMap<object, Record<string, string>>;
 }
 let readOnce: ReadOnce | undefined;
 const newReadOnce = (): ReadOnce => ({
-    joinedLists: new WeakMap(), idLists: new WeakMap(),
+    joinedLists: new WeakMap(), stringLists: new WeakMap(), idLists: new WeakMap(),
     records: { formatting: new WeakMap(), metadata: new WeakMap() }, attributes: new WeakMap(),
 });
 
@@ -261,13 +262,20 @@ export function withWellTypedValues<T extends OfficeParserAST>(ast: T): T {
 
 /** The most entries a chart's list of labels, series or values is read with (a chart table writes far fewer). */
 const MAX_CHART_ENTRIES = 1_000_000;
-
-/** `value` as a list of strings, one level, at most MAX_CHART_ENTRIES: an entry that is not a plain value is empty. */
+/**
+ * `value` as a list of strings, one level, at most MAX_CHART_ENTRIES: an entry that is not a plain value
+ * is empty. A list many series share is read once (an AST built in code gave 1,000 series one list of
+ * 100,000 values, and reading it per series filled the heap); sharedNodeVisits weighs it per series.
+ */
 const asStrings = (value: unknown): string[] => {
     if (!Array.isArray(value)) return [];
-    const out: string[] = [];
-    for (let i = 0; i < value.length && i < MAX_CHART_ENTRIES; i++) out.push(isPrimitive(value[i]) ? String(value[i]) : '');
-    return out;
+    let strings = readOnce?.stringLists.get(value);
+    if (!strings) {
+        strings = [];
+        for (let i = 0; i < value.length && i < MAX_CHART_ENTRIES; i++) strings.push(isPrimitive(value[i]) ? String(value[i]) : '');
+        readOnce?.stringLists.set(value, strings);
+    }
+    return strings;
 };
 
 /**

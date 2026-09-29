@@ -99,6 +99,8 @@ class NativeLayout {
     private readonly imageMode: ImageMode;
     /** `name -> attachment` index, so image lookups are O(1) rather than a scan per image node. */
     private readonly attachmentsByName = new Map<string, OfficeParserAST['attachments'][number]>();
+    /** Each attachment's embedded image, or why it was not embedded: made once, drawn at every picture showing it. */
+    private readonly embeddedImages = new Map<OfficeParserAST['attachments'][number], Promise<any>>();
     /** Footnote/endnote bodies gathered from `node.notes` during the walk, drawn at document end. */
     private readonly collectedNotes: OfficeContentNode[] = [];
     private readonly collectedNoteSet = new Set<OfficeContentNode>();
@@ -596,17 +598,27 @@ class NativeLayout {
             return;
         }
         try {
-            const bytes = base64ToBytes(attachment.data);
-            // Reject an image whose declared dimensions are absurd BEFORE decoding it: embedPng/embedJpg
-            // allocate the full bitmap, so a decompression bomb would OOM the process uncatchably.
-            const dim = sniffImageSize(bytes);
-            if (dim && dim.w * dim.h > MAX_IMAGE_PIXELS) {
-                this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: `image is too large to embed (${dim.w}x${dim.h} pixels)` });
+            // Each attachment decoded and embedded once, and drawn wherever a picture shows it: embedded
+            // again at each, one 3 MB picture shown 400 times (a 3 MB DOCX) made a 1.2 GB PDF.
+            let embedded = this.embeddedImages.get(attachment);
+            if (!embedded) {
+                embedded = (async () => {
+                    const bytes = base64ToBytes(attachment.data);
+                    // Reject an image whose declared dimensions are absurd BEFORE decoding it: embedPng/embedJpg
+                    // allocate the full bitmap, so a decompression bomb would OOM the process uncatchably.
+                    const dim = sniffImageSize(bytes);
+                    if (dim && dim.w * dim.h > MAX_IMAGE_PIXELS) return `image is too large to embed (${dim.w}x${dim.h} pixels)`;
+                    const isJpg = /jpe?g/i.test(attachment.extension || '') || attachment.mimeType === 'image/jpeg';
+                    return isJpg ? await this.pdf.embedJpg(bytes) : await this.pdf.embedPng(bytes);
+                })();
+                this.embeddedImages.set(attachment, embedded);
+            }
+            const img = await embedded;
+            if (typeof img === 'string') {
+                this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: img });
                 fallback();
                 return;
             }
-            const isJpg = /jpe?g/i.test(attachment.extension || '') || attachment.mimeType === 'image/jpeg';
-            const img = isJpg ? await this.pdf.embedJpg(bytes) : await this.pdf.embedPng(bytes);
             // Resolve the draw size in points, by priority: an explicit ImageMetadata.width/height
             // (a length like '200px'/'3cm', a number in px, or a '%' of the content width), then PDF
             // page bounds (already points), then the intrinsic pixel size converted px->pt. Aspect ratio

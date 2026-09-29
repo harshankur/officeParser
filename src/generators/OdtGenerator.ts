@@ -132,6 +132,9 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
 
     private media: MediaPart[] = [];
     private mediaByAttachment = new Map<string, string>();
+    /** Each attachment's intrinsic size, measured when it was first decoded, and those that could not be decoded. */
+    private readonly mediaIntrinsic = new Map<string, { w: number; h: number } | null>();
+    private readonly mediaUndecodable = new Set<string>();
     private manifestMedia = new Map<string, string>(); // Pictures/xxx -> contentType
 
     private listDefs = new Map<string, ListDef>();
@@ -691,17 +694,25 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
         if (!att || !att.data) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'missing attachment' }); return null; }
         const ext = MIME_EXT[(att.mimeType || '').toLowerCase()];
         if (!ext) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName, reason: 'unsupported mime' }); return null; }
-        let bytes: Uint8Array;
-        try { bytes = decodeBase64(att.data); } catch { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName }); return null; }
+        // Each attachment decoded and measured once, at the first picture showing it: decoded again at
+        // every picture before the media was looked up, one 3 MB picture shown 20,000 times took 105 s.
+        if (this.mediaUndecodable.has(attachmentName)) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName }); return null; }
         let name = this.mediaByAttachment.get(attachmentName);
         if (!name) {
+            let bytes: Uint8Array;
+            try { bytes = decodeBase64(att.data); } catch {
+                this.mediaUndecodable.add(attachmentName);
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName });
+                return null;
+            }
+            this.mediaIntrinsic.set(attachmentName, sniffImageSize(bytes));
             name = `image${this.media.length + 1}.${ext}`;
             const contentType = att.mimeType || 'image/png';
             this.media.push({ name, bytes, ext, contentType });
             this.mediaByAttachment.set(attachmentName, name);
             this.manifestMedia.set(`Pictures/${name}`, contentType);
         }
-        return { href: `Pictures/${name}`, intrinsic: sniffImageSize(bytes) };
+        return { href: `Pictures/${name}`, intrinsic: this.mediaIntrinsic.get(attachmentName) ?? null };
     }
 
     /** Image size in points, priority: explicit width -> PDF bounds -> intrinsic@96dpi -> 3x2.25in, capped to content width. */

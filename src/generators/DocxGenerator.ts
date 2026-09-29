@@ -49,6 +49,9 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
     private currentRelOwner = 'word/document.xml';
     private media: MediaPart[] = [];
     private mediaByAttachment = new Map<string, string>();
+    /** Each attachment's intrinsic size, measured when it was first decoded, and those that could not be decoded. */
+    private readonly mediaIntrinsic = new Map<string, { w: number; h: number } | null>();
+    private readonly mediaUndecodable = new Set<string>();
     private usedExtensions = new Set<string>();
     private drawingCounter = 0;
     private usedBookmarkNames = new UniqueNames();
@@ -119,10 +122,18 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
         // Word does not render an SVG referenced by a bare a:blip (it needs the asvg extension + a
         // raster fallback); emit nothing here so the caller degrades to alt text instead of a broken image.
         if (ext === 'svg') { this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'docx', feature: 'svg image' }); return null; }
-        let bytes: Uint8Array;
-        try { bytes = decodeBase64(att.data); } catch { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName }); return null; }
+        // Each attachment decoded and measured once, at the first picture showing it: decoded again at
+        // every picture before the media was looked up, one 3 MB picture shown 20,000 times took 105 s.
+        if (this.mediaUndecodable.has(attachmentName)) { this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName }); return null; }
         let name = this.mediaByAttachment.get(attachmentName);
         if (!name) {
+            let bytes: Uint8Array;
+            try { bytes = decodeBase64(att.data); } catch {
+                this.mediaUndecodable.add(attachmentName);
+                this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: attachmentName });
+                return null;
+            }
+            this.mediaIntrinsic.set(attachmentName, sniffImageSize(bytes));
             name = `image${this.media.length + 1}.${ext}`;
             const contentType = (att.mimeType || 'image/png');
             this.media.push({ name, bytes, ext, contentType });
@@ -130,7 +141,7 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             this.usedExtensions.add(ext);
         }
         const rid = this.addRel('http://schemas.openxmlformats.org/officeDocument/2006/relationships/image', `media/${name}`);
-        return { rid, cx: 0, cy: 0, intrinsic: sniffImageSize(bytes) };
+        return { rid, cx: 0, cy: 0, intrinsic: this.mediaIntrinsic.get(attachmentName) ?? null };
     }
 
     // ── metadata / reproducibility ─────────────────────────────────────────────
