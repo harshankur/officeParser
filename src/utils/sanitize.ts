@@ -584,7 +584,7 @@ const LATEX_TEXT_ESCAPES: Record<string, string> = {
  * empty group between the pair keeps the two characters the source actually contained. Every
  * alternative is one character (the neighbor is only looked at), so a match costs constant time.
  */
-const LATEX_TEXT_SPECIAL = /[\n\\{}$&%#_~^<>|`[\]\t ­​]|([-',])(?=\1)/g;
+const LATEX_TEXT_SPECIAL = /[\n\\{}$&%#_~^<>|`[\]\t\u00A0\u00AD\u200B]|([-',])(?=\1)/g;
 
 /**
  * Escapes document text for a LaTeX text position (running text, a macro argument, a table cell).
