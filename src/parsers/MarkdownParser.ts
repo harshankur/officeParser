@@ -1233,13 +1233,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // definitions conventionally live at the end of the document, after every place
     // they're referenced - inline parsing below needs the full map upfront. The first line
     // may be followed by continuation lines indented one level (4 spaces or a tab), which are
-    // dedented and joined onto the definition (Pandoc/GFM). A 4-space-indented block right after
-    // a definition is therefore read as its continuation rather than as a standalone code block.
-    // Supported (lossless) shape: contiguous continuation - the indented lines follow the
-    // definition with no blank line between them. Known limitation (6.E.1): a continuation
-    // separated from the definition by a BLANK line is not folded in - the regex below stops at
-    // the blank line, and the indented block after it re-parses as a fenced/indented code block on
-    // save. Multi-paragraph footnotes should therefore use the contiguous form.
+    // dedented and joined onto the definition (Pandoc/GFM), blank lines between them allowed (see
+    // below), so a note may hold several paragraphs. A 4-space-indented block right after a
+    // definition is therefore read as its continuation rather than as a standalone code block.
     const footnoteDefinitions = new Map<string, string>();
     // Every id a `[^id]` reference consumes, so definitions that are never referenced can be
     // detected at the end and preserved rather than silently dropped (see the orphan sweep below).
