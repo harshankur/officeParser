@@ -4300,6 +4300,8 @@ async function testHtmlBrowserReading(): Promise<void> {
     const doc = (content: any[], metadata: object = {}) => ({ type: 'docx', metadata, attachments: [], content } as any);
     const idsOf = (html: string) => [...html.matchAll(/\sid="([^"]*)"/g)].map(m => m[1]);
     const chapterOf = async (ast: any, extra: object = {}) => strFromU8(unzipSync((await write(ast, 'epub', extra)) as Uint8Array)['OEBPS/chapter1.xhtml']);
+    // Characters XML does not allow at all, which no XHTML chapter may hold.
+    const XML_INVALID = /[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
     // A paragraph holding a block: its wrapper (a quote's <blockquote>) is kept, and its ids go on its
     // first part, whatever that part is.
@@ -4348,6 +4350,20 @@ async function testHtmlBrowserReading(): Promise<void> {
         const back = await parse(html);
         assert.strictEqual(collectAllNodes(back).filter(n => n.type === 'note' && !(n.metadata as any)?.unreferenced).length >= 2, true, `HTML: both references read back (${label})`);
     }
+
+    // Characters XML does not allow never reach an EPUB, whatever the source (a decoded `&#1;`, a raw
+    // control character in Markdown or a CSV cell, metadata).
+    for (const [src, type] of [['<p>a&#1;b&#11;c&#xFFFE;d</p>', 'html'], ['a\x01b\x0Bc\n', 'md'], ['a\x01b,c\x0Bd\n', 'csv']] as const) {
+        const ast = await parse(src, type);
+        const chapter = await chapterOf(ast);
+        assert.ok(!XML_INVALID.test(chapter), `EPUB: no character XML forbids from ${JSON.stringify(src)}`);
+        assert.ok(/a.?b/.test(chapter), 'EPUB: the text around it is kept');
+    }
+    const metaEpub = unzipSync(await write(doc([{ type: 'paragraph', children: [T('x')] }], { title: 'Ti\x01tle', author: 'A\x0Bb', description: 'd\uFFFE', keywords: 'k\x02' }), 'epub') as Uint8Array);
+    for (const [name, bytes] of Object.entries(metaEpub)) if (/\.(xhtml|opf|xml)$/.test(name)) assert.ok(!XML_INVALID.test(strFromU8(bytes)), `EPUB: ${name} holds no character XML forbids`);
+    assert.ok(strFromU8(metaEpub['OEBPS/content.opf']).includes('<dc:title>Title</dc:title>'), 'EPUB: the title is kept without the control character');
+    // HTML reads a number past the last code point as U+FFFD, as it reads NUL and a surrogate.
+    assert.strictEqual(collectAllNodes(await parse('<p>&#0;&#xD800;&#1114112;&#x80;</p>')).find(n => n.type === 'text')?.text, '\uFFFD\uFFFD\uFFFD\u20AC', 'HTML: out-of-range numeric references read as U+FFFD');
 
     console.log('  HTML/EPUB reading and writing: All assertions passed ✓');
 }

@@ -2,7 +2,7 @@ import { Zippable, zipSync } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeParserAST } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { HtmlGenerator } from './HtmlGenerator.js';
-import { escapeXml } from '../utils/sanitize.js';
+import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { decodeBase64, documentLanguage, MIME_EXT, resolveZipInstant } from '../utils/officeGenUtils.js';
 
 const VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
@@ -64,6 +64,12 @@ const promoteParagraphsWithBlockContent = (html: string): string => {
 };
 
 /**
+ * A value as the text of an XML element or attribute (the package document, the navigation document,
+ * a chapter's head): escaped, and without the characters XML does not allow at all (see toXhtml).
+ */
+const xmlText = (value: string | undefined): string => escapeXml(stripInvalidXmlChars(value as string));
+
+/**
  * Converts HtmlGenerator's HTML output into well-formed XHTML, which EPUB reading
  * systems parse as strict XML (unlike browsers, which tolerate HTML's looseness).
  *
@@ -83,10 +89,14 @@ const promoteParagraphsWithBlockContent = (html: string): string => {
  *  - escapes stray ampersands (e.g. in `href` query strings) not already part of a valid
  *    reference;
  *  - gives HTML boolean attributes an explicit value (`checked` -> `checked="checked"`);
- *  - self-closes void elements (`<br>` -> `<br/>`).
+ *  - self-closes void elements (`<br>` -> `<br/>`);
+ *  - removes the characters XML does not allow at all, even escaped (C0 controls but tab, line
+ *    feed and carriage return; U+FFFE and U+FFFF; lone surrogates), which a document's text can hold
+ *    (a control character in a CSV cell, `&#1;` in an HTML page): one made the chapter unreadable.
+ *    DOCX and ODT output leave them out in the same way.
  */
 const toXhtml = (html: string): string => {
-    let out = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+    let out = stripInvalidXmlChars(html).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
 
     out = promoteParagraphsWithBlockContent(out);
 
@@ -101,6 +111,8 @@ const toXhtml = (html: string): string => {
     // option" is never rewritten.
     out = out.replace(/<input\b([^>]*?)\schecked(\s*\/?>)/gi, '<input$1 checked="checked"$2');
     out = out.replace(/<(iframe|video|audio)\b([^>]*?)\s(allowfullscreen|autoplay|controls|loop|muted)(\s*\/?>|\s)/gi, '<$1$2 $3="$3"$4');
+    // A gated embed's marker attribute (`htmlConfig.gatedEmbeds`), written bare; the reader checks only that it is there.
+    out = out.replace(/<div data-embed-gated /g, '<div data-embed-gated="" ');
 
     // Self-close void elements (non-greedy attr capture so an already-present trailing `/`
     // isn't duplicated, e.g. `<meta .../>` must not become `<meta ...//>`).
@@ -243,10 +255,10 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
 
         const chapterXhtml = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="${escapeXml(language)}">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="${xmlText(language)}">
 <head>
 <meta charset="utf-8"/>
-<title>${escapeXml(title)}</title>
+<title>${xmlText(title)}</title>
 <style type="text/css">
 ${EPUB_STYLESHEET}
 </style>
@@ -260,20 +272,20 @@ ${xhtmlBody}
         // all. Inline `${x ? ... : ''}` leaves the surrounding indentation and newline behind, so
         // every optional field the document lacks used to emit a stray blank line into the OPF.
         const optionalDcElements = [
-            author ? `<dc:creator>${escapeXml(author)}</dc:creator>` : '',
-            description ? `<dc:description>${escapeXml(description)}</dc:description>` : '',
+            author ? `<dc:creator>${xmlText(author)}</dc:creator>` : '',
+            description ? `<dc:description>${xmlText(description)}</dc:description>` : '',
             // dc:subject is repeatable and is the OPF's only slot for either of these.
-            subject ? `<dc:subject>${escapeXml(subject)}</dc:subject>` : '',
-            keywords ? `<dc:subject>${escapeXml(keywords)}</dc:subject>` : '',
+            subject ? `<dc:subject>${xmlText(subject)}</dc:subject>` : '',
+            keywords ? `<dc:subject>${xmlText(keywords)}</dc:subject>` : '',
         ].filter(Boolean).map(el => `    ${el}`).join('\n');
 
         const opf = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="pub-id">${escapeXml(identifier)}</dc:identifier>
-    <dc:title>${escapeXml(title)}</dc:title>
+    <dc:identifier id="pub-id">${xmlText(identifier)}</dc:identifier>
+    <dc:title>${xmlText(title)}</dc:title>
 ${optionalDcElements}
-    <dc:language>${escapeXml(language)}</dc:language>
+    <dc:language>${xmlText(language)}</dc:language>
     <meta property="dcterms:modified">${modified}</meta>
   </metadata>
   <manifest>
@@ -291,9 +303,9 @@ ${optionalDcElements}
 <head><meta charset="utf-8"/><title>Navigation</title></head>
 <body>
 <nav epub:type="toc" id="toc">
-<h1>${escapeXml(title)}</h1>
+<h1>${xmlText(title)}</h1>
 <ol>
-<li><a href="chapter1.xhtml">${escapeXml(title)}</a></li>
+<li><a href="chapter1.xhtml">${xmlText(title)}</a></li>
 </ol>
 </nav>
 </body>

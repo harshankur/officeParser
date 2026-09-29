@@ -3,7 +3,7 @@ import { anchorMark, isAnchorMark, resolveAnchorMarks } from '../utils/anchorUti
 import { createAST } from '../utils/astUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
-import { decodeCharacterReferences } from '../utils/htmlEntities.js';
+import { CHARACTER_REFERENCE, decodeCharacterReference } from '../utils/htmlEntities.js';
 import { isEmptyMath, MathNode, mathmlTreeToLatex } from '../utils/mathUtils.js';
 import { isSafeHtmlAttributeName, iframeAllowed } from '../utils/sanitize.js';
 import { setOwn } from '../utils/lookupUtils.js';
@@ -97,9 +97,11 @@ const BLOCK_LEVEL_TAGS = new Set(['address', 'article', 'aside', 'blockquote', '
  * One pass, so it is the exact inverse of `escapeHtml`: chained replaces decoded `&amp;` before
  * `&quot;`/`&#39;`, turning the escaped literal text `&amp;quot;` into `"` instead of `&quot;`. Every
  * numeric reference and HTML 4's named references decode (`&rsquo;`, `&#8217;`, `&copy;`), not only
- * the few `escapeHtml` writes.
+ * the few `escapeHtml` writes. A number past the last code point (`&#1114112;`) is U+FFFD, as HTML
+ * reads it (NUL and surrogates are too, see decodeCharacterReference).
  */
-const decodeEntities = decodeCharacterReferences;
+const decodeEntities = (text: string): string =>
+    text.replace(CHARACTER_REFERENCE, (full: string, body: string) => decodeCharacterReference(body) ?? (body[0] === '#' ? '\uFFFD' : full));
 
 /** An element's raw child text as the source had it (code/math bodies). A comment is not text. */
 const rawChildText = (node: HtmlNode): string => node.children.map(c => (c.type === 'comment' ? '' : c.text || '')).join('');
