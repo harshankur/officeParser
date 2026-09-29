@@ -4,7 +4,7 @@ import { trimEndChars } from '../utils/textUtils.js';
 import { AdmonitionMetadata, CodeMetadata, CommentMetadata, ConversionResult, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, ParagraphMetadata, TexDocumentClass, TextFormatting, TextMetadata } from '../types.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { ADMONITION_COLOR, decodeBase64, embedUrl, fillSheetRowGaps, hexColor, isHeaderRow, lengthToPt, marginPt, MIME_EXT, paperSizePt, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
-import { LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, planLatexUnicode } from '../utils/latexUtils.js';
+import { LatexMathPlan, LatexScripts, LatexUnicodePlan, LISTINGS_LANGUAGES, mathCommandsOf, planLatexMath, planLatexUnicode, withLatexMathMacros } from '../utils/latexUtils.js';
 import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, sanitizeLatexMath, sanitizeLatexUrl } from '../utils/sanitize.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { contentHash, imageToTextPdf, newDecodeBudget } from '../utils/textPdf.js';
@@ -277,6 +277,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private nestedFootnotes: string[] = [];
     /** Colors the body uses, as validated `RRGGBB` hex, each defined once by name. */
     private readonly colors = new Set<string>();
+    /** The control words the formulas written use, for the packages and definitions they need (see planLatexMath). */
+    private readonly mathCommands = new Set<string>();
     private readonly warnedFeatures = new Set<string>();
 
     /** Set while rendering a heading whose every run is bold: the heading is bold already. */
@@ -331,15 +333,16 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const meta = this.metadataCommands();
         const unicode = planLatexUnicode([headerSetup, meta.title, ...meta.hypersetup, ...parts].join('\n'));
         if (unicode.packages.has('amssymb')) this.uses.amssymb = true;
+        const math = this.mathPlan();
         let tex: string;
         const carried = this.carriedImageBlocks();
         if (standalone) {
             const titleBlock = this.titleBlock();
-            tex = `${this.preamble(headerSetup, meta, unicode)}${carried ? `\n${carried}\n` : ''}\n\\begin{document}\n\n${[titleBlock, ...parts].filter(Boolean).join(BLOCK_SEPARATOR)}\n\n\\end{document}\n`;
+            tex = `${this.preamble(headerSetup, meta, unicode, math)}${carried ? `\n${carried}\n` : ''}\n\\begin{document}\n\n${[titleBlock, ...parts].filter(Boolean).join(BLOCK_SEPARATOR)}\n\n\\end{document}\n`;
         } else {
-            // \definecolor and filecontents* are legal in the body, so a fragment carries its own
-            // color definitions and images.
-            tex = `${this.fragmentHeader(unicode)}\n${[carried, this.colorDefinitions().join('\n'), ...parts].filter(Boolean).join(BLOCK_SEPARATOR)}\n`;
+            // \definecolor, \providecommand and filecontents* are legal in the body, so a fragment
+            // carries its own color definitions, math definitions and images.
+            tex = `${this.fragmentHeader(unicode, math)}\n${[carried, this.colorDefinitions().join('\n'), math.definitions.join('\n'), ...parts].filter(Boolean).join(BLOCK_SEPARATOR)}\n`;
         }
 
         const bundle = this.config.texConfig.bundle === true;
@@ -916,10 +919,20 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     // ── math ─────────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * A safe formula as LaTeX: the KaTeX and MathJax macros LaTeX lacks written as what they stand for,
+     * and its commands noted, for the packages and definitions the preamble gives them (see mathPlan).
+     */
+    private mathLatex(latex: string): string {
+        const out = withLatexMathMacros(latex);
+        mathCommandsOf(out, this.mathCommands);
+        return out;
+    }
+
     private inlineMath(source: string): string {
         this.uses.math = true;
         const result = sanitizeLatexMath(source, 'inline');
-        if (result.ok) return result.latex ? `$${result.latex}$` : '';
+        if (result.ok) return result.latex ? `$${this.mathLatex(result.latex)}$` : '';
         this.warn(OfficeWarningType.MATH_WRITTEN_AS_TEXT, { commands: result.commands });
         return `\\texttt{${escapeLatex(source, ' ')}}`;
     }
@@ -929,7 +942,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const result = sanitizeLatexMath(source, 'block');
         if (result.ok) {
             if (!result.latex) return '';
-            return result.displayEnvironment ? result.latex : `\\[\n${result.latex}\n\\]`;
+            const latex = this.mathLatex(result.latex);
+            return result.displayEnvironment ? latex : `\\[\n${latex}\n\\]`;
         }
         this.warn(OfficeWarningType.MATH_WRITTEN_AS_TEXT, { commands: result.commands });
         return this.codeText(source, undefined, '');
@@ -2040,11 +2054,34 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         return this.beamer ? '\\begin{frame}\n\\titlepage\n\\end{frame}' : '\\maketitle';
     }
 
+    /**
+     * What the formulas written need beyond amsmath and amssymb (see planLatexMath): packages such as
+     * `bm` or `mathtools` for the commands a source loaded them for. A command nothing the output
+     * loads defines prints its own name, so the document compiles and shows where it is, and is
+     * reported.
+     */
+    private mathPlan(): LatexMathPlan {
+        const plan = planLatexMath(this.mathCommands);
+        for (const p of plan.packages) {
+            if (p.name === 'xcolor') this.uses.xcolor = true;
+            if (p.name === 'graphicx') this.uses.graphics = true;
+        }
+        const unknown = plan.undefinedCommands;
+        if (unknown.length) {
+            // Named up to a point: a document of thousands of them gets a message, not a megabyte.
+            const named = unknown.slice(0, 20).map(c => `\\${c}`).join(', ') + (unknown.length > 20 ? ` and ${unknown.length - 20} more` : '');
+            this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: `math commands no package the output loads defines (${named}), each printed as its name`, format: 'tex' });
+        }
+        return plan;
+    }
+
     /** `\usepackage` lines for what the body uses (hyperref and the font setup are handled separately). */
-    private packageLines(unicode: LatexUnicodePlan): string[] {
+    private packageLines(unicode: LatexUnicodePlan, math: LatexMathPlan): string[] {
         const u = this.uses;
         const lines: string[] = [];
         if (u.math || u.amssymb) lines.push('\\usepackage{amsmath,amssymb}');
+        // The packages of the commands the formulas use; xcolor and graphicx are loaded below, as the body's.
+        for (const p of math.packages) if (p.name !== 'xcolor' && p.name !== 'graphicx') lines.push(`\\usepackage${p.options ? `[${p.options}]` : ''}{${p.name}}`);
         if (unicode.packages.has('pifont')) lines.push('\\usepackage{pifont}');
         if (unicode.packages.has('newunicodechar')) lines.push('\\usepackage{newunicodechar}');
         if (u.graphics && !this.beamer) lines.push('\\usepackage{graphicx}');
@@ -2056,7 +2093,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         return lines;
     }
 
-    private preamble(headerSetup: string, meta: { title: string; hypersetup: string[] }, unicode: LatexUnicodePlan): string {
+    private preamble(headerSetup: string, meta: { title: string; hypersetup: string[] }, unicode: LatexUnicodePlan, math: LatexMathPlan): string {
         const classOptions = this.beamer
             ? ['aspectratio=169', `${this.classSizePt}pt`, ...(this.uses.colortbl ? ['xcolor=table'] : [])]
             : [`${this.classSizePt}pt`];
@@ -2089,7 +2126,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             lines.push(`\\usepackage[${geometry.join(',')}]{geometry}`);
             lines.push('\\usepackage{parskip}');
         }
-        lines.push(...this.packageLines(unicode));
+        lines.push(...this.packageLines(unicode, math));
         if (headerSetup) lines.push('\\usepackage{fancyhdr}');
         if (!this.beamer) lines.push('\\usepackage[hyperfootnotes=false]{hyperref}');
 
@@ -2114,6 +2151,16 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         lines.push(...this.colorDefinitions());
         if (headerSetup) lines.push(headerSetup);
         lines.push(...this.unicodeLines(unicode));
+        if (math.definitions.length) {
+            // Made at the start of the document, after every package's own definitions (a command one
+            // of them defines keeps its meaning); the LaTeX parser reads the formulas as written.
+            lines.push(
+                '% Math commands no package loaded here defines, each printed as its name until you define it (or load its package).',
+                '\\AtBeginDocument{%',
+                ...math.definitions.map(d => `  ${d}%`),
+                '}',
+            );
+        }
         if (meta.title) lines.push(meta.title);
         return lines.join('\n') + '\n';
     }
@@ -2225,11 +2272,11 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     }
 
     /** The comment heading a body-only fragment: the packages the including document must load. */
-    private fragmentHeader(unicode: LatexUnicodePlan): string {
+    private fragmentHeader(unicode: LatexUnicodePlan, math: LatexMathPlan): string {
         const unicodeLines = this.unicodeLines(unicode);
         const fonts = this.scriptFontLines(unicode.scripts);
         // The per-engine declarations test the engine with iftex's \iftutex.
-        const packages = [...(unicodeLines.length || fonts.length ? ['\\usepackage{iftex}'] : []), ...this.packageLines(unicode)];
+        const packages = [...(unicodeLines.length || fonts.length ? ['\\usepackage{iftex}'] : []), ...this.packageLines(unicode, math)];
         if (this.uses.graphics && this.beamer) packages.push('\\usepackage{graphicx}');
         packages.push('\\usepackage{hyperref}');
         // Under XeLaTeX and LuaLaTeX (after fontspec), the fonts for the scripts Latin Modern lacks.

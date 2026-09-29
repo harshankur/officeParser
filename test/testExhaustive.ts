@@ -2762,6 +2762,29 @@ c &= d
     const commentedTable = await texOf('\\begin{document}\\begin{tabular}{ll}\na & b \\\\\n% \\begin{tabular}{lll} was the old layout\nc & \\verb|d&e| \\\\\n\\end{tabular}\n\n\\section{After}Text.\\end{document}');
     assert.deepStrictEqual([commentedTable.ast.content.map(n => n.type), commentedTable.ast.content[0].children!.map(r => r.children!.map(c => c.text))], [['table', 'heading', 'paragraph'], [['a', 'b'], ['c', 'd&e']]], 'TEX parse: a commented-out \\begin inside a tabular, and \\verb in a cell');
 
+    // amsmath's \DeclareMathOperator and mathtools' paired delimiters are expanded, as \newcommand is.
+    const declared = await texOf(String.raw`\documentclass{article}\usepackage{amsmath,mathtools,bm}
+\DeclareMathOperator*{\argmax}{arg\,max}\DeclareMathOperator{\Tr}{Tr}
+\DeclarePairedDelimiter\abs{\lvert}{\rvert}
+\DeclarePairedDelimiterX\innerp[2]{\langle}{\rangle}{#1,\delimsize\vert #2}
+\begin{document}$\argmax_\theta \Tr A \coloneqq \abs{y} + \abs*{\frac{a}{b}} + \abs[\big]{z} + \innerp*{u}{v}$ and $\bm{x}$\end{document}`);
+    assert.deepStrictEqual([collectAllNodes(declared.ast).filter(n => (n.metadata as any)?.math).map(n => n.text), declared.warnings.length],
+        [['\\operatorname*{arg\\,max}_\\theta \\operatorname{Tr} A \\coloneqq \\lvert y \\rvert + \\left\\lvert \\frac{a}{b} \\right\\rvert + \\bigl\\lvert z \\bigr\\rvert + \\left\\langle u,\\middle\\vert v \\right\\rangle', '\\bm{x}'], 0],
+        'TEX parse: \\DeclareMathOperator, \\DeclarePairedDelimiter(X), sized and starred');
+    // The generator loads the packages the formulas' commands come from, writes KaTeX's and MathJax's own
+    // macros as the LaTeX they stand for, and gives a command nothing defines its name as its meaning.
+    const declaredWarnings: any[] = [];
+    const declaredTex = (await declared.ast.to('tex', { onWarning: (w: any) => declaredWarnings.push(w) } as any)).value as string;
+    assert.ok(/\\usepackage\{amsmath,amssymb\}\n\\usepackage\{mathtools\}\n\\usepackage\{bm\}\n/.test(declaredTex) && !declaredWarnings.length, 'TEX: \\coloneqq loads mathtools and \\bm loads bm (last)');
+    const dialectWarnings: any[] = [];
+    const dialect = await OfficeParser.parseOffice(Buffer.from('Reals $x \\in \\R^n$, $\\lang a, b \\rang$, $\\Rightarrow \\Reals$ and $\\zork{x}$.'), { fileType: 'md' } as any);
+    const dialectTex = (await dialect.to('tex', { onWarning: (w: any) => dialectWarnings.push(w) } as any)).value as string;
+    assert.ok(dialectTex.includes('$x \\in \\mathbb{R}^n$, $\\langle a, b \\rangle$, $\\Rightarrow \\mathbb{R}$ and $\\zork{x}$')
+        && dialectTex.includes('\\AtBeginDocument{%\n  \\providecommand{\\zork}{\\texttt{\\textbackslash zork}}%\n}'), 'TEX: KaTeX macros written as LaTeX; an unknown command prints its name');
+    assert.deepStrictEqual(dialectWarnings.map(w => [w.code, w.details?.feature]), [['CONTENT_NOT_REPRESENTABLE', 'math commands no package the output loads defines (\\zork), each printed as its name']], 'TEX: the unknown math command is reported');
+    const dialectAgain = (await (await OfficeParser.parseOffice(Buffer.from(dialectTex), { fileType: 'tex' } as any)).to('tex', { onWarning: () => {} } as any)).value as string;
+    assert.strictEqual(dialectAgain, dialectTex, 'TEX round trip: the math definitions and rewritten macros are a fixed point');
+
     // \today prints the date of the parse (as LaTeX prints the date of the compile), in the document's
     // language, or the text texParserConfig.today sets; it is never dropped.
     const dateIn = (tag: string) => new Intl.DateTimeFormat(tag, { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date());

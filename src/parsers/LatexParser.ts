@@ -866,7 +866,12 @@ interface ListContext { listId: string; level: number; enumDepth: number; nextIn
 
 /** One argument of an `xparse` (`\NewDocumentCommand`) signature. */
 interface XArg { kind: 'm' | 'o' | 'O' | 's' | 't' | 'd' | 'D' | 'r' | 'R' | 'v' | 'b'; token?: string; open?: string; close?: string; value?: string; }
-interface UserMacro { nargs: number; optDefault: string | null; body: string; spec?: XArg[]; }
+/**
+ * A user macro: its arguments and body. `paired` marks a mathtools paired delimiter (`\abs{x}`), whose
+ * body sits between its delimiters: `\abs*` sizes them to the body (`\left`/`\right`), `\abs[\big]` with
+ * that size, and `\delimsize` in the body stands for the size.
+ */
+interface UserMacro { nargs: number; optDefault: string | null; body: string; spec?: XArg[]; paired?: { open: string; close: string; pre: string; post: string }; }
 interface UserEnv { nargs: number; optDefault: string | null; begin: string; end: string; spec?: XArg[]; }
 /** A theorem-like environment: its printed title, `\theoremstyle`, and the counter it numbers with (none: unnumbered). */
 interface TheoremDef { title: string; style: string; counter?: string; }
@@ -1416,6 +1421,16 @@ class LatexReader {
 
     /** Reads a user macro's arguments and returns its body with them substituted. */
     private substitute(sc: Scanner, def: UserMacro): string {
+        if (def.paired) {
+            const star = sc.readStar();
+            const size = star ? null : sc.readRawOptional()?.trim() || null;
+            const args: string[] = [];
+            for (let k = 0; k < def.nargs; k++) args.push(sc.readRawGroup() ?? '');
+            const [left, right, middle] = star ? ['\\left', '\\right', '\\middle'] : size ? [`${size}l`, `${size}r`, size] : ['', '', ''];
+            const body = this.fill(def.body, args).replace(/\\delimsize(?![A-Za-z])/g, () => middle);
+            const { open, close, pre, post } = def.paired;
+            return `${pre}${left}${open} ${body} ${right}${close}${post}`;
+        }
         return this.fill(def.body, this.readUserArgs(sc, def));
     }
 
@@ -2323,6 +2338,24 @@ class LatexReader {
                 this.defineDocumentCommand(sc, name); return;
             case 'NewDocumentEnvironment': case 'RenewDocumentEnvironment': case 'ProvideDocumentEnvironment': case 'DeclareDocumentEnvironment':
                 this.defineDocumentEnvironment(sc, name); return;
+            // amsmath's operator names and mathtools' paired delimiters, which formulas use like any command.
+            case 'DeclareMathOperator': {
+                const star = sc.readStar();
+                const cs = (sc.readRawGroup() ?? '').trim().replace(/^\\/, '').replace(/\s+/g, '');
+                const body = sc.readRawGroup() ?? '';
+                if (cs && !PROTECTED_COMMANDS.has(cs)) this.macros.set(cs, { nargs: 0, optDefault: null, body: `\\operatorname${star ? '*' : ''}{${body}}` });
+                return;
+            }
+            case 'DeclarePairedDelimiter': case 'DeclarePairedDelimiterX': case 'DeclarePairedDelimiterXPP': {
+                const cs = (sc.readRawGroup() ?? '').trim().replace(/^\\/, '').replace(/\s+/g, '');
+                const n = name === 'DeclarePairedDelimiter' ? 1 : Math.max(0, Math.min(9, parseInt(sc.readRawOptional() ?? '0', 10) || 0));
+                const pre = name === 'DeclarePairedDelimiterXPP' ? sc.readRawGroup() ?? '' : '';
+                const open = sc.readRawGroup() ?? '', close = sc.readRawGroup() ?? '';
+                const post = name === 'DeclarePairedDelimiterXPP' ? sc.readRawGroup() ?? '' : '';
+                const body = name === 'DeclarePairedDelimiter' ? '#1' : sc.readRawGroup() ?? '';
+                if (cs && !PROTECTED_COMMANDS.has(cs)) this.macros.set(cs, { nargs: n, optDefault: null, body, paired: { open, close, pre, post } });
+                return;
+            }
             // expl3 code is a programming layer with its own syntax, not document content.
             case 'ExplSyntaxOn': sc.readRawUntil('\\ExplSyntaxOff', '\\ExplSyntaxOn'); return;
             case 'newtheorem': {

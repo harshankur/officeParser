@@ -249,3 +249,252 @@ export const LATEX_SYMBOL_CHARACTERS: ReadonlyMap<string, string> = (() => {
     }
     return map;
 })();
+
+
+/**
+ * The commands a formula may use once the LaTeX generator's preamble has loaded amsmath and amssymb:
+ * what TeX Live 2026 defines under pdfLaTeX in the kernel's plain, math, spacing, font, text-symbol,
+ * box, reference and tabular parts (`latex.ltx`), in `fontmath.ltx`, and in amsmath and amssymb
+ * (with amsfonts, amsopn, amsbsy and amstext), less those `sanitizeLatexMath` refuses and the
+ * kernel's package-writing commands. Found by reading those files' command names and keeping the
+ * ones `\ifcsname` finds defined. A formula using anything else needs a package of
+ * {@link MATH_PACKAGE_COMMANDS}, or is a command no package the output loads defines.
+ */
+const LATEX_MATH_COMMANDS: ReadonlySet<string> = new Set(`
+    AA AE Acute Alph AmS AmSfont And Arrowvert AssignSocketPlug Bar Bbb Bbbk Big Bigg Biggl Biggm Biggr Bigl Bigm Bigr
+    Box Breve Bumpeq Cap Check CheckEncodingSubset Cup DOTSB DOTSI DOTSX Ddot Delta Diamond Dot Doteq Downarrow Finv
+    Game Gamma Grave H Hat IJ IfBooleanF IfBooleanTF Im Join L LaTeX LaTeXe Lambda Leftarrow Leftrightarrow Lleftarrow
+    Longleftarrow Longleftrightarrow Longrightarrow Lsh MakeUppercase MultiIntegral O OE Omega P Phi Pi Pr Psi Re Ref
+    Relbar Rightarrow Roman Rrightarrow Rsh S SS Sigma Subset Supset TeX TextOrMath TextSymbolUnavailable Theta Tilde
+    UndeclareTextCommand Uparrow Updownarrow Upsilon UseHookWithArguments UseLegacyTextSymbols UseSocket
+    UseTaggingSocket UseTextAccent UseTextSymbol Vdash Vec Vert Vvdash Xi a aa above abovedisplayshortskip
+    abovedisplayskip abovewithdelims accent acute addpenalty addvspace ae aleph align aligned alignedat allowbreak
+    allowdisplaybreaks alph alpha amalg angle approx approxeq arabic arccos arcsin arctan arg array arraycolsep
+    arrayrulewidth arraystretch arrowvert ast asymp atop atopwithdelims b backepsilon backprime backsim backsimeq
+    backslash bar barwedge because begin begingroup belowdisplayshortskip belowdisplayskip beta beth between bfseries
+    bgroup big bigcap bigcirc bigcup bigg biggl biggm biggr bigl bigm bigodot bigoplus bigotimes bigr bigskip
+    bigskipamount bigsqcup bigstar bigtriangledown bigtriangleup biguplus bigvee bigwedge binom blacklozenge blacksquare
+    blacktriangle blacktriangledown blacktriangleleft blacktriangleright bmod bold boldmath boldsymbol bordermatrix bot
+    bowtie box boxdot boxed boxmaxdepth boxminus boxplus boxtimes brace braceld bracelu bracerd braceru bracevert brack
+    break breve buildrel bullet bumpeq c cap capitalacute capitalbreve capitalcaron capitalcedilla capitalcircumflex
+    capitaldieresis capitaldotaccent capitalgrave capitalhungarumlaut capitalmacron capitalnewtie capitalogonek
+    capitalring capitaltie capitaltilde cases cdot cdotp cdots centerdot centerline cfrac check checkmark chi choose
+    circ circeq circlearrowleft circlearrowright circledR circledS circledast circledcirc circleddash clap cline
+    clubsuit colon complement cong coprod copy copyright cos cosh cot coth csc cup curlyeqprec curlyeqsucc curlyvee
+    curlywedge currentgrouptype curvearrowleft curvearrowright d dag dagger daleth dasharrow dashleftarrow
+    dashrightarrow dashv dbinom ddag ddagger ddddot dddot ddot ddots deg delimiter delimiterfactor delimitershortfall
+    delta det dfrac diagdown diagup diamond diamondsuit digamma dim dimen discretionary displaybreak displayindent
+    displaylimits displaylines displaymath displaystyle displaywidowpenalty displaywidth div divide divideontimes dot
+    doteq doteqdot dotfill dotplus dots dotsb dotsc dotsi dotsm dotso doublebarwedge doublecap doublecup
+    doublehyphendemerits doublerulesep downarrow downbracefill downdownarrows downharpoonleft downharpoonright dp egroup
+    ell em emph empty emptyset end endalign endaligned endarray enddisplaymath endeqnarray endequation endgather endgraf
+    endgroup endline endmath endmathdisplay endmatrix endminipage endmultline endsplit endsubarray endtabbing endtabular
+    endtrivlist enskip enspace ensuremath epsilon eqcirc eqnarray eqno eqref eqsim eqslantgtr eqslantless equation equiv
+    eta eth exhyphenpenalty exists exp extracolsep fallingdotseq fbox fboxrule fboxsep fill finalhyphendemerits flat
+    fmtversion fnsymbol fontchardp fontcharht fontdimen fontencoding fontfamily fontsize footnotesize forall frac frak
+    frame framebox frenchspacing frown gamma gather gcd ge genfrac geq geqq geqslant gets gg ggg gggtr gimel glossary
+    gnapprox gneq gneqq gnsim grave gtrapprox gtrdot gtreqless gtreqqless gtrless gtrsim gvertneqq halign hat hbadness
+    hbar hbox hdots hdotsfor heartsuit hfil hfill hfilneg hfuzz hglue hideskip hidewidth hline hom hookleftarrow
+    hookrightarrow hphantom hrule hrulefill hsize hskip hslash hspace hss ht hyphenpenalty i ialign idotsint iff
+    ignorespaces ignorespacesafterend iiiint iiint iint ij imath impliedby implies in indent index inf infty injlim int
+    intercal interdisplaylinepenalty interfootnotelinepenalty interlinepenalty intertext intop iota item itshape j jmath
+    joinrel jot k kappa ker kern kill l lVert label labelformat lambda land langle lbrace lbrack lceil ldotp ldots le
+    leaders leadsto leavevmode left leftarrow leftarrowfill leftarrowtail lefteqn leftharpoondown leftharpoonup
+    leftleftarrows leftline leftrightarrow leftrightarrows leftrightharpoons leftrightsquigarrow leftroot leftskip
+    leftthreetimes legacyoldstylenums leq leqno leqq leqslant lessapprox lessdot lesseqgtr lesseqqgtr lessgtr lesssim
+    lfloor lg lgroup lhd lhook lim liminf limits limsup linepenalty lineskip lineskiplimit linewidth ll llap llcorner
+    lll llless lmoustache ln lnapprox lneq lneqq lnot lnsim log longleftarrow longleftrightarrow longmapsto
+    longrightarrow lor lower lowercase lozenge lq lrcorner ltimes lvert lvertneqq magstep magstephalf makebox maltese
+    mapsto mapstochar math mathaccent mathaccentV mathalpha mathbb mathbf mathbin mathcal mathchar mathchoice mathclose
+    mathdisplay mathdollar mathellipsis mathfrak mathgroup mathhexbox mathinner mathit mathnormal mathop mathopen
+    mathord mathpalette mathparagraph mathpunct mathrel mathring mathrm mathsection mathsf mathsterling mathstrut
+    mathsurround mathtt mathunderscore mathversion matrix max maxdepth maxdimen mbox mdseries measuredangle medmuskip
+    medskip medskipamount medspace mho mid middle min minalignsep minipage mintagsep mkern mod models moveleft mp mskip
+    mspace mu multicolumn multimap multiply multispan multline multlinegap multlinetaggap muskip nLeftarrow
+    nLeftrightarrow nRightarrow nVDash nVdash nabla narrower natural ncong ne nearrow neg negmedspace negthickspace
+    negthinspace neq nexists ngeq ngeqq ngeqslant ngtr ni nleftarrow nleftrightarrow nleq nleqq nleqslant nless nmid
+    nobreak nobreakdash nobreakdashes nobreakspace nocorr nocorrlist noindent nointerlineskip nolimits nonfrenchspacing
+    nonscript nonumber normalbaselines normalbaselineskip normalcolor normalfont normallineskip normallineskiplimit
+    normalsize not notag notin nparallel nprec npreceq nrightarrow nshortmid nshortparallel nsim nsubseteq nsubseteqq
+    nsucc nsucceq nsupseteq nsupseteqq ntriangleleft ntrianglelefteq ntriangleright ntrianglerighteq nu null
+    nulldelimiterspace nvDash nvdash nwarrow o oalign odot oe offinterlineskip oint ointop oldstylenums omega ominus
+    ooalign openup operatorfont operatorname operatornamewithlimits oplus oslash otimes over overbrace overfullrule
+    overleftarrow overleftrightarrow overline overrightarrow overset overunderset overwithdelims owns pageref parallel
+    parbox parfillskip parindent parshape parskip partial penalty perp phantom phi pi pitchfork pm pmatrix pmb pmod pod
+    poptabs postdisplaypenalty pounds prec precapprox preccurlyeq preceq precnapprox precneqq precnsim precsim
+    predisplaypenalty pretolerance prevdepth prime primfrac prod projlim propto protect psi pushtabs qopname qquad quad
+    r rVert raise raisebox raisetag rangle rbrace rbrack rceil ref relax relbar relpenalty removelastskip restriction
+    rfloor rgroup rhd rho rhook right rightarrow rightarrowfill rightarrowtail rightharpoondown rightharpoonup
+    rightleftarrows rightleftharpoons rightline rightrightarrows rightskip rightsquigarrow rightthreetimes risingdotseq
+    rlap rmdefault rmfamily rmoustache rmsubstdefault roman root rootbox rq rtimes rule rvert sb scriptfont
+    scriptscriptfont scriptscriptstyle scriptspace scriptstyle scshape searrow sec selectfont setminus sf sffamily
+    sfsubstdefault sharp shortmid shortparallel shoveleft shoveright sideset sigma sim simeq sin sinh skew skewchar skip
+    slash slshape smallfrown smallint smallsetminus smallskip smallskipamount smallsmile smash smile sp space
+    spacefactor spaceskip spadesuit sphericalangle split splitmaxdepth splittopskip sqcap sqcup sqrt sqrtsign sqsubset
+    sqsubseteq sqsupset sqsupseteq square ss sscshape stackrel star stretch strut strutbox subarray subset subseteq
+    subseteqq subsetneq subsetneqq substack succ succapprox succcurlyeq succeq succnapprox succneqq succnsim succsim sum
+    sup supset supseteq supseteqq supsetneq supsetneqq surd swarrow swshape symAMSa symAMSb symbol symletters
+    symoperators t tabbing tabbingsep tabcolsep tabskip tabular tag tan tanh tau tbinom text textacutedbl
+    textascendercompwordmark textasciiacute textasciibreve textasciicaron textasciicircum textasciidieresis
+    textasciigrave textasciimacron textasciitilde textasteriskcentered textbackslash textbaht textbar textbardbl textbf
+    textbigcircle textblank textborn textbraceleft textbraceright textbrokenbar textbullet textcapitalcompwordmark
+    textcelsius textcent textcentoldstyle textcircled textcircledP textcolonmonetary textcommaabove textcommabelow
+    textcompsubstdefault textcompwordmark textcopyleft textcopyright textcurrency textdagger textdaggerdbl textdblhyphen
+    textdblhyphenchar textdegree textdied textdiscount textdiv textdivorced textdollar textdollaroldstyle textdong
+    textdownarrow texteightoldstyle textellipsis textemdash textendash textestimated texteuro textexclamdown
+    textfiveoldstyle textflorin textfont textfouroldstyle textfractionsolidus textgravedbl textgreater textguarani
+    textinterrobang textinterrobangdown textit textlangle textlbrackdbl textleaf textleftarrow
+    textlegacyasteriskcentered textlegacybardbl textlegacybullet textlegacydagger textlegacydaggerdbl
+    textlegacyparagraph textlegacyperiodcentered textlegacysection textless textlira textlnot textlquill textmarried
+    textmd textmho textminus textmu textmusicalnote textnaira textnineoldstyle textnormal textnumero textohm textonehalf
+    textoneoldstyle textonequarter textonesuperior textopenbullet textordfeminine textordmasculine textparagraph
+    textperiodcentered textpertenthousand textperthousand textpeso textpilcrow textpm textquestiondown textquotedblleft
+    textquotedblright textquoteleft textquoteright textquotesingle textquotestraightbase textquotestraightdblbase
+    textrangle textrbrackdbl textrecipe textreferencemark textregistered textrightarrow textrm textrquill textsc
+    textsection textservicemark textsevenoldstyle textsf textsixoldstyle textsl textssc textsterling textstyle
+    textsuperscript textsurd textsw textthreeoldstyle textthreequarters textthreequartersemdash textthreesuperior
+    texttildelow texttimes texttrademark texttt texttwelveudash texttwooldstyle texttwosuperior textulc textunderscore
+    textup textuparrow textvisiblespace textwidth textwon textyen textzerooldstyle tfrac theequation thempfn
+    thempfootnote thepage theparentequation therefore theta thetag thickapprox thickmuskip thicksim thickspace
+    thinmuskip thinspace tilde times tmspace to toks tolerance top topskip triangle triangledown triangleleft
+    trianglelefteq triangleq triangleright trianglerighteq trivlist ttfamily ttsubstdefault twoheadleftarrow
+    twoheadrightarrow u ulcorner ulcshape underbar underbrace underleftarrow underleftrightarrow underline
+    underrightarrow underset unitlength unlhd unpenalty unrhd unskip uparrow upbracefill updownarrow upharpoonleft
+    upharpoonright uplus uppercase uproot upshape upsilon upuparrows urcorner usefont v vDash vadjust valign value
+    varDelta varGamma varLambda varOmega varPhi varPi varPsi varSigma varTheta varUpsilon varXi varbigtriangledown
+    varbigtriangleup varepsilon varinjlim varkappa varliminf varlimsup varnothing varphi varpi varprojlim varpropto
+    varrho varsigma varsubsetneq varsubsetneqq varsupsetneq varsupsetneqq vartheta vartriangle vartriangleleft
+    vartriangleright vbadness vbox vcenter vdash vdots vec vee veebar veqno vert vfil vfilneg vfuzz vglue vline vphantom
+    vrule vskip vspace vss vtop wd wedge widehat widetilde widowpenalty wp wr xi xleaders xleftarrow xrightarrow yen
+    zeta
+`.split(/\s+/).filter(Boolean));
+
+/**
+ * Packages with math commands a formula may use (so a document parsed from LaTeX that loaded them
+ * keeps working), in the order they are loaded, each with its load options and its commands. `bm`
+ * comes last, as its manual asks; `xcolor` and `graphicx` are loaded by the generator itself.
+ */
+const MATH_PACKAGES: ReadonlyArray<{ name: string; options?: string; commands: string }> = [
+    {
+        name: 'mathtools', commands: 'coloneqq Coloneqq coloneq Coloneq eqqcolon Eqqcolon eqcolon Eqcolon vcentcolon dblcolon approxcolon Approxcolon '
+            + 'colonapprox Colonapprox simcolon Simcolon colonsim Colonsim ordinarycolon mathclap mathllap mathrlap mathmbox mathmakebox cramped '
+            + 'crampedclap crampedllap crampedrlap smashoperator adjustlimits prescript underbracket overbracket xmapsto xhookrightarrow '
+            + 'xhookleftarrow xLeftarrow xRightarrow xleftrightarrow xLeftrightarrow xleftharpoonup xrightharpoonup xleftharpoondown '
+            + 'xrightharpoondown xleftrightharpoons xrightleftharpoons splitfrac splitdfrac MoveEqLeft ArrowBetweenLines shortintertext '
+            + 'lparen rparen Aboxed',
+    },
+    { name: 'esint', commands: 'oiint oiiint sqint sqiint ointclockwise ointctrclockwise varointclockwise varointctrclockwise fint landupint landdownint' },
+    { name: 'stmaryrd', commands: 'llbracket rrbracket llparenthesis rrparenthesis mapsfrom Mapsfrom Mapsto longmapsfrom Longmapsfrom Longmapsto lightning' },
+    { name: 'mathrsfs', commands: 'mathscr' },
+    {
+        name: 'upgreek', commands: 'upalpha upbeta upgamma updelta upepsilon upvarepsilon upzeta upeta uptheta upvartheta upiota upkappa uplambda upmu '
+            + 'upnu upxi uppi upvarpi uprho upvarrho upsigma upvarsigma uptau upupsilon upphi upvarphi upchi uppsi upomega Upgamma Updelta Uptheta '
+            + 'Uplambda Upxi Uppi Upsigma Upupsilon Upphi Uppsi Upomega',
+    },
+    { name: 'dsfont', commands: 'mathds' },
+    { name: 'bbm', commands: 'mathbbm mathbbmss mathbbmtt' },
+    { name: 'cancel', commands: 'cancel bcancel xcancel cancelto' },
+    { name: 'xfrac', commands: 'sfrac' },
+    { name: 'nicefrac', commands: 'nicefrac' },
+    { name: 'relsize', commands: 'mathlarger mathsmaller' },
+    { name: 'mathdots', commands: 'iddots' },
+    { name: 'gensymb', commands: 'degree celsius perthousand ohm micro' },
+    { name: 'braket', commands: 'bra ket braket Bra Ket Braket' },
+    { name: 'siunitx', commands: 'SI si num ang unit qty numrange qtyrange SIrange numlist qtylist' },
+    { name: 'mhchem', options: 'version=4', commands: 'ce pu' },
+    { name: 'xcolor', commands: 'color textcolor colorbox fcolorbox' },
+    { name: 'graphicx', commands: 'scalebox rotatebox reflectbox resizebox' },
+    { name: 'bm', commands: 'bm bmmax hmmax' },
+];
+
+/**
+ * siunitx's units and prefixes, which it defines inside its unit arguments (`\SI{3}{\metre}`): known
+ * commands when a formula loads it.
+ */
+const SIUNITX_UNITS: ReadonlySet<string> = new Set(('ampere candela kelvin kilogram gram metre meter mole second becquerel degreeCelsius coulomb '
+    + 'farad gray hertz henry joule katal lumen lux newton ohm pascal radian siemens sievert steradian tesla volt watt weber '
+    + 'astronomicalunit bel dalton day decibel degree electronvolt hectare hour litre liter arcminute minute arcsecond neper tonne '
+    + 'percent quecto ronto yocto zepto atto femto pico nano micro milli centi deci deca deka hecto kilo mega giga tera peta exa '
+    + 'zetta yotta ronna quetta square squared cubic cubed per tothe raiseto of cancel highlight').split(' '));
+
+/** The package of each command in {@link MATH_PACKAGES}. */
+const MATH_PACKAGE_OF: Record<string, string> = lookupTable(Object.fromEntries(MATH_PACKAGES.flatMap(p => p.commands.split(' ').map(c => [c, p.name]))));
+
+/**
+ * Macros KaTeX and MathJax define that LaTeX does not (Markdown and HTML math is written for them),
+ * and the LaTeX each stands for.
+ */
+const MATH_DIALECT_MACROS: Record<string, string> = lookupTable({
+    R: '\\mathbb{R}', N: '\\mathbb{N}', Z: '\\mathbb{Z}', Q: '\\mathbb{Q}', C: '\\mathbb{C}', Reals: '\\mathbb{R}', reals: '\\mathbb{R}',
+    natnums: '\\mathbb{N}', cnums: '\\mathbb{C}', Complex: '\\mathbb{C}', lang: '\\langle', rang: '\\rangle', larr: '\\leftarrow',
+    rarr: '\\rightarrow', lArr: '\\Leftarrow', rArr: '\\Rightarrow', Larr: '\\Leftarrow', Rarr: '\\Rightarrow', harr: '\\leftrightarrow',
+    hArr: '\\Leftrightarrow', Harr: '\\Leftrightarrow', uarr: '\\uparrow', darr: '\\downarrow', uArr: '\\Uparrow', dArr: '\\Downarrow',
+    Uarr: '\\Uparrow', Darr: '\\Downarrow', isin: '\\in', plusmn: '\\pm', sdot: '\\cdot', sub: '\\subset', sube: '\\subseteq',
+    supe: '\\supseteq', alef: '\\aleph', alefsym: '\\aleph', weierp: '\\wp', image: '\\Im', real: '\\Re', infin: '\\infty',
+    clubs: '\\clubsuit', diamonds: '\\diamondsuit', hearts: '\\heartsuit', spades: '\\spadesuit', thetasym: '\\vartheta',
+    Alpha: '\\mathrm{A}', Beta: '\\mathrm{B}', Epsilon: '\\mathrm{E}', Zeta: '\\mathrm{Z}', Eta: '\\mathrm{H}', Iota: '\\mathrm{I}',
+    Kappa: '\\mathrm{K}', Mu: '\\mathrm{M}', Nu: '\\mathrm{N}', Omicron: '\\mathrm{O}', Rho: '\\mathrm{P}', Tau: '\\mathrm{T}',
+    Chi: '\\mathrm{X}', omicron: 'o',
+});
+
+/**
+ * Calls `visit` with each control word of a formula (its name, and where it starts and ends), read
+ * as TeX reads them: `\\alpha` is a line break, then letters.
+ */
+function eachMathCommand(latex: string, visit: (name: string, start: number, end: number) => void): void {
+    for (let i = latex.indexOf('\\'); i >= 0 && i < latex.length; i = latex.indexOf('\\', i)) {
+        let j = i + 1;
+        while (j < latex.length && /[A-Za-z]/.test(latex[j])) j++;
+        if (j > i + 1) { visit(latex.slice(i + 1, j), i, j); i = j; } else i += 2;
+    }
+}
+
+/** Adds the control words of a formula to `into`. */
+export function mathCommandsOf(latex: string, into: Set<string>): void {
+    eachMathCommand(latex, name => { into.add(name); });
+}
+
+/**
+ * A formula with the KaTeX and MathJax macros LaTeX lacks written as what they stand for (`\R` as
+ * `\mathbb{R}`), so it means in LaTeX what its source meant. Only whole control words are replaced.
+ */
+export function withLatexMathMacros(latex: string): string {
+    const parts: string[] = [];
+    let from = 0;
+    eachMathCommand(latex, (name, start, end) => {
+        const macro = MATH_DIALECT_MACROS[name];
+        if (!macro) return;
+        parts.push(latex.slice(from, start), macro);
+        from = end;
+    });
+    if (from === 0) return latex;
+    parts.push(latex.slice(from));
+    return parts.join('');
+}
+
+/**
+ * What the math a document holds needs beyond amsmath and amssymb: the packages its commands come
+ * from (in load order, with their options), and the commands nothing the output loads defines, with
+ * a definition for each that prints its own name, so the document compiles and shows where it is.
+ */
+export interface LatexMathPlan {
+    packages: { name: string; options?: string }[];
+    definitions: string[];
+    undefinedCommands: string[];
+}
+
+/** Plans what the commands a document's formulas use need (see {@link LatexMathPlan}). */
+export function planLatexMath(commands: Iterable<string>): LatexMathPlan {
+    const names = [...new Set(commands)].sort();
+    const needed = new Set<string>();
+    for (const name of names) {
+        const pkg = MATH_PACKAGE_OF[name];
+        if (pkg) needed.add(pkg);
+    }
+    const undefinedCommands = names.filter(name => !MATH_PACKAGE_OF[name] && !LATEX_MATH_COMMANDS.has(name) && !(needed.has('siunitx') && SIUNITX_UNITS.has(name)));
+    return {
+        packages: MATH_PACKAGES.filter(p => needed.has(p.name)).map(p => ({ name: p.name, ...(p.options ? { options: p.options } : {}) })),
+        definitions: undefinedCommands.map(name => `\\providecommand{\\${name}}{\\texttt{\\textbackslash ${name}}}`),
+        undefinedCommands,
+    };
+}
