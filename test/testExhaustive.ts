@@ -2700,6 +2700,68 @@ code here
     assert.deepStrictEqual((await texOf(Buffer.from('\\usepackage[utf8]{inputenc}\\begin{document}caf\u00e9\\end{document}', 'latin1'))).paras, ['café'], 'TEX parse: a declared utf8 the bytes contradict is judged by the bytes');
     assert.deepStrictEqual((await texOf(Buffer.concat([Buffer.from('% !TEX encoding = IsoLatin2\n\\begin{document}'), Buffer.from([0xb1]), Buffer.from('\\end{document}')]))).paras, ['ą'], 'TEX parse: TeXShop encoding names');
 
+    // A URL argument's `%` is a character (hyperref reads it so), not a comment that takes the closing
+    // brace and the rest of the document into the link.
+    const urlPct = await texOf(String.raw`\documentclass{article}\begin{document}
+See \url{https://example.com/a%20b} for details, \href{https://example.com/c%20d}{the site} and \nolinkurl{x%y}.
+
+Second paragraph.
+\end{document}`);
+    assert.deepStrictEqual([urlPct.paras, collectAllNodes(urlPct.ast).filter(n => (n.metadata as any)?.link).map(n => (n.metadata as any).link), urlPct.warnings.length],
+        [['See https://example.com/a%20b for details, the site and x%y.', 'Second paragraph.'], ['https://example.com/a%20b', 'https://example.com/c%20d'], 0], 'TEX parse: % in \\url, \\href and \\nolinkurl is part of the URL');
+    // The generator escapes every % it writes in a URL (a bare one is a comment inside a heading or a
+    // footnote), and those links parse back.
+    const zurich = await OfficeParser.parseOffice(Buffer.from('# See [Zürich](https://de.wikipedia.org/wiki/Zürich) here\n\nA note[^1] and [home](https://example.edu/~alice/).\n\n[^1]: See [Zürich](https://de.wikipedia.org/wiki/Zürich).\n'), { fileType: 'md' } as any);
+    const zurichTex = (await zurich.to('tex')).value as string;
+    assert.ok(zurichTex.includes('\\href{https://de.wikipedia.org/wiki/Z\\%C3\\%BCrich}{Zürich} here}') && zurichTex.includes('\\href{https://example.edu/\\%7Ealice/}{home}')
+        && !/[^\\]%[0-9A-F]{2}/.test(zurichTex.slice(zurichTex.indexOf('\\begin{document}'))), 'TEX: URL encodings are written \\%XX');
+    const zurichBack = await OfficeParser.parseOffice(Buffer.from(zurichTex), { fileType: 'tex' } as any);
+    assert.deepStrictEqual(collectAllNodes(zurichBack).filter(n => (n.metadata as any)?.link).map(n => [n.text, (n.metadata as any).link]),
+        [['Zürich', 'https://de.wikipedia.org/wiki/Z%C3%BCrich'], ['Zürich', 'https://de.wikipedia.org/wiki/Z%C3%BCrich'], ['home', 'https://example.edu/%7Ealice/']], 'TEX round trip: links in a heading and a footnote parse back');
+    // What is left open at the end of the input took in the rest: reported, not passed over.
+    const openGroup = await texOf(String.raw`\begin{document}Start \textbf{bold never closed.
+
+Second.\end{document}`);
+    assert.ok(openGroup.warnings.some(w => w.code === 'LATEX_CONSTRUCT_NOT_INTERPRETED' && w.message.includes('{ without a matching } (read to the end of the input)')), 'TEX parse: an unclosed argument is reported');
+    for (const [open, what] of [[String.raw`\begin{itemize}\item a`, '\\begin{itemize} without its \\end{itemize}'], [String.raw`\begin{tabular}{l} a`, '\\begin{tabular} without its \\end{tabular}'], ['$x', 'math opened with $ without its $'], [String.raw`\iffalse x`, '\\iffalse without its \\fi']]) {
+        assert.ok((await texOf(open)).warnings.some(w => w.message.includes(what)), `TEX parse: ${what} is reported`);
+    }
+    // TeX drops a comment in a formula: kept, it was typeset (`\%`), and an unbalanced brace in one made
+    // the generator write the whole formula as verbatim text.
+    const mathComments = await texOf(String.raw`\begin{document}\begin{equation} x = 1 % a comment
+\end{equation}\begin{align}
+a &= b \\ % first { unbalanced
+c &= d
+\end{align}\ensuremath{y % z
+}\end{document}`);
+    const mathTexts = collectAllNodes(mathComments.ast).filter(n => (n.metadata as any)?.math).map(n => n.text);
+    assert.deepStrictEqual(mathTexts, ['\\begin{equation} x = 1 \n\\end{equation}', '\\begin{align}\na &= b \\\\ \nc &= d\n\\end{align}', 'y'], 'TEX parse: comments in display-math environments and \\ensuremath are dropped');
+    const mathCommentsTexWarnings: any[] = [];
+    const mathCommentsTex = (await mathComments.ast.to('tex', { onWarning: (w: any) => mathCommentsTexWarnings.push(w) } as any)).value as string;
+    assert.ok(mathCommentsTex.includes('\\begin{align}\na &= b \\\\ \nc &= d\n\\end{align}') && !mathCommentsTex.includes('comment') && !mathCommentsTexWarnings.length, 'TEX: the formulas are written as math, with no comment typeset');
+    // \input reads a file as TeX does: its last line end is a space (never a paragraph break), and the
+    // primitive form takes a name without braces.
+    const inputZip = (main: string) => Buffer.from(zipSync({ 'main.tex': strToU8(`\\documentclass{article}\\begin{document}\n${main}\n\\end{document}`), 'acc.tex': strToU8('95.3\n'), 'chapter1.tex': strToU8('Chapter text.') }));
+    assert.deepStrictEqual((await texOf(inputZip('The accuracy is \\input{acc} percent on the test set.'))).paras, ['The accuracy is 95.3 percent on the test set.'], 'TEX parse: \\input in a sentence keeps the paragraph');
+    assert.deepStrictEqual((await texOf(inputZip('The accuracy is \\input{acc}\npercent.'))).paras, ['The accuracy is 95.3 percent.'], 'TEX parse: \\input at a line end keeps the paragraph');
+    assert.deepStrictEqual((await texOf(inputZip('Before \\input chapter1 after.\n\n\\input{acc}\n\nAfter.'))).paras, ['Before Chapter text. after.', '95.3', 'After.'], 'TEX parse: \\input without braces; blank lines around an \\input still break paragraphs');
+    // The main file of a project is not a part of another document.
+    for (const [layout, expected] of [
+        [{ 'paper-main/main.tex': '\\documentclass{article}\\begin{document}MAIN BODY \\input{chapter1}\\end{document}', 'paper-main/chapter1.tex': '\\documentclass[main]{subfiles}\\begin{document}Chapter one.\\end{document}' }, 'MAIN BODY Chapter one.'],
+        [{ 'paper.tex': '\\documentclass{article}\\begin{document}MAIN BODY \\subfile{intro}\\end{document}', 'intro.tex': '\\documentclass[paper]{subfiles}\\begin{document}Intro.\\end{document}' }, 'MAIN BODY Intro.'],
+        [{ 'a.tex': '\\documentclass{article}\\begin{document}Part A.\\end{document}', 'z.tex': '% \\documentclass{article}\n\\documentclass{book}\\begin{document}Whole \\include{a}\\end{document}' }, 'Whole Part A.'],
+        [{ 'main.tex': '\\input{preamble}\\begin{document}Body.\\end{document}', 'preamble.tex': '\\documentclass{article}' }, 'Body.'],
+    ] as const) {
+        const project = await texOf(Buffer.from(zipSync(Object.fromEntries(Object.entries(layout).map(([k, v]) => [k, strToU8(v)])))));
+        assert.deepStrictEqual(project.paras, [expected], `TEX project: the main file of ${Object.keys(layout).join(', ')}`);
+    }
+    // Scans of the raw source read comments as TeX does.
+    assert.deepStrictEqual((await texOf('\\documentclass{article}\\begin{document}\n% \\chapter{Old draft}\n\\section{Intro}\\end{document}')).ast.content.map(n => (n.metadata as any).level), [1], 'TEX parse: a commented-out \\chapter does not demote the sections');
+    const commentedClass = await texOf('%\\documentclass{beamer}\n\\documentclass{article}\\begin{document}\\begin{theorem}T\\end{theorem}\\end{document}');
+    assert.deepStrictEqual([commentedClass.ast.metadata.nativeProperties?.documentClass, commentedClass.ast.content[0].type], ['article', 'paragraph'], 'TEX parse: a commented-out \\documentclass is not the class');
+    const commentedTable = await texOf('\\begin{document}\\begin{tabular}{ll}\na & b \\\\\n% \\begin{tabular}{lll} was the old layout\nc & \\verb|d&e| \\\\\n\\end{tabular}\n\n\\section{After}Text.\\end{document}');
+    assert.deepStrictEqual([commentedTable.ast.content.map(n => n.type), commentedTable.ast.content[0].children!.map(r => r.children!.map(c => c.text))], [['table', 'heading', 'paragraph'], [['a', 'b'], ['c', 'd&e']]], 'TEX parse: a commented-out \\begin inside a tabular, and \\verb in a cell');
+
     // \today prints the date of the parse (as LaTeX prints the date of the compile), in the document's
     // language, or the text texParserConfig.today sets; it is never dropped.
     const dateIn = (tag: string) => new Intl.DateTimeFormat(tag, { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date());

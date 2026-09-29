@@ -2339,10 +2339,24 @@ async function latexParserTests() {
         ['20k unclosed ConTeXt \\startitemize', '\\starttext ' + '\\startitemize \\item x '.repeat(20000)],
         ['40k xparse \\ends with no \\begin', '\\NewDocumentEnvironment{A}{}{}{}\\NewDocumentEnvironment{B}{}{}{}' + '\\begin{A}'.repeat(40000) + '\\end{B}'.repeat(40000)],
         ['100k unknown \\if words in a skipped branch', '\\iffalse ' + '\\ifunknown x '.repeat(100000)],
+        // Scans that read comments, URLs and verbatim text as TeX does: each looks for a construct's end once.
+        ['100k commented-out \\begin lines in a tabular', '\\begin{tabular}{l}\n' + '% \\begin{tabular}{l} x & y\n'.repeat(100000) + '\\end{tabular}'],
+        ['100k near misses of \\begin and \\end in a tabular', '\\begin{tabular}{l}' + '\\bf \\em \\beg \\en \\% '.repeat(60000) + '\\end{tabular}'],
+        ['100k \\verb on one line', 'x \\verb|a%b| '.repeat(100000)],
+        ['100k unclosed \\verb on one line', '\\verb!a '.repeat(100000)],
+        ['100k \\verb in one table cell row', '\\begin{tabular}{l}' + '\\verb|a&b| '.repeat(100000) + '\\end{tabular}'],
+        ['20k unclosed \\url{ with %', '\\url{a%\n'.repeat(20000)],
+        ['100k % lines in an equation', '\\begin{equation}' + 'x % c\n'.repeat(100000) + '\\end{equation}'],
+        ['100k unclosed verbatim environments', '\\begin{verbatim}x'.repeat(100000)],
+        ['a 1MB \\input line', '\\input ' + 'a'.repeat(1_000_000)],
     ] as const) {
         const r = await parse(src);
         check(`latex parser: ${label} parses in linear time`, r.ms < TIME_BUDGET_MS, `${r.ms}ms`);
     }
+    // Picking a project's main file reads every file once, whatever the files include.
+    const manyFiles = Object.fromEntries(Array.from({ length: 3000 }, (_, k) => [`ch/${k}.tex`, `\\input{ch/${k + 1}}\\include{${k + 2}}\\subfile{../x}\n% \\documentclass{article}\n`]));
+    const mainPick = await parse(zip({ ...manyFiles, 'main.tex': '\\input{preamble}\\begin{document}Body\\end{document}', 'preamble.tex': '\\documentclass{article}' }));
+    check('latex parser: the main file of 3,000 files including each other is found in linear time', mainPick.ms < TIME_BUDGET_MS && mainPick.json.includes('Body'), `${mainPick.ms}ms`);
 
     // Memory: an expansion is sized before it is built, and a column spec's repetition is bounded by length.
     const heapBefore = process.memoryUsage().heapUsed;

@@ -119,22 +119,103 @@ const TABLE_ENVS: Record<string, string> = {
 const DRAWING_ENVS = new Set(['tikzpicture', 'pgfpicture', 'picture', 'forest', 'axis', 'circuitikz', 'pspicture', 'tikzcd']);
 
 /**
- * `src` without its `filecontents` bodies, which are file data rather than document source. Scanned
- * forward once: a pattern looking for each start's end read the rest of the source again for every
- * unclosed one (a megabyte of them took seconds). An unclosed body is left in place, as the pattern did.
+ * `raw` without its `%` comments: each `%` that is not a control symbol (`\%`) to the end of its line,
+ * the line end kept (so a control word before it still ends there). For source read raw, whose
+ * comments the scanner never saw: a formula's body, a column specification, a key-value list.
  */
-function withoutFilecontents(src: string): string {
-    const begin = /\\begin\s*\{filecontents\*?\}/g;
-    const end = /\\end\s*\{filecontents\*?\}/g;
-    let out = '', from = 0;
-    for (let open = begin.exec(src); open; open = begin.exec(src)) {
-        end.lastIndex = open.index + open[0].length;
-        const close = end.exec(src);
-        if (!close) break;
-        out += src.slice(from, open.index);
-        from = begin.lastIndex = close.index + close[0].length;
+function withoutComments(raw: string): string {
+    if (!raw.includes('%')) return raw;
+    const out: string[] = [];
+    let from = 0;
+    for (let i = 0; i < raw.length; i++) {
+        const c = raw[i];
+        if (c === '\\') { i++; continue; }
+        if (c !== '%') continue;
+        out.push(raw.slice(from, i));
+        const eol = raw.indexOf('\n', i);
+        i = from = eol < 0 ? raw.length : eol;
+        i--;
     }
-    return out + src.slice(from);
+    out.push(raw.slice(from));
+    return out.join('');
+}
+
+/**
+ * `src` as TeX reads its structure, for the scans that look over the whole source for a command
+ * (the class, the sectioning in use): comments, and the bodies of verbatim environments, `filecontents`
+ * and `\verb`, which are text rather than commands, blanked out (every character but a line end made
+ * a space, so a position in the result is the same position in `src`), and a `\url`/`\href` URL,
+ * whose `%` is a character, stepped over whole. A `% \chapter{Old}` in an article made its
+ * `\section`s level 2, and a `%\documentclass{beamer}` above the real one made the document a deck.
+ * One forward pass: each end marker is looked for once, from where the body starts.
+ */
+function liveSource(src: string): string {
+    const out: string[] = [];
+    let from = 0;
+    const blank = (a: number, b: number) => {
+        out.push(src.slice(from, a), src.slice(a, b).replace(/[^\n]/g, ' '));
+        from = b;
+    };
+    // Only a `%` or a `\` can start anything: the text between them is skipped in one native search.
+    const special = /[%\\]/g;
+    let i = 0;
+    while (i < src.length) {
+        special.lastIndex = i;
+        const next = special.exec(src);
+        if (!next) break;
+        i = next.index;
+        const c = src[i];
+        if (c === '%') {
+            const eol = src.indexOf('\n', i);
+            const end = eol < 0 ? src.length : eol;
+            blank(i, end);
+            i = end;
+            continue;
+        }
+        if (c !== '\\') { i++; continue; }
+        let j = i + 1;
+        while (j < src.length && /[A-Za-z@]/.test(src[j])) j++;
+        // A control symbol (`\%`, `\\`, `\{`): its character is not special.
+        if (j === i + 1) { i += 2; continue; }
+        const name = src.slice(i + 1, j);
+        i = j;
+        if (name === 'verb') {
+            if (src[i] === '*') i++;
+            const delim = src[i];
+            if (delim === undefined || delim === '\n') continue;
+            // `\verb` cannot span a line: its body ends at the delimiter or the line end, whichever is first
+            // (read up to it, so many on one long line are each read once).
+            let end = i + 1;
+            while (end < src.length && src[end] !== delim && src[end] !== '\n') end++;
+            blank(i + 1, end);
+            i = src[end] === delim ? end + 1 : end;
+            continue;
+        }
+        if (name === 'url' || name === 'href' || name === 'nolinkurl') {
+            let k = i;
+            while (src[k] === ' ' || src[k] === '\t') k++;
+            if (src[k] !== '{') continue;
+            let depth = 0;
+            for (; k < src.length; k++) {
+                if (src[k] === '\\') { k++; continue; }
+                if (src[k] === '{') depth++;
+                else if (src[k] === '}' && --depth === 0) break;
+            }
+            i = k + 1;
+            continue;
+        }
+        if (name !== 'begin') continue;
+        const env = /^\s*\{([^{}\n]*)\}/.exec(src.slice(i, i + 64));
+        if (!env || !(VERBATIM_ENVS.has(env[1].trim()) || /^filecontents\*?$/.test(env[1].trim()))) continue;
+        const bodyStart = i + env[0].length;
+        const endMarker = `\\end{${env[1].trim()}}`;
+        const close = src.indexOf(endMarker, bodyStart);
+        const bodyEnd = close < 0 ? src.length : close;
+        blank(bodyStart, bodyEnd);
+        i = close < 0 ? src.length : close + endMarker.length;
+    }
+    out.push(src.slice(from));
+    return out.join('');
 }
 
 /**
@@ -344,8 +425,17 @@ class Scanner {
     private afterCs = false;
     private lineStart = true;
 
-    constructor(src: string, file?: string) {
+    /**
+     * @param onUnclosed - Told when a read runs to the end of the input without finding what closes
+     *   it (a `{`, an environment, a `$`), with what was left open: everything after it was taken in.
+     */
+    constructor(src: string, file?: string, private readonly onUnclosed?: (what: string) => void) {
         this.frames = [{ s: src, i: 0, file }];
+    }
+
+    /** Reports what a read left open at the end of the input (see the constructor). */
+    unclosed(what: string): void {
+        this.onUnclosed?.(what);
     }
 
     get depth(): number { return this.frames.length; }
@@ -361,6 +451,8 @@ class Scanner {
 
     push(src: string, file?: string): void {
         this.frames.push({ s: src, i: 0, file });
+        // A file is read from the start of its first line, where an empty line is a paragraph break.
+        if (file) this.lineStart = true;
     }
 
     save(): Snapshot {
@@ -434,11 +526,24 @@ class Scanner {
                 return { t: 'comment', v };
             }
             if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+                // A paragraph break is an empty line of one source: the line end that closes an included
+                // file (or a macro body) and the one after `\input{...}` in the file that read it are two
+                // lines ending, a space, as in TeX. Counted together they made a break mid-sentence.
                 let newlines = c === '\n' ? 1 : 0;
-                while (this.peekCh() === ' ' || this.peekCh() === '\t' || this.peekCh() === '\n' || this.peekCh() === '\r') {
+                let frame = this.frames[this.frames.length - 1];
+                let lineStart = this.lineStart;
+                let par = false;
+                for (let n = this.peekCh(); n === ' ' || n === '\t' || n === '\n' || n === '\r'; n = this.peekCh()) {
+                    const top = this.frames[this.frames.length - 1];
+                    if (top !== frame) {
+                        par ||= newlines >= 2 || (lineStart && newlines >= 1);
+                        frame = top;
+                        newlines = 0;
+                        lineStart = false;
+                    }
                     if (this.nextCh() === '\n') newlines++;
                 }
-                const par = newlines >= 2 || (this.lineStart && newlines >= 1);
+                par ||= newlines >= 2 || (lineStart && newlines >= 1);
                 const skip = this.afterCs && !par;
                 this.afterCs = false;
                 this.lineStart = false;
@@ -497,30 +602,59 @@ class Scanner {
         return this.endRaw(this.readBalanced('{', '}'));
     }
 
-    private readBalanced(open: string, close: string): string {
+    /**
+     * The URL argument of `\url`, `\href` or `\nolinkurl`: hyperref reads it with `%`, `#` and `~` as
+     * ordinary characters, so a `%` there (`a%20b`) is part of the URL, not a comment that would take
+     * the closing brace and the rest of the line with it. Braces still nest.
+     */
+    readUrlGroup(): string | null {
+        this.skipBlanks();
+        if (this.peekCh() !== '{') return this.readRawGroup();
+        this.nextCh();
+        return this.endRaw(this.readBalanced('{', '}', true));
+    }
+
+    /** Raw source up to the `close` that balances an `open` already read; `%` starts a comment unless `percentLiteral`. */
+    private readBalanced(open: string, close: string, percentLiteral = false): string {
         let depth = 1;
-        let out = '';
+        // Collected in parts: a long argument built with `+=` a character at a time was all string pieces.
+        const parts: string[] = [];
         for (;;) {
             const c = this.nextCh();
-            if (c === undefined) return out;
+            if (c === undefined) {
+                this.unclosed(`${open} without a matching ${close}`);
+                return parts.join('');
+            }
             if (c === '\\') {
                 const n = this.nextCh();
-                out += c + (n ?? '');
+                parts.push(c + (n ?? ''));
                 continue;
             }
-            if (c === '%') {
-                out += c;
-                while (this.peekCh() !== undefined && this.peekCh() !== '\n') out += this.nextCh();
+            if (c === '%' && !percentLiteral) {
+                parts.push(c);
+                while (this.peekCh() !== undefined && this.peekCh() !== '\n') parts.push(this.nextCh()!);
                 continue;
             }
             if (c === open) depth++;
-            else if (c === close && --depth === 0) return out;
+            else if (c === close && --depth === 0) return parts.join('');
             if (open !== '{' && c === '{') {
-                out += c + this.readBalanced('{', '}') + '}';
+                parts.push(c + this.readBalanced('{', '}', percentLiteral) + '}');
                 continue;
             }
-            out += c;
+            parts.push(c);
         }
+    }
+
+    /**
+     * A file name written without braces (`\input chapter1`, TeX's own syntax): it ends at a space,
+     * which is consumed, or at a character that cannot be part of it.
+     */
+    readBareFileName(): string {
+        this.skipBlanks();
+        const parts: string[] = [];
+        for (let c = this.peekCh(); c !== undefined && !/[\s{}\\%$&#^~]/.test(c) && parts.length < 1024; c = this.peekCh()) parts.push(this.nextCh()!);
+        if (this.peekCh() === ' ') this.nextCh();
+        return this.endRaw(parts.join(''));
     }
 
     /** `[...]` at the current position (after blanks), or null without consuming anything. */
@@ -585,40 +719,69 @@ class Scanner {
         return r;
     }
 
-    /** Raw source up to (and consuming) `marker`; the marker is not included. */
-    readRawUntil(marker: string): { text: string; found: boolean } {
+    /**
+     * Raw source up to (and consuming) `marker`; the marker is not included. `opener` names what the
+     * marker closes, for the report when the input ends first.
+     */
+    readRawUntil(marker: string, opener?: string): { text: string; found: boolean } {
         // The body is collected in parts and only the last `marker.length` characters are compared,
         // so a long `\verb` or `\iffalse` body costs time linear in its length.
         const parts: string[] = [];
         let tail = '';
         for (;;) {
             const c = this.nextCh();
-            if (c === undefined) return { text: parts.join(''), found: false };
+            if (c === undefined) {
+                this.unclosed(`${opener ?? 'a construct'} without its ${marker}`);
+                return { text: parts.join(''), found: false };
+            }
             parts.push(c);
             tail = (tail + c).slice(-marker.length);
             if (tail === marker) return this.endRaw({ text: parts.join('').slice(0, -marker.length), found: true });
         }
     }
 
-    /** Raw source up to the `\end{name}` matching an already-consumed `\begin{name}`. */
-    readRawEnvBody(name: string): string {
-        const begin = `\\begin{${name}}`;
-        const end = `\\end{${name}}`;
-        // As in readRawUntil: parts plus a short rolling tail, so a brace-heavy body stays linear.
-        const width = Math.max(begin.length, end.length) + 1;
+    /**
+     * Raw source up to the `\end{name}` matching an already-consumed `\begin{name}`. A `\begin` or
+     * `\end` in a `%` comment is not one (a commented-out `\begin{tabular}` inside a tabular took the
+     * rest of the document into the table), and a control symbol (`\%`, `\\`) is read whole, so its
+     * character neither starts a comment nor makes the `\end` after it part of it. `verbatim` reads a
+     * body whose `%` is text (a `filecontents` file) with no comments.
+     */
+    readRawEnvBody(name: string, verbatim = false): string {
+        const begin = `begin{${name}}`;
+        const end = `end{${name}}`;
         let depth = 1;
+        // Collected in parts, and each `\begin`/`\end` matched character by character as it is read,
+        // so a long, brace-heavy or comment-heavy body stays linear.
         const parts: string[] = [];
-        let tail = '';
+        const matchRest = (word: string, from: number): boolean => {
+            for (let k = from; k < word.length; k++) {
+                if (this.peekCh() !== word[k]) return false;
+                parts.push(this.nextCh()!);
+            }
+            return true;
+        };
         for (;;) {
             const c = this.nextCh();
-            if (c === undefined) return parts.join('');
-            parts.push(c);
-            tail = (tail + c).slice(-width);
-            if (c === '}') {
-                if (tail.endsWith(end) && !tail.endsWith('\\' + end)) {
-                    if (--depth === 0) return this.endRaw(parts.join('').slice(0, -end.length));
-                } else if (tail.endsWith(begin)) depth++;
+            if (c === undefined) {
+                this.unclosed(`\\begin{${name}} without its \\end{${name}}`);
+                return parts.join('');
             }
+            parts.push(c);
+            if (c === '%' && !verbatim) {
+                while (this.peekCh() !== undefined && this.peekCh() !== '\n') parts.push(this.nextCh()!);
+                continue;
+            }
+            if (c !== '\\') continue;
+            const first = this.peekCh();
+            if (first === undefined) continue;
+            if (!/[A-Za-z]/.test(first)) { parts.push(this.nextCh()!); continue; }
+            if (first !== 'b' && first !== 'e') continue;
+            parts.push(this.nextCh()!);
+            const word = first === 'b' ? begin : end;
+            if (!matchRest(word, 1)) continue;
+            if (first === 'b') { depth++; continue; }
+            if (--depth === 0) return this.endRaw(parts.join('').slice(0, -(end.length + 1)));
         }
     }
 
@@ -627,7 +790,10 @@ class Scanner {
         let out = '';
         for (;;) {
             const c = this.nextCh();
-            if (c === undefined) return out;
+            if (c === undefined) {
+                this.unclosed(`math opened with ${closer === '\\)' ? '\\(' : closer === '\\]' ? '\\[' : closer} without its ${closer}`);
+                return out;
+            }
             if (c === '\\') {
                 const n = this.nextCh();
                 if (n === undefined) return out + c;
@@ -878,13 +1044,22 @@ class LatexReader {
 
     constructor(private config: FullOfficeParserConfig, private project: Project | null, private mainDir: string) { }
 
+    /**
+     * A scanner over `src` whose reads report what they leave open at the end of the input (an
+     * unclosed `{`, environment or `$` takes in everything after it, as TeX would before failing),
+     * named in `LATEX_CONSTRUCT_NOT_INTERPRETED`.
+     */
+    private scanner(src: string, file?: string): Scanner {
+        return new Scanner(src, file, what => this.unknown.add(`${what} (read to the end of the input)`));
+    }
+
     // ── entry ──
 
     parse(src: string, file?: string): OfficeContentNode[] {
         this.prescan(src);
         const flow = new Flow();
         this.docFlow = flow;
-        this.parseFlow(new Scanner(src, file), flow, {});
+        this.parseFlow(this.scanner(src, file), flow, {});
         this.endParagraph(flow);
         // References resolve before runs merge: a reference without a link is merged into the text around it.
         this.resolveRefs();
@@ -907,8 +1082,9 @@ class LatexReader {
      * sections), whether sections are numbered, and the document class.
      */
     private prescan(src: string): void {
-        // File data (an image carried as a PDF, say) is no evidence of the document's structure.
-        src = withoutFilecontents(src);
+        // Only what TeX reads as commands is evidence of the document's structure: not comments, and
+        // not verbatim text or file data (an image carried as a PDF, say).
+        src = liveSource(src);
         // `\documentstyle` is LaTeX 2.09's `\documentclass`.
         // Options and name stop at the next bracket or brace, and the whitespace after the options is
         // part of them: each scanning to the end, or trying every split of the spaces between them, took
@@ -1137,10 +1313,15 @@ class LatexReader {
             const snap = sc.save();
             const tok = sc.next(this.atLetter);
             switch (tok.t) {
-                case 'eof': unwind(); return 'eof';
+                case 'eof':
+                    // What is still open took in everything after it: said, not passed over.
+                    if (localGroups > 0) sc.unclosed('{ without a matching }');
+                    if (stop.env) sc.unclosed(`\\begin{${stop.env}} without its \\end{${stop.env}}`);
+                    unwind();
+                    return 'eof';
                 case 'bgroup':
                     this.flushText(flow);
-                    if (this.nesting >= MAX_NESTING_DEPTH) { this.tooDeep(flow, sc.readRawUntil('}').text); break; }
+                    if (this.nesting >= MAX_NESTING_DEPTH) { this.tooDeep(flow, sc.readRawUntil('}', '{').text); break; }
                     this.pushState();
                     localGroups++;
                     break;
@@ -1182,7 +1363,7 @@ class LatexReader {
         if (raw === null) return 'eof';
         if (this.nesting >= MAX_NESTING_DEPTH) { this.tooDeep(flow, raw); return 'eof'; }
         this.nesting++;
-        try { return this.parseFlow(new Scanner(raw), flow, {}); } finally { this.nesting--; }
+        try { return this.parseFlow(this.scanner(raw), flow, {}); } finally { this.nesting--; }
     }
 
     /** Parses raw source as the body of a separate container (a note, a cell) and returns its blocks. */
@@ -1193,7 +1374,7 @@ class LatexReader {
         const run = () => {
             if (this.nesting >= MAX_NESTING_DEPTH) { this.tooDeep(flow, raw); this.endParagraph(flow); return; }
             this.nesting++;
-            try { this.parseFlow(new Scanner(raw), flow, {}); } finally { this.nesting--; }
+            try { this.parseFlow(this.scanner(raw), flow, {}); } finally { this.nesting--; }
             this.endParagraph(flow);
         };
         if (freshState) {
@@ -1281,14 +1462,14 @@ class LatexReader {
                 else {
                     sc.skipBlanks();
                     const delim = sc.nextCh();
-                    text = delim === undefined ? '' : sc.readRawUntil(delim).text;
+                    text = delim === undefined ? '' : sc.readRawUntil(delim, `a verbatim argument opened with ${delim}`).text;
                 }
                 return text.replace(/[\\{}$&#^_%~]/g, c => VERBATIM_CHARS[c]);
             }
             default: {
                 const open = a.open ?? '[', close = a.close ?? ']';
                 // A delimiter that also closes (`d||`) cannot nest: the argument ends at its next occurrence.
-                const value = open === close ? (sc.readChar(open) ? sc.readRawUntil(close).text : null) : sc.readRawOptional(open, close);
+                const value = open === close ? (sc.readChar(open) ? sc.readRawUntil(close, `an argument opened with ${open}`).text : null) : sc.readRawOptional(open, close);
                 return value ?? (a.kind === 'O' || a.kind === 'D' || a.kind === 'R' ? a.value ?? '' : NO_VALUE);
             }
         }
@@ -1345,12 +1526,14 @@ class LatexReader {
     private expandMath(src: string): string {
         if (this.macros.size === 0) return src;
         let out = '';
-        const sc = new Scanner(src);
+        const sc = this.scanner(src);
         let steps = 0;
         for (;;) {
             if (++steps > MAX_EXPANDED_CHARS) break;
             const c = sc.nextCh();
             if (c === undefined) break;
+            // A comment a macro's body brings into the formula is dropped, as TeX drops it.
+            if (c === '%') { while (sc.peekCh() !== undefined && sc.peekCh() !== '\n') sc.nextCh(); continue; }
             if (c !== '\\') { out += c; continue; }
             let name = '';
             if (/[A-Za-z]/.test(sc.peekCh() ?? '')) { while (/[A-Za-z]/.test(sc.peekCh() ?? '')) name += sc.nextCh(); }
@@ -1486,7 +1669,10 @@ class LatexReader {
             case 'else': case 'or': {
                 const top = this.conds.pop();
                 // The end of a taken branch: the rest, to the matching `\fi`, is the branch not taken.
-                if (top === 'taken') { sc.skipBranch(n => this.isConditional(n, sc), false); return true; }
+                if (top === 'taken') {
+                    if (sc.skipBranch(n => this.isConditional(n, sc), false) === null) sc.unclosed(`\\${name} without its \\fi`);
+                    return true;
+                }
                 if (top !== undefined) this.conds.push(top);
                 return true;
             }
@@ -1521,7 +1707,9 @@ class LatexReader {
         }
         if (negate) value = !value;
         if (value) { this.conds.push('taken'); return; }
-        if (sc.skipBranch(n => this.isConditional(n, sc), true) === 'else') this.conds.push('else');
+        const reached = sc.skipBranch(n => this.isConditional(n, sc), true);
+        if (reached === 'else') this.conds.push('else');
+        else if (reached === null) sc.unclosed(`\\${name} without its \\fi`);
     }
 
     /** A conditional's value, reading its test, or undefined when it cannot be decided (the test is then left unread). */
@@ -1861,8 +2049,9 @@ class LatexReader {
                 this.endParagraph(flow);
                 if (this.config.includeBreakNodes) this.pushBlock(flow, { type: 'break', metadata: { breakType: 'page' } as any });
                 return;
-            case 'input': case 'subfile': case 'include_':
-                this.includeFile(sc, flow, sc.readRawGroup(), name === 'subfile');
+            case 'input': case 'subfile':
+                // `\input` also takes TeX's primitive form, a name with no braces (`\input chapter1`).
+                this.includeFile(sc, flow, name === 'input' && !sc.nextIs('{') ? sc.readBareFileName() : sc.readRawGroup(), name === 'subfile');
                 return;
             case 'import': case 'subimport': case 'inputfrom': case 'subinputfrom': {
                 sc.readStar();
@@ -1994,13 +2183,13 @@ class LatexReader {
             }
             case 'href': {
                 sc.readRawOptional();
-                const [url, raw] = this.readArgs(sc, 'mm');
-                const u = this.unescapeUrl(url ?? '');
+                const u = this.unescapeUrl(sc.readUrlGroup() ?? '');
+                const raw = sc.readRawGroup();
                 this.withLink(flow, u, u.startsWith('#'), raw);
                 return;
             }
             case 'url': case 'nolinkurl': {
-                const u = this.unescapeUrl(sc.readRawGroup() ?? '');
+                const u = this.unescapeUrl(sc.readUrlGroup() ?? '');
                 if (name === 'nolinkurl') { this.addText(flow, u, true); return; }
                 this.withState(s => { s.link = { url: u, internal: false }; }, () => this.addText(flow, u, true));
                 return;
@@ -2105,7 +2294,7 @@ class LatexReader {
             case 'hrule': case 'hrulefill':
                 this.addInline(flow, { type: 'break', metadata: { breakType: 'thematic' } as any });
                 return;
-            case 'ensuremath': this.addInlineMath(flow, sc.readRawGroup() ?? ''); return;
+            case 'ensuremath': this.addInlineMath(flow, withoutComments(sc.readRawGroup() ?? '')); return;
             case '(': this.addInlineMath(flow, sc.readMath('\\)')); return;
             case '[': this.addBlockMath(flow, sc.readMath('\\]')); return;
             case 'verb': case 'lstinline': case 'mintinline': case 'Verb': {
@@ -2113,7 +2302,7 @@ class LatexReader {
                 else if (name !== 'verb') sc.readRawOptional();
                 if (name === 'verb') sc.readStar();
                 const delim = sc.nextCh();
-                const text = delim === '{' ? sc.readRawUntil('}').text : sc.readRawUntil(delim ?? '|').text;
+                const text = sc.readRawUntil(delim === '{' ? '}' : delim ?? '|', `\\${name}${delim ?? ''}`).text;
                 this.withState(s => { s.fmt.font = 'monospace'; }, () => this.addText(flow, text, true));
                 return;
             }
@@ -2135,7 +2324,7 @@ class LatexReader {
             case 'NewDocumentEnvironment': case 'RenewDocumentEnvironment': case 'ProvideDocumentEnvironment': case 'DeclareDocumentEnvironment':
                 this.defineDocumentEnvironment(sc, name); return;
             // expl3 code is a programming layer with its own syntax, not document content.
-            case 'ExplSyntaxOn': sc.readRawUntil('\\ExplSyntaxOff'); return;
+            case 'ExplSyntaxOn': sc.readRawUntil('\\ExplSyntaxOff', '\\ExplSyntaxOn'); return;
             case 'newtheorem': {
                 const star = sc.readStar();
                 const env = (sc.readRawGroup() ?? '').trim();
@@ -2504,7 +2693,7 @@ class LatexReader {
 
     /** The arguments of every `\name{...}` in raw source, in order. */
     private argumentsOf(raw: string, name: string): string[] {
-        const sc = new Scanner(raw);
+        const sc = this.scanner(raw);
         const out: string[] = [];
         for (;;) {
             const tok = sc.next(this.atLetter);
@@ -2569,6 +2758,8 @@ class LatexReader {
         for (let i = 0; i < raw.length; i++) {
             const c = raw[i];
             if (c === '\\') { cur += c + (raw[++i] ?? ''); continue; }
+            // A comment is not part of a key or value (`pdftitle={T}, % the title`).
+            if (c === '%') { while (i + 1 < raw.length && raw[i + 1] !== '\n') i++; continue; }
             if (c === '{') depth++;
             if (c === '}') depth--;
             if (c === ',' && depth === 0) { push(); continue; }
@@ -2590,7 +2781,7 @@ class LatexReader {
         const flow = new Flow();
         this.withState(s => { s.inline = true; s.align = undefined; }, () => {
             if (this.nesting >= MAX_NESTING_DEPTH) this.tooDeep(flow, raw);
-            else { this.nesting++; try { this.parseFlow(new Scanner(raw), flow, {}); } finally { this.nesting--; } }
+            else { this.nesting++; try { this.parseFlow(this.scanner(raw), flow, {}); } finally { this.nesting--; } }
             this.flushText(flow);
         });
         const children = this.trimInline(flow.inline);
@@ -2630,10 +2821,13 @@ class LatexReader {
             return;
         }
         let text = decodeTex(this.project!.files.get(resolved)!, this.inputEncoding).text.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
-        if (subfile) {
-            // Looked up once each (a pattern tried every `\begin{document}` against the rest of the file).
-            const start = text.indexOf('\\begin{document}');
-            const end = start === -1 ? -1 : text.indexOf('\\end{document}', start + '\\begin{document}'.length);
+        // A `\subfile`, or a file that is a document of its own (a `subfiles` or `standalone` part), is
+        // read for its body: its preamble and its own `\begin{document}` would start the document over.
+        // The markers are found where TeX reads commands (not in comments), each looked up once.
+        const live = liveSource(text);
+        if (subfile || /\\document(?:class|style)\b/.test(live)) {
+            const start = live.indexOf('\\begin{document}');
+            const end = start === -1 ? -1 : live.indexOf('\\end{document}', start + '\\begin{document}'.length);
             if (end !== -1) text = text.slice(start + '\\begin{document}'.length, end);
         }
         // Included text counts against the same budget as macro expansion, so including a large file
@@ -2644,7 +2838,9 @@ class LatexReader {
             this.includeLimitHit = true;
             return;
         }
-        sc.push(text + '\n', resolved);
+        // TeX ends every line of a file with a line end, the last one too, and nothing more: `95.3` in a
+        // file read mid-sentence is "95.3 ", never a paragraph break (an extra line end made one).
+        sc.push(text.endsWith('\n') ? text : `${text}\n`, resolved);
     }
 
     private findProjectFile(path: string, extensions: string[], dirs: string[] = ['']): string | null {
@@ -2666,7 +2862,8 @@ class LatexReader {
     private fileContents(sc: Scanner, env: string): void {
         const options = (sc.readRawOptional() ?? '').split(',').map(o => o.trim());
         const name = (sc.readRawGroup() ?? '').trim();
-        const body = sc.readRawEnvBody(env);
+        // The file's text is written as it is: a `%` in it is a character (a PDF's header), not a comment.
+        const body = sc.readRawEnvBody(env, true);
         const path = name ? normalizeProjectPath(this.mainDir, name) : null;
         if (path === null) return;
         // The file's lines are those after the \begin line, each written as TeX writes a line: without
@@ -2773,7 +2970,10 @@ class LatexReader {
         if (env === 'thebibliography') { sc.readRawGroup(); return this.bibliography(sc, flow, env); }
         if (VERBATIM_ENVS.has(env)) { this.verbatim(sc, flow, env); return; }
         if (DISPLAY_MATH_ENVS.has(env)) {
-            const body = sc.readRawEnvBody(env);
+            // TeX drops a comment in a formula as anywhere else (`$...$` loses its comments as it is
+            // read): kept, it was typeset as text (`\%`), and an unbalanced brace in one made the
+            // whole formula fail the generator's check.
+            const body = withoutComments(sc.readRawEnvBody(env));
             // A numbered equation's labels resolve to its number for \ref/\eqref.
             if (!env.endsWith('*') && env !== 'displaymath' && env !== 'math') {
                 const number = String(++this.equationNumber);
@@ -3130,8 +3330,8 @@ class LatexReader {
             this.expand(sc, `\\${cmd}${star}{${title}}${kv.get('reference') ? `\\label{${kv.get('reference')}}` : ''}`);
             return true;
         }
-        if (what === 'typing') { sc.readRawOptional(); this.expand(sc, `\\begin{verbatim}${sc.readRawUntil('\\stoptyping').text}\\end{verbatim}`); return true; }
-        if (what === 'formula') { sc.readRawOptional(); this.addBlockMath(flow, sc.readRawUntil('\\stopformula').text); return true; }
+        if (what === 'typing') { sc.readRawOptional(); this.expand(sc, `\\begin{verbatim}${sc.readRawUntil('\\stoptyping', '\\starttyping').text}\\end{verbatim}`); return true; }
+        if (what === 'formula') { sc.readRawOptional(); this.addBlockMath(flow, withoutComments(sc.readRawUntil('\\stopformula', '\\startformula').text)); return true; }
         if (what === 'itemize') {
             if (stop) { const env = this.contextLists.pop(); if (env) this.expand(sc, `\\end{${env}}`); return true; }
             const opts = (sc.readRawOptional() ?? '').split(',').map(o => o.trim());
@@ -3157,7 +3357,7 @@ class LatexReader {
         } else if (/^(Verbatim|BVerbatim|LVerbatim)/.test(env)) {
             sc.readRawOptional();
         }
-        const { text } = sc.readRawUntil(`\\end{${env}}`);
+        const { text } = sc.readRawUntil(`\\end{${env}}`, `\\begin{${env}}`);
         if (env === 'comment') return;
         const code = text.replace(/^[ \t]*\n/, '').replace(/\n[ \t]*$/, '');
         const meta: CodeMetadata = {};
@@ -3240,7 +3440,8 @@ class LatexReader {
         if (ctx.nextIndex !== undefined) { index = ctx.nextIndex; ctx.nextIndex = undefined; }
         while (r === 'item') {
             sc.next(this.atLetter); // \item
-            sc.readRawOptional('<', '>');
+            // An overlay specification (`\item<2->`) is beamer's: elsewhere a `<` is the item's text.
+            if (this.beamer) sc.readRawOptional('<', '>');
             const label = sc.readRawOptional();
             const itemFlow = new Flow();
             (itemFlow as any).__list = ctx;
@@ -3403,7 +3604,7 @@ class LatexReader {
 
     /** Column alignments from a column specification (`l`, `c`, `r`, `p{}` with `>{\centering}`, `*{n}{...}`). */
     private columnAligns(spec: string): (('left' | 'center' | 'right') | undefined)[] {
-        let s = spec;
+        let s = withoutComments(spec);
         for (let guard = 0; guard < 8 && /\*\{\s*(\d+)\s*\}\{/.test(s); guard++) {
             // `*{n}{spec}` repeats `spec`; the repetition is bounded by column count and by length, since
             // a long `spec` repeated 1000 times would otherwise allocate a huge string.
@@ -3469,6 +3670,20 @@ class LatexReader {
                 }
                 cur += '\\' + word;
                 i += word.length;
+                if (word === 'verb' || word === 'lstinline' || word === 'Verb') {
+                    // A verbatim argument's `&`, `\\`, braces and `%` are its text (`\verb|a&b|`), up to its
+                    // closing delimiter on the same line.
+                    let j = i + 1;
+                    if (word === 'verb' && body[j] === '*') j++;
+                    else if (word !== 'verb' && body[j] === '[') { while (j < body.length && body[j] !== ']' && body[j] !== '\n') j++; j++; }
+                    const delim = body[j] === '{' ? '}' : body[j];
+                    if (delim === undefined || delim === '\n') continue;
+                    let end = j + 1;
+                    while (end < body.length && body[end] !== delim && body[end] !== '\n') end++;
+                    const closed = body[end] === delim;
+                    cur += body.slice(i + 1, closed ? end + 1 : end);
+                    i = closed ? end : end - 1;
+                }
                 continue;
             }
             if (c === '%') { const e = body.indexOf('\n', i); cur += body.slice(i, e < 0 ? body.length : e); i = e < 0 ? body.length : e - 1; continue; }
@@ -3688,8 +3903,8 @@ class LatexReader {
  * so it is found in the bytes read as Latin-1, before the file is decoded.
  */
 function declaredEncoding(head: string): string | undefined {
-    // A commented-out declaration declares nothing.
-    const live = head.replace(/(^|[^\\])%.*$/gm, '$1');
+    // A commented-out declaration declares nothing (a `%` after `\\` starts a comment too).
+    const live = liveSource(head);
     // An option list or argument stops at the next bracket or brace (scanning on to the end from each
     // start took time in the square of an unclosed `\usepackage[` repeated).
     const inputenc = /\\usepackage\s*\[([^\][]*)\]\s*\{inputenc\}/.exec(live) ?? /\\inputencoding\s*\{([^{}]*)\}/.exec(live);
@@ -3749,11 +3964,46 @@ function decodeTex(buf: Buffer, inherited?: string): { text: string; declared?: 
 
 const ZIP_MAGIC = [0x50, 0x4b];
 
-/** Picks the main file of a project: `main.tex`, else a top-level `.tex` with `\documentclass`, else the shallowest one. */
+/** Classes of a file that is a part of another document, compiled on its own only for a preview. */
+const PART_CLASSES = new Set(['subfiles', 'standalone']);
+
+/**
+ * Picks the main file of a project. It is a `.tex` that is not a part of another document: not of
+ * the `subfiles` or `standalone` class, and not read by another file (`\input`, `\include`,
+ * `\subfile`, `\import`). Of those, the shallowest `main.tex`, else the shallowest with a
+ * `\documentclass`, else the shallowest. Failing that, any `.tex` with a `\documentclass`, else the
+ * shallowest `.tex`. Commands are looked for where TeX reads them, not in comments.
+ */
 function findMainFile(files: Map<string, Buffer>): string | null {
-    if (files.has('main.tex')) return 'main.tex';
-    const tex = [...files.keys()].filter(p => p.toLowerCase().endsWith('.tex')).sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b));
-    return tex.find(p => /\\documentclass/.test(files.get(p)!.toString('utf8'))) ?? tex[0] ?? null;
+    const depth = (p: string) => p.split('/').length;
+    const tex = [...files.keys()].filter(p => p.toLowerCase().endsWith('.tex')).sort((a, b) => depth(a) - depth(b) || a.localeCompare(b));
+    const classOf = new Map<string, string>();
+    const included = new Set<string>();
+    for (const path of tex) {
+        const live = liveSource(files.get(path)!.toString('utf8'));
+        const cls = /\\document(?:class|style)\s*(?:\[[^\][]*\]\s*)?\{([^{}]*)\}/.exec(live);
+        if (cls) classOf.set(path, cls[1].trim());
+        // What this file reads: relative to its own folder (`\subfile`, `\import`) or to the project's (`\input`).
+        const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+        const names = [
+            ...[...live.matchAll(/\\(?:input|include|subfile|subfileinclude)\s*\{([^{}]*)\}/g)].map(m => m[1]),
+            ...[...live.matchAll(/\\input[ \t]+([^\s{}\\%]+)/g)].map(m => m[1]),
+            ...[...live.matchAll(/\\(?:sub)?(?:import|inputfrom|includefrom)\*?\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g)].map(m => `${m[1].trim().replace(/\/?$/, '/')}${m[2]}`),
+        ];
+        for (const name of names) {
+            for (const base of [dir, '']) {
+                for (const ext of ['', '.tex']) {
+                    const p = normalizeProjectPath(base, name.trim() + ext);
+                    if (p !== null && p !== path && files.has(p)) included.add(p);
+                }
+            }
+        }
+    }
+    const isMain = (p: string) => p.split('/').pop() === 'main.tex';
+    const roots = tex.filter(p => !PART_CLASSES.has(classOf.get(p) ?? '') && !included.has(p));
+    const documents = roots.filter(p => classOf.has(p));
+    // A `main.tex` without a `\documentclass` of its own may read it from a file it includes (a preamble).
+    return roots.find(isMain) ?? documents[0] ?? roots[0] ?? tex.find(p => classOf.has(p)) ?? tex[0] ?? null;
 }
 
 /**
