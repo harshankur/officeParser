@@ -404,6 +404,17 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     }
 
     /**
+     * Takes `key` from the keys getFootnoteKey gives notes, for an id a writer derives from a note's key
+     * (a second reference's `KEY-2`), so no note is given it later. False when a note or an earlier claim
+     * holds it.
+     */
+    protected claimFootnoteKey(key: string): boolean {
+        if (this.usedFootnoteKeys.has(key)) return false;
+        this.usedFootnoteKeys.add(key);
+        return true;
+    }
+
+    /**
      * True when every content-bearing text descendant satisfies `test` - i.e. the property is
      * uniform across the whole node and therefore says nothing the node type does not already say.
      *

@@ -4330,6 +4330,25 @@ async function testHtmlBrowserReading(): Promise<void> {
     parseXmlString(replaced);
     assert.ok(replaced.includes('<div>a<table>') && replaced.includes('b</div>'), `EPUB: a paragraph holding a table is promoted to a div (${replaced})`);
 
+    // A note cited twice: each reference has an id of its own, and the note's back-link returns to the first.
+    // (In the Markdown, the note `1-2` holds the id a second reference to note 1 would take, which passes it over.)
+    for (const [label, src, type, second] of [
+        ['HTML', '<p>a<sup data-footnote-ref="1">1</sup> b<sup data-footnote-ref="1">1</sup></p><section data-footnotes><div data-footnote-id="1">Note one</div></section>', 'html', 'footnote-ref-1-2'],
+        ['Markdown', 'A[^1] and C[^1-2] and B[^1].\n\n[^1]: Note.\n\n[^1-2]: Other.\n', 'md', 'footnote-ref-1-3'],
+    ] as const) {
+        const ast = await parse(src, type);
+        const html = await write(ast) as string;
+        const ids = idsOf(html);
+        assert.strictEqual(new Set(ids).size, ids.length, `HTML: ${label} footnote cited twice gives no duplicate id (${ids})`);
+        assert.ok(ids.includes('footnote-ref-1') && ids.includes(second), `HTML: ${label} a later reference has an id of its own (${ids})`);
+        assert.ok(html.includes('<a href="#footnote-ref-1">↩</a>'), 'HTML: the back-link returns to the first reference');
+        const chapter = await chapterOf(ast);
+        const chapterIds = idsOf(chapter);
+        assert.strictEqual(new Set(chapterIds).size, chapterIds.length, `EPUB: ${label} footnote cited twice gives no duplicate id`);
+        const back = await parse(html);
+        assert.strictEqual(collectAllNodes(back).filter(n => n.type === 'note' && !(n.metadata as any)?.unreferenced).length >= 2, true, `HTML: both references read back (${label})`);
+    }
+
     console.log('  HTML/EPUB reading and writing: All assertions passed ✓');
 }
 

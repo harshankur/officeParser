@@ -946,12 +946,31 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const meta = note.metadata as any;
                 if (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') {
                     const key = this.escape(this.getFootnoteKey(note));
-                    result += `<sup data-footnote-ref="${key}" id="footnote-ref-${key}"><a href="#footnote-${key}">${key}</a></sup>`;
+                    result += `<sup data-footnote-ref="${key}" id="${this.escape(this.footnoteReferenceId(note))}"><a href="#footnote-${key}">${key}</a></sup>`;
                 }
             }
         }
 
         return result;
+    }
+
+    /** How many references to each note are written, and the number the next one's id tries (see footnoteReferenceId). */
+    private readonly footnoteReferencesWritten = new Map<OfficeContentNode, { count: number; nextSuffix: number }>();
+
+    /**
+     * The id of the next reference written to `note`: `footnote-ref-KEY` for the first (the note's back-link
+     * returns to it), `footnote-ref-KEY-N` for each after it. A note cited twice (one note node every
+     * reference shares) gave both references one id: a page with duplicate ids, which EPUB rejects. The key
+     * `KEY-N` is claimed from the note keys, so no note given it later shares the id; one a note holds is
+     * passed over, each tried once.
+     */
+    private footnoteReferenceId(note: OfficeContentNode): string {
+        const key = this.getFootnoteKey(note);
+        const written = this.footnoteReferencesWritten.get(note) ?? { count: 0, nextSuffix: 2 };
+        this.footnoteReferencesWritten.set(note, written);
+        if (++written.count === 1) return `footnote-ref-${key}`;
+        while (!this.claimFootnoteKey(`${key}-${written.nextSuffix}`)) written.nextSuffix++;
+        return `footnote-ref-${key}-${written.nextSuffix++}`;
     }
 
     /** Whether a styleMap writes `node` (a paragraph) as an element that holds blocks (see FLOW_CONTAINER_TAGS). */
