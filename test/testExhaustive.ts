@@ -852,8 +852,75 @@ async function testRtf(): Promise<void> {
     assert.ok(rtfOutput.includes('\\par'), 'RTF roundtrip: has \\par paragraph marker');
 
     await testRtfDestinations();
+    await testRtfTables();
 
     console.log('  RTF: All assertions passed ✓');
+}
+
+/**
+ * RTF tables as Word writes them: nested tables (`\itapN`, `\nestcell`, `\nesttableprops ... \nestrow`,
+ * `\nonesttables`), merged cells (`\clvmgf`/`\clvmrg`, `\clmgf`/`\clmrg`), and the writer's side of both,
+ * with colours in any CSS form.
+ */
+async function testRtfTables(): Promise<void> {
+    const parse = async (rtf: string) => OfficeParser.parseOffice(Buffer.from(rtf, 'latin1'), { fileType: 'rtf' } as any);
+    const shape = (n: OfficeContentNode): any => n.type === 'table' || n.type === 'row'
+        ? [n.type, (n.children ?? []).map(shape)]
+        : n.type === 'cell'
+            ? ['cell', (n.metadata as any)?.col, (n.metadata as any)?.rowSpan ?? 1, (n.metadata as any)?.colSpan ?? 1, (n.children ?? []).map(shape)]
+            : [n.type, n.text];
+
+    // Word's nested table: the inner rows stay the inner table's (they were read as the outer table's).
+    const nested = await parse(String.raw`{\rtf1\ansi\trowd\cellx3000\cellx6000\pard\intbl\itap2 One\par\pard\intbl\itap2 Three\nestcell{\nonesttables\par}\pard\intbl\itap2 Two\nestcell{\nonesttables\par}\pard\intbl\itap2 {\*\nesttableprops\trowd\clvmgf\cellx1300\cellx2600\nestrow}{\nonesttables\par}\pard\intbl\itap2 \nestcell{\nonesttables\par}Four\nestcell{\nonesttables\par}\pard\intbl\itap2 {\*\nesttableprops\trowd\clvmrg\cellx1300\cellx2600\nestrow}{\nonesttables\par}\trowd\cellx3000\cellx6000\pard\intbl \cell Beside\cell\pard\intbl {\trowd\cellx3000\cellx6000\row}\pard After\par}`);
+    assert.deepStrictEqual(nested.content.map(shape), [
+        ['table', [['row', [
+            ['cell', 0, 1, 1, [['table', [
+                ['row', [['cell', 0, 2, 1, [['paragraph', 'One'], ['paragraph', 'Three']]], ['cell', 1, 1, 1, [['paragraph', 'Two']]]]],
+                ['row', [['cell', 1, 1, 1, [['paragraph', 'Four']]]]],
+            ]]]],
+            ['cell', 1, 1, 1, [['paragraph', 'Beside']]],
+        ]]]],
+        ['paragraph', 'After'],
+    ], 'RTF: a nested table (\\itap2, \\nestcell, \\nesttableprops) is read nested, its vertical merge a rowSpan');
+
+    // Merges across and down: the continuation cell's content joins the merged cell, later cells keep their columns.
+    const merged = await parse(String.raw`{\rtf1\ansi\trowd\clvmgf\cellx2000\clmgf\cellx4000\clmrg\cellx6000\cellx8000\pard\intbl A\cell B\cell B2\cell C\cell\row\trowd\clvmrg\cellx2000\cellx4000\cellx6000\cellx8000\pard\intbl \cell D\cell E\cell F\cell\row\pard After\par}`);
+    assert.deepStrictEqual(merged.content.map(shape)[0], ['table', [
+        ['row', [['cell', 0, 2, 1, [['paragraph', 'A']]], ['cell', 1, 1, 2, [['paragraph', 'B'], ['paragraph', 'B2']]], ['cell', 3, 1, 1, [['paragraph', 'C']]]]],
+        ['row', [['cell', 1, 1, 1, [['paragraph', 'D']]], ['cell', 2, 1, 1, [['paragraph', 'E']]], ['cell', 3, 1, 1, [['paragraph', 'F']]]]],
+    ]], 'RTF: \\clvmrg lengthens the cell above (rowSpan) and \\clmrg widens the one before (colSpan), cells keeping their columns');
+    // Word writes the row definition after the row's cells too (in {\trowd ... \row}): merges still apply.
+    const trailing = await parse(String.raw`{\rtf1\ansi\pard\intbl A\cell B\cell\pard\intbl{\trowd\clvmgf\cellx2000\cellx4000\row}\pard\intbl \cell C\cell\pard\intbl{\trowd\clvmrg\cellx2000\cellx4000\row}\pard After\par}`);
+    assert.deepStrictEqual(trailing.content.map(shape)[0], ['table', [
+        ['row', [['cell', 0, 2, 1, [['paragraph', 'A']]], ['cell', 1, 1, 1, [['paragraph', 'B']]]]],
+        ['row', [['cell', 1, 1, 1, [['paragraph', 'C']]]]],
+    ]], 'RTF: a row definition after the cells applies its merges');
+
+    // The writer: a nested table as Word writes one, read back nested; colours in any CSS form.
+    const T = (text: string, extra: any = {}) => ({ type: 'text', text, ...extra }) as OfficeContentNode;
+    const P = (...children: OfficeContentNode[]) => ({ type: 'paragraph', children }) as OfficeContentNode;
+    const cell = (...children: OfficeContentNode[]) => ({ type: 'cell', children }) as OfficeContentNode;
+    const inner = { type: 'table', children: [{ type: 'row', children: [cell(P(T('inner 1'))), cell(P(T('inner 2')))] }] } as OfficeContentNode;
+    const written = await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [
+        P(T('red', { formatting: { color: 'red' } }), T(' green', { formatting: { color: '#0f0', backgroundColor: 'navy' } }), T(' blue', { formatting: { color: 'rgb(0, 0, 255)', backgroundColor: 'transparent' } })),
+        { type: 'table', children: [
+            { type: 'row', children: [cell(P(T('outer A')), inner), cell(P(T('outer B')))] },
+            { type: 'row', children: [cell(P(T('outer C'))), cell(P(T('outer D')))] },
+        ] } as OfficeContentNode,
+        P(T('After')),
+    ] } as any, 'rtf');
+    const rtf = written.value as string;
+    assert.ok(!/NaN/.test(rtf) && rtf.includes('{\\colortbl;\\red255\\green0\\blue0;\\red0\\green255\\blue0;\\red0\\green0\\blue128;\\red0\\green0\\blue255;}'), `RTF: named, three-digit and rgb() colours are written as colours (${rtf.slice(0, 300)})`);
+    assert.ok(rtf.includes('\\nestcell') && rtf.includes('\\nesttableprops') && rtf.includes('\\itap2') && rtf.includes('{\\nonesttables\\par}'), 'RTF: a nested table is written with \\itap2, \\nestcell and \\nesttableprops');
+    const back = await parse(rtf);
+    assert.deepStrictEqual(back.content.map(shape).slice(1), [
+        ['table', [
+            ['row', [['cell', 0, 1, 1, [['paragraph', 'outer A'], ['table', [['row', [['cell', 0, 1, 1, [['paragraph', 'inner 1']]], ['cell', 1, 1, 1, [['paragraph', 'inner 2']]]]]]]]], ['cell', 1, 1, 1, [['paragraph', 'outer B']]]]],
+            ['row', [['cell', 0, 1, 1, [['paragraph', 'outer C']]], ['cell', 1, 1, 1, [['paragraph', 'outer D']]]]],
+        ]],
+        ['paragraph', 'After'],
+    ], 'RTF: a nested table round-trips nested, the outer table whole');
+    assert.deepStrictEqual((back.content[0].children ?? []).map(n => [n.text, n.formatting?.color, n.formatting?.backgroundColor]), [['red', '#ff0000', undefined], [' green', '#00ff00', '#000080'], [' blue', '#0000ff', undefined]], 'RTF: the colours read back');
 }
 
 /**
@@ -3053,7 +3120,9 @@ async function testOfficeGenUtils(): Promise<void> {
 
     assert.strictEqual(hexColor('#f00'), 'FF0000', 'hexColor: #rgb expands');
     assert.strictEqual(hexColor('112233'), '112233', 'hexColor: bare 6-hex');
-    assert.strictEqual(hexColor('red'), null, 'hexColor: named -> null');
+    // Any CSS colour the AST holds (an HTML or Markdown document's own): a named one was dropped.
+    assert.deepStrictEqual(['red', 'Navy', 'rgb(255, 128, 0)', 'rgba(0 0 255 / 50%)', 'hsl(120, 100%, 25%)', '#0f08', '#11223380', 'transparent', 'currentColor', 'inherit', 'rgb(1,2)', 'x'.repeat(100)].map(c => hexColor(c)),
+        ['FF0000', '000080', 'FF8000', '0000FF', '008000', '00FF00', '112233', null, null, null, null, null], 'hexColor: named, rgb(), hsl() and alpha forms resolve; others are null');
     assert.strictEqual(hexColor('red"/><x'), null, 'hexColor: hostile -> null');
 
     assert.strictEqual(toBookmarkNameRaw('a b!'), 'a_b_', 'toBookmarkNameRaw sanitizes to [A-Za-z0-9_]');

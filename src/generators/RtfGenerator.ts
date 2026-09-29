@@ -3,11 +3,14 @@ import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
-import { base64ByteLength, decodeBase64, embedUrl } from '../utils/officeGenUtils.js';
+import { base64ByteLength, decodeBase64, embedUrl, hexColor } from '../utils/officeGenUtils.js';
 
 /** Each byte's two hex digits. */
 const HEX_BYTES = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
 import { clampInt } from '../utils/numberUtils.js';
+
+/** The width in twips a table takes on the page (its cells share it). */
+const PAGE_WIDTH = 9000;
 
 /** Nodes whose children are a line of text: a picture in one sits in its line. */
 const LINE_HOLDERS = new Set(['paragraph', 'heading', 'list', 'cell', 'definitionTerm', 'definitionDescription']);
@@ -35,7 +38,12 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     private colorTable: string[] = [];
     /** Each colour's index in {@link colorTable}, so a run finds its colour without scanning the table. */
     private colorIndex = new Map<string, number>();
-    private inTable = false;
+    /** How deeply in tables the node being written is (0 outside any): a paragraph `\itapN` deep is in a table nested N - 1 deep. */
+    private tableDepth = 0;
+    /** The width in twips each table being written takes (the page's, or its cell's), then each row's cell width. */
+    private widths: number[] = [];
+    /** The types of the nodes being written, outermost first, so a row knows whether a table holds it. */
+    private readonly openTypes: string[] = [];
     /**
      * Set while rendering a heading's children.
      *
@@ -98,9 +106,9 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         if (this.colorTable.length > 0) {
             output += '{\\colortbl;';
             for (const hex of this.colorTable) {
-                const r = parseInt(hex.substring(1, 3), 16);
-                const g = parseInt(hex.substring(3, 5), 16);
-                const b = parseInt(hex.substring(5, 7), 16);
+                const r = parseInt(hex.substring(0, 2), 16);
+                const g = parseInt(hex.substring(2, 4), 16);
+                const b = parseInt(hex.substring(4, 6), 16);
                 output += `\\red${r}\\green${g}\\blue${b};`;
             }
             output += '}\n';
@@ -123,8 +131,17 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         // method entirely, so without repeating the check here the signal would be silently
         // inert for this generator - which is exactly how it was missed.
         checkAbortSignal(this.config.abortSignal);
-        const wasInTable = this.inTable;
-        if (node.type === 'table') this.inTable = true;
+        const wasTableDepth = this.tableDepth;
+        const wasWidths = this.widths.length;
+        // A table is a level deeper, as is a row no table holds (a sheet's): its cells' paragraphs said
+        // nothing of being in a table, which ended the row at the first of them.
+        const opensTable = node.type === 'table' || (node.type === 'row' && this.openTypes[this.openTypes.length - 1] !== 'table');
+        if (opensTable) {
+            this.tableDepth++;
+            this.widths.push(this.widths[this.widths.length - 1] ?? PAGE_WIDTH);
+        }
+        if (node.type === 'row') this.widths.push(Math.max(1, Math.floor(this.widths[this.widths.length - 1] / (node.children?.length || 1))));
+        this.openTypes.push(node.type);
         const wasInHeading = this.inHeading;
         const wasHeadingSize = this.headingUniformSize;
         if (node.type === 'heading') {
@@ -138,28 +155,37 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
             result = await super.processNodeRecursive(node, processor);
         } finally {
             if (holdsLine) this.lineDepth--;
+            this.openTypes.pop();
+            this.widths.length = wasWidths;
+            this.tableDepth = wasTableDepth;
         }
-        this.inTable = wasInTable;
         this.inHeading = wasInHeading;
         this.headingUniformSize = wasHeadingSize;
         // A block's comments, a paragraph of their own before it, in the table around it if any.
         const refs = this.blockAnnotations.get(node);
         if (refs !== undefined) {
             this.blockAnnotations.delete(node);
-            result = `${this.inTable ? '\\pard\\intbl' : '\\pard'} ${refs}\\par\n${result}`;
+            result = `${this.pard()} ${refs}\\par\n${result}`;
         }
         return result;
     }
 
+    /** A paragraph's opening: `\pard`, and in a table `\intbl` and, nested, how deeply (`\itapN`). */
+    private pard(): string {
+        if (this.tableDepth === 0) return '\\pard';
+        return this.tableDepth === 1 ? '\\pard\\intbl' : `\\pard\\intbl\\itap${this.tableDepth}`;
+    }
+
     private async renderBody(ast: OfficeParserAST): Promise<{ running: string; body: string }> {
         let body = '';
-        this.inTable = false;
+        this.tableDepth = 0;
+        this.widths = [];
 
         const render = async (node: OfficeContentNode, childrenOutput: string): Promise<string> => {
             const mapping = this.getSemanticMapping(node);
             if (mapping) {
                 if (mapping.tag === 'blockquote') {
-                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    const pPr = this.pard();
                     return `${pPr}\\li720\\ri720\\sa120 ${childrenOutput}\\par\n`;
                 }
 
@@ -167,7 +193,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 if (hMatch) {
                     const level = parseInt(hMatch[1]);
                     const fontSize = 24 + (6 - level) * 4;
-                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    const pPr = this.pard();
                     return `${pPr}\\s${level}\\sb240\\sa120{\\b\\fs${fontSize} ${childrenOutput}}\\par\n`;
                 }
             }
@@ -186,18 +212,23 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         if (f.underline) { prefix += '\\ul '; suffix = '\\ul0 ' + suffix; }
                         if (f.strikethrough) { prefix += '\\strike '; suffix = '\\strike0 ' + suffix; }
 
-                        if (f.color) {
+                        // Colours as six hex digits, whatever CSS form the AST holds them in (see hexColor):
+                        // a named or three-digit one wrote \redNaN into the colour table, and RTF readers
+                        // refused the whole document.
+                        const color = hexColor(f.color);
+                        const background = hexColor(f.backgroundColor);
+                        if (color) {
                             // RTF default background is white. Ensure light text without a dark background remains readable.
-                            const isTextLight = this.isLightColor(f.color);
-                            const isBgLight = !f.backgroundColor || this.isLightColor(f.backgroundColor);
-                            
+                            const isTextLight = this.isLightColor(color);
+                            const isBgLight = !background || this.isLightColor(background);
+
                             if (!(isTextLight && isBgLight)) {
-                                const idx = this.getColorIndex(f.color);
+                                const idx = this.getColorIndex(color);
                                 prefix += `\\cf${idx + 1} `;
                             }
                         }
-                        if (f.backgroundColor) {
-                            const idx = this.getColorIndex(f.backgroundColor);
+                        if (background) {
+                            const idx = this.getColorIndex(background);
                             prefix += `\\highlight${idx + 1} `;
                         }
                         if (f.size && !this.headingUniformSize) {
@@ -240,12 +271,12 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // Written into control words, so only ever a number.
                     const level = clampInt(meta?.level, 1, 9, 1);
                     const fontSize = 24 + (6 - level) * 4;
-                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    const pPr = this.pard();
                     return `${pPr}\\s${level}\\sb240\\sa120{\\b\\fs${fontSize} ${childrenOutput}}\\par\n`;
                 }
 
                 case 'paragraph': {
-                    let pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    let pPr = this.pard();
                     pPr += '\\sa120';
                     if (this.config.includeFormatting && node.metadata) {
                         const meta = node.metadata as any;
@@ -265,28 +296,37 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     const isOrdered = meta?.listType === 'ordered';
                     const marker = isOrdered ? `${clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1}. ` : '\\bullet ';
                     const listControl = isOrdered ? '\\pndec' : '\\pnbullet';
-                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    const pPr = this.pard();
                     return `${pPr}\\li${indent}\\fi-360\\ilvl${level}${listControl} ${marker}${childrenOutput}\\par\n`;
                 }
 
                 case 'table': {
-                    return `\\pard\\sa0\n${childrenOutput}`;
+                    return this.tableDepth > 1 ? childrenOutput : `\\pard\\sa0\n${childrenOutput}`;
                 }
 
                 case 'row': {
                     const cells = node.children || [];
-                    const pageWidth = 9000; // Standard twips width
-                    const cellWidth = Math.floor(pageWidth / (cells.length || 1));
+                    // The width of a cell of the row: the page's (9000 twips) or, nested, the cell's
+                    // around the table, shared among the row's cells (see processNodeRecursive).
+                    const cellWidth = this.widths[this.widths.length - 1] ?? PAGE_WIDTH;
                     let cellDefs = '';
                     for (let i = 0; i < cells.length; i++) {
                         // Add basic cell borders and calculate width
                         cellDefs += `\\clbrdrt\\brdrs\\brdrw10\\clbrdrl\\brdrs\\brdrw10\\clbrdrb\\brdrs\\brdrw10\\clbrdrr\\brdrs\\brdrw10\\cellx${(i + 1) * cellWidth}`;
                     }
+                    // A nested table's row as Word writes it: its cells, then its definition in
+                    // \nesttableprops ending in \nestrow, and a paragraph for readers without nesting.
+                    // Written with \cell and \row, its cells and rows became the outer table's.
+                    if (this.tableDepth > 1) return `${childrenOutput}${this.pard()} {\\*\\nesttableprops\\trowd\\trgaph108\\trleft-108${cellDefs}\\nestrow}{\\nonesttables\\par}\n`;
                     return `\\trowd\\trgaph108\\trleft-108${cellDefs}\n${childrenOutput}\\row\n`;
                 }
 
                 case 'cell': {
-                    return `\\pard\\intbl\\sb60\\sa60 ${childrenOutput}\\cell\n`;
+                    // A nested table's cell ends in \nestcell; a cell ending in a table, in a
+                    // paragraph of its own (as Word writes one), not in the table's last row.
+                    const end = this.tableDepth > 1 ? '\\nestcell' : '\\cell';
+                    const endsInTable = node.children?.[node.children.length - 1]?.type === 'table';
+                    return `${this.pard()}\\sb60\\sa60 ${childrenOutput}${endsInTable ? `${this.pard()} ${end}` : end}\n`;
                 }
 
                 case 'image': {
@@ -340,7 +380,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     }
                     // Among the blocks a picture is a paragraph of its own: it ran into the text after it.
                     if (this.lineDepth === 0 && pict) {
-                        const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                        const pPr = this.pard();
                         pict = `${pPr}\\sa120 ${pict}\\par\n`;
                     }
                     // image+ocr-text: the image, then its recognized text.
@@ -362,7 +402,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     this.usedMonospace = true;
                     const lines = this.escapeRtf(node.text || this.getNodeText(node)).split(/\r\n|\r|\n/).join('\\line ');
                     if (meta?.math === 'inline') return `{\\f2 ${lines}}`;
-                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    const pPr = this.pard();
                     return `${pPr}\\sa120{\\f2 ${lines}}\\par\n`;
                 }
 
@@ -371,7 +411,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // A term, bold, and its description, indented, each a paragraph of its own (they ran
                     // into each other and into the next paragraph); one holding paragraphs is them.
                     if (node.children?.some(child => child.type !== 'text' && child.type !== 'break' && child.type !== 'image' && !(child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math === 'inline'))) return childrenOutput;
-                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    const pPr = this.pard();
                     return node.type === 'definitionTerm'
                         ? `${pPr}\\sa0{\\b ${childrenOutput}}\\par\n`
                         : `${pPr}\\li720\\sa120 ${childrenOutput}\\par\n`;
@@ -383,7 +423,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // the author's hidden note) has no place in RTF, and is left out as before.
                     if (isSourceComment(node)) return '';
                     if (node.children?.length || !node.text) return childrenOutput;
-                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    const pPr = this.pard();
                     return `${pPr}\\sa120 ${this.escapeRtf(node.text)}\\par\n`;
                 }
 
@@ -397,7 +437,7 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // copy, so it gets the same scheme policy.
                     const safeUrl = sanitizeRtfUrl(rawUrl);
                     if (!safeUrl) return '';
-                    const pPr = this.inTable ? '\\pard\\intbl' : '\\pard';
+                    const pPr = this.pard();
                     return `${pPr}\\sa120 ${safeUrl}\\par\n`;
                 }
 
@@ -459,8 +499,9 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
      * formatting is not theirs.
      */
     private async renderApart(nodes: OfficeContentNode[]): Promise<string> {
-        const saved = { inTable: this.inTable, inHeading: this.inHeading, headingUniformSize: this.headingUniformSize, lineDepth: this.lineDepth };
-        this.inTable = false;
+        const saved = { tableDepth: this.tableDepth, widths: this.widths, inHeading: this.inHeading, headingUniformSize: this.headingUniformSize, lineDepth: this.lineDepth };
+        this.tableDepth = 0;
+        this.widths = [];
         this.inHeading = false;
         this.headingUniformSize = false;
         this.lineDepth = 0;
@@ -468,7 +509,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         try {
             for (const node of nodes) out += await this.processNodeRecursive(node, this.processor!);
         } finally {
-            this.inTable = saved.inTable;
+            this.tableDepth = saved.tableDepth;
+            this.widths = saved.widths;
             this.inHeading = saved.inHeading;
             this.headingUniformSize = saved.headingUniformSize;
             this.lineDepth = saved.lineDepth;
@@ -498,24 +540,24 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         return out;
     }
 
+    /** A colour's index in the colour table (0-based; `\cf` and `\highlight` count from 1), given as six hex digits. */
     private getColorIndex(hex: string): number {
-        const h = hex.toUpperCase();
-        let idx = this.colorIndex.get(h);
+        let idx = this.colorIndex.get(hex);
         if (idx === undefined) {
             idx = this.colorTable.length;
-            this.colorTable.push(h);
-            this.colorIndex.set(h, idx);
+            this.colorTable.push(hex);
+            this.colorIndex.set(hex, idx);
         }
         return idx;
     }
 
+    /** Whether a colour (six hex digits) is light enough to be unreadable on white. */
     private isLightColor(hex: string): boolean {
-        if (!hex || hex.length !== 7 || !hex.startsWith('#')) return false;
-        const r = parseInt(hex.substring(1, 3), 16);
-        const g = parseInt(hex.substring(3, 5), 16);
-        const b = parseInt(hex.substring(5, 7), 16);
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
         if (isNaN(r) || isNaN(g) || isNaN(b)) return false;
-        
+
         // Simple luminance calculation
         const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
         return luminance > 0.8;

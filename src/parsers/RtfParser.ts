@@ -40,7 +40,7 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
+import { CellMetadata, FullOfficeParserConfig, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, TextFormatting } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
@@ -621,12 +621,38 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // ═══════════════════════════════════════════════════════════════════
     // Table state tracking (Stack-based for nesting)
     // ═══════════════════════════════════════════════════════════════════
+    // Table cell properties tracking: how a cell of the row definition (`\trowd` ... `\cellx`) is merged.
+    interface CellProps {
+        /** `\clmgf` / `\clmrg`: the first of cells merged across, or one merged into the cell before it. */
+        mergeFirst?: boolean;
+        mergeContinues?: boolean;
+        /** `\clvmgf` / `\clvmrg`: the first of cells merged down, or one merged into the cell above it. */
+        verticalFirst?: boolean;
+        verticalContinues?: boolean;
+    }
+
     interface TableContext {
         rows: OfficeContentNode[];
         currentCells: OfficeContentNode[]; // Cells in the current row
         currentCellContent: OfficeContentNode[]; // Content of the currently open cell
         rowIndex: number;
+        /**
+         * The row definition's cells (the latest `\trowd` ... `\cellx` of this table), applied when the row
+         * ends: Word writes it before a row's cells, again after them, and a nested table's only after
+         * them (in `\nesttableprops`).
+         */
+        cellDefinitions: CellProps[];
+        /** The cell a vertical merge started in, and its row, by grid column. */
+        verticalMerges: Map<number, { cell: OfficeContentNode; row: number }>;
     }
+
+    /**
+     * How deeply tables may nest (`\itapN`): past it a paragraph is in the deepest table (real documents
+     * nest a few levels). Each level a paragraph opens is a table, a row and a cell once closed, for the
+     * few bytes of `\itapN`: a stated depth of millions is not millions of them, and a document
+     * alternating between deep and shallow paragraphs makes at most this many levels for each.
+     */
+    const MAX_TABLE_DEPTH = 16;
 
     let tableStack: TableContext[] = [];
     let currentFootnoteId = 0;
@@ -643,29 +669,17 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
     // Helper to get current table context
     const getCurrentTable = (): TableContext | undefined => tableStack.length > 0 ? tableStack[tableStack.length - 1] : undefined;
 
-    // Helper to ensure a table context exists (for top-level tables)
-    const ensureTableContext = () => {
-        if (tableStack.length === 0) {
-            tableStack.push({
-                rows: [],
-                currentCells: [],
-                currentCellContent: [],
-                rowIndex: 0
-            });
-        }
-    };
-
-    let inTable = false;
-    let paragraphInTable = false;
-    let tableId = 0;
-
-    // Table cell properties tracking
-    interface CellProps {
-        isMergedContinuation: boolean;
-    }
-    let rowCellProps: CellProps[] = [];
-    let currentCellDefinitionProps: CellProps = { isMergedContinuation: false };
-    let cellContentIndex = 0;
+    /**
+     * How deeply in tables the paragraph being read is: 0 outside any, 1 in a table's cell, 2 in a table
+     * nested in one, and so on (`\intbl`, `\itapN`; after `\trowd` a paragraph is in the table until
+     * `\pard`, as many writers leave `\intbl` out).
+     */
+    let paragraphDepth = 0;
+    // The row definition being read (`\trowd` ... `\cellx`), the table it is for, and whether the reader is
+    // in a nested table's `\nesttableprops`, whose `\trowd` defines the nested table's row.
+    let definingTable: TableContext | undefined;
+    let definitionCell: CellProps = {};
+    let nestedPropsDepth = 0;
 
     // ═══════════════════════════════════════════════════════════════════
     // List state tracking (Word 97+ uses \ls for list style ID)
@@ -724,11 +738,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         knownListId: string | undefined;
         knownListType: 'ordered' | 'unordered' | undefined;
         tables: TableContext[];
-        table: boolean;
-        paragraphTable: boolean;
-        cellProps: CellProps[];
-        cellDefinitionProps: CellProps;
-        cellIndex: number;
+        depth: number;
+        definingTable: TableContext | undefined;
+        definitionCell: CellProps;
+        nestedPropsDepth: number;
         linkUrl: string | undefined;
         afterParagraph: OfficeContentNode[];
     }
@@ -752,11 +765,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             knownListId: lastKnownListId,
             knownListType: lastKnownListType,
             tables: tableStack,
-            table: inTable,
-            paragraphTable: paragraphInTable,
-            cellProps: rowCellProps,
-            cellDefinitionProps: currentCellDefinitionProps,
-            cellIndex: cellContentIndex,
+            depth: paragraphDepth,
+            definingTable,
+            definitionCell,
+            nestedPropsDepth,
             linkUrl: currentLinkUrl,
             afterParagraph: blocksAfterParagraph,
         };
@@ -776,11 +788,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         lastKnownListId = undefined;
         lastKnownListType = undefined;
         tableStack = [];
-        inTable = false;
-        paragraphInTable = false;
-        rowCellProps = [];
-        currentCellDefinitionProps = { isMergedContinuation: false };
-        cellContentIndex = 0;
+        paragraphDepth = 0;
+        definingTable = undefined;
+        definitionCell = {};
+        nestedPropsDepth = 0;
         currentLinkUrl = undefined;
         blocksAfterParagraph = [];
         return saved;
@@ -805,11 +816,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         lastKnownListId = saved.knownListId;
         lastKnownListType = saved.knownListType;
         tableStack = saved.tables;
-        inTable = saved.table;
-        paragraphInTable = saved.paragraphTable;
-        rowCellProps = saved.cellProps;
-        currentCellDefinitionProps = saved.cellDefinitionProps;
-        cellContentIndex = saved.cellIndex;
+        paragraphDepth = saved.depth;
+        definingTable = saved.definingTable;
+        definitionCell = saved.definitionCell;
+        nestedPropsDepth = saved.nestedPropsDepth;
         currentLinkUrl = saved.linkUrl;
         blocksAfterParagraph = saved.afterParagraph;
     };
@@ -821,17 +831,30 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
      */
     const finishFlow = () => {
         flushParagraph();
-        while (tableStack.length > 0 && !isFlushingTable) flushTable();
-        inTable = false;
-        paragraphInTable = false;
+        closeTablesTo(0);
+        paragraphDepth = 0;
     };
 
-    /** Where a finished block goes: the open cell for a paragraph in a table, else the flow's target. */
-    const blockContainer = (): OfficeContentNode[] => {
-        if (inTable && paragraphInTable) {
-            ensureTableContext();
-            return getCurrentTable()!.currentCellContent;
+    /**
+     * Makes the open tables `depth` deep: tables nested deeper are finished (each into the cell of the
+     * table around it, the outermost into the flow's target), and missing levels are opened, each a
+     * table starting in the open cell of the one around it.
+     */
+    const closeTablesTo = (depth: number) => {
+        while (tableStack.length > depth) flushTable();
+    };
+    const openTablesTo = (depth: number) => {
+        closeTablesTo(depth);
+        while (tableStack.length < depth) {
+            tableStack.push({ rows: [], currentCells: [], currentCellContent: [], rowIndex: 0, cellDefinitions: [], verticalMerges: new Map() });
         }
+        return tableStack[depth - 1];
+    };
+
+    /** Where a finished block goes: the open cell of the table the paragraph is in, else the flow's target (after any table it ends). */
+    const blockContainer = (): OfficeContentNode[] => {
+        if (paragraphDepth > 0) return openTablesTo(paragraphDepth).currentCellContent;
+        closeTablesTo(0);
         return currentTarget;
     };
 
@@ -871,42 +894,12 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         }
     };
 
-    let isFlushingTable = false;
-
-    // Helper to flush current paragraph
+    // Helper to flush current paragraph. A paragraph with content outside any table ends the tables
+    // still open, which go before it (see blockContainer).
     const flushParagraph = () => {
         flushRun(); // Ensure last run is added
 
-        // Check if we need to end the table
-        // If we were in a table, but this paragraph is NOT marked as in-table, 
-        // and we have content, then the table has ended.
         const hasContent = currentParagraphTextChunks.length > 0 || currentParagraphChildren.length > 0;
-        if (inTable && !paragraphInTable && !isFlushingTable && (hasContent || blocksAfterParagraph.length > 0)) {
-            // CRITICAL: Save current paragraph content before flushing table
-            // because flushTable() -> flushRow() -> flushCell() -> flushParagraph()
-            // would otherwise process this content during the table flush
-            // (Kept as they are, not copied: the buffers are replaced below, and a copy of the paragraph
-            // for each table or note in it took time in the square of a long paragraph.)
-            const savedParagraphTextChunks = currentParagraphTextChunks;
-            const savedParagraphChildren = currentParagraphChildren;
-            const savedParagraphRawChunks = currentParagraphRawChunks;
-            const savedBlocksAfterParagraph = blocksAfterParagraph;
-
-            // Clear buffers so nested flushParagraph() doesn't process them
-            currentParagraphTextChunks = [];
-            currentParagraphChildren = [];
-            currentParagraphRawChunks = [];
-            blocksAfterParagraph = [];
-
-            flushTable();
-
-            // Restore the saved content for processing after the table
-            currentParagraphTextChunks = savedParagraphTextChunks;
-            currentParagraphChildren = savedParagraphChildren;
-            currentParagraphRawChunks = savedParagraphRawChunks;
-            blocksAfterParagraph = savedBlocksAfterParagraph;
-        }
-
         if (hasContent) {
             const currentParagraphText = currentParagraphTextChunks.join('');
             let nodeType: string = 'paragraph';
@@ -1030,89 +1023,102 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         }
     };
 
-    // Helper to flush current cell
-    const flushCell = (tableCtx?: TableContext) => {
-        flushParagraph();
-        const ctx = tableCtx || getCurrentTable();
-        if (!ctx) return undefined;
-
-        // Always return a cell node, even if empty, to preserve table structure (grid)
-        const cellNode: OfficeContentNode = {
+    // Helper to flush current cell: the open cell of `ctx` (empty or not, to keep the grid) is the row's next cell.
+    const flushCell = (ctx: TableContext) => {
+        ctx.currentCells.push({
             type: 'cell',
             text: ctx.currentCellContent.map(c => c.text).join('\n'),
-            children: [...ctx.currentCellContent],
-            metadata: {
-                row: ctx.rowIndex,
-                col: ctx.currentCells.length
-            }
-        };
+            children: ctx.currentCellContent,
+            metadata: { row: ctx.rowIndex, col: 0 } as CellMetadata,
+        });
         ctx.currentCellContent = [];
-        return cellNode;
     };
 
-    // Helper to flush current row - creates a row node from collected cells
-    const flushRow = (tableCtx?: TableContext) => {
-        const ctx = tableCtx || getCurrentTable();
-        if (!ctx) return;
-
-        const cell = flushCell(ctx);
-        // Only add cell if it has content (prevents phantom empty cells during cleanup)
-        if (cell && (cell.children && cell.children.length > 0 || cell.text)) {
-            ctx.currentCells.push(cell);
-        }
-
-        if (ctx.currentCells.length > 0) {
-            const rowNode: OfficeContentNode = {
-                type: 'row',
-                text: ctx.currentCells.map(c => c.text).filter(t => t !== '').join(config.newlineDelimiter),
-                children: [...ctx.currentCells]
-            };
-            ctx.rows.push(rowNode);
-            ctx.currentCells = [];
-            ctx.rowIndex++;
-        }
+    /** Adds a merged-away cell's content (if it has any) to the cell it is merged into. */
+    const foldCell = (into: OfficeContentNode, cell: OfficeContentNode) => {
+        const children = cell.children ?? [];
+        if (!children.some(c => c.type !== 'paragraph' || (c.text ?? '').trim() !== '' || (c.children?.length ?? 0) > 0)) return;
+        for (const child of children) (into.children ??= []).push(child);
+        if (cell.text?.trim()) into.text = into.text ? `${into.text}\n${cell.text}` : cell.text;
     };
 
-    // Helper to flush table
-    const flushTable = () => {
-        if (isFlushingTable) return;
-        isFlushingTable = true;
-
-        const ctx = getCurrentTable();
-        if (!ctx) {
-            isFlushingTable = false;
-            return;
-        }
-
-        flushRow(ctx);
-
-        if (ctx.rows.length > 0) {
-            tableId++;
-            const tableNode: OfficeContentNode = {
-                type: 'table',
-                text: ctx.rows.map(r => r.text).join('\n'), // Aggregate text from rows
-                children: [...ctx.rows]
-            };
-
-            // If we have a parent table, add this table to the parent's current cell
-            if (tableStack.length > 1) {
-                const parentCtx = tableStack[tableStack.length - 2];
-                parentCtx.currentCellContent.push(tableNode);
-            } else {
-                currentTarget.push(tableNode);
+    /**
+     * Helper to flush current row: content left in the open cell is its last cell (a row without it has
+     * none), and the row definition's merges apply. A cell merged across (`\clmrg`) widens the one before
+     * it and one merged down (`\clvmrg`) lengthens the one above it, each taking its content; cells after
+     * it keep their columns. The continuation cell was dropped without the span, so they shifted left.
+     */
+    const flushRow = (ctx: TableContext) => {
+        if (ctx.currentCellContent.length > 0) flushCell(ctx);
+        const cells = ctx.currentCells;
+        ctx.currentCells = [];
+        if (cells.length === 0) return;
+        const kept: OfficeContentNode[] = [];
+        let column = 0;
+        let across: OfficeContentNode | undefined;
+        for (let i = 0; i < cells.length; i++, column++) {
+            const cell = cells[i];
+            const definition = ctx.cellDefinitions[i];
+            if (definition?.mergeContinues && across) {
+                const meta = across.metadata as CellMetadata;
+                meta.colSpan = (meta.colSpan ?? 1) + 1;
+                foldCell(across, cell);
+                continue;
             }
+            const above = definition?.verticalContinues ? ctx.verticalMerges.get(column) : undefined;
+            if (above) {
+                (above.cell.metadata as CellMetadata).rowSpan = ctx.rowIndex - above.row + 1;
+                foldCell(above.cell, cell);
+                across = undefined;
+                continue;
+            }
+            const meta = cell.metadata as CellMetadata;
+            meta.row = ctx.rowIndex;
+            meta.col = column;
+            kept.push(cell);
+            across = cell;
+            if (definition?.verticalFirst) ctx.verticalMerges.set(column, { cell, row: ctx.rowIndex });
+            else ctx.verticalMerges.delete(column);
         }
+        ctx.rows.push({
+            type: 'row',
+            text: kept.map(c => c.text).filter(t => t !== '').join(config.newlineDelimiter),
+            children: kept,
+        });
+        ctx.rowIndex++;
+    };
 
-        // Pop the table from stack
-        tableStack.pop();
+    // Helper to flush table: the innermost open table, into the open cell of the table around it or the flow's target.
+    const flushTable = () => {
+        const ctx = tableStack.pop();
+        if (!ctx) return;
+        flushRow(ctx);
+        if (ctx.rows.length === 0) return;
+        const tableNode: OfficeContentNode = {
+            type: 'table',
+            text: ctx.rows.map(r => r.text).join('\n'), // Aggregate text from rows
+            children: ctx.rows,
+        };
+        const parent = getCurrentTable();
+        if (parent) parent.currentCellContent.push(tableNode);
+        else currentTarget.push(tableNode);
+    };
 
-        // If stack is empty, we are out of table mode
-        if (tableStack.length === 0) {
-            inTable = false;
-            paragraphInTable = false;
-        }
+    /** `\cell` (depth 1) or `\nestcell` (deeper): the paragraph before it is in the cell, which ends. */
+    const cellEnds = (depth: number) => {
+        if (paragraphDepth < depth) paragraphDepth = depth;
+        flushParagraph();
+        flushCell(openTablesTo(depth));
+        paragraphDepth = depth;
+    };
 
-        isFlushingTable = false;
+    /** `\row` (depth 1) or `\nestrow` (deeper): the row of the table that deep ends. */
+    const rowEnds = (depth: number) => {
+        if (paragraphDepth < depth) paragraphDepth = depth;
+        flushParagraph();
+        flushRow(openTablesTo(depth));
+        // Subsequent paragraphs must say they are in the table (\intbl) to be in it.
+        paragraphDepth = depth - 1;
     };
 
     // Extract hyperlink URL from field instruction group
@@ -1347,7 +1353,10 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 'pmmetafile', 'wmetafile', 'dibitmap', 'bitmap', 'object',
                 'nextGenerator', 'nonshppict', 'xml', 'private',
                 'upnp', 'ud', 'filetbl', 'operator', 'author', 'creatim', 'revtim', 'printim', 'comment',
-                'fldinst', 'listtext', 'pntext' // Ignore list marker text (handled separately)
+                'fldinst', 'listtext', 'pntext', // Ignore list marker text (handled separately)
+                // What a writer puts in place of a nested table for readers without nesting (a `\par`
+                // after each nested cell and row), which this reader has.
+                'nonesttables',
             ];
 
             let isIgnored = false;
@@ -1657,6 +1666,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
             // Create a new formatting context for the group
             const groupFormatting = { ...formatting };
+            const isNestedTableProps = node.destination === 'nesttableprops';
+            if (isNestedTableProps) nestedPropsDepth++;
 
             for (const child of node.content) {
                 // A shape's properties (`\sp` name and value pairs) are not text; its text box is.
@@ -1692,6 +1703,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
                 traverse(child, groupFormatting, depth + 1);
             }
+            if (isNestedTableProps) nestedPropsDepth--;
 
             if (node.destination === 'listtable') {
                 parsingListTable = false;
@@ -1777,127 +1789,59 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 flushParagraph();
                 currentFormatting = { ...formatting };
             }
-            // Table control words
+            // Table control words. A nested table (Word's form) is paragraphs at a deeper `\itapN`,
+            // cells ended by `\nestcell`, and rows by `\nestrow` in `{\*\nesttableprops \trowd ...
+            // \nestrow}` after the row's cells; `{\nonesttables ...}` is for readers without nesting.
+            // (A \trowd in a cell with content was read as a nested table, and \nestcell and \nestrow as
+            // the outer table's: a nested table's rows became the outer table's.)
             else if (node.value === 'trowd') {
-                // Table row definition - start of a new row
-                // Check if we are starting a nested table
-                // If we are already in a table, and we have content in the current cell, 
-                // then this trowd implies a nested table start.
-                const ctx = getCurrentTable();
-                if (inTable && ctx && ctx.currentCellContent.length > 0) {
-                    // Start nested table
-                    ensureTableContext(); // Should already exist if inTable is true
-                    // Push new table context
-                    tableStack.push({
-                        rows: [],
-                        currentCells: [],
-                        currentCellContent: [],
-                        rowIndex: 0
-                    });
+                // A row definition: a nested table's in \nesttableprops, else the (outermost) table's.
+                if (nestedPropsDepth > 0) {
+                    definingTable = openTablesTo(Math.max(paragraphDepth, 2));
                 } else {
-                    if (!inTable) {
-                        inTable = true;
-                        ensureTableContext();
-                    }
+                    definingTable = openTablesTo(1);
+                    // After \trowd we are inside a table row, so content should go to table cells.
+                    // Many RTF files don't use \intbl, relying solely on \trowd...\cell...\row structure.
+                    if (paragraphDepth < 1) paragraphDepth = 1;
                 }
-
-                // After \trowd we are inside a table row, so content should go to table cells.
-                // Many RTF files don't use \intbl, relying solely on \trowd...\cell...\row structure.
-                paragraphInTable = true;
-
-                // Reset cell properties for the new row definition
-                rowCellProps = [];
-                currentCellDefinitionProps = { isMergedContinuation: false };
-                cellContentIndex = 0;
+                definingTable.cellDefinitions = [];
+                definitionCell = {};
+            } else if (node.value === 'clvmgf') {
+                definitionCell.verticalFirst = true;
             } else if (node.value === 'clvmrg') {
-                // Vertical merge continuation
-                currentCellDefinitionProps.isMergedContinuation = true;
+                definitionCell.verticalContinues = true;
             } else if (node.value === 'clmgf') {
-                // Vertical merge first cell (reset continuation flag if set, though usually mutually exclusive)
-                currentCellDefinitionProps.isMergedContinuation = false;
+                definitionCell.mergeFirst = true;
+            } else if (node.value === 'clmrg') {
+                definitionCell.mergeContinues = true;
             } else if (node.value === 'cellx') {
                 // End of cell definition
-                rowCellProps.push({ ...currentCellDefinitionProps });
-                // Reset for next cell
-                currentCellDefinitionProps = { isMergedContinuation: false };
+                definingTable?.cellDefinitions.push(definitionCell);
+                definitionCell = {};
             } else if (node.value === 'cell') {
-                // End of cell - add it to current row
-                // Force paragraphInTable = true because \cell implies we are in a table cell
-                paragraphInTable = true;
-
-                // Check if this cell is a merged continuation
-                let isMergedContinuation = false;
-                if (cellContentIndex < rowCellProps.length) {
-                    isMergedContinuation = rowCellProps[cellContentIndex].isMergedContinuation;
-                }
-                cellContentIndex++;
-
-                const cell = flushCell();
-                // Only add if not a merged continuation
-                if (cell) {
-                    if (!isMergedContinuation) {
-                        const ctx = getCurrentTable();
-                        if (ctx) ctx.currentCells.push(cell);
-                    }
-                }
+                // \cell implies the paragraph before it is in a table cell, \intbl or not.
+                cellEnds(1);
                 currentFormatting = { ...formatting };
             } else if (node.value === 'nestcell') {
-                // End of cell in outer table (nested context)
-                // If we are in an inner table, we need to close it and return to outer
-
-                // First, flush the current cell of the inner table (if any pending)
-                // Actually, nestcell ends the OUTER cell.
-                // So the inner table should have been finished by now?
-                // Usually inner table ends with \row.
-
-                // If we are in a nested table (stack > 1), we should pop until we are at the outer table?
-                // Or maybe just pop one level?
-                if (tableStack.length > 1) {
-                    // Flush the inner table if it has pending rows
-                    const innerCtx = getCurrentTable();
-                    if (innerCtx && (innerCtx.rows.length > 0 || innerCtx.currentCells.length > 0)) {
-                        flushTable(); // This pops the stack
-                    }
-                }
-
-                // Now we are (hopefully) at the outer table level
-                // Treat as a regular cell end for the outer table
-                paragraphInTable = true;
-                const cell = flushCell();
-                if (cell) {
-                    const ctx = getCurrentTable();
-                    if (ctx) ctx.currentCells.push(cell);
-                }
+                cellEnds(Math.max(paragraphDepth, 2));
                 currentFormatting = { ...formatting };
-
             } else if (node.value === 'row') {
-                // End of row
-                flushRow();
-                currentFormatting = { ...formatting };
-                // Reset content index for safety (though trowd usually does it)
-                cellContentIndex = 0;
-                // Critical: Reset paragraphInTable after row ends.
                 // Subsequent paragraphs must explicitly use \intbl to be part of the table.
                 // Without this, content after the last \row gets incorrectly merged.
-                paragraphInTable = false;
-            } else if (node.value === 'nestrow') {
-                // End of row in outer table
-                // If we are still in inner table context, flush it
-                if (tableStack.length > 1) {
-                    flushTable();
-                }
-
-                flushRow();
+                rowEnds(1);
                 currentFormatting = { ...formatting };
-                cellContentIndex = 0;
+            } else if (node.value === 'nestrow') {
+                rowEnds(Math.max(paragraphDepth, 2));
+                currentFormatting = { ...formatting };
             } else if (node.value === 'intbl') {
                 // Paragraph is in a table
-                inTable = true;
-                paragraphInTable = true;
-                ensureTableContext();
+                if (paragraphDepth < 1) paragraphDepth = 1;
+            } else if (node.value === 'itap') {
+                // How deeply in tables the paragraph is (0 in none, which \pard already says)
+                if (node.param !== undefined && node.param > 0) paragraphDepth = Math.min(node.param, MAX_TABLE_DEPTH);
             } else if (node.value === 'pard') {
                 // Reset paragraph properties
-                paragraphInTable = false;
+                paragraphDepth = 0;
                 // Reset other props...
                 paragraphIndent = 0;
                 paragraphAlignment = 'left';

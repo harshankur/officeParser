@@ -10,6 +10,7 @@
  */
 
 import { EmbedMetadata, ImageMode, OfficeContentNode } from '../types.js';
+import { cssColorHex } from './colorUtils.js';
 import { lookupTable } from './lookupUtils.js';
 
 /**
@@ -274,12 +275,12 @@ export function sniffImageSize(bytes: Uint8Array): { w: number; h: number } | nu
     return null;
 }
 
-/** Validates a `#RRGGBB`/`RRGGBB`/`#RGB` hex color to bare uppercase `RRGGBB`, or null. */
+/**
+ * A colour as bare uppercase `RRGGBB`, or null: any CSS colour the AST holds (`#RGB`, `#RRGGBB` with or
+ * without `#`, named, `rgb()`, `hsl()`; see cssColorHex). Read as hex alone, a named colour was dropped.
+ */
 export function hexColor(v: string | undefined): string | null {
-    if (!v) return null;
-    let h = v.trim().replace(/^#/, '');
-    if (/^[0-9A-Fa-f]{3}$/.test(h)) h = h.split('').map(c => c + c).join('');
-    return /^[0-9A-Fa-f]{6}$/.test(h) ? h.toUpperCase() : null;
+    return cssColorHex(v);
 }
 
 /** Sanitizes a bookmark/anchor name to `[A-Za-z0-9_]`, leading letter/underscore, <=40 chars. */

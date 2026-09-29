@@ -3430,6 +3430,12 @@ async function parserHardeningTests() {
     const destinationCell = String.raw`\pard\intbl A{\*\atnid J}\chatn{\*\annotation\pard\plain R\par}{\footnote\pard\plain N\par}{\shp{\*\shpinst{\shptxt\pard\plain T\par}}}\cell`;
     const destinationItem = String.raw`{\*\atnid J}\chatn{\*\annotation\pard\plain R\par}{\footnote\pard\plain N\par}{\shp{\*\shpinst{\shptxt\pard\plain T\par}}}`;
     const manyDestinations = await parseQuiet(Buffer.from(String.raw`{\rtf1\ansi\trowd\cellx3000` + destinationCell.repeat(20000) + String.raw`\row\pard\ls1\ilvl0 Item` + destinationItem.repeat(20000) + String.raw`\par}`), 'rtf');
+    // A stated table depth is held to the reader's nesting limit: 20,000 paragraphs alternating between
+    // \itap of four billion and \itap1, and 20,000 merged-down cells, are read in linear time and bounded size.
+    const depthStarted = Date.now();
+    const deepTables = await parseQuiet(Buffer.from(String.raw`{\rtf1\ansi` + String.raw`\pard\intbl\itap4294967295 x\par\pard\intbl y\par`.repeat(20000) + String.raw`\trowd\clvmgf\cellx100\pard\intbl a\cell\row` + String.raw`\trowd\clvmrg\cellx100\pard\intbl b\cell\row`.repeat(20000) + '}'), 'rtf');
+    const deepSize = JSON.stringify(deepTables.ast?.content ?? []).length;
+    check('rtf: 20,000 paragraphs at a stated depth of billions and 20,000 merged cells are read in linear time and size', !deepTables.error && Date.now() - depthStarted < 5000 && deepSize < 100_000_000, `${Date.now() - depthStarted}ms ${deepTables.error} ${deepSize}`);
     const destinationBlocks = manyDestinations.ast?.content ?? [];
     check('rtf: 20,000 comments, notes and text boxes in table cells and a list item are read in linear time', !manyDestinations.error && Date.now() - destinationsStarted < 5000 && destinationBlocks[0]?.type === 'table' && destinationBlocks[0]?.children?.[0]?.children?.length === 20000 && destinationBlocks[1]?.type === 'list', `${Date.now() - destinationsStarted}ms ${manyDestinations.error} ${destinationBlocks.slice(0, 2).map((n: any) => n.type)}`);
     // DOCX tracked changes read as the document now stands: insertions in, deletions and moved-away text out.
