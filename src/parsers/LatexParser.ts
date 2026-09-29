@@ -1123,8 +1123,11 @@ class LatexReader {
             this.context = true;
             this.unknown.add('ConTeXt (the document is not LaTeX)');
         }
+        // The sectioning a document uses is that of every file it includes: a thesis whose `\chapter`s
+        // are in files of their own made its sections the top level, alongside its chapters.
+        const structure = this.includedSources(src);
         SECTIONING.forEach((name, rank) => {
-            if (new RegExp(`\\\\${name}\\*?\\s*[[{]`).test(src) || (this.context && new RegExp(`\\\\start${name}\\b`).test(src))) this.sectionRanks.add(rank);
+            if (new RegExp(`\\\\${name}\\*?\\s*[[{]`).test(structure) || (this.context && new RegExp(`\\\\start${name}\\b`).test(structure))) this.sectionRanks.add(rank);
         });
         if (this.context) {
             // ConTeXt's unnumbered title levels read as the numbered ones they stand for.
@@ -1132,7 +1135,34 @@ class LatexReader {
                 if (new RegExp(`\\\\start${title}\\b`).test(src)) this.sectionRanks.add(SECTIONING.indexOf(name));
             });
         }
-        if (/\\setcounter\s*\{secnumdepth\}\s*\{\s*-/.test(src)) this.numbered = false;
+        if (/\\setcounter\s*\{secnumdepth\}\s*\{\s*-/.test(structure)) this.numbered = false;
+    }
+
+    /**
+     * `src` (live source, see liveSource) and the live source of every project file it includes with
+     * `\input`, `\include` or `\subfile`, each file once and within the budget included text has (see
+     * MAX_EXPANDED_CHARS): what the document is made of, for what prescan decides before reading it.
+     */
+    private includedSources(src: string): string {
+        if (!this.project) return src;
+        const parts = [src];
+        const seen = new Set<string>();
+        const pending = [src];
+        let chars = src.length;
+        while (pending.length) {
+            const text = pending.pop()!;
+            for (const match of text.matchAll(/\\(?:input|include|subfile)(?![A-Za-z@])\s*(?:\{([^{}]*)\}|([^\s{}\\%]+))/g)) {
+                const resolved = this.findProjectFile((match[1] ?? match[2] ?? '').trim(), ['', '.tex']);
+                if (!resolved || seen.has(resolved)) continue;
+                seen.add(resolved);
+                const included = liveSource(decodeTex(this.project.files.get(resolved)!, this.inputEncoding).text);
+                chars += included.length;
+                if (chars > MAX_EXPANDED_CHARS) return parts.join('\n');
+                parts.push(included);
+                pending.push(included);
+            }
+        }
+        return parts.join('\n');
     }
 
     // ── state ──

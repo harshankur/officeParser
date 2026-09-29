@@ -2944,6 +2944,14 @@ See \autoref{sec:i}, \autoref{fig:a}, \cref{fig:a,eq:x}, \Cref{sec:i}, \cref{lem
     assert.ok(turned !== upright && rotatedPage !== upright, 'TEX: the rotated fixtures differ from the upright one');
     assert.deepStrictEqual([upright, turned, rotatedPage].map(pdf => imageFromPdf(new TextEncoder().encode(pdf), newDecodeBudget())?.mimeType ?? 'kept as PDF'),
         ['image/png', 'kept as PDF', 'kept as PDF'], 'TEX: only an upright, unrotated single-image page is taken as its picture');
+
+    // The sectioning a document uses is that of the files it includes: a thesis whose chapters are in
+    // files of their own read its sections as top-level headings, beside the chapters.
+    for (const cls of ['report', 'book']) {
+        const thesis = zipSync({ 'main.tex': strToU8(`\\documentclass{${cls}}\\begin{document}\n\\include{ch1}\n\\end{document}\n`), 'ch1.tex': strToU8('\\chapter{Intro}\nText.\n\\section{Background}\nMore.\n') });
+        const levels = collectAllNodes(await OfficeParser.parseOffice(Buffer.from(thesis), { fileType: 'zip' } as any)).filter(n => n.type === 'heading').map(n => (n.metadata as any)?.level);
+        assert.deepStrictEqual(levels, [1, 2], `TEX: a ${cls}'s chapters in an included file are the top level`);
+    }
 }
 
 /**
