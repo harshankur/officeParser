@@ -199,6 +199,9 @@ const isEscapedAt = (text: string, i: number): boolean => {
     return slashes % 2 === 1;
 };
 
+/** A link label as CommonMark matches it: without its outer whitespace, each inner run of whitespace one space, in lower case. */
+const normalizeLabel = (label: string): string => trimAsciiWhitespace(label).replace(/\s+/g, ' ').toLowerCase();
+
 /**
  * A Markdown link destination `url "title"` (also `'title'` or `(title)`) split into its URL and
  * optional title, both decoded as CommonMark decodes them. A title may escape its own delimiter
@@ -360,6 +363,38 @@ function hasTableDelimiterRow(block: string): boolean {
         if (lines[i].includes('-') && /^[-:| \t]+$/.test(lines[i])) return true;
     }
     return false;
+}
+
+/** A reference definition's title, `"..."`, `'...'` or `(...)` (each may escape its delimiter), then nothing else on its line. */
+const DEFINITION_TITLE = /^[ \t]*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|\(((?:[^()\\]|\\.)*)\))[ \t]*$/;
+
+/**
+ * The link reference definition (`[label]: target "title"`) starting at line `i` of `lines`, as
+ * CommonMark reads one, or null: up to three spaces in, a label of at most 999 characters (up to its
+ * first unescaped `]`) holding something besides whitespace, then its target, `<in angle brackets>`
+ * or with no spaces, on the same line or the next (`[x]:` then `  https://...`), then an optional
+ * title, on the target's line or the next. A title line that is no title ends the definition before
+ * it; anything else after the target makes the lines no definition. `lines` says how many it takes.
+ * Its target and title are decoded as CommonMark decodes them.
+ */
+function readLinkDefinition(lines: string[], i: number): { label: string; url: string; title?: string; lines: number } | null {
+    const head = /^ {0,3}\[((?:[^\]\\]|\\.){1,999})\]:(.*)$/.exec(lines[i]);
+    if (!head || !trimAsciiWhitespace(head[1])) return null;
+    let rest = head[2];
+    let used = 1;
+    if (!trimAsciiWhitespace(rest)) {
+        if (i + 1 >= lines.length || !trimAsciiWhitespace(lines[i + 1])) return null;
+        rest = lines[i + 1];
+        used = 2;
+    }
+    const target = /^[ \t]*(?:<((?:[^<>\\]|\\.)*)>|([^\s<]\S*))(?=[ \t]|$)/.exec(rest);
+    if (!target) return null;
+    const url = decodeMarkdownText(target[1] ?? target[2]);
+    const after = rest.slice(target[0].length);
+    const title = trimAsciiWhitespace(after) ? DEFINITION_TITLE.exec(after) : i + used < lines.length ? DEFINITION_TITLE.exec(lines[i + used]) : null;
+    if (trimAsciiWhitespace(after) && !title) return null;
+    if (!title) return { label: head[1], url, lines: used };
+    return { label: head[1], url, title: decodeMarkdownText(title[1] ?? title[2] ?? title[3]), lines: trimAsciiWhitespace(after) ? used : used + 1 };
 }
 
 /**
@@ -1048,10 +1083,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // Extract link/image reference definitions (`[ref]: /url "title"`) before block
     // splitting, for the same reason as footnotes/abbreviations: they conventionally
     // live at the end of the document, after every place they're referenced. Keyed by
-    // trimmed/lowercased label, matching CommonMark's case-insensitive reference matching.
-    // A label ends at its first unescaped `]` (`[Step \[2\]: configure](url)`, a link, was read as the
-    // label `Step \[2\` and the paragraph lost), and a definition does not interrupt a paragraph: one
-    // on the line after text (`- item` then `[x]: y`) is that text's continuation.
+    // normalized label, matching CommonMark's case-insensitive reference matching (see
+    // readLinkDefinition). A definition does not interrupt a paragraph: one on the line after text
+    // (`- item` then `[x]: y`) is that text's continuation. After a heading, a rule or another
+    // definition it is one (a heading then a list of definitions lost them all).
     const linkDefinitions = new Map<string, { url: string; title?: string }>();
     // The characters reference definitions (a link's or picture's target, an abbreviation's title) may
     // repeat into the document beyond their first use: each use is written out in full by every
@@ -1065,16 +1100,26 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         referenceBudget -= size;
         return true;
     };
-    let lastDefinitionEnd = -1;
-    textStr = textStr.replace(/^\[((?:[^\]\\]|\\[\s\S]){1,999})\]:[ \t]*(\S+)(?:[ \t]+"((?:[^"\\]|\\.)*)")?[ \t]*$/gm, (match: string, label: string, url: string, title: string | undefined, offset: number, whole: string) => {
-        if (offset > 0 && lastDefinitionEnd !== offset - 1) {
-            const previousLine = whole.slice(whole.lastIndexOf('\n', offset - 2) + 1, offset - 1);
-            if (trimAsciiWhitespace(previousLine)) return match;
+    {
+        const lines = textStr.split('\n');
+        const kept: string[] = [];
+        // Whether the line before is paragraph text: any line with content but a heading, a rule or a
+        // heading's underline (a definition's lines are taken out).
+        let inParagraph = false;
+        for (let i = 0; i < lines.length; i++) {
+            const definition = inParagraph ? null : readLinkDefinition(lines, i);
+            if (definition) {
+                linkDefinitions.set(normalizeLabel(definition.label), definition.title === undefined ? { url: definition.url } : { url: definition.url, title: definition.title });
+                for (let k = 0; k < definition.lines; k++) kept.push('');
+                i += definition.lines - 1;
+                continue;
+            }
+            const line = lines[i];
+            kept.push(line);
+            inParagraph = !!trimAsciiWhitespace(line) && !ATX_HEADING_START.test(line) && !THEMATIC_BREAK.test(line) && !SETEXT_UNDERLINE.test(line);
         }
-        lastDefinitionEnd = offset + match.length;
-        linkDefinitions.set(label.trim().toLowerCase(), { url: decodeMarkdownText(url), title: title === undefined ? undefined : decodeMarkdownText(title) });
-        return '';
-    });
+        textStr = kept.join('\n');
+    }
 
     // Parses a Pandoc-style attribute list body (the part inside `{...}`), e.g.
     // `width=50% .centered` or `align=right`. Per MARKDOWN_DIALECT.md §15's Decisions,
@@ -1401,7 +1446,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             } else if (g.refText !== undefined) { // Explicit/collapsed reference link or image: [text][ref] / [text][]
                 const isImage = g.refBang === '!';
                 const label = g.refText;
-                const refId = (g.refId || label).trim().toLowerCase();
+                const refId = normalizeLabel(g.refId || label);
                 const def = linkDefinitions.get(refId);
                 if (def && expandReference(`link:${refId}`, def.url.length + (def.title?.length ?? 0))) {
                     appendAll(nodes, buildLinkOrImageNodes(isImage, label, def.url));
@@ -1412,8 +1457,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             } else if (g.shortText !== undefined) { // Shortcut reference: [text]
                 const isImage = g.shortBang === '!';
                 const label = g.shortText;
-                const def = linkDefinitions.get(label.trim().toLowerCase());
-                if (def && expandReference(`link:${label.trim().toLowerCase()}`, def.url.length + (def.title?.length ?? 0))) {
+                const def = linkDefinitions.get(normalizeLabel(label));
+                if (def && expandReference(`link:${normalizeLabel(label)}`, def.url.length + (def.title?.length ?? 0))) {
                     appendAll(nodes, buildLinkOrImageNodes(isImage, label, def.url));
                 } else {
                     // Not a known reference - ordinary bracketed prose, preserve unchanged.
