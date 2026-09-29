@@ -578,11 +578,13 @@ const LATEX_TEXT_ESCAPES: Record<string, string> = {
 };
 
 /**
- * Characters TeX fonts combine with an identical neighbor into a different glyph (`--` is an en
- * dash, `''` a closing double quote, `,,` a low double quote in T1). An empty group between the pair
- * keeps the two characters the source actually contained.
+ * What {@link escapeLatex} rewrites: a line end, a character of {@link LATEX_TEXT_ESCAPES}, or one of
+ * the characters TeX fonts combine with an identical neighbor into a different glyph (`--` is an en
+ * dash, `''` a closing double quote, `,,` a low double quote in T1) when that neighbor follows it; an
+ * empty group between the pair keeps the two characters the source actually contained. Every
+ * alternative is one character (the neighbor is only looked at), so a match costs constant time.
  */
-const LATEX_LIGATURE_CHARS = new Set(['-', "'", ',']);
+const LATEX_TEXT_SPECIAL = /[\n\\{}$&%#_~^<>|`[\]\t ­​]|([-',])(?=\1)/g;
 
 /**
  * Escapes document text for a LaTeX text position (running text, a macro argument, a table cell).
@@ -598,15 +600,10 @@ const LATEX_LIGATURE_CHARS = new Set(['-', "'", ',']);
  */
 export function escapeLatex(text: string, newline = ' '): string {
     if (typeof text !== 'string') return '';
-    const src = normalizeLatexInput(text);
-    let out = '';
-    for (let i = 0; i < src.length; i++) {
-        const ch = src[i];
-        if (ch === '\n') { out += newline; continue; }
-        out += LATEX_TEXT_ESCAPES[ch] ?? ch;
-        if (LATEX_LIGATURE_CHARS.has(ch) && src[i + 1] === ch) out += '{}';
-    }
-    return out;
+    // One native pass that copies the text between special characters as it is: built a character at
+    // a time, a 20 MB run took seconds and hundreds of megabytes of string pieces, and 140 MB exhausted the heap.
+    return normalizeLatexInput(text).replace(LATEX_TEXT_SPECIAL, (ch, ligature: string | undefined) =>
+        ligature ? `${ligature}{}` : ch === '\n' ? newline : LATEX_TEXT_ESCAPES[ch]);
 }
 
 /**
@@ -656,27 +653,29 @@ const LATEX_URL_ESCAPES: Record<string, string> = { '#': '\\#', '&': '\\&', '_':
  * The URL is then made inert to TeX: `#`, `&`, `_` and `%` take their escaped forms (an existing
  * `%xx` escape is kept, a stray `%` is encoded as `%25`), and everything else that is not a plain URL
  * character is percent-encoded as UTF-8, which is equivalent in a URL and leaves no TeX-special or
- * non-ASCII character in the argument.
+ * non-ASCII character in the argument. Every `%` is written `\%`, those of the encoding included:
+ * inside another command's argument (a heading, a footnote, a caption, a table cell) TeX has read a
+ * bare `%` as a comment before hyperref sees the URL, which swallowed the rest of the line.
  */
 export function sanitizeLatexUrl(url: string): string {
     const safe = sanitizeOfficePackageUrl(url);
     if (!safe) return '';
     const encoder = new TextEncoder();
-    let out = '';
+    const out: string[] = [];
     const chars = Array.from(safe);
     for (let i = 0; i < chars.length; i++) {
         const ch = chars[i];
         if (ch === '%') {
-            out += /^[0-9A-Fa-f]{2}$/.test((chars[i + 1] ?? '') + (chars[i + 2] ?? '')) ? '\\%' : '\\%25';
+            out.push(/^[0-9A-Fa-f]{2}$/.test((chars[i + 1] ?? '') + (chars[i + 2] ?? '')) ? '\\%' : '\\%25');
         } else if (LATEX_URL_ESCAPES[ch]) {
-            out += LATEX_URL_ESCAPES[ch];
+            out.push(LATEX_URL_ESCAPES[ch]);
         } else if (LATEX_URL_LITERAL.test(ch)) {
-            out += ch;
+            out.push(ch);
         } else {
-            for (const byte of encoder.encode(ch)) out += '%' + byte.toString(16).toUpperCase().padStart(2, '0');
+            for (const byte of encoder.encode(ch)) out.push('\\%' + byte.toString(16).toUpperCase().padStart(2, '0'));
         }
     }
-    return out;
+    return out.join('');
 }
 
 /**

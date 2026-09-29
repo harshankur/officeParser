@@ -2133,8 +2133,23 @@ async function latexSanitizationTests() {
     }
     const url = sanitizeLatexUrl('https://x.com/a b/{c}\\d^e|f~g$h?i=1&j=_#k%zz%41é');
     check('latex url: special characters encoded or escaped',
-        url === 'https://x.com/a%20b/%7Bc%7D%5Cd%5Ee%7Cf%7Eg%24h?i=1\\&j=\\_\\#k\\%25zz\\%41%C3%A9', url);
+        url === 'https://x.com/a\\%20b/\\%7Bc\\%7D\\%5Cd\\%5Ee\\%7Cf\\%7Eg\\%24h?i=1\\&j=\\_\\#k\\%25zz\\%41\\%C3\\%A9', url);
     check('latex url: no raw brace or command survives', !/[{}]/.test(url) && liveControlWords(url).length === 0);
+    // Its own encodings too: a bare `%` is a comment when the link sits in an argument (a heading, a footnote).
+    check('latex url: every % it writes is escaped', !/(^|[^\\])%/.test(sanitizeLatexUrl('https://example.edu/~alice/Zürich?q=a b')), sanitizeLatexUrl('https://example.edu/~alice/Zürich?q=a b'));
+    // escapeLatex copies the text between special characters in one pass: built a character at a time,
+    // 20 MB took seconds and hundreds of megabytes, and 140 MB exhausted the heap.
+    const escapeTimed = (n: number) => {
+        const text = 'word & more_text 50% {x} -- '.repeat(Math.ceil(n / 28)).slice(0, n);
+        const started = Date.now();
+        const out = escapeLatex(text);
+        return { ms: Date.now() - started, ok: out.startsWith('word \\& more\\_text 50\\% \\{x\\} -{}- ') };
+    };
+    const escapeSmall = escapeTimed(1_000_000), escapeLarge = escapeTimed(4_000_000);
+    check('latex: escapeLatex is linear in its input', escapeSmall.ok && escapeLarge.ok && escapeLarge.ms < Math.max(200, 7 * escapeSmall.ms), `${escapeSmall.ms}ms vs ${escapeLarge.ms}ms`);
+    const escapeHeap = process.memoryUsage().heapUsed;
+    const escapedRun = escapeLatex('plain words here '.repeat(1_200_000));
+    check('latex: escaping a 20 MB run holds about its own size', process.memoryUsage().heapUsed - escapeHeap < 150_000_000 && escapedRun.length === 20_400_000, `heap +${Math.round((process.memoryUsage().heapUsed - escapeHeap) / 1e6)}MB`);
 
     // latexSourceComment: a hidden note stays inside `%` lines whatever line breaks it holds, and a
     // `-->` inside it cannot end the comment early for the LaTeX parser.
