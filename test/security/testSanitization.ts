@@ -3584,6 +3584,12 @@ async function parserHardeningTests() {
     const padIssues: string[] = [];
     await OfficeGenerator.generate(astWith([tallNarrow]) as any, 'csv', { onWarning: (issue: any) => padIssues.push(issue.code) } as any);
     check('csv: rows left short by the padding budget are reported (TABLE_GRID_LIMIT_EXCEEDED)', padIssues.includes('TABLE_GRID_LIMIT_EXCEEDED'), `${padIssues}`);
+    // Plain text lines a table's columns up within a budget of spaces (16 million, plus 16 a byte of the
+    // document); past it cells are set off by one space, and that is reported.
+    const wideColumn = { type: 'table', children: Array.from({ length: 70_000 }, (_, r) => ({ type: 'row', children: [{ type: 'cell', children: [{ type: 'text', text: r === 0 ? 'y'.repeat(250) : 'x' }] }, { type: 'cell', children: [{ type: 'text', text: 'z' }] }] })) };
+    const alignIssues: string[] = [];
+    const aligned = (await OfficeGenerator.generate(astWith([wideColumn]) as any, 'text', { textConfig: { preserveLayout: true }, onWarning: (issue: any) => alignIssues.push(issue.code) } as any)).value as string;
+    check('text: table alignment past its budget of spaces is reported (TABLE_GRID_LIMIT_EXCEEDED)', aligned.length < 20_000_000 && alignIssues.includes('TABLE_GRID_LIMIT_EXCEEDED'), `${aligned.length} ${alignIssues}`);
     const parsedNarrow = await warned(Buffer.from(['h0,h1,h2,h3,h4,h5,h6,h7,h8,h9,h10,h11,h12', ...Array.from({ length: 100_000 }, (_, r) => String(r))].join('\n')), 'csv');
     const narrowCsv = parsedNarrow.ast ? (await parsedNarrow.ast.to('csv')).value as string : '';
     check('csv: a parsed CSV of 100,000 short rows under a 13-column header is padded whole', narrowCsv.split('\n').filter(Boolean).every(line => line.split(',').length === 13), narrowCsv.slice(-80));

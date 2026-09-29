@@ -126,7 +126,8 @@ export enum OfficeWarningType {
      * A document's tables held more empty grid positions than one output may fill (a million, plus 16 for
      * each byte of the document it was parsed from): a table's cells were laid out closer, so they no
      * longer stand in the rows and columns the document put them in, or short rows were not padded to
-     * their table's width, or a sparse sheet's empty rows were not written.
+     * their table's width, or a sparse sheet's empty rows were not written; or plain text stopped lining
+     * up columns, past the spaces one output may add to align them (16 million, plus 16 a byte).
      */
     TABLE_GRID_LIMIT_EXCEEDED = 'TABLE_GRID_LIMIT_EXCEEDED',
     /** A content feature (e.g. math, an embedded object) has no faithful representation in the destination format and was downgraded or dropped */

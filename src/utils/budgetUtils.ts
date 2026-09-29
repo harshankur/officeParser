@@ -46,3 +46,10 @@ export const REPEATED_CHARACTERS_PER_BYTE = 16;
  * columns (19 KB) fills 1.2 million.
  */
 export const GRID_POSITIONS_PER_BYTE = 16;
+
+/**
+ * Spaces plain text may add to line up tables and page layouts for each byte of the document, beyond
+ * the 16 million every document may (see TextGenerator): a workbook of a million cells lines its
+ * columns up with about ten million.
+ */
+export const LAYOUT_SPACES_PER_BYTE = 16;

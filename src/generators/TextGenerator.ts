@@ -1,4 +1,5 @@
-import { CodeMetadata, ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNodeType, OfficeParserAST } from '../types.js';
+import { CodeMetadata, ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNodeType, OfficeParserAST, OfficeWarningType } from '../types.js';
+import { documentBytesOf, LAYOUT_SPACES_PER_BYTE } from '../utils/budgetUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { clampRepeat, median } from '../utils/numberUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
@@ -383,8 +384,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 // The padding comes out of the document's layout budget (as a table's does); past it, a
                 // run is set off by one space.
                 const pad = col - line.length;
-                if (pad > 0 && this.layoutPaddingLeft >= pad) {
-                    this.layoutPaddingLeft -= pad;
+                if (pad > 0 && this.takeLayoutPadding(pad)) {
                     line += ' '.repeat(pad);
                 } else if (pad > 0) {
                     line += ' ';
@@ -418,8 +418,22 @@ export class TextGenerator extends BaseGenerator<'text'> {
     }
 
 
-    /** Spaces laid-out tables may still add to line their columns up (see renderTable). */
-    private layoutPaddingLeft = MAX_LAYOUT_PADDING;
+    /**
+     * Spaces laid-out tables and pages may still add to line their columns up (see renderTable):
+     * MAX_LAYOUT_PADDING plus LAYOUT_SPACES_PER_BYTE for each byte of the document parsed.
+     */
+    private layoutPaddingLeft = MAX_LAYOUT_PADDING + LAYOUT_SPACES_PER_BYTE * documentBytesOf(this.ast);
+    private layoutPaddingWarned = false;
+
+    /** Whether `pad` more spaces fit the layout budget (and takes them); past it, reported once. */
+    private takeLayoutPadding(pad: number): boolean {
+        if (this.layoutPaddingLeft >= pad) { this.layoutPaddingLeft -= pad; return true; }
+        if (!this.layoutPaddingWarned) {
+            this.layoutPaddingWarned = true;
+            this.warn(OfficeWarningType.TABLE_GRID_LIMIT_EXCEEDED, { unaligned: true, limit: MAX_LAYOUT_PADDING + LAYOUT_SPACES_PER_BYTE * documentBytesOf(this.ast) });
+        }
+        return false;
+    }
 
     /** A laid-out table renders its own cells (see renderTable). */
     protected override walkedByProcessor(node: OfficeContentNode): boolean {
@@ -464,8 +478,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 // budget of padding: padded to the widest cell, one 100 KB cell over 2,000 rows made
                 // 200 MB of spaces from 1.6 KB. A cell wider than that is written as it is.
                 const pad = Math.min(colWidths[i] || 0, LAYOUT_COLUMN_WIDTH) - cell.length;
-                const padding = pad > 0 && this.layoutPaddingLeft >= pad ? pad : 0;
-                this.layoutPaddingLeft -= padding;
+                const padding = pad > 0 && this.takeLayoutPadding(pad) ? pad : 0;
                 tableOutput += cell + ' '.repeat(padding) + ' | ';
             }
             tableOutput += newline;
