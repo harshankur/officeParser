@@ -1029,11 +1029,24 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             const customProps: Record<string, any> = {};
             const nativeProps: Record<string, any> = {};
 
-            for (const line of lines) {
+            // A YAML item, quoted or not, as a string (a quoted one decoded as a quoted scalar is, below).
+            const itemValue = (item: string) => (/^"(.*)"$/.test(item) ? decodeDoubleQuoted(item) : /^'(.*)'$/.test(item) ? item.slice(1, -1).replace(/''/g, "'") : item);
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
                 const match = line.match(/^([^:]+):\s*(.*)$/);
                 if (match) {
                     const key = match[1].trim();
                     const rawVal = match[2].trim();
+                    // A key with no value on its line and `- item` lines after it (a block sequence,
+                    // `tags:` then `  - a`) has those items as its value: its lines were skipped, and the
+                    // key was written back as `tags: ""`.
+                    let items: string[] | undefined;
+                    for (let j = i + 1; !rawVal && j < lines.length; j++) {
+                        const item = /^[ \t]*-(?:[ \t](.*))?$/.exec(lines[j]);
+                        if (!item) break;
+                        (items ??= []).push(itemValue(trimAsciiWhitespace(item[1] ?? '')));
+                        i = j;
+                    }
                     // A quoted scalar is explicitly a string in YAML: strip the quotes but never
                     // coerce it, so `version: "123"` / `flag: "true"` keep their string-ness across
                     // a save/reload cycle instead of silently degrading to a number/boolean on the
@@ -1047,7 +1060,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                         : /^'(.*)'$/.test(rawVal) ? rawVal.slice(1, -1).replace(/''/g, "'") : rawVal;
 
                     let parsedVal: any = val;
-                    if (!isQuoted && rawVal.startsWith('[') && rawVal.endsWith(']')) {
+                    if (items) {
+                        parsedVal = items;
+                    } else if (!isQuoted && rawVal.startsWith('[') && rawVal.endsWith(']')) {
                         // Flow-array (`tags: [a, b]`) or JSON-array (`tags: ["a","b"]`) value -
                         // parse into a real array instead of storing the literal bracket string,
                         // so it round-trips symmetrically with MarkdownGenerator's frontmatter output.
@@ -1057,8 +1072,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                         } catch {
                             const inner = rawVal.slice(1, -1).trim();
                             // Quoted items decoded as quoted scalars are (above).
-                            parsedVal = inner === '' ? [] : splitFlowArrayItems(inner).map(item => (/^"(.*)"$/.test(item) ? decodeDoubleQuoted(item)
-                                : /^'(.*)'$/.test(item) ? item.slice(1, -1).replace(/''/g, "'") : item));
+                            parsedVal = inner === '' ? [] : splitFlowArrayItems(inner).map(itemValue);
                         }
                     } else if (isQuoted) parsedVal = val;
                     else if (val === 'true') parsedVal = true;
