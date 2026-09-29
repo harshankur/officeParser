@@ -2143,6 +2143,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // of a quote or note being read.
     const parseBlocks = async (blocks: string[], content: OfficeContentNode[]): Promise<void> => {
     let currentAlignment: 'left' | 'center' | 'right' | 'justify' | undefined = undefined;
+    // The last list read: its last item, and its id and each level's counter, marker and indentation,
+    // for a list block after it to go on with (see the list branch).
+    let previousList: { last: OfficeContentNode; listId: string; counters: Map<number, number>; markers: Map<number, string>; indents: number[] } | undefined;
 
     for (let block of blocks) {
         // Empty anchors (bookmark targets) before a block's content, on its first line or on a line of
@@ -2535,17 +2538,25 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // Lists
         if (LIST_ITEM_START.test(block.split('\n', 1)[0])) {
             const lines = block.split('\n');
-            let listId = `md-list-${listIdCounter++}`;
-            const listCounters = new Map<number, number>();
+            // A list block right after a list (blank lines between) whose first item is of the kind of
+            // its top-level items goes on with it: a loose list, as CommonMark reads it (`1. a`, a blank
+            // line, `1. b` is items 1 and 2 of one list, where each started a list and was numbered 1).
+            const first = /^([ \t]*)([-*+]|\d+[.)])/.exec(lines[0])!;
+            const firstKind = /\d/.test(first[2]) ? first[2].slice(-1) : first[2];
+            const continues = previousList && content[content.length - 1] === previousList.last
+                && previousList.markers.get(0) === firstKind && first[1].replace(/\t/g, '    ').length <= (previousList.indents[0] ?? 0)
+                ? previousList : undefined;
+            let listId = continues?.listId ?? `md-list-${listIdCounter++}`;
+            const listCounters = continues?.counters ?? new Map<number, number>();
             // The marker each level's list uses (its bullet, or an ordered list's `.` or `)`): another
             // starts a new list, as CommonMark reads it (`1. one` after `- b` counted on from the bullets).
-            const levelMarkers = new Map<number, string>();
+            const levelMarkers = continues?.markers ?? new Map<number, string>();
             // Relative indent stack (not a fixed-width divisor) so nesting level is
             // computed from what indentation actually appeared in this block, rather
             // than assuming a specific indent width. This makes the parser agnostic to
             // 2-space (hand-written), 4-space (this generator's own output), or
             // tab-indented (normalized to a 4-column stop) nested lists.
-            const indentStack: number[] = [];
+            const indentStack: number[] = continues?.indents ?? [];
             // The item being read and its lines: its text and indented continuation lines (see the
             // sub-splitter above), read as one text when the item ends, as a paragraph's lines are,
             // so emphasis or a link may run from one line to the next.
@@ -2639,6 +2650,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     item.lines.push(trimStartChars(line, ' \t'));
                 }
             }
+            previousList = { last: content[content.length - 1], listId, counters: listCounters, markers: levelMarkers, indents: indentStack };
             endItem();
             continue;
         }
