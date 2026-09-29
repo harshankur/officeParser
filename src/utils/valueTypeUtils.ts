@@ -7,11 +7,11 @@ import { OfficeContentNode, OfficeParserAST } from '../types.js';
  * string, or a union of string literals.
  */
 const NUMBER_FIELDS = new Set(['level', 'indentation', 'itemIndex', 'row', 'col', 'rowSpan', 'colSpan', 'slideNumber', 'pageNumber', 'pageWidth', 'pageHeight', 'rotation', 'pages']);
-const BOOLEAN_FIELDS = new Set(['isTask', 'checked', 'unreferenced', 'bold', 'italic', 'underline', 'strikethrough', 'subscript', 'superscript']);
+const BOOLEAN_FIELDS = new Set(['isTask', 'checked', 'unreferenced', 'wikilink', 'bold', 'italic', 'underline', 'strikethrough', 'subscript', 'superscript']);
 const STRING_FIELDS = new Set([
     'style', 'alignment', 'listType', 'listId', 'noteId', 'sheetName', 'align', 'backgroundColor', 'color', 'size', 'font',
     'attachmentName', 'altText', 'url', 'width', 'height', 'title', 'link', 'linkType', 'linkTitle', 'embedType', 'videoId', 'label',
-    'admonitionType', 'sourceSyntax', 'pageLabel', 'pageName', 'abbreviationTitle', 'citationKey', 'wikilink', 'noteType', 'breakType',
+    'admonitionType', 'sourceSyntax', 'pageLabel', 'pageName', 'abbreviationTitle', 'citationKey', 'noteType', 'breakType',
     'clear', 'language', 'math', 'author', 'initials', 'date', 'commentId', 'type', 'chartType',
 ]);
 /** `paragraphIndentation`'s fields, all numbers (points). */

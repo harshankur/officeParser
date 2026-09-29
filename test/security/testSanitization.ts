@@ -3587,6 +3587,10 @@ async function parserHardeningTests() {
     const parsedNarrow = await warned(Buffer.from(['h0,h1,h2,h3,h4,h5,h6,h7,h8,h9,h10,h11,h12', ...Array.from({ length: 100_000 }, (_, r) => String(r))].join('\n')), 'csv');
     const narrowCsv = parsedNarrow.ast ? (await parsedNarrow.ast.to('csv')).value as string : '';
     check('csv: a parsed CSV of 100,000 short rows under a 13-column header is padded whole', narrowCsv.split('\n').filter(Boolean).every(line => line.split(',').length === 13), narrowCsv.slice(-80));
+    // A link's `wikilink` is a boolean: false is not a wikilink (coerced to the string "false", it was).
+    const notWiki = astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'Example', metadata: { link: 'https://example.com', linkType: 'external', wikilink: false } }] }]);
+    const notWikiMd = (await OfficeGenerator.generate(notWiki as any, 'md', { onWarning: () => {} } as any)).value as string;
+    check('md: a link with wikilink false is a Markdown link', notWikiMd.includes('[Example](https://example.com)') && !notWikiMd.includes('[['), notWikiMd);
     // A paragraph's text is the text of its runs, not written beside them: a paragraph of 96 MB in one run is written.
     const hugeText = 'x'.repeat(96_000_000);
     const hugeParagraph = (await OfficeGenerator.generate(astWith([{ type: 'paragraph', text: hugeText, children: [{ type: 'text', text: hugeText }] }]) as any, 'text', { onWarning: () => {} } as any)).value as string;
