@@ -131,7 +131,10 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
     decompressionLimits: {
         maxUncompressedBytes: 512 * 1024 * 1024,
         maxZipEntries: 10000,
-        maxTableCells: 1000000
+        maxTableCells: 1000000,
+        maxXmlElements: 2000000,
+        maxRawContentLength: 64 * 1024 * 1024,
+        maxRepeatedContent: 16 * 1024 * 1024,
     },
     htmlParserConfig: { preserveAttributes: false, preserveIframes: false, preserveComments: true, embedFolkForms: false },
     ignorePageGeometry: false,
@@ -146,7 +149,14 @@ const FULL_CONFIG: DeepRequired<OfficeParserConfig> = {
         headingDetection: 'auto',
         pageRange: '',
         normalizeText: true,
-        extractTextColor: true
+        extractTextColor: true,
+        maxTextItems: 20_000,
+        maxOperators: 250_000,
+        maxAnnotations: 10_000,
+        maxTimeMs: 5_000,
+        // pdf.js in a process of its own, as it runs by default in Node.
+        separateProcess: true,
+        processMemoryMb: 1024,
     },
     texParserConfig: { today: '' },
 };
