@@ -853,8 +853,26 @@ async function testRtf(): Promise<void> {
 
     await testRtfDestinations();
     await testRtfTables();
+    await testRtfEncodings();
 
     console.log('  RTF: All assertions passed ✓');
+}
+
+/**
+ * RTF text in the code page it is written in: the document's (`\ansicpg`, double-byte ones too), a
+ * font's (`\fcharset`, for its group), and TextEdit's lines (a backslash ending each) and font table.
+ */
+async function testRtfEncodings(): Promise<void> {
+    const texts = async (rtf: string) => (await OfficeParser.parseOffice(Buffer.from(rtf, 'latin1'), { fileType: 'rtf' } as any)).content.map(n => n.text);
+    assert.deepStrictEqual(await texts(String.raw`{\rtf1\ansi\ansicpg932 \'93\'fa\'96\'7b\'8c\'ea\par}`), ['日本語'], 'RTF: \\ansicpg932 is Shift-JIS');
+    assert.deepStrictEqual(await texts(String.raw`{\rtf1\ansi\ansicpg936 \'d6\'d0\'ce\'c4\par}`), ['中文'], 'RTF: \\ansicpg936 is GBK');
+    assert.deepStrictEqual(await texts(String.raw`{\rtf1\ansi\ansicpg950 \'a4\'a4\'a4\'e5\par}`), ['中文'], 'RTF: \\ansicpg950 is Big5');
+    assert.deepStrictEqual(await texts(String.raw`{\rtf1\ansi\ansicpg949 \'c7\'d1\'b1\'db\par}`), ['한글'], 'RTF: \\ansicpg949 is Korean');
+    // A font's character set is its text's code page, for the font's group only.
+    assert.deepStrictEqual(await texts(String.raw`{\rtf1\ansi\ansicpg1252{\fonttbl{\f0 Arial;}{\f1\fcharset204 Arial Cyr;}{\f2\fcharset128 Mincho;}}\f1 \'cf\'f0\'e8 {\f2 \'93\'fa\'96\'7b}\f0  \'e9\par}`), ['При 日本 é'], 'RTF: \\fcharset204 and \\fcharset128 fonts are read in their code pages, and the document\'s after');
+    // TextEdit: a backslash ending a line ends the paragraph, and fonts are listed without groups.
+    const cocoa = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\ansicpg1252\\cocoartf2907\n{\\fonttbl\\f0\\froman\\fcharset0 Times-Bold;\\f1\\froman\\fcharset0 Times-Roman;}\n{\\colortbl;;\\red0\\green0\\blue233;}\n\\f0\\b First line\\\n\\f1\\b0\\cf2 Second line\\\r\nThird\\\n}', 'latin1'), { fileType: 'rtf' } as any);
+    assert.deepStrictEqual(cocoa.content.map(n => [n.text, n.children?.[0]?.formatting?.font, n.children?.[0]?.formatting?.color]), [['First line', 'Times-Bold', undefined], ['Second line', 'Times-Roman', '#0000e9'], ['Third', 'Times-Roman', '#0000e9']], 'RTF: TextEdit lines are paragraphs, its fonts named, and ";;" in the colour table is two colours');
 }
 
 /**

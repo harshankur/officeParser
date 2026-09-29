@@ -199,6 +199,27 @@ const latin1Text = (bytes: Uint8Array): string => {
 /** The most characters a `\ucN` may ask a reader to skip after each `\uN` (see SimpleRtfParser.skip). */
 const MAX_UNICODE_FALLBACK = 16;
 
+/**
+ * The code page of each font character set (`\fcharsetN`) that has one of its own; the others (0 ANSI,
+ * 1 default, 2 symbol) use the document's (`\ansicpgN`).
+ */
+const CHARSET_CODE_PAGES = new Map<number, number>([
+    [77, 10000], [128, 932], [129, 949], [134, 936], [136, 950], [161, 1253], [162, 1254], [163, 1258],
+    [177, 1255], [178, 1256], [186, 1257], [204, 1251], [222, 874], [238, 1250], [254, 437], [255, 437],
+]);
+
+/** Code pages whose TextDecoder label is not `windows-N`. */
+const CODE_PAGE_ENCODINGS = new Map<number, string>([
+    [932, 'shift_jis'], [936, 'gbk'], [949, 'euc-kr'], [950, 'big5'], [10000, 'macintosh'], [20932, 'euc-jp'],
+    [54936, 'gb18030'], [65001, 'utf-8'], [437, 'ibm437'], [850, 'ibm850'],
+]);
+
+/**
+ * Double-byte code pages: bytes in one are that code page's (a UTF-8 reading of them, meant for writers
+ * that put UTF-8 under a single-byte code page, could take a pair for a UTF-8 character).
+ */
+const DOUBLE_BYTE_CODE_PAGES = new Set([932, 936, 949, 950, 1361, 20932, 54936]);
+
 export class SimpleRtfParser {
     /** Current position in the buffer */
     private index: number = 0;
@@ -208,6 +229,18 @@ export class SimpleRtfParser {
 
     /** Current code page for character decoding (default is Windows-1252) */
     private codePage: number = 1252;
+
+    /**
+     * The document's code page (`\ansicpgN`), each font's (its `\fcharsetN` or `\cpgN` in the font
+     * table), the font whose entry is being read, and the code page of each open group. Text under a
+     * font of its own character set (`{\f1\fcharset204 ...}`, a Russian or Japanese font) is in that
+     * font's code page, until the group ends or another font is chosen: it was read in the document's.
+     */
+    private documentCodePage = 1252;
+    private readonly fontCodePages = new Map<number, number>();
+    private font: number | undefined;
+    private defaultFont: number | undefined;
+    private readonly codePageStack: number[] = [];
 
     /** Cached TextDecoders for different code pages */
     private decoders: { [key: number]: TextDecoder } = {};
@@ -267,6 +300,7 @@ export class SimpleRtfParser {
                 currentGroup.content.push(newGroup);
                 stack.push(newGroup);
                 this.ucStack.push(this.ucStack[this.ucStack.length - 1]);
+                this.codePageStack.push(this.codePage);
                 this.skip = 0;
             } else if (char === 0x7D) { // '}'
                 this.index++;
@@ -274,6 +308,7 @@ export class SimpleRtfParser {
                 if (stack.length > 1) {
                     stack.pop();
                     this.ucStack.pop();
+                    this.codePage = this.codePageStack.pop() ?? this.codePage;
                 }
                 this.skip = 0;
                 // If stack is 1 (root), we ignore extra closing braces or just stop?
@@ -319,6 +354,15 @@ export class SimpleRtfParser {
         }
 
         this.flushPendingText(group);
+
+        // A backslash ending a line is a paragraph break (`\par`), as the specification has it, and as
+        // TextEdit writes every line: the lines ran together.
+        if (char === 0x0A || char === 0x0D) {
+            this.index++;
+            if (char === 0x0D && this.buffer[this.index] === 0x0A) this.index++;
+            group.content.push({ type: 'control', value: 'par' });
+            return;
+        }
 
         if (char === 0x2A) { // \* (ignorable destination)
             // We treat this as a control word named '*'
@@ -377,15 +421,30 @@ export class SimpleRtfParser {
 
         // Handle encoding control words
         if (name === 'ansicpg' && param !== undefined) {
-            this.codePage = param;
+            this.codePage = this.documentCodePage = param;
         } else if (name === 'ansi') {
-            this.codePage = 1252;
+            this.codePage = this.documentCodePage = 1252;
         } else if (name === 'mac') {
-            this.codePage = 10000;
+            this.codePage = this.documentCodePage = 10000;
         } else if (name === 'pc') {
-            this.codePage = 437;
+            this.codePage = this.documentCodePage = 437;
         } else if (name === 'pca') {
-            this.codePage = 850;
+            this.codePage = this.documentCodePage = 850;
+        } else if (name === 'f' && param !== undefined) {
+            // A font: its code page (in the font table, the entry's own until its \fcharset says).
+            this.font = param;
+            this.codePage = this.fontCodePages.get(param) ?? this.documentCodePage;
+        } else if ((name === 'fcharset' || name === 'cpg') && param !== undefined && this.font !== undefined) {
+            const codePage = name === 'cpg' ? param : CHARSET_CODE_PAGES.get(param);
+            if (codePage !== undefined && codePage > 0) {
+                this.fontCodePages.set(this.font, codePage);
+                this.codePage = codePage;
+            }
+        } else if (name === 'deff' && param !== undefined) {
+            this.defaultFont = param;
+        } else if (name === 'plain') {
+            // Character formatting back to the default: the default font's code page.
+            this.codePage = (this.defaultFont !== undefined ? this.fontCodePages.get(this.defaultFont) : undefined) ?? this.documentCodePage;
         }
 
         const control: RtfControl = { type: 'control', value: name, param };
@@ -496,7 +555,7 @@ export class SimpleRtfParser {
         // Try UTF-8 first if there are any non-ASCII bytes.
         // Many modern RTF generators (like calibre or web-based tools) dump UTF-8 bytes 
         // into the RTF even if the header claims a different code page.
-        if (bytes.some(b => b > 127)) {
+        if (!DOUBLE_BYTE_CODE_PAGES.has(codePage) && bytes.some(b => b > 127)) {
             try {
                 // Use fatal: true to ensure we fall back on invalid UTF-8 sequences
                 const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
@@ -508,10 +567,9 @@ export class SimpleRtfParser {
 
         // Fallback to specified code page
         if (!this.decoders[codePage]) {
-            let encoding = `windows-${codePage}`;
-            if (codePage === 10000) encoding = 'macintosh';
-            else if (codePage === 437) encoding = 'ibm437';
-            else if (codePage === 850) encoding = 'ibm850';
+            // Shift-JIS, GBK, Big5 and the others are not `windows-N` to a TextDecoder: read as such, they
+            // fell back to Windows-1252.
+            const encoding = CODE_PAGE_ENCODINGS.get(codePage) ?? `windows-${codePage}`;
 
             try {
                 this.decoders[codePage] = new TextDecoder(encoding);
@@ -2171,8 +2229,22 @@ function extractFontTable(doc: RtfGroup): { [key: number]: string } {
     const tableGroup = findRtfGroup(doc, 'fonttbl');
 
     if (tableGroup) {
+        // A font given in the table itself, not in a group of its own (`{\fonttbl\f0 Times;\f1 Arial;}`, as
+        // TextEdit writes it): its name runs to the `;`.
+        let inlineIndex: number | undefined;
+        let inlineName = '';
         for (const fontNode of tableGroup.content) {
-            if (fontNode.type === 'group') {
+            if (fontNode.type === 'control' && fontNode.value === 'f') {
+                inlineIndex = fontNode.param;
+                inlineName = '';
+            } else if (fontNode.type === 'text' && inlineIndex !== undefined) {
+                const end = fontNode.value.indexOf(';');
+                inlineName += end >= 0 ? fontNode.value.slice(0, end) : fontNode.value;
+                if (end >= 0) {
+                    if (inlineName.trim()) fontTable[inlineIndex] = inlineName.trim();
+                    inlineIndex = undefined;
+                }
+            } else if (fontNode.type === 'group') {
                 let fontIndex: number | undefined;
                 let fontName = '';
 
@@ -2207,11 +2279,16 @@ function extractColorTable(doc: RtfGroup): { [key: number]: string } {
                 if (item.value === 'red' && item.param !== undefined) red = item.param;
                 else if (item.value === 'green' && item.param !== undefined) green = item.param;
                 else if (item.value === 'blue' && item.param !== undefined) blue = item.param;
-            } else if (item.type === 'text' && item.value === ';') {
-                const hex = `#${red.toString(16).padStart(2, '0')}${green.toString(16).padStart(2, '0')}${blue.toString(16).padStart(2, '0')}`;
-                colorTable[colorIndex] = hex;
-                colorIndex++;
-                red = 0; green = 0; blue = 0;
+            } else if (item.type === 'text') {
+                // Each `;` ends a colour (`;;` is two, the second the default colour: taken as one, the
+                // colours after it were one index off).
+                for (let at = item.value.indexOf(';'); at >= 0; at = item.value.indexOf(';', at + 1)) {
+                    const byte = (v: number) => Math.min(255, Math.max(0, v)).toString(16).padStart(2, '0');
+                    const hex = `#${byte(red)}${byte(green)}${byte(blue)}`;
+                    colorTable[colorIndex] = hex;
+                    colorIndex++;
+                    red = 0; green = 0; blue = 0;
+                }
             }
         }
     }
