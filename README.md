@@ -755,6 +755,8 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `SHEET_RANGE_NOT_FOUND` | generate | A `csvConfig.sheets` range matched no sheet, so CSV output is empty. |
 | `EMPTY_CHUNK_GENERATED` / `WHITESPACE_NODE_SKIPPED` / `BROWSER_GENERATION_LIMITATION` / `PERFORMANCE_TIP` / `DEPENDENCY_LOAD_FAILED` | generate | Diagnostic/informational notes from the chunking and PDF generators. |
 
+Generating throws `OUTPUT_TOO_LARGE` when the output would grow past what a string or array holds, or when an AST built in code shares its nodes, records, lists or long strings along more paths than a writer follows (a shared value is written at every use, so a few KB of AST could ask for gigabytes). Parsed documents stay well inside the bound; an AST's own `config.decompressionLimits.maxRepeatedContent` (up to 1 GiB) widens it. An AST nested past what the stack holds throws `MAX_NESTING_DEPTH_EXCEEDED`.
+
 The full enum lives in `OfficeWarningType` / `OfficeErrorType` (`src/types.ts`); the error codes used in the `catch` above are the `OfficeErrorType` members.
 
 ---

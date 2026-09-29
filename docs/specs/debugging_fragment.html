@@ -259,6 +259,10 @@ await officeParser.parseOffice(latexBuffer,    { fileType: 'tex' });</code></pre
                 <td>HTML or RTF nested more than 256 levels deep, far beyond real documents. The input is malformed or built to exhaust the parser; it is refused rather than parsed</td>
             </tr>
             <tr>
+                <td><code>OUTPUT_TOO_LARGE</code> error when generating</td>
+                <td>The output would not fit in a string, or an AST built in code shares its nodes, lists or long strings along more paths than a writer follows (each shared value is written at every use). Write in parts, or widen the bound with the AST's <code>config.decompressionLimits.maxRepeatedContent</code> (up to 1 GiB)</td>
+            </tr>
+            <tr>
                 <td>Document parses but comes back empty</td>
                 <td>Check <code>ast.warnings</code> for <code>NO_WORKSHEETS_FOUND</code> / <code>NO_SLIDES_FOUND</code> - the file really is empty. Corrupt input throws instead of returning empty</td>
             </tr>
