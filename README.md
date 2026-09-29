@@ -733,6 +733,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `PDF_SEPARATE_PROCESS_UNAVAILABLE` | parse | pdf.js could not start in a separate process (Node), so it runs in the host; a hostile PDF can then exhaust its memory, and pdf.js's time is not bounded (bound it with `abortSignal`). |
 | `PDF_CONTENT_LIMIT_EXCEEDED` | parse | A PDF passed one of its content limits (plus an allowance per byte), which the message names: past `pdfParserConfig.maxTextItems` or `maxTimeMs` the rest of it was not read; past `maxOperators` its images, text colours and font styles from that page on were not (its text was). |
 | `ALT_CHUNK_NOT_READ` | parse | A DOCX alternative-format chunk (`w:altChunk`) was not read: its part is missing, is of a format other than HTML, MHT, RTF, plain text or DOCX, is a DOCX inside a DOCX chunk, or could not be read (not a ZIP, no document part, nested too deep). The rest of the document is read; a chunk past the document's limits (`maxXmlElements`, `maxUncompressedBytes`) still fails the parse. Saving the document again in Word merges chunks into it. |
+| `CONTENT_PART_NOT_READ` | parse | A chapter an EPUB's spine lists was not read: its file is missing from the archive (or has an extension other than `.xhtml`, `.html`, `.htm`, `.xht` or `.xml`), or it is encrypted (DRM, listed in `META-INF/encryption.xml`). A book whose chapters are all encrypted throws `DOCUMENT_DECRYPTION_FAILED` instead. |
 | `RAW_CONTENT_LIMIT_EXCEEDED` | parse | With `includeRawContent`, the document's nodes reached `decompressionLimits.maxRawContentLength` of raw content; the remaining nodes carry none. |
 | `IMAGE_EXTRACTION_FAILED` / `IMAGE_PROCESSING_FAILED` / `ATTACHMENT_EXTRACTION_FAILED` | parse | An image/attachment could not be extracted or decoded; it was skipped or degraded. |
 | `ANNOTATION_EXTRACTION_FAILED` / `CHART_DATA_EXTRACTION_FAILED` | parse | A PDF annotation / a chart's data could not be read. |
@@ -1081,6 +1082,11 @@ existing `HtmlParser`, so EPUB content shares the same AST shape (and the same M
 fidelity above) as every other format. Dublin Core metadata (`dc:title`, `dc:creator`, `dc:description`,
 `dc:subject`, `dc:date`, `dc:publisher`, `dc:language`, `dc:identifier`) maps into `ast.metadata` /
 `ast.metadata.nativeProperties`, and cover art is exposed via `metadata.customProperties.coverImageName`.
+A chapter the spine lists that cannot be read (missing from the archive, or encrypted by DRM, as
+`META-INF/encryption.xml` lists it) is reported with a `CONTENT_PART_NOT_READ` warning; a book whose
+chapters are all encrypted throws `DOCUMENT_DECRYPTION_FAILED`. Font obfuscation is not encryption
+of the content, and is passed over. EPUB 3 footnotes (`<a epub:type="noteref">` citing an
+`<aside epub:type="footnote">`) are read as notes.
 
 `EpubGenerator` renders the AST through `HtmlGenerator` and packages the result as a minimal, valid
 EPUB 3 (`mimetype`, `META-INF/container.xml`, an OPF manifest, a nav document, and one XHTML chapter).

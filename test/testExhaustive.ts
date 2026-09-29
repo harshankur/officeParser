@@ -4442,6 +4442,33 @@ async function testHtmlBrowserReading(): Promise<void> {
     assert.deepStrictEqual(collectAllNodes({ content: based } as any).map(n => (n.metadata as any)?.link ?? (n.metadata as any)?.url).filter(Boolean),
         ['https://example.com/dir/page.html', '#frag', 'https://example.com/dir/i.png', 'https://example.com/dir/small.png'], 'HTML: <base href> resolves links and pictures; srcset gives a picture');
 
+    // ── EPUB: every chapter the spine lists is read, or reported ──
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+    const book = (manifest: string, spine: string, files: Record<string, string | Uint8Array>) => Buffer.from(zipSync({
+        mimetype: strToU8('application/epub+zip'),
+        'META-INF/container.xml': strToU8('<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'),
+        'OEBPS/content.opf': strToU8(`<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title></metadata><manifest>${manifest}</manifest><spine>${spine}</spine></package>`),
+        ...Object.fromEntries(Object.entries(files).map(([k, v]) => [k, typeof v === 'string' ? strToU8(v) : v])),
+    }));
+    const chapter = (body: string) => `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head><body>${body}</body></html>`;
+    const epubWarnings: string[] = [];
+    const epub = await parse(book(
+        '<item id="c1" href="chapter%201.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="ch2.xml" media-type="application/xhtml+xml"/><item id="c3" href="gone.xhtml" media-type="application/xhtml+xml"/><item id="i1" href="image_1.png" media-type="image/png"/><item id="i2" href="my%20pic.png" media-type="image/png"/>',
+        '<itemref idref="c1"/><itemref idref="c2"/><itemref idref="c3"/>',
+        {
+            'OEBPS/chapter 1.xhtml': chapter(`<p>One</p><p><img src="image_1.png" alt="book"/><img src="data:image/png;base64,${png.toString('base64')}" alt="inline"/><img src="my%20pic.png" alt="spaced"/></p>`),
+            'OEBPS/ch2.xml': chapter('<p>Two</p>'), 'OEBPS/image_1.png': png, 'OEBPS/my pic.png': png,
+        }), 'epub', { extractAttachments: true, onWarning: (w: any) => epubWarnings.push(w.code) });
+    assert.strictEqual(plainOf(epub.content).includes('One') && plainOf(epub.content).includes('Two'), true, 'EPUB: a percent-encoded href and a .xml chapter are read');
+    assert.deepStrictEqual(epubWarnings, ['CONTENT_PART_NOT_READ'], 'EPUB: a chapter missing from the archive is reported');
+    const pictures = collectAllNodes(epub).filter(n => n.type === 'image').map(n => `${(n.metadata as any).altText}=${(n.metadata as any).attachmentName}`);
+    assert.deepStrictEqual(pictures, ['book=image_1.png', 'inline=image_1-2.png', 'spaced=my pic.png'], 'EPUB: each picture keeps the attachment it shows');
+    const drm = book('<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>', '<itemref idref="c1"/>', {
+        'OEBPS/ch1.xhtml': new Uint8Array([0x9F, 0x12, 0x80, 0x33, 0xFF]),
+        'META-INF/encryption.xml': '<?xml version="1.0"?><encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/><enc:CipherData><enc:CipherReference URI="OEBPS/ch1.xhtml"/></enc:CipherData></enc:EncryptedData></encryption>',
+    });
+    await assert.rejects(parse(drm, 'epub'), /encrypted \(DRM/, 'EPUB: a book whose chapters are encrypted is refused with a clear error');
+
     console.log('  HTML/EPUB reading and writing: All assertions passed ✓');
 }
 

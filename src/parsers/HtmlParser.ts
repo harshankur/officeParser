@@ -917,6 +917,13 @@ export interface HtmlPartContext {
      * for every `<img>`, so a small book showing one large picture many times took gigabytes.
      */
     imageAttachment?: (src: string) => string | undefined;
+    /**
+     * The name a picture the part holds as data (a `data:` URI) is given, from the name this part would
+     * give it (`image_1.png`): the container's parts each number theirs from 1, so the container names
+     * them, each once. Named again after the part was read, by name, a book's own `image_1.png` and a
+     * chapter's first data picture were both renamed.
+     */
+    attachmentName?: (proposed: string) => string;
 }
 
 /** The first picture a `srcset` names (`a.png 1x, b.png 2x` names a.png), for an <img> with no `src`. */
@@ -1989,7 +1996,8 @@ export const parseHtml = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     if (match && config.extractAttachments) {
                         const mimeType = match[1] as any;
                         const data = match[2];
-                        const name = `image_${attachments.length + 1}.${mimeType.split('/')[1]}`;
+                        const proposed = `image_${attachments.length + 1}.${mimeType.split('/')[1]}`;
+                        const name = part.attachmentName ? part.attachmentName(proposed) : proposed;
                         attachments.push({
                             type: 'image',
                             mimeType,
