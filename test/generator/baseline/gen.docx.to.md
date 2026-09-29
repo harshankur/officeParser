@@ -316,39 +316,39 @@ Two kinds of links are possible, those that refer to an external website and tho
 
 You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook.
 
-[<u>**Demonstration of DOCX support in calibre1**</u>](#toc581531977)
+[<u>**Demonstration of DOCX support in calibre**</u>](#toc581531977)[	](#toc581531977)[<u>**1**</u>](#toc581531977)
 
-[<u>**Text Formatting1**</u>](#toc2054249818)
+[<u>**Text Formatting**</u>](#toc2054249818)[	](#toc2054249818)[<u>**1**</u>](#toc2054249818)
 
-[<u>*Inline formatting2*</u>](#toc2137712100)
+[<u>*Inline formatting*</u>](#toc2137712100)[	](#toc2137712100)[<u>*2*</u>](#toc2137712100)
 
-[<u>*Fun with fonts2*</u>](#toc1074133965)
+[<u>*Fun with fonts*</u>](#toc1074133965)[	](#toc1074133965)[<u>*2*</u>](#toc1074133965)
 
-[<u>*Paragraph level formatting2*</u>](#toc2022725662)
+[<u>*Paragraph level formatting*</u>](#toc2022725662)[	](#toc2022725662)[<u>*2*</u>](#toc2022725662)
 
-[<u>**Tables2**</u>](#toc28114276)
+[<u>**Tables**</u>](#toc28114276)[	](#toc28114276)[<u>**2**</u>](#toc28114276)
 
-[<u>**Structural Elements4**</u>](#toc54889875)
+[<u>**Structural Elements**</u>](#toc54889875)[	](#toc54889875)[<u>**4**</u>](#toc54889875)
 
-[<u>*Footnotes & Endnotes5*</u>](#toc201580556)
+[<u>*Footnotes & Endnotes*</u>](#toc201580556)[	](#toc201580556)[<u>*5*</u>](#toc201580556)
 
-[<u>*Dropcaps5*</u>](#toc1977424358)
+[<u>*Dropcaps*</u>](#toc1977424358)[	](#toc1977424358)[<u>*5*</u>](#toc1977424358)
 
-[<u>*Links5*</u>](#toc1233048813)
+[<u>*Links*</u>](#toc1233048813)[	](#toc1233048813)[<u>*5*</u>](#toc1233048813)
 
-[<u>*Table of Contents5*</u>](#toc64145348)
+[<u>*Table of Contents*</u>](#toc64145348)[	](#toc64145348)[<u>*5*</u>](#toc64145348)
 
-[<u>**Images6**</u>](#toc484565143)
+[<u>**Images**</u>](#toc484565143)[	](#toc484565143)[<u>**6**</u>](#toc484565143)
 
-[<u>**Lists7**</u>](#toc1359965655)
+[<u>**Lists**</u>](#toc1359965655)[	](#toc1359965655)[<u>**7**</u>](#toc1359965655)
 
-[<u>*Bulleted List8*</u>](#toc1958162433)
+[<u>*Bulleted List*</u>](#toc1958162433)[	](#toc1958162433)[<u>*8*</u>](#toc1958162433)
 
-[<u>*Numbered List8*</u>](#toc415190676)
+[<u>*Numbered List*</u>](#toc415190676)[	](#toc415190676)[<u>*8*</u>](#toc415190676)
 
-[<u>*Multi-level Lists8*</u>](#toc1093260318)
+[<u>*Multi-level Lists*</u>](#toc1093260318)[	](#toc1093260318)[<u>*8*</u>](#toc1093260318)
 
-[<u>*Continued Lists8*</u>](#toc1471533984)
+[<u>*Continued Lists*</u>](#toc1471533984)[	](#toc1471533984)[<u>*8*</u>](#toc1471533984)
 
 <div style="text-align: center">
 

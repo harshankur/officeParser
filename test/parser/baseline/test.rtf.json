@@ -32,7 +32,10 @@
     "decompressionLimits": {
       "maxUncompressedBytes": 536870912,
       "maxZipEntries": 10000,
-      "maxTableCells": 1000000
+      "maxTableCells": 1000000,
+      "maxXmlElements": 2000000,
+      "maxRawContentLength": 67108864,
+      "maxRepeatedContent": 16777216
     },
     "htmlParserConfig": {
       "preserveAttributes": false,
@@ -51,7 +54,13 @@
       "headingDetection": "auto",
       "pageRange": "",
       "normalizeText": true,
-      "extractTextColor": true
+      "extractTextColor": true,
+      "maxTextItems": 20000,
+      "maxOperators": 250000,
+      "maxAnnotations": 10000,
+      "maxTimeMs": 5000,
+      "separateProcess": true,
+      "processMemoryMb": 1024
     },
     "texParserConfig": {
       "today": ""
@@ -3302,153 +3311,152 @@
       "children": [
         {
           "type": "row",
-          "text": "One\nThree\nTwo",
+          "text": "One\nThree\nTwo\nFour\nTo the left is a table inside a table, with some cells merged.",
           "children": [
             {
               "type": "cell",
-              "text": "One\nThree",
+              "text": "One\nThree\nTwo\nFour",
               "children": [
                 {
-                  "type": "paragraph",
-                  "text": "One",
+                  "type": "table",
+                  "text": "One\nThree\nTwo\nFour",
                   "children": [
                     {
-                      "type": "text",
-                      "text": "One",
-                      "formatting": {
-                        "bold": false,
-                        "italic": false,
-                        "underline": false,
-                        "strikethrough": false,
-                        "subscript": false,
-                        "superscript": false,
-                        "size": "11pt",
-                        "font": "Ubuntu"
-                      }
-                    }
-                  ],
-                  "metadata": {},
-                  "rawContent": "}\\pard \\plain \\ltrpar \\ql \\li0 \\ri0 \\sb240 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\pararsid10101022 \\yts28 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs22 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 One\\par "
-                },
-                {
-                  "type": "paragraph",
-                  "text": "Three",
-                  "children": [
+                      "type": "row",
+                      "text": "One\nThree\nTwo",
+                      "children": [
+                        {
+                          "type": "cell",
+                          "text": "One\nThree",
+                          "children": [
+                            {
+                              "type": "paragraph",
+                              "text": "One",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "text": "One",
+                                  "formatting": {
+                                    "bold": false,
+                                    "italic": false,
+                                    "underline": false,
+                                    "strikethrough": false,
+                                    "subscript": false,
+                                    "superscript": false,
+                                    "size": "11pt",
+                                    "font": "Ubuntu"
+                                  }
+                                }
+                              ],
+                              "metadata": {},
+                              "rawContent": "}\\pard \\plain \\ltrpar \\ql \\li0 \\ri0 \\sb240 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\pararsid10101022 \\yts28 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs22 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 One\\par "
+                            },
+                            {
+                              "type": "paragraph",
+                              "text": "Three",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "text": "Three",
+                                  "formatting": {
+                                    "bold": false,
+                                    "italic": false,
+                                    "underline": false,
+                                    "strikethrough": false,
+                                    "subscript": false,
+                                    "superscript": false,
+                                    "size": "11pt",
+                                    "font": "Ubuntu"
+                                  }
+                                }
+                              ],
+                              "metadata": {},
+                              "rawContent": "}\\pard \\ltrpar \\ql \\li0 \\ri0 \\sb240 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\pararsid2566706 \\yts28 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 Three\\nestcell "
+                            }
+                          ],
+                          "metadata": {
+                            "row": 0,
+                            "col": 0,
+                            "rowSpan": 2
+                          }
+                        },
+                        {
+                          "type": "cell",
+                          "text": "Two",
+                          "children": [
+                            {
+                              "type": "paragraph",
+                              "text": "Two",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "text": "Two",
+                                  "formatting": {
+                                    "bold": false,
+                                    "italic": false,
+                                    "underline": false,
+                                    "strikethrough": false,
+                                    "subscript": false,
+                                    "superscript": false,
+                                    "size": "11pt",
+                                    "font": "Ubuntu"
+                                  }
+                                }
+                              ],
+                              "metadata": {},
+                              "rawContent": "}\\pard \\ltrpar \\ql \\li0 \\ri0 \\sb240 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\pararsid10101022 \\yts28 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 Two\\nestcell "
+                            }
+                          ],
+                          "metadata": {
+                            "row": 0,
+                            "col": 1
+                          }
+                        }
+                      ]
+                    },
                     {
-                      "type": "text",
-                      "text": "Three",
-                      "formatting": {
-                        "bold": false,
-                        "italic": false,
-                        "underline": false,
-                        "strikethrough": false,
-                        "subscript": false,
-                        "superscript": false,
-                        "size": "11pt",
-                        "font": "Ubuntu"
-                      }
-                    }
-                  ],
-                  "metadata": {},
-                  "rawContent": "}\\pard \\ltrpar \\ql \\li0 \\ri0 \\sb240 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\pararsid2566706 \\yts28 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 Three\\nestcell "
-                }
-              ],
-              "metadata": {
-                "row": 0,
-                "col": 0
-              }
-            },
-            {
-              "type": "cell",
-              "text": "Two",
-              "children": [
-                {
-                  "type": "paragraph",
-                  "text": "Two",
-                  "children": [
-                    {
-                      "type": "text",
-                      "text": "Two",
-                      "formatting": {
-                        "bold": false,
-                        "italic": false,
-                        "underline": false,
-                        "strikethrough": false,
-                        "subscript": false,
-                        "superscript": false,
-                        "size": "11pt",
-                        "font": "Ubuntu"
-                      }
-                    }
-                  ],
-                  "metadata": {},
-                  "rawContent": "{\\nonesttables \\par }}\\pard \\ltrpar \\ql \\li0 \\ri0 \\sb240 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\pararsid10101022 \\yts28 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 Two\\nestcell "
-                }
-              ],
-              "metadata": {
-                "row": 0,
-                "col": 1
-              }
-            }
-          ]
-        },
-        {
-          "type": "row",
-          "text": "Four",
-          "children": [
-            {
-              "type": "cell",
-              "text": "",
-              "children": [],
-              "metadata": {
-                "row": 1,
-                "col": 0
-              }
-            },
-            {
-              "type": "cell",
-              "text": "Four",
-              "children": [
-                {
-                  "type": "paragraph",
-                  "text": "Four",
-                  "children": [
-                    {
-                      "type": "text",
+                      "type": "row",
                       "text": "Four",
-                      "formatting": {
-                        "bold": false,
-                        "italic": false,
-                        "underline": false,
-                        "strikethrough": false,
-                        "subscript": false,
-                        "superscript": false,
-                        "size": "11pt",
-                        "font": "Ubuntu"
-                      }
+                      "children": [
+                        {
+                          "type": "cell",
+                          "text": "Four",
+                          "children": [
+                            {
+                              "type": "paragraph",
+                              "text": "Four",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "text": "Four",
+                                  "formatting": {
+                                    "bold": false,
+                                    "italic": false,
+                                    "underline": false,
+                                    "strikethrough": false,
+                                    "subscript": false,
+                                    "superscript": false,
+                                    "size": "11pt",
+                                    "font": "Ubuntu"
+                                  }
+                                }
+                              ],
+                              "metadata": {},
+                              "rawContent": "}\\pard \\plain \\ltrpar \\ql \\li0 \\ri0 \\sl276 \\slmult1 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs24 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 {\\*\\nesttableprops \\trowd \\ltrrow \\ts28 \\trqc \\trgaph108 \\trleft5 \\trbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrh \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrv \\brdrs \\brdrw10 \\brdrcf25 \\trftsWidth2 \\trwWidth4000 \\trftsWidthB3 \\trautofit1 \\trpaddl108 \\trpaddr108 \\trpaddfl3 \\trpaddft3 \\trpaddfb3 \\trpaddfr3 \\tblrsid13900489 \\tbllkhdrrows \\tbllkhdrcols \\tbllknocolband \\tblind0 \\tblindtype3 \\clvmgf \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth1678 \\clshdrawnil \\cellx1348 \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth1629 \\clshdrawnil \\cellx2615 \\nestrow }}\\pard \\plain \\ltrpar \\ql \\li0 \\ri0 \\sb240 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\pararsid10101022 \\yts28 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs22 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 \\nestcell Four\\nestcell "
+                            }
+                          ],
+                          "metadata": {
+                            "row": 1,
+                            "col": 1
+                          }
+                        }
+                      ]
                     }
-                  ],
-                  "metadata": {},
-                  "rawContent": "{\\nonesttables \\par }}\\pard \\plain \\ltrpar \\ql \\li0 \\ri0 \\sl276 \\slmult1 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs24 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 {\\*\\nesttableprops \\trowd \\ltrrow \\ts28 \\trqc \\trgaph108 \\trleft5 \\trbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrh \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrv \\brdrs \\brdrw10 \\brdrcf25 \\trftsWidth2 \\trwWidth4000 \\trftsWidthB3 \\trautofit1 \\trpaddl108 \\trpaddr108 \\trpaddfl3 \\trpaddft3 \\trpaddfb3 \\trpaddfr3 \\tblrsid13900489 \\tbllkhdrrows \\tbllkhdrcols \\tbllknocolband \\tblind0 \\tblindtype3 \\clvmgf \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth1678 \\clshdrawnil \\cellx1348 \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth1629 \\clshdrawnil \\cellx2615 \\nestrow }{\\nonesttables \\par }}\\pard \\plain \\ltrpar \\ql \\li0 \\ri0 \\sb240 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\pararsid10101022 \\yts28 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs22 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 \\nestcell {\\nonesttables \\par }Four\\nestcell "
+                  ]
                 }
               ],
               "metadata": {
-                "row": 1,
-                "col": 1
-              }
-            }
-          ]
-        },
-        {
-          "type": "row",
-          "text": "To the left is a table inside a table, with some cells merged.",
-          "children": [
-            {
-              "type": "cell",
-              "text": "",
-              "children": [],
-              "metadata": {
-                "row": 2,
+                "row": 0,
                 "col": 0
               }
             },
@@ -3476,11 +3484,11 @@
                     }
                   ],
                   "metadata": {},
-                  "rawContent": "{\\nonesttables \\par }}\\pard \\plain \\ltrpar \\ql \\li0 \\ri0 \\sl276 \\slmult1 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs24 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 {\\*\\nesttableprops \\trowd \\lastrow \\ltrrow \\ts28 \\trqc \\trgaph108 \\trleft5 \\trbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrh \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrv \\brdrs \\brdrw10 \\brdrcf25 \\trftsWidth2 \\trwWidth4000 \\trftsWidthB3 \\trautofit1 \\trpaddl108 \\trpaddr108 \\trpaddfl3 \\trpaddft3 \\trpaddfb3 \\trpaddfr3 \\tblrsid13900489 \\tbllkhdrrows \\tbllkhdrcols \\tbllknocolband \\tblind0 \\tblindtype3 \\clvmrg \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth1678 \\clshdrawnil \\cellx1348 \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth1629 \\clshdrawnil \\cellx2615 \\nestrow }{\\nonesttables \\par }\\ltrrow }\\trowd \\lastrow \\ltrrow \\ts28 \\trqc \\trgaph108 \\trrh1079 \\trleft-108 \\trbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrh \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrv \\brdrs \\brdrw10 \\brdrcf25 \\trftsWidth2 \\trwWidth3500 \\trftsWidthB3 \\trautofit1 \\trpaddl108 \\trpaddr108 \\trpaddfl3 \\trpaddft3 \\trpaddfb3 \\trpaddfr3 \\tblrsid2566706 \\tbllkhdrrows \\tbllkhdrcols \\tbllknocolband \\tblind0 \\tblindtype3 \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth4788 \\clshdrawnil \\cellx3380 \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth4788 \\clshdrawnil \\cellx6595 \\pard \\plain \\ltrpar \\ql \\li0 \\ri0 \\sb240 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\pararsid10101022 \\yts28 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs22 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 \\cell To the left is a table inside a table, with some cells merged.\\cell "
+                  "rawContent": "}\\pard \\plain \\ltrpar \\ql \\li0 \\ri0 \\sl276 \\slmult1 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\itap2 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs24 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 {\\*\\nesttableprops \\trowd \\lastrow \\ltrrow \\ts28 \\trqc \\trgaph108 \\trleft5 \\trbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrh \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrv \\brdrs \\brdrw10 \\brdrcf25 \\trftsWidth2 \\trwWidth4000 \\trftsWidthB3 \\trautofit1 \\trpaddl108 \\trpaddr108 \\trpaddfl3 \\trpaddft3 \\trpaddfb3 \\trpaddfr3 \\tblrsid13900489 \\tbllkhdrrows \\tbllkhdrcols \\tbllknocolband \\tblind0 \\tblindtype3 \\clvmrg \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth1678 \\clshdrawnil \\cellx1348 \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth1629 \\clshdrawnil \\cellx2615 \\nestrow }\\ltrrow }\\trowd \\lastrow \\ltrrow \\ts28 \\trqc \\trgaph108 \\trrh1079 \\trleft-108 \\trbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrh \\brdrs \\brdrw10 \\brdrcf25 \\trbrdrv \\brdrs \\brdrw10 \\brdrcf25 \\trftsWidth2 \\trwWidth3500 \\trftsWidthB3 \\trautofit1 \\trpaddl108 \\trpaddr108 \\trpaddfl3 \\trpaddft3 \\trpaddfb3 \\trpaddfr3 \\tblrsid2566706 \\tbllkhdrrows \\tbllkhdrcols \\tbllknocolband \\tblind0 \\tblindtype3 \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth4788 \\clshdrawnil \\cellx3380 \\clvertalt \\clbrdrt \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrl \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrb \\brdrs \\brdrw10 \\brdrcf25 \\clbrdrr \\brdrs \\brdrw10 \\brdrcf25 \\cltxlrtb \\clftsWidth3 \\clwWidth4788 \\clshdrawnil \\cellx6595 \\pard \\plain \\ltrpar \\ql \\li0 \\ri0 \\sb240 \\widctlpar \\intbl \\wrapdefault \\aspalpha \\aspnum \\faauto \\adjustright \\rin0 \\lin0 \\pararsid10101022 \\yts28 \\rtlch \\fcs1 \\af31507 \\afs22 \\alang1025 \\ltrch \\fcs0 \\f43 \\fs22 \\lang1033 \\langfe1033 \\cgrid \\langnp1033 \\langfenp1033 {\\rtlch \\fcs1 \\af31507 \\ltrch \\fcs0 \\insrsid2566706 \\cell To the left is a table inside a table, with some cells merged.\\cell "
                 }
               ],
               "metadata": {
-                "row": 2,
+                "row": 0,
                 "col": 1
               }
             }
@@ -6068,7 +6076,8 @@
               "metadata": {
                 "noteId": "1",
                 "noteType": "footnote"
-              }
+              },
+              "text": "In paged media, footnotes are usually displayed at the bottom of the text. However, in ebooks, a better paradigm is to make them clickable endnotes that the user can browse at her pleasure. This conversion is handled automatically by calibre."
             }
           ]
         },
@@ -6115,7 +6124,8 @@
               "metadata": {
                 "noteId": "2",
                 "noteType": "endnote"
-              }
+              },
+              "text": "Endnotes are typically used for longer notes, they remain endnotes when converted into ebook form, except that they have an additional backlink to make it easy to return to the current position after reading the note."
             }
           ]
         },

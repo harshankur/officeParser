@@ -2640,7 +2640,7 @@ Paragraph level formatting~ \\
 \hline
 You can do crazy things with~paragraphs, if~the urge strikes you. For~instance~this paragraph is~right aligned~and has a right border. It has also been given a light gray background.~ \\
 \hline
-For~the lovers~of poetry amongst you, paragraphs with hanging indents, like this oftencome in handy. You can use hanging indents to ensure that a line of poetry~retains~its individual identity as a line even when the screen~is~ too~narrow to display it as a single line. Not only does this paragraph have a hanging indent,~it~is also has an extra top margin, setting it apart from the preceding paragraph.~ \\
+For~the lovers~of poetry amongst you, paragraphs with hanging indents, like this often\hfil\break{}come in handy. You can use hanging indents to ensure that a line of poetry~retains~its individual identity as a line even when the screen~is~ too~narrow to display it as a single line. Not only does this paragraph have a hanging indent,~it~is also has an extra top margin, setting it apart from the preceding paragraph.~ \\
 \hline
 \end{longtable}
 
@@ -2737,37 +2737,37 @@ Three~ &  &  &  \\
 \section{Sheet5}
 
 {\scriptsize\setlength{\tabcolsep}{2pt}
-\begin{longtable}{|*{13}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-26\tabcolsep-14\arrayrulewidth)/13\relax}|}}
+\begin{longtable}{|*{14}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)/14\relax}|}}
 \hline
-We~end~with a~fancy~calendar, note how~much of the original formatting is preserved.~Note that this table will only display correctly on~relatively wide~screens. In general, very wide tables or tables whose cells have fixed width requirements~don’t~fare well in~ebooks.~ &  &  &  &  &  &  &  &  &  &  &  &  \\
+We~end~with a~fancy~calendar, note how~much of the original formatting is preserved.~Note that this table will only display correctly on~relatively wide~screens. In general, very wide tables or tables whose cells have fixed width requirements~don’t~fare well in~ebooks.~ &  &  &  &  &  &  &  &  &  &  &  &  &  \\
 \hline
- &  &  &  &  &  &  &  &  &  &  &  &  \\
+ &  &  &  &  &  &  &  &  &  &  &  &  &  \\
 \hline
-December 2007~ &  &  &  &  &  &  &  &  &  &  &  &  \\
+\multicolumn{13}{|>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*13/14+24\tabcolsep+12\arrayrulewidth\relax}|}{December 2007~} &  \\
 \hline
-Sun~ &  & Mon~ &  & Tue~ &  & Wed~ &  & Thu~ &  & Fri~ &  & Sat~ \\
+Sun~ &  & Mon~ &  & Tue~ &  & Wed~ &  & Thu~ &  & Fri~ &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{Sat~} \\
 \hline
- &  &  &  &  &  &  &  &  &  &  &  & 1~ \\
+ &  &  &  &  &  &  &  &  &  &  &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{1~} \\
 \hline
- &  &  &  &  &  &  &  &  &  &  &  &  \\
+ &  &  &  &  &  &  &  &  &  &  &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{} \\
 \hline
-2~ &  & 3~ &  & 4~ &  & 5~ &  & 6~ &  & 7~ &  & 8~ \\
+2~ &  & 3~ &  & 4~ &  & 5~ &  & 6~ &  & 7~ &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{8~} \\
 \hline
- &  &  &  &  &  &  &  &  &  &  &  &  \\
+ &  &  &  &  &  &  &  &  &  &  &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{} \\
 \hline
-9~ &  & 10~ &  & 11~ &  & 12~ &  & 13~ &  & 14~ &  & 15~ \\
+9~ &  & 10~ &  & 11~ &  & 12~ &  & 13~ &  & 14~ &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{15~} \\
 \hline
- &  &  &  &  &  &  &  &  &  &  &  &  \\
+ &  &  &  &  &  &  &  &  &  &  &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{} \\
 \hline
-16~ &  & 17~ &  & 18~ &  & 19~ &  & 20~ &  & 21~ &  & 22~ \\
+16~ &  & 17~ &  & 18~ &  & 19~ &  & 20~ &  & 21~ &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{22~} \\
 \hline
- &  &  &  &  &  &  &  &  &  &  &  &  \\
+ &  &  &  &  &  &  &  &  &  &  &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{} \\
 \hline
-23~ &  & 24~ &  & 25~ &  & 26~ &  & 27~ &  & 28~ &  & 29~ \\
+23~ &  & 24~ &  & 25~ &  & 26~ &  & 27~ &  & 28~ &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{29~} \\
 \hline
- &  &  &  &  &  &  &  &  &  &  &  &  \\
+ &  &  &  &  &  &  &  &  &  &  &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{} \\
 \hline
-30~ &  & 31~ &  &  &  &  &  &  &  &  &  &  \\
+30~ &  & 31~ &  &  &  &  &  &  &  &  &  & \multicolumn{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)*2/14+2\tabcolsep+1\arrayrulewidth\relax}|}{} \\
 \hline
 \end{longtable}
 }
@@ -2808,8 +2808,7 @@ Centered images like this are useful for large pictures that should be a focus o
 \hline
  \\
 \hline
-% alt: 165 Inspirational Quotes To Keep You Motivated In Life
-\includegraphics[bb=0 0 473.25 473.25,width={\ifdim 473.25pt>\linewidth\linewidth\else 473.25pt\fi},height={\ifdim 473.25pt>0.9\textheight0.9\textheight\else 473.25pt\fi},keepaspectratio]{image1-9738ec41.pdf} \\
+\includegraphics[bb=0 0 473.25 473.25,width={\ifdim 473.25pt>\linewidth\linewidth\else 473.25pt\fi},height={\ifdim 473.25pt>0.9\textheight0.9\textheight\else 473.25pt\fi},keepaspectratio,alt={165 Inspirational Quotes To Keep You Motivated In Life}]{image1-9738ec41.pdf} \\
 \hline
  \\
 \hline

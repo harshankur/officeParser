@@ -32,7 +32,10 @@
     "decompressionLimits": {
       "maxUncompressedBytes": 536870912,
       "maxZipEntries": 10000,
-      "maxTableCells": 1000000
+      "maxTableCells": 1000000,
+      "maxXmlElements": 2000000,
+      "maxRawContentLength": 67108864,
+      "maxRepeatedContent": 16777216
     },
     "htmlParserConfig": {
       "preserveAttributes": false,
@@ -51,7 +54,13 @@
       "headingDetection": "auto",
       "pageRange": "",
       "normalizeText": true,
-      "extractTextColor": true
+      "extractTextColor": true,
+      "maxTextItems": 20000,
+      "maxOperators": 250000,
+      "maxAnnotations": 10000,
+      "maxTimeMs": 5000,
+      "separateProcess": true,
+      "processMemoryMb": 1024
     },
     "texParserConfig": {
       "today": ""
@@ -15854,7 +15863,7 @@
                   ],
                   "metadata": {
                     "row": 1,
-                    "col": 0
+                    "col": 1
                   },
                   "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"a1309\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1308\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1306\" text:class-names=\"\">Four </text:span><text:span text:style-name=\"a1307\" text:class-names=\"\"/></text:p></table:table-cell>"
                 }
@@ -16041,7 +16050,7 @@
                   "children": [],
                   "metadata": {
                     "row": 0,
-                    "col": 1
+                    "col": 13
                   },
                   "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"a1354\"><text:list xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1353\"><text:list-item><text:p text:style-name=\"a1352\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1351\" text:class-names=\"\"/></text:p></text:list-item></text:list></table:table-cell>"
                 }

@@ -32,7 +32,10 @@
     "decompressionLimits": {
       "maxUncompressedBytes": 536870912,
       "maxZipEntries": 10000,
-      "maxTableCells": 1000000
+      "maxTableCells": 1000000,
+      "maxXmlElements": 2000000,
+      "maxRawContentLength": 67108864,
+      "maxRepeatedContent": 16777216
     },
     "htmlParserConfig": {
       "preserveAttributes": false,
@@ -51,7 +54,13 @@
       "headingDetection": "auto",
       "pageRange": "",
       "normalizeText": true,
-      "extractTextColor": true
+      "extractTextColor": true,
+      "maxTextItems": 20000,
+      "maxOperators": 250000,
+      "maxAnnotations": 10000,
+      "maxTimeMs": 5000,
+      "separateProcess": true,
+      "processMemoryMb": 1024
     },
     "texParserConfig": {
       "today": ""
@@ -1716,6 +1725,12 @@
                   "formatting": {}
                 },
                 {
+                  "type": "break",
+                  "metadata": {
+                    "breakType": "textWrapping"
+                  }
+                },
+                {
                   "type": "text",
                   "text": "come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph. ",
                   "formatting": {}
@@ -3371,7 +3386,8 @@
               ],
               "metadata": {
                 "row": 2,
-                "col": 0
+                "col": 0,
+                "colSpan": 13
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"13\" table:number-rows-spanned=\"1\" table:style-name=\"ce67\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">December 2007 </text:p></table:table-cell>"
             }
@@ -3549,7 +3565,8 @@
               ],
               "metadata": {
                 "row": 3,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">Sat </text:p></table:table-cell>"
             }
@@ -3691,7 +3708,8 @@
               ],
               "metadata": {
                 "row": 4,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce70\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">1 </text:p></table:table-cell>"
             }
@@ -3827,7 +3845,8 @@
               "children": [],
               "metadata": {
                 "row": 5,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }
@@ -4005,7 +4024,8 @@
               ],
               "metadata": {
                 "row": 6,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce70\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">8 </text:p></table:table-cell>"
             }
@@ -4141,7 +4161,8 @@
               "children": [],
               "metadata": {
                 "row": 7,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }
@@ -4319,7 +4340,8 @@
               ],
               "metadata": {
                 "row": 8,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce70\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">15 </text:p></table:table-cell>"
             }
@@ -4455,7 +4477,8 @@
               "children": [],
               "metadata": {
                 "row": 9,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }
@@ -4633,7 +4656,8 @@
               ],
               "metadata": {
                 "row": 10,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce70\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">22 </text:p></table:table-cell>"
             }
@@ -4769,7 +4793,8 @@
               "children": [],
               "metadata": {
                 "row": 11,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }
@@ -4947,7 +4972,8 @@
               ],
               "metadata": {
                 "row": 12,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce70\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">29 </text:p></table:table-cell>"
             }
@@ -5083,7 +5109,8 @@
               "children": [],
               "metadata": {
                 "row": 13,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }
@@ -5231,7 +5258,8 @@
               "children": [],
               "metadata": {
                 "row": 14,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce72\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }

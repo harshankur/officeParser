@@ -13,7 +13,7 @@
 \usepackage[paperwidth=595.28pt,paperheight=841.89pt,top=72pt,bottom=72pt,left=72pt,right=72pt]{geometry}
 \usepackage{parskip}
 \usepackage{graphicx}
-\usepackage{array,longtable}
+\usepackage{array,longtable,multirow}
 \usepackage[normalem]{ulem}
 \usepackage{xcolor}
 \usepackage{endnotes}
@@ -2618,13 +2618,15 @@ Next, we have something a little more complex, a nested table, i.e. a table insi
 
 \begin{longtable}{|*{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-4\tabcolsep-3\arrayrulewidth)/2\relax}|}}
 \hline
-{\fontsize{11pt}{13.2pt}\selectfont One}
-
-{\fontsize{11pt}{13.2pt}\selectfont Three} & {\fontsize{11pt}{13.2pt}\selectfont Two} \\
+\begin{tabular}{|*{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-4\tabcolsep-3\arrayrulewidth)/2\relax}|}}
 \hline
+\multirow{2}{=}{{\fontsize{11pt}{13.2pt}\selectfont One}
+
+{\fontsize{11pt}{13.2pt}\selectfont Three}} & {\fontsize{11pt}{13.2pt}\selectfont Two} \\
+\cline{2-2}
  & {\fontsize{11pt}{13.2pt}\selectfont Four} \\
 \hline
- & {\fontsize{11pt}{13.2pt}\selectfont To the left is a table inside a table, with some cells merged.} \\
+\end{tabular} & {\fontsize{11pt}{13.2pt}\selectfont To the left is a table inside a table, with some cells merged.} \\
 \hline
 \end{longtable}
 

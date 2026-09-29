@@ -1,10 +1,10 @@
 {
-  "outputLength": 296431,
+  "outputLength": 296447,
   "hasContent": true,
-  "lineCount": 1037,
+  "lineCount": 1035,
   "wordCount": 4651,
   "headingCount": 16,
-  "tableCount": 5,
+  "tableCount": 6,
   "listCount": 11,
   "imageCount": 1,
   "linkCount": 76,
@@ -12,7 +12,7 @@
     "h1": 5,
     "h2": 11,
     "h3": 0,
-    "table": 5,
+    "table": 6,
     "ul": 5,
     "ol": 6
   }

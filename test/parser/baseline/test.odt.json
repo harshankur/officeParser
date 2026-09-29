@@ -32,7 +32,10 @@
     "decompressionLimits": {
       "maxUncompressedBytes": 536870912,
       "maxZipEntries": 10000,
-      "maxTableCells": 1000000
+      "maxTableCells": 1000000,
+      "maxXmlElements": 2000000,
+      "maxRawContentLength": 67108864,
+      "maxRepeatedContent": 16777216
     },
     "htmlParserConfig": {
       "preserveAttributes": false,
@@ -51,7 +54,13 @@
       "headingDetection": "auto",
       "pageRange": "",
       "normalizeText": true,
-      "extractTextColor": true
+      "extractTextColor": true,
+      "maxTextItems": 20000,
+      "maxOperators": 250000,
+      "maxAnnotations": 10000,
+      "maxTimeMs": 5000,
+      "separateProcess": true,
+      "processMemoryMb": 1024
     },
     "texParserConfig": {
       "today": ""
@@ -5967,7 +5976,7 @@
                           ],
                           "metadata": {
                             "row": 1,
-                            "col": 0
+                            "col": 1
                           },
                           "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"TableCell237\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P238\">Four</text:p></table:table-cell>"
                         }
@@ -6174,7 +6183,7 @@
               ],
               "metadata": {
                 "row": 0,
-                "col": 1
+                "col": 13
               },
               "rawContent": "<table:table-cell xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"P261\"/></table:table-cell>"
             }

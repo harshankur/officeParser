@@ -164,7 +164,7 @@
     }
   },
   {
-    "text": "| One Three  Two Four | To the left is a table inside a table, with some cells merged. |",
+    "text": "| One Three Two Four | To the left is a table inside a table, with some cells merged. |",
     "metadata": {
       "sourceType": "html",
       "closestHeading": "Tables",

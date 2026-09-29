@@ -32,7 +32,10 @@
     "decompressionLimits": {
       "maxUncompressedBytes": 536870912,
       "maxZipEntries": 10000,
-      "maxTableCells": 1000000
+      "maxTableCells": 1000000,
+      "maxXmlElements": 2000000,
+      "maxRawContentLength": 67108864,
+      "maxRepeatedContent": 16777216
     },
     "htmlParserConfig": {
       "preserveAttributes": false,
@@ -51,7 +54,13 @@
       "headingDetection": "auto",
       "pageRange": "",
       "normalizeText": true,
-      "extractTextColor": true
+      "extractTextColor": true,
+      "maxTextItems": 20000,
+      "maxOperators": 250000,
+      "maxAnnotations": 10000,
+      "maxTimeMs": 5000,
+      "separateProcess": true,
+      "processMemoryMb": 1024
     },
     "texParserConfig": {
       "today": ""
@@ -609,7 +618,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Here, we demonstrate various types of inline text formatting and the use of embedded fonts.",
+      "text": "Here, we demonstrate various types of inline text formatting and the use of embedded fonts.\n",
       "children": [
         {
           "type": "text",
@@ -7624,7 +7633,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Demonstration of DOCX support in calibre1",
+      "text": "Demonstration of DOCX support in calibre\t1",
       "children": [
         {
           "type": "text",
@@ -7638,6 +7647,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Demonstration of DOCX support in calibre</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc581531977",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "bold": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc581531977",
             "linkType": "internal"
           }
@@ -7666,7 +7687,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Text Formatting1",
+      "text": "Text Formatting\t1",
       "children": [
         {
           "type": "text",
@@ -7680,6 +7701,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Text Formatting</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc2054249818",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "bold": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc2054249818",
             "linkType": "internal"
           }
@@ -7708,7 +7741,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Inline formatting2",
+      "text": "Inline formatting\t2",
       "children": [
         {
           "type": "text",
@@ -7722,6 +7755,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Inline formatting</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc2137712100",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "italic": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc2137712100",
             "linkType": "internal"
           }
@@ -7753,7 +7798,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Fun with fonts2",
+      "text": "Fun with fonts\t2",
       "children": [
         {
           "type": "text",
@@ -7767,6 +7812,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Fun with fonts</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc1074133965",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "italic": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc1074133965",
             "linkType": "internal"
           }
@@ -7798,7 +7855,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Paragraph level formatting2",
+      "text": "Paragraph level formatting\t2",
       "children": [
         {
           "type": "text",
@@ -7812,6 +7869,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Paragraph level formatting</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc2022725662",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "italic": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc2022725662",
             "linkType": "internal"
           }
@@ -7843,7 +7912,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Tables2",
+      "text": "Tables\t2",
       "children": [
         {
           "type": "text",
@@ -7857,6 +7926,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Tables</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc28114276",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "bold": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc28114276",
             "linkType": "internal"
           }
@@ -7885,7 +7966,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Structural Elements4",
+      "text": "Structural Elements\t4",
       "children": [
         {
           "type": "text",
@@ -7899,6 +7980,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Structural Elements</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc54889875",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "bold": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc54889875",
             "linkType": "internal"
           }
@@ -7927,7 +8020,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Footnotes & Endnotes5",
+      "text": "Footnotes & Endnotes\t5",
       "children": [
         {
           "type": "text",
@@ -7941,6 +8034,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Footnotes &amp; Endnotes</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc201580556",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "italic": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc201580556",
             "linkType": "internal"
           }
@@ -7972,7 +8077,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Dropcaps5",
+      "text": "Dropcaps\t5",
       "children": [
         {
           "type": "text",
@@ -7986,6 +8091,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Dropcaps</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc1977424358",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "italic": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc1977424358",
             "linkType": "internal"
           }
@@ -8017,7 +8134,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Links5",
+      "text": "Links\t5",
       "children": [
         {
           "type": "text",
@@ -8031,6 +8148,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Links</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc1233048813",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "italic": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc1233048813",
             "linkType": "internal"
           }
@@ -8062,7 +8191,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Table of Contents5",
+      "text": "Table of Contents\t5",
       "children": [
         {
           "type": "text",
@@ -8076,6 +8205,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Table of Contents</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc64145348",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "italic": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc64145348",
             "linkType": "internal"
           }
@@ -8107,7 +8248,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Images6",
+      "text": "Images\t6",
       "children": [
         {
           "type": "text",
@@ -8121,6 +8262,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Images</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc484565143",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "bold": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc484565143",
             "linkType": "internal"
           }
@@ -8149,7 +8302,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Lists7",
+      "text": "Lists\t7",
       "children": [
         {
           "type": "text",
@@ -8163,6 +8316,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Lists</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc1359965655",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "bold": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc1359965655",
             "linkType": "internal"
           }
@@ -8191,7 +8356,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Bulleted List8",
+      "text": "Bulleted List\t8",
       "children": [
         {
           "type": "text",
@@ -8205,6 +8370,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Bulleted List</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc1958162433",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "italic": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc1958162433",
             "linkType": "internal"
           }
@@ -8236,7 +8413,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Numbered List8",
+      "text": "Numbered List\t8",
       "children": [
         {
           "type": "text",
@@ -8250,6 +8427,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Numbered List</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc415190676",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "italic": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc415190676",
             "linkType": "internal"
           }
@@ -8281,7 +8470,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Multi-level Lists8",
+      "text": "Multi-level Lists\t8",
       "children": [
         {
           "type": "text",
@@ -8295,6 +8484,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Multi-level Lists</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc1093260318",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "italic": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc1093260318",
             "linkType": "internal"
           }
@@ -8326,7 +8527,7 @@
     },
     {
       "type": "paragraph",
-      "text": "Continued Lists8",
+      "text": "Continued Lists\t8",
       "children": [
         {
           "type": "text",
@@ -8340,6 +8541,18 @@
           "rawContent": "<w:t xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">Continued Lists</w:t>",
           "metadata": {
             "style": "Hyperlink",
+            "link": "#_Toc1471533984",
+            "linkType": "internal"
+          }
+        },
+        {
+          "type": "text",
+          "text": "\t",
+          "formatting": {
+            "italic": true,
+            "size": "10pt"
+          },
+          "metadata": {
             "link": "#_Toc1471533984",
             "linkType": "internal"
           }

@@ -40,7 +40,7 @@ TestBool: true
 | This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion.   |
 | Paragraph level formatting  |
 | You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.  |
-| For the lovers of poetry amongst you, paragraphs with hanging indents, like this oftencome in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.  |
+| For the lovers of poetry amongst you, paragraphs with hanging indents, like this often<br>come in handy. You can use hanging indents to ensure that a line of poetry retains its individual identity as a line even when the screen is  too narrow to display it as a single line. Not only does this paragraph have a hanging indent, it is also has an extra top margin, setting it apart from the preceding paragraph.  |
 
 ---
 
@@ -82,21 +82,194 @@ TestBool: true
 
 ---
 
-| We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.  |  |  |  |  |  |  |  |  |  |  |  |  |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| December 2007  |  |  |  |  |  |  |  |  |  |  |  |  |
-| Sun  |  | Mon  |  | Tue  |  | Wed  |  | Thu  |  | Fri  |  | Sat  |
-|  |  |  |  |  |  |  |  |  |  |  |  | 1  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
-| 2  |  | 3  |  | 4  |  | 5  |  | 6  |  | 7  |  | 8  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
-| 9  |  | 10  |  | 11  |  | 12  |  | 13  |  | 14  |  | 15  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
-| 16  |  | 17  |  | 18  |  | 19  |  | 20  |  | 21  |  | 22  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
-| 23  |  | 24  |  | 25  |  | 26  |  | 27  |  | 28  |  | 29  |
-|  |  |  |  |  |  |  |  |  |  |  |  |  |
-| 30  |  | 31  |  |  |  |  |  |  |  |  |  |  |
+<table>
+  <tr>
+    <td>We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks. </td>
+  </tr>
+  <tr>
+    <td colspan="13">December 2007 </td>
+  </tr>
+  <tr>
+    <td>Sun </td>
+    <td></td>
+    <td>Mon </td>
+    <td></td>
+    <td>Tue </td>
+    <td></td>
+    <td>Wed </td>
+    <td></td>
+    <td>Thu </td>
+    <td></td>
+    <td>Fri </td>
+    <td></td>
+    <td colspan="2">Sat </td>
+  </tr>
+  <tr>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td colspan="2">1 </td>
+  </tr>
+  <tr>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td colspan="2"></td>
+  </tr>
+  <tr>
+    <td>2 </td>
+    <td></td>
+    <td>3 </td>
+    <td></td>
+    <td>4 </td>
+    <td></td>
+    <td>5 </td>
+    <td></td>
+    <td>6 </td>
+    <td></td>
+    <td>7 </td>
+    <td></td>
+    <td colspan="2">8 </td>
+  </tr>
+  <tr>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td colspan="2"></td>
+  </tr>
+  <tr>
+    <td>9 </td>
+    <td></td>
+    <td>10 </td>
+    <td></td>
+    <td>11 </td>
+    <td></td>
+    <td>12 </td>
+    <td></td>
+    <td>13 </td>
+    <td></td>
+    <td>14 </td>
+    <td></td>
+    <td colspan="2">15 </td>
+  </tr>
+  <tr>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td colspan="2"></td>
+  </tr>
+  <tr>
+    <td>16 </td>
+    <td></td>
+    <td>17 </td>
+    <td></td>
+    <td>18 </td>
+    <td></td>
+    <td>19 </td>
+    <td></td>
+    <td>20 </td>
+    <td></td>
+    <td>21 </td>
+    <td></td>
+    <td colspan="2">22 </td>
+  </tr>
+  <tr>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td colspan="2"></td>
+  </tr>
+  <tr>
+    <td>23 </td>
+    <td></td>
+    <td>24 </td>
+    <td></td>
+    <td>25 </td>
+    <td></td>
+    <td>26 </td>
+    <td></td>
+    <td>27 </td>
+    <td></td>
+    <td>28 </td>
+    <td></td>
+    <td colspan="2">29 </td>
+  </tr>
+  <tr>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td colspan="2"></td>
+  </tr>
+  <tr>
+    <td>30 </td>
+    <td></td>
+    <td>31 </td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td colspan="2"></td>
+  </tr>
+</table>
 
 ---
 
