@@ -2789,6 +2789,11 @@ c &= d
     const commentedTable = await texOf('\\begin{document}\\begin{tabular}{ll}\na & b \\\\\n% \\begin{tabular}{lll} was the old layout\nc & \\verb|d&e| \\\\\n\\end{tabular}\n\n\\section{After}Text.\\end{document}');
     assert.deepStrictEqual([commentedTable.ast.content.map(n => n.type), commentedTable.ast.content[0].children!.map(r => r.children!.map(c => c.text))], [['table', 'heading', 'paragraph'], [['a', 'b'], ['c', 'd&e']]], 'TEX parse: a commented-out \\begin inside a tabular, and \\verb in a cell');
 
+    // A row's `\\` right before `\end{tabular}` (no space between) ends the row, not the environment's end:
+    // read as one `\\end`, the table took the caption and the text after it into a row of its own.
+    const rowEnd = await texOf(String.raw`\begin{document}\begin{table}\begin{tabular}{ll}a & b\\c & x\\\end{tabular}\caption{Cap}\end{table}After text.\end{document}`);
+    assert.deepStrictEqual([rowEnd.ast.content.map(n => n.type), rowEnd.ast.content[0].children!.length, rowEnd.ast.content.slice(1).map(n => n.text)], [['table', 'paragraph', 'paragraph'], 2, ['Cap', 'After text.']], 'TEX parse: \\\\ directly before \\end{tabular}');
+
     // amsmath's \DeclareMathOperator and mathtools' paired delimiters are expanded, as \newcommand is.
     const declared = await texOf(String.raw`\documentclass{article}\usepackage{amsmath,mathtools,bm}
 \DeclareMathOperator*{\argmax}{arg\,max}\DeclareMathOperator{\Tr}{Tr}
