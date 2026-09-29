@@ -428,59 +428,78 @@ export function markdownEscapeInline(text: string, atLineStart = false): string 
     // (whose `.` or `)` is then escaped rather than the number). `-8` or `+7` begins nothing.
     const blockMarker = /[ \t]*(?:(#{1,6}(?=[ \t\n]|$)|>|[-+](?=[ \t\n]|$)|-(?=[- \t]*(?:\n|$))|=(?=[= \t]*(?:\n|$))|:(?=[ \t:]))|(\d{1,9})(?=[.)](?:[ \t\n]|$)))/y;
     const reference = /&(?:#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/y;
-    let out = '';
-    for (let i = 0; i < text.length; i++) {
-        if ((i === 0 && atLineStart) || text[i - 1] === '\n') {
+    // The characters that may need a backslash or an entity: the text between them is copied as one
+    // slice (it grew a character at a time, which took a second and a gigabyte of memory for 20 MB).
+    const special = /[\\`*[\]~$_={&<\n]/g;
+    const parts: string[] = [];
+    let copied = 0; // where the text not yet in parts starts
+    /** Writes `replacement` for the text from `start` to `end` (an insertion when they are equal). */
+    const replace = (start: number, end: number, replacement: string) => {
+        if (start > copied) parts.push(text.slice(copied, start));
+        parts.push(replacement);
+        copied = end;
+    };
+    let lineStart = atLineStart;
+    for (let i = 0; i < text.length;) {
+        if (lineStart) {
+            lineStart = false;
             blockMarker.lastIndex = i;
             const marker = blockMarker.exec(text);
             if (marker) {
-                const at = blockMarker.lastIndex - (marker[1] ?? marker[2]).length;
-                out += text.slice(i, at) + (marker[2] !== undefined ? `${marker[2]}\\${text[blockMarker.lastIndex]}` : `\\${marker[1][0]}${marker[1].slice(1)}`);
-                i = blockMarker.lastIndex - (marker[2] !== undefined ? 0 : 1);
+                // A backslash before the marker, or, for an item's number, before its `.` or `)`.
+                const at = blockMarker.lastIndex - (marker[2] !== undefined ? 0 : marker[1].length);
+                replace(at, at, '\\');
+                i = blockMarker.lastIndex;
                 continue;
             }
         }
+        special.lastIndex = i;
+        const found = special.exec(text);
+        if (!found) break;
+        i = found.index;
         const char = text[i];
         switch (char) {
+            case '\n':
+                lineStart = true;
+                break;
             case '\\':
-                out += i + 1 === text.length || MARKDOWN_PUNCTUATION.test(text[i + 1]) || text[i + 1] === '\n' ? '\\\\' : '\\';
+                if (i + 1 === text.length || MARKDOWN_PUNCTUATION.test(text[i + 1]) || text[i + 1] === '\n') replace(i, i + 1, '\\\\');
                 break;
             case '`': case '*': case '[': case ']': case '~': case '$':
-                out += `\\${char}`;
+                replace(i, i + 1, `\\${char}`);
                 break;
             case '_': {
                 let end = i;
                 while (text[end] === '_') end++;
-                const run = text.slice(i, end);
-                out += isMarkdownWordCharacter(text[i - 1]) && isMarkdownWordCharacter(text[end]) ? run : run.replace(/_/g, '\\_');
-                i = end - 1;
-                break;
+                if (!(isMarkdownWordCharacter(text[i - 1]) && isMarkdownWordCharacter(text[end]))) replace(i, end, '\\_'.repeat(end - i));
+                i = end;
+                continue;
             }
             case '=': {
                 let end = i;
                 while (text[end] === '=') end++;
-                const run = text.slice(i, end);
-                out += run.length > 1 ? run.replace(/=/g, '\\=') : run;
-                i = end - 1;
-                break;
+                if (end - i > 1) replace(i, end, '\\='.repeat(end - i));
+                i = end;
+                continue;
             }
             case '{':
-                out += i === 0 || text[i + 1] === '#' ? '\\{' : '{';
+                if (i === 0 || text[i + 1] === '#') replace(i, i + 1, '\\{');
                 break;
             case '&':
                 // As markdownEscapeText: only an `&` that starts a character reference.
                 reference.lastIndex = i;
-                out += reference.test(text) ? '&amp;' : '&';
+                if (reference.test(text)) replace(i, i + 1, '&amp;');
                 break;
             case '<':
                 // As markdownEscapeTags: only a `<` that would open a tag, comment or instruction.
-                out += /[a-zA-Z/!?]/.test(text[i + 1] ?? '') ? '&lt;' : '<';
+                if (/[a-zA-Z/!?]/.test(text[i + 1] ?? '')) replace(i, i + 1, '&lt;');
                 break;
-            default:
-                out += char;
         }
+        i++;
     }
-    return out;
+    if (parts.length === 0) return text;
+    if (copied < text.length) parts.push(text.slice(copied));
+    return parts.join('');
 }
 
 /**
