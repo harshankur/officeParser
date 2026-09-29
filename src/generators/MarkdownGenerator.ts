@@ -965,7 +965,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     }
                     // Alt text on one line, escaped as text (a `]` would close the `![...]`, and a
                     // renderer reads markup in alt text), and the URL scheme neutralized.
-                    const safeAlt = markdownEscapeInline(foldLines(meta?.altText || 'image'));
+                    // (No alt text is `![](...)`: a made-up `image` was read back as the picture's alt text.)
+                    const safeAlt = markdownEscapeInline(foldLines(meta?.altText || ''));
                     const safeSrc = sanitizeMarkdownUrl(src, { allowDataImage: true });
                     const imgTitle = meta?.title ? markdownTitle(meta.title) : '';
                     const imageMd = withAnchors(this.linkedImage(meta, `![${safeAlt}](${safeSrc}${imgTitle})${this.renderAttributeList(meta)}`));
