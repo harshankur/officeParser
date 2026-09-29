@@ -2518,6 +2518,15 @@ async function testLatexParsing(): Promise<void> {
     const deckTex = (await titled.to('tex')).value as string;
     assert.ok(/\\title\{Deck\}\n\\subtitle\{Sub\}\n\\author\{Ann, Bob\}\n\\date\{May 1, 2024\}/.test(deckTex) && /\\begin\{frame\}\[allowframebreaks\]\n\\relax\n\\titlepage\n\\end\{frame\}/.test(deckTex), 'TEX beamer: a title slide regenerates as \\titlepage');
 
+    // A \section between frames stays a \section (not a frame of its own), and a frame's subtitle a
+    // \framesubtitle, so the deck parses back with the same slides.
+    const sectioned = await OfficeParser.parseOffice(Buffer.from('\\documentclass{beamer}\\begin{document}\\section{Intro}\\subsection{Start}\\begin{frame}{First}{Sub}Body.\\end{frame}\\section{End}\\begin{frame}\\frametitle{Last}\\framesubtitle{Bye}\\end{frame}\\end{document}'), { fileType: 'tex' });
+    const sectionedTex = (await sectioned.to('tex')).value as string;
+    assert.ok(/\\section\{Intro\}[^\n]*\n\n\\subsection\{Start\}[^\n]*\n\n\\begin\{frame\}\[allowframebreaks\]\n\\frametitle\{First\}\n\\framesubtitle\{Sub\}/.test(sectionedTex) && (sectionedTex.match(/\\begin\{frame\}/g) || []).length === 2, 'TEX beamer: sections between frames and frame subtitles are written as such');
+    const sectionedBack = await OfficeParser.parseOffice(Buffer.from(sectionedTex), { fileType: 'tex' });
+    const outline = (a: any) => a.content.map((n: any) => n.type === 'slide' ? ['slide', n.children.filter((c: any) => c.type === 'heading').map((c: any) => [c.metadata.level, c.text])] : [n.type, n.metadata?.level, n.text]);
+    assert.deepStrictEqual(outline(sectionedBack), outline(sectioned), 'TEX round trip: a sectioned deck keeps its slides, titles and subtitles');
+
     // A \label after \phantomsection names what follows it (the generator's anchor before a block).
     const anchored = await OfficeParser.parseOffice(Buffer.from('\\documentclass{article}\\begin{document}First.\n\n\\phantomsection\\label{next}Second.\n\n\\section{S}\\label{sec}\\end{document}'), { fileType: 'tex' });
     assert.deepStrictEqual(anchored.content.map(n => [n.text, (n.metadata as any).anchorIds]), [['First.', undefined], ['Second.', ['next']], ['S', ['sec']]], 'TEX parse: \\phantomsection anchors the following block');

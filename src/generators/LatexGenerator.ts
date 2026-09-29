@@ -1792,27 +1792,42 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private async renderBeamerBody(nodes: OfficeContentNode[]): Promise<string> {
         const frames: string[] = [];
         let pending: { title: OfficeContentNode | null; body: OfficeContentNode[] } | null = null;
-        const flushPending = async () => {
-            if (pending && (pending.title || pending.body.length)) frames.push(await this.frame(pending.title, pending.body, [], null));
+        const isFramed = (n: OfficeContentNode | undefined) => n?.type === 'slide' || n?.type === 'page' || n?.type === 'sheet';
+        const isTitleHeading = (n: OfficeContentNode | undefined) => n?.type === 'heading' && ((n.metadata as HeadingMetadata)?.level ?? 1) <= 2;
+        const flushPending = async (at: number) => {
+            const p = pending as { title: OfficeContentNode | null; body: OfficeContentNode[] } | null;
             pending = null;
+            if (!p || (!p.title && !p.body.length)) return;
+            // A heading with nothing under it before the next slide (past any headings like it) is a
+            // `\section` between frames, as beamer's own documents have (what the parser reads them as),
+            // not a frame of its own.
+            let next = at;
+            while (isTitleHeading(nodes[next])) next++;
+            if (p.title && !p.body.length && isFramed(nodes[next])) {
+                const section = await this.withCtx({ sections: true }, () => this.heading(p.title!));
+                if (section) frames.push(section);
+                return;
+            }
+            frames.push(await this.frame(p.title, p.body, [], null));
         };
-        for (const node of nodes) {
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
             checkAbortSignal(this.config.abortSignal);
             if (this.titleNodes?.nodes.has(node)) {
                 if (node !== this.titleNodes.title) continue;
-                await flushPending();
+                await flushPending(i);
                 const override = await this.handleOnNode(node);
                 if (override === false) continue;
                 frames.push(typeof override === 'string' ? override : await this.frame(null, [], [], node, '\\titlepage'));
                 continue;
             }
-            const framed = node.type === 'slide' || node.type === 'page' || node.type === 'sheet';
-            const titleHeading = node.type === 'heading' && ((node.metadata as HeadingMetadata)?.level ?? 1) <= 2;
+            const framed = isFramed(node);
+            const titleHeading = isTitleHeading(node);
             if (!framed && !titleHeading) {
                 (pending ??= { title: null, body: [] }).body.push(node);
                 continue;
             }
-            await flushPending();
+            await flushPending(i);
             const override = await this.handleOnNode(node);
             if (override === false) continue;
             if (typeof override === 'string') { frames.push(override); continue; }
@@ -1830,22 +1845,29 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             const body = titleIdx >= 0 ? [...children.slice(0, titleIdx), ...children.slice(titleIdx + 1)] : children;
             frames.push(await this.frame(title, body, node.notes || [], node));
         }
-        await flushPending();
+        await flushPending(nodes.length);
         return frames.join(BLOCK_SEPARATOR);
+    }
+
+    /** A frame title's (or subtitle's) text, in a moving argument. */
+    private async frameHeading(heading: OfficeContentNode): Promise<string> {
+        const override = await this.handleOnNode(heading);
+        if (override === false) return '';
+        if (typeof override === 'string') return override.trim();
+        return (await this.withCtx({ moving: true, display: false, verbatim: false, labels: false },
+            async () => (await this.headingRuns(heading, this.hasUniformFormatting(heading, f => f?.bold === true))) + await this.notesFor(heading))).trim();
     }
 
     private async frame(title: OfficeContentNode | null, body: OfficeContentNode[], notes: OfficeContentNode[], owner: OfficeContentNode | null, lead = ''): Promise<string> {
         const anchors = owner ? this.anchorsFor(owner, true) : '';
-        let titleTex = '';
-        if (title) {
-            const override = await this.handleOnNode(title);
-            if (override !== false) {
-                titleTex = typeof override === 'string'
-                    ? override
-                    : await this.withCtx({ moving: true, display: false, verbatim: false, labels: false },
-                        async () => (await this.headingRuns(title, this.hasUniformFormatting(title, f => f?.bold === true))) + await this.notesFor(title));
-            }
-        }
+        const titleTex = title ? await this.frameHeading(title) : '';
+        // A heading of a lower level right under the title is the frame's subtitle (what the parser
+        // reads `\framesubtitle` and `\begin{frame}{Title}{Subtitle}` as).
+        const level = (n: OfficeContentNode | undefined) => Math.floor(Number((n?.metadata as HeadingMetadata | undefined)?.level)) || 1;
+        const first = body[0];
+        const subtitle = title && first?.type === 'heading' && level(first) > level(title) ? first : null;
+        if (subtitle) body = body.slice(1);
+        const subtitleTex = subtitle ? await this.frameHeading(subtitle) : '';
         let content: string;
         if (owner?.type === 'sheet') {
             content = await this.withCtx({ sections: false, longtable: false }, () => this.sheetInFrame(owner));
@@ -1864,9 +1886,10 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         // beamer reads a `{` right after \begin{frame} as the frame title, so a body that starts with a
         // group (an aligned paragraph, a sized run) needs something else in front of it.
         const lines = [`\\begin{frame}[${options.join(',')}]`];
-        lines.push(titleTex.trim() ? `\\frametitle{${titleTex.trim()}}` : '\\relax');
-        if (title) {
-            const labels = this.anchorsFor(title, true);
+        lines.push(titleTex ? `\\frametitle{${titleTex}}` : '\\relax');
+        if (subtitleTex) lines.push(`\\framesubtitle{${subtitleTex}}`);
+        for (const heading of [title, subtitle]) {
+            const labels = heading ? this.anchorsFor(heading, true) : '';
             if (labels) lines.push(labels);
         }
         if (anchors) lines.push(anchors);
