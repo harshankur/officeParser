@@ -336,9 +336,9 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     const ocr = (node.text || '').trim();
                     // Recognized text from a scanned image is column-aligned across several lines (the
                     // OCR reader keeps that layout by default). A raw newline is just whitespace to an
-                    // RTF reader, so every line break has to become a \line or the whole block
-                    // collapses into one run. escapeRtf leaves newlines untouched, so split after it.
-                    const ocrRtf = ocr ? `${this.escapeRtf(ocr).split(/\r\n|\r|\n/).join('\\line ')}\\par\n` : '';
+                    // RTF reader, so every line break has to become a \line (as escapeRtf writes it) or
+                    // the whole block collapses into one run.
+                    const ocrRtf = ocr ? `${this.escapeRtf(ocr)}\\par\n` : '';
                     // ocr-text-only: just the recognized text.
                     if (mode === 'ocr-text-only') return ocrRtf;
 
@@ -400,7 +400,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'rtf', feature: 'math' });
                     }
                     this.usedMonospace = true;
-                    const lines = this.escapeRtf(node.text || this.getNodeText(node)).split(/\r\n|\r|\n/).join('\\line ');
+                    // (Its lines kept: escapeRtf writes each line end as \line.)
+                    const lines = this.escapeRtf(node.text || this.getNodeText(node));
                     if (meta?.math === 'inline') return `{\\f2 ${lines}}`;
                     const pPr = this.pard();
                     return `${pPr}\\sa120{\\f2 ${lines}}\\par\n`;
@@ -563,7 +564,18 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         return luminance > 0.8;
     }
 
+    /**
+     * Text as RTF: its metacharacters escaped (see escapeRtf in sanitize), and its control characters as
+     * RTF writes them, none of them raw: a tab is `\tab`, a line end or vertical tab (Word's line break
+     * in text) `\line`, a form feed `\page`, and the other C0 controls, which show nothing, are left
+     * out. Written raw, a tab stood in the text as a stray character, and a line end, which RTF readers
+     * ignore, joined the lines' words.
+     */
     private escapeRtf(text: string): string {
-        return escapeRtfShared(text);
+        return escapeRtfShared(text)
+            .replace(/\r\n?|[\n\v]/g, '\\line ')
+            .replace(/\t/g, '\\tab ')
+            .replace(/\f/g, '\\page ')
+            .replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '');
     }
 }

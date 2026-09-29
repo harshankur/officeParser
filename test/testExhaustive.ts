@@ -873,6 +873,16 @@ async function testRtfEncodings(): Promise<void> {
     // TextEdit: a backslash ending a line ends the paragraph, and fonts are listed without groups.
     const cocoa = await OfficeParser.parseOffice(Buffer.from('{\\rtf1\\ansi\\ansicpg1252\\cocoartf2907\n{\\fonttbl\\f0\\froman\\fcharset0 Times-Bold;\\f1\\froman\\fcharset0 Times-Roman;}\n{\\colortbl;;\\red0\\green0\\blue233;}\n\\f0\\b First line\\\n\\f1\\b0\\cf2 Second line\\\r\nThird\\\n}', 'latin1'), { fileType: 'rtf' } as any);
     assert.deepStrictEqual(cocoa.content.map(n => [n.text, n.children?.[0]?.formatting?.font, n.children?.[0]?.formatting?.color]), [['First line', 'Times-Bold', undefined], ['Second line', 'Times-Roman', '#0000e9'], ['Third', 'Times-Roman', '#0000e9']], 'RTF: TextEdit lines are paragraphs, its fonts named, and ";;" in the colour table is two colours');
+
+    // The writer: a tab is \tab, a line end or vertical tab \line, a form feed \page; no control
+    // character is written raw (a tab stood in the text, and a line end, which readers ignore, joined words).
+    const controls = await OfficeGenerator.generate({ type: 'docx', metadata: {}, attachments: [], content: [
+        { type: 'paragraph', children: [{ type: 'text', text: 'a\tb c\nd e\r\nf g\u000bh i\u0001j' }, { type: 'text', text: 'bold\ttab', formatting: { bold: true } }] },
+    ] } as any, 'rtf');
+    const rtfControls = controls.value as string;
+    assert.ok(!/[\t\v\f\x00-\x08\x0e-\x1f]/.test(rtfControls), `RTF: no control character is written raw (${JSON.stringify(rtfControls.slice(-160))})`);
+    const controlsBack = await OfficeParser.parseOffice(Buffer.from(rtfControls, 'latin1'), { fileType: 'rtf' } as any);
+    assert.deepStrictEqual(controlsBack.content.map(n => n.text), ['a\tb c\nd e\nf g\nh ijbold\ttab'], 'RTF: a tab and line ends read back');
 }
 
 /**
