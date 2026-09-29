@@ -3921,6 +3921,12 @@ async function htmlReadingTests() {
     // A page in the encoding it declares is decoded twice at most (once found not UTF-8).
     await scalesLinearly('html: a windows-1252 page', n => OfficeParser.parseOffice(Buffer.from('<meta charset="windows-1252"><p>' + 'caf\xe9 '.repeat(n), 'latin1'), { fileType: 'html', onWarning: () => {} } as any), 20000);
 
+    // MHT: each space after an `=` is looked at once, whether or not it pads a soft line break.
+    const { readMht } = await import('../../src/utils/mhtUtils');
+    const qp = (body: string) => Buffer.from(`Content-Type: text/html\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n${body}`, 'latin1');
+    await scalesLinearly('mht: equals signs each before a run of spaces', async n => readMht(qp(('=' + ' '.repeat(50)).repeat(n))), 5000);
+    await scalesLinearly('mht: equals signs with spaces between', async n => readMht(qp('= '.repeat(n * 25))), 5000);
+
     // Writing: a srcset candidate's trailing commas (a pattern for them retried every comma), ids renamed as XML names.
     await scalesLinearly('html: a srcset candidate of commas', n => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'image', metadata: { url: 'https://ok/a.png' }, htmlAttributes: { srcset: 'a' + ','.repeat(n) + 'x,' } }] }]), 'html', { onWarning: () => {} } as any), 20000);
     await scalesLinearly('epub: ids each starting with a digit, and links to them', n => OfficeGenerator.generate(astWith(Array.from({ length: n }, (_, k) => ({ type: 'paragraph', metadata: { anchorIds: [`${k}`, `${k} x`] }, children: [{ type: 'text', text: 'x', metadata: { link: `#${k}`, linkType: 'internal' } }] }))), 'epub', { onWarning: () => {} } as any), 1000);

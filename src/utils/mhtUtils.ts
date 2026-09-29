@@ -66,9 +66,13 @@ const decodeQuotedPrintable = (text: string): Buffer => {
     for (let i = 0; i < text.length; i++) {
         const c = text.charCodeAt(i);
         if (c !== 61 /* = */) { bytes[length++] = c & 0xff; continue; }
-        // A soft line break (`=` at a line's end) joins the lines.
-        if (text[i + 1] === '\r' && text[i + 2] === '\n') { i += 2; continue; }
-        if (text[i + 1] === '\n') { i += 1; continue; }
+        // A soft line break (`=` at a line's end, with the spaces and tabs a mail system may have padded it
+        // with before the line break: RFC 2045's transport padding) joins the lines. Each space is looked
+        // at once: an `=` it does not end a line for ends the look.
+        let end = i + 1;
+        while (text[end] === ' ' || text[end] === '\t') end++;
+        if (text[end] === '\r' && text[end + 1] === '\n') { i = end + 1; continue; }
+        if (text[end] === '\n') { i = end; continue; }
         const hex = text.slice(i + 1, i + 3);
         if (/^[0-9A-Fa-f]{2}$/.test(hex)) { bytes[length++] = parseInt(hex, 16); i += 2; continue; }
         bytes[length++] = c;

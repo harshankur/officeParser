@@ -4484,6 +4484,11 @@ async function testHtmlBrowserReading(): Promise<void> {
     assert.ok(anchorIds.every(id => /^[A-Za-z_][\w.-]*$/.test(id)) && new Set(anchorIds).size === anchorIds.length && !anchoredChapter.includes(' name="'), `EPUB: every id is an XML name, and anchors carry no name attribute (${anchorIds})`);
     assert.ok(anchoredChapter.includes('href="#_9"'), 'EPUB: a link follows its renamed id');
 
+    // ── MHT: a soft line break padded with spaces or tabs is still one (RFC 2045) ──
+    const { readMht, mhtPartText } = await import('../src/utils/mhtUtils');
+    const mht = 'MIME-Version: 1.0\r\nContent-Type: text/html; charset="utf-8"\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n<p>Soft =  \r\nbreak with=\t\r\ntabs, a plain=\r\nbreak, =3D, and =\nLF</p>';
+    assert.strictEqual(mhtPartText(readMht(Buffer.from(mht, 'latin1'))[0]), '<p>Soft break withtabs, a plainbreak, =, and LF</p>', 'MHT: padded soft line breaks join their lines');
+
     console.log('  HTML/EPUB reading and writing: All assertions passed ✓');
 }
 
