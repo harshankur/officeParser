@@ -2410,6 +2410,14 @@
             border-bottom: none;
         }
 
+        .config-group-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            gap: 1rem;
+        }
+
         .config-group-title {
             font-size: 0.75rem;
             text-transform: uppercase;
@@ -2420,7 +2428,7 @@
 
         .config-items-container {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
             gap: 1rem 1.5rem;
             align-items: center;
         }
@@ -2429,12 +2437,20 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 1rem;
+            gap: 0.75rem;
             padding: 0.5rem 0.75rem;
             background: rgba(255, 255, 255, 0.02);
             border: 1px solid var(--border);
             border-radius: 8px;
             transition: all 0.2s ease;
+            min-width: 0;
+        }
+
+        .config-item > input:not([type="checkbox"]),
+        .config-item > select {
+            min-width: 0;
+            flex-shrink: 1;
+            max-width: 100%;
         }
 
         .config-item:hover {
@@ -2454,6 +2470,7 @@
             font-weight: 600;
             color: var(--text-dim);
             white-space: nowrap;
+            flex-shrink: 0;
         }
 
         .config-item.full-width .config-label {
@@ -2461,6 +2478,241 @@
             text-transform: uppercase;
             letter-spacing: 0.05em;
             font-size: 0.7rem;
+        }
+
+        /* Parser Config Progressive Disclosure */
+        #parser-config-container .config-item.collapsed-hidden {
+            display: none !important;
+        }
+
+        #parser-config-container:not(.is-collapsed) .config-item:not(.hidden):not(.collapsed-hidden) {
+            animation: configItemFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes configItemFadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-4px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .btn-config-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.45rem;
+            padding: 0.3rem 0.85rem;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            color: var(--text-dim);
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            user-select: none;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .btn-config-toggle:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--primary);
+            color: var(--text-main);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+
+        .btn-config-toggle:active {
+            transform: scale(0.98);
+        }
+
+        .btn-config-toggle .toggle-count {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.1rem 0.45rem;
+            border-radius: 10px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            background: rgba(99, 102, 241, 0.15);
+            color: var(--primary);
+            line-height: 1;
+        }
+
+        .btn-config-toggle .toggle-icon {
+            width: 12px;
+            height: 12px;
+            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .btn-config-toggle[aria-expanded="true"] .toggle-icon {
+            transform: rotate(180deg);
+        }
+
+        /* Format-Specific Parser Configuration Sections */
+        .parser-format-sections {
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+            margin-top: 1.25rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .parser-format-sections.hidden {
+            display: none !important;
+        }
+
+        .parser-format-sections:not(.hidden) .parser-format-group {
+            animation: configItemFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .parser-format-group {
+            background: rgba(255, 255, 255, 0.015);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+            transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .parser-format-group:hover {
+            border-color: rgba(99, 102, 241, 0.25);
+        }
+
+        .parser-format-group.is-active-format {
+            border-color: rgba(99, 102, 241, 0.45);
+            background: rgba(99, 102, 241, 0.035);
+            box-shadow: 0 0 16px rgba(99, 102, 241, 0.08);
+        }
+
+        .parser-format-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+        }
+
+        .parser-format-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-dim);
+        }
+
+        .parser-format-group.is-active-format .parser-format-title {
+            color: var(--primary);
+        }
+
+        .parser-format-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.15rem 0.55rem;
+            border-radius: 10px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            background: rgba(99, 102, 241, 0.15);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .parser-format-badge.hidden {
+            display: none !important;
+        }
+
+        /* Collapsible Overrides Card */
+        .overrides-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 15px;
+            padding: 1.25rem;
+            margin-bottom: 2rem;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .overrides-card:hover {
+            border-color: rgba(99, 102, 241, 0.3);
+        }
+
+        .overrides-card-header {
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+            width: 100%;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .overrides-title-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            gap: 1rem;
+        }
+
+        .overrides-badges {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .overrides-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.15rem 0.55rem;
+            border-radius: 12px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            background: rgba(99, 102, 241, 0.08);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            color: var(--primary);
+            white-space: nowrap;
+        }
+
+        .overrides-subtitle {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            line-height: 1.4;
+        }
+
+        .overrides-content {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            margin-top: 1.25rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .overrides-card.is-collapsed .overrides-content {
+            display: none !important;
+        }
+
+        .overrides-card:not(.is-collapsed) .overrides-content {
+            animation: configItemFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            #parser-config-container:not(.is-collapsed) .config-item[data-cfg-advanced="true"] {
+                animation: none;
+            }
+            .btn-config-toggle .toggle-icon {
+                transition: none;
+            }
         }
 
         /* Style Map Builder UI */
@@ -2990,44 +3242,67 @@
 
         window.CONFIG_SCHEMAS = {
             parser: [
-                // `formats` scopes an item to specific INPUT file types (matched against the
-                // resolved parser format: the file-type hint if set, else the loaded file's
-                // extension). An item with no `formats` is GENERAL and always shown. All items
-                // are still rendered into the DOM so their values persist and the parse-config
-                // read sites can read them; only visibility is toggled. See applyParserFormatFilter.
+                // General Parser Settings - Everyday / Primary (First 2 rows when collapsed)
                 { id: 'cfg_fileType', label: 'File Type Hint', type: 'select', options: ['', 'docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'], names: ['Auto', 'DOCX', 'XLSX', 'PPTX', 'PDF', 'RTF', 'CSV', 'Markdown', 'HTML', 'ODT', 'ODS', 'ODP', 'ODG', 'EPUB', 'LaTeX'], width: '100px' },
                 { id: 'cfg_extractAttachments', label: 'Extract Attachments', type: 'switch', default: true },
-                { id: 'cfg_ocr', label: 'Enable OCR', type: 'switch', default: false, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg', 'tex'] },
-                { id: 'cfg_ocrPreserveLayout', label: 'OCR Preserve Layout', type: 'switch', default: true, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg', 'tex'] },
-                { id: 'cfg_ignoreInternalLinks_parser', label: 'Ignore Internal Links', type: 'switch', default: false, formats: ['pdf', 'docx', 'odt', 'ods', 'odp', 'odg', 'tex'] },
-                { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formats: ['pdf'] },
-                { id: 'cfg_pdfUseTags', label: 'PDF Use Tags', type: 'switch', default: true, formats: ['pdf'] },
-                { id: 'cfg_pdfDetectColumns', label: 'PDF Detect Columns', type: 'switch', default: true, formats: ['pdf'] },
-                { id: 'cfg_password', label: 'Password (PDF/OOXML/ODF)', type: 'text', default: '', width: '160px', formats: ['pdf', 'docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_pdfPageRange', label: 'PDF Page Range', type: 'text', default: '', width: '80px', formats: ['pdf'] },
-                { id: 'cfg_pdfExtractTextColor', label: 'PDF Extract Text Color', type: 'switch', default: true, formats: ['pdf'] },
-                { id: 'cfg_includeRawContent', label: 'Include Raw Source', type: 'switch', default: false, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'html', 'rtf', 'csv'] },
-                { id: 'cfg_serializeRawContent', label: 'Serialize Raw XML', type: 'switch', default: true, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'html'] },
-                { id: 'cfg_preserveXmlWhitespace', label: 'Preserve XML Space', type: 'switch', default: false, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub', 'html'] },
-                { id: 'cfg_ignoreNotes', label: 'Ignore Notes', type: 'switch', default: false, formats: ['pdf', 'docx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg', 'tex'] },
-                { id: 'cfg_includeBreakNodes', label: 'Include Break Nodes', type: 'switch', default: true, formats: ['docx', 'odt', 'ods', 'odp', 'odg', 'tex'] },
-                { id: 'cfg_preserveAttributes', label: 'Preserve HTML Attributes', type: 'switch', default: false, formats: ['html', 'md', 'epub'] },
-                { id: 'cfg_preserveIframes', label: 'Preserve Iframes', type: 'switch', default: false, formats: ['html', 'md', 'epub'] },
-                { id: 'cfg_preserveComments', label: 'Preserve HTML Comments', type: 'switch', default: false, formats: ['html', 'epub'] },
-                { id: 'cfg_texToday', label: 'LaTeX \\today Text', type: 'text', default: '', width: '140px', placeholder: 'date of the parse', formats: ['tex'] },
-                { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: ',', width: '60px', formats: ['csv'] },
-                { id: 'cfg_ocrAutoTerminate', label: 'OCR Auto Terminate (s)', type: 'number', default: 10, width: '70px', min: 0, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg', 'tex'] },
-                { id: 'cfg_ocrWorkerLoad', label: 'OCR Worker Load (s)', type: 'number', default: 60, width: '70px', min: 0, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg', 'tex'] },
-                { id: 'cfg_ocrRecognition', label: 'OCR Recog (s)', type: 'number', default: 30, width: '70px', min: 0, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg', 'tex'] },
-                { id: 'cfg_maxUncompressedBytes', label: 'Max Uncompressed Size (MB)', type: 'number', default: 512, width: '80px', min: 0, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'] },
-                { id: 'cfg_maxZipEntries', label: 'Max ZIP Entries', type: 'number', default: 10000, width: '80px', min: 0, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'] },
-                { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs', fullWidth: true, formats: ['pdf'] }
+                { id: 'cfg_password', label: 'Password', type: 'text', default: '', width: '160px', placeholder: 'PDF, OOXML, ODF' },
+                { id: 'cfg_ocr', label: 'Enable OCR', type: 'switch', default: false },
+                { id: 'cfg_ocrLanguage', label: 'OCR Language', type: 'text', default: 'eng', width: '60px' },
+                { id: 'cfg_ignoreHeadersAndFooters', label: 'Ignore Headers/Footers', type: 'switch', default: false },
+                { id: 'cfg_ignoreNotes', label: 'Ignore Notes', type: 'switch', default: false },
+                { id: 'cfg_ignoreComments', label: 'Ignore Comments', type: 'switch', default: false },
+                { id: 'cfg_includeBreakNodes', label: 'Include Break Nodes', type: 'switch', default: true },
+                { id: 'cfg_ignoreInternalLinks_parser', label: 'Ignore Internal Links', type: 'switch', default: false },
+
+                // General Parser Settings - Advanced (Visible when expanded)
+                { id: 'cfg_includeRawContent', label: 'Include Raw Source', type: 'switch', default: false, advanced: true },
+                { id: 'cfg_serializeRawContent', label: 'Serialize Raw XML', type: 'switch', default: true, advanced: true },
+                { id: 'cfg_preserveXmlWhitespace', label: 'Preserve XML Space', type: 'switch', default: false, advanced: true },
+
+                { id: 'cfg_ocrPreserveLayout', label: 'OCR Preserve Layout', type: 'switch', default: true, advanced: true },
+                { id: 'cfg_ocrAutoTerminate', label: 'OCR Auto Terminate (s)', type: 'number', default: 10, width: '70px', min: 0, advanced: true },
+                { id: 'cfg_ocrWorkerLoad', label: 'OCR Worker Load (s)', type: 'number', default: 60, width: '70px', min: 0, advanced: true },
+                { id: 'cfg_ocrRecognition', label: 'OCR Recog (s)', type: 'number', default: 30, width: '70px', min: 0, advanced: true },
+
+                { id: 'cfg_maxUncompressedBytes', label: 'Max Uncompressed (MB)', type: 'number', default: 512, width: '80px', min: 0, advanced: true },
+                { id: 'cfg_maxZipEntries', label: 'Max ZIP Entries', type: 'number', default: 10000, width: '80px', min: 0, advanced: true },
+                { id: 'cfg_maxTableCells', label: 'Max Table Cells', type: 'number', default: 1000000, width: '85px', min: 0, advanced: true },
+                { id: 'cfg_maxXmlElements', label: 'Max XML Elements', type: 'number', default: 2000000, width: '85px', min: 0, advanced: true },
+                { id: 'cfg_maxRepeatedContent', label: 'Max Repeated Content', type: 'number', default: 16777216, width: '95px', min: 0, advanced: true },
+
+                // Format-Specific Parser Settings (Separated in dedicated format sections when expanded)
+                // PDF Options
+                { id: 'cfg_pdfPageRange', label: 'PDF Page Range', type: 'text', default: '', width: '80px', formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfHeadingDetection', label: 'PDF Heading Detection', type: 'select', options: ['auto', 'font-size', 'off'], names: ['Auto', 'Font Size', 'Off'], default: 'auto', width: '100px', formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfDetectColumns', label: 'PDF Detect Columns', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfUseTags', label: 'PDF Use Tags', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfMergeHyphenatedWords', label: 'PDF Merge Hyphens', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfNormalizeText', label: 'PDF Normalize Text', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfExtractTextColor', label: 'PDF Extract Text Color', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs', fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+
+                // HTML / EPUB Options
+                { id: 'cfg_preserveAttributes', label: 'Preserve HTML Attributes', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'epub', 'md'] },
+                { id: 'cfg_preserveIframes', label: 'Preserve Iframes', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'epub', 'md'] },
+                { id: 'cfg_preserveComments', label: 'Preserve HTML Comments', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'epub'] },
+                { id: 'cfg_embedFolkForms', label: 'Embed Folk Forms', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'md'] },
+
+                // CSV Options
+                { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: ',', width: '60px', formatGroup: 'csv', formats: ['csv'] },
+
+                // LaTeX Options
+                { id: 'cfg_texToday', label: 'LaTeX \\today Text', type: 'text', default: '', width: '140px', placeholder: 'date of the parse', formatGroup: 'tex', formats: ['tex'] },
+
+                // Presentation Options
+                { id: 'cfg_ignoreSlideMasters', label: 'Ignore Slide Masters', type: 'switch', default: false, formatGroup: 'pptx', formats: ['pptx', 'odp'] }
             ],
             generator: [
                 { id: 'cfg_includeFormatting', label: 'Include Formatting', type: 'switch', default: true },
                 { id: 'cfg_generateIds', label: 'Generate IDs', type: 'switch', default: true },
                 { id: 'cfg_renderMetadata', label: 'Render Metadata', type: 'switch', default: false },
                 { id: 'cfg_includeImages', label: 'Images', type: 'select', options: ['image-only', 'image+ocr-text', 'ocr-text-only', 'none'], names: ['Image only', 'Image + OCR text', 'OCR text only', 'None'], default: 'image-only', width: '130px' },
+                { id: 'cfg_maxInlineImageBytes', label: 'Max Inline Image (bytes)', type: 'number', default: 1500000, width: '90px', min: 0 },
                 { id: 'cfg_includeCharts', label: 'Include Charts', type: 'switch', default: true },
                 { id: 'cfg_ignoreInternalLinks_generator', label: 'Ignore Internal Links', type: 'switch', default: false },
                 { id: 'cfg_ignoreDefaultStyleMap', label: 'Ignore Default Style Map', type: 'switch', default: false }
@@ -3069,91 +3344,127 @@
             text: [
                 { id: 'cfg_text_preserveLayout', label: 'Layout', type: 'inline-switch', default: true },
                 { id: 'cfg_text_renderNotes', label: 'Notes', type: 'inline-switch', default: true },
-                { id: 'cfg_text_newlineDelimiter', label: 'Newline', type: 'inline-text', default: '\\n', width: '60px' }
+                { id: 'cfg_text_newlineDelimiter', label: 'Newline', type: 'inline-text', default: '\\n', width: '60px' },
+                { id: 'cfg_text_pageSeparator', label: 'Page Sep', type: 'inline-text', default: '\\n', width: '60px' }
             ]
         };
 
-        function renderConfigItems(sectionKey, containerId) {
-            const schema = window.CONFIG_SCHEMAS[sectionKey];
-            let html = '';
+        window.PARSER_FORMAT_GROUPS = [
+            { id: 'pdf', title: 'PDF Options', icon: '📄', formats: 'pdf' },
+            { id: 'html', title: 'HTML / EPUB Options', icon: '🌐', formats: 'html,epub,md' },
+            { id: 'csv', title: 'CSV Options', icon: '📊', formats: 'csv' },
+            { id: 'tex', title: 'LaTeX Options', icon: '📐', formats: 'tex' },
+            { id: 'pptx', title: 'Presentation Options', icon: '📽️', formats: 'pptx,odp' }
+        ];
 
-            schema.forEach(item => {
-                const saved = localStorage.getItem(item.id);
-                const value = saved !== null ? (item.type.includes('switch') ? saved === 'true' : saved) : item.default;
-                const isInline = item.type.startsWith('inline-');
-                // Tag every wrapper so applyParserFormatFilter can show/hide it by input format.
-                // Items without `formats` carry no data-cfg-formats and are treated as general.
-                const cfgAttr = `data-cfg-id="${item.id}"${item.formats ? ` data-cfg-formats="${item.formats.join(',')}"` : ''}`;
+        function renderSingleConfigItem(item) {
+            const saved = localStorage.getItem(item.id);
+            const value = saved !== null ? (item.type.includes('switch') ? saved === 'true' : saved) : item.default;
+            const isInline = item.type.startsWith('inline-');
+            const cfgAttr = `data-cfg-id="${item.id}"` +
+                (item.formats ? ` data-cfg-formats="${item.formats.join(',')}"` : '') +
+                (item.formatGroup ? ` data-cfg-group="${item.formatGroup}"` : '') +
+                (item.advanced ? ` data-cfg-advanced="true"` : '');
 
-                if (item.type.includes('switch')) {
-                    html += `
-                        <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
-                            <span class="config-label">${item.label}</span>
-                            <label class="switch">
-                                <input type="checkbox" id="${item.id}" ${value ? 'checked' : ''}>
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                    `;
-                } else if (item.type.includes('select')) {
-                    html += `
-                        <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
-                            <span class="config-label">${item.label}</span>
-                            <select id="${item.id}" class="btn btn-outline" style="padding: ${isInline ? '0.2rem' : '0.4rem'}; font-size: 0.8rem; width: ${item.width || 'auto'};">
-                                ${item.options.map((opt, i) => `<option value="${opt}" ${opt === value ? 'selected' : ''} ${item.disabledOptions && item.disabledOptions.includes(opt) ? 'disabled' : ''}>${item.names[i]}</option>`).join('')}
-                            </select>
-                        </div>
-                    `;
-                } else if (item.type === 'popover-panel') {
-                    // A trigger for a hand-written panel elsewhere in the markup. Used where a
-                    // config field is an OBJECT with many members (metadataOverrides, the
-                    // MarkdownDialectConfig / FallbackToHtmlConfig object forms) and a single
-                    // control cannot represent it. Mirrors the existing `standalone` popover.
-                    html += `
-                        <div ${cfgAttr} class="${item.inline ? 'window-config-item' : 'config-item'}">
-                            <button class="btn btn-outline" style="padding: ${item.inline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; font-size: ${item.inline ? '0.75rem' : '0.8rem'}; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);" onclick="window.toggleConfigPopover('${item.panelId}', this)">
+            if (item.type.includes('switch')) {
+                return `
+                    <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
+                        <span class="config-label">${item.label}</span>
+                        <label class="switch">
+                            <input type="checkbox" id="${item.id}" ${value ? 'checked' : ''}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                `;
+            } else if (item.type.includes('select')) {
+                return `
+                    <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
+                        <span class="config-label">${item.label}</span>
+                        <select id="${item.id}" class="btn btn-outline" style="padding: ${isInline ? '0.2rem' : '0.4rem'}; font-size: 0.8rem; width: ${item.width || 'auto'};">
+                            ${item.options.map((opt, i) => `<option value="${opt}" ${opt === value ? 'selected' : ''} ${item.disabledOptions && item.disabledOptions.includes(opt) ? 'disabled' : ''}>${item.names[i]}</option>`).join('')}
+                        </select>
+                    </div>
+                `;
+            } else if (item.type === 'popover-panel') {
+                return `
+                    <div ${cfgAttr} class="${item.inline ? 'window-config-item' : 'config-item'}">
+                        <button class="btn btn-outline" style="padding: ${item.inline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; font-size: ${item.inline ? '0.75rem' : '0.8rem'}; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);" onclick="window.toggleConfigPopover('${item.panelId}', this)">
+                            ${item.label}
+                            <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                    </div>
+                `;
+            } else if (item.type.includes('popover-textarea')) {
+                return `
+                    <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
+                        <button class="btn btn-outline" style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; font-size: ${isInline ? '0.75rem' : '0.8rem'}; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);" onclick="window.toggleConfigPopover('${item.id}_popover', this)">
+                            ${item.label}
+                            <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                        <div id="${item.id}_popover" class="config-popover" style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 350px;">
+                            <div style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
                                 ${item.label}
-                                <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-                            </button>
-                        </div>
-                    `;
-                } else if (item.type.includes('popover-textarea')) {
-                    html += `
-                        <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
-                            <button class="btn btn-outline" style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; font-size: ${isInline ? '0.75rem' : '0.8rem'}; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);" onclick="window.toggleConfigPopover('${item.id}_popover', this)">
-                                ${item.label}
-                                <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-                            </button>
-                            <div id="${item.id}_popover" class="config-popover" style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 350px;">
-                                <div style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
-                                    ${item.label}
-                                    <button class="modal-close-btn" style="font-size: 0.8rem;" onclick="window.toggleConfigPopover('${item.id}_popover')">✕</button>
-                                </div>
-                                <textarea id="${item.id}" class="btn btn-outline" 
-                                    style="padding: 0.5rem; width: 100%; min-height: ${item.height || '100px'}; font-size: 0.75rem; font-family: monospace; resize: vertical; background: var(--bg-card); color: var(--text-main); cursor: text;" 
-                                    ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>${value}</textarea>
+                                <button class="modal-close-btn" style="font-size: 0.8rem;" onclick="window.toggleConfigPopover('${item.id}_popover')">✕</button>
                             </div>
-                        </div>
-                    `;
-                } else if (item.type.includes('textarea')) {
-                    html += `
-                        <div ${cfgAttr} class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}" style="align-items: flex-start;">
-                            <span class="config-label">${item.label}</span>
                             <textarea id="${item.id}" class="btn btn-outline" 
-                                style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; min-height: ${item.height || '60px'}; font-size: ${isInline ? '0.75rem' : '0.8rem'}; font-family: monospace; resize: vertical;" 
+                                style="padding: 0.5rem; width: 100%; min-height: ${item.height || '100px'}; font-size: 0.75rem; font-family: monospace; resize: vertical; background: var(--bg-card); color: var(--text-main); cursor: text;" 
                                 ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>${value}</textarea>
                         </div>
-                    `;
-                } else {
-                    html += `
-                        <div ${cfgAttr} class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}">
-                            <span class="config-label">${item.label}</span>
-                            <input type="${item.type.replace('inline-', '')}" id="${item.id}" class="btn btn-outline" 
-                                style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; font-size: ${isInline ? '0.75rem' : '0.8rem'};" 
-                                value="${value}" ${item.min !== undefined ? `min="${item.min}"` : ''} ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>
+                    </div>
+                `;
+            } else if (item.type.includes('textarea')) {
+                return `
+                    <div ${cfgAttr} class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}" style="align-items: flex-start;">
+                        <span class="config-label">${item.label}</span>
+                        <textarea id="${item.id}" class="btn btn-outline" 
+                            style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; min-height: ${item.height || '60px'}; font-size: ${isInline ? '0.75rem' : '0.8rem'}; font-family: monospace; resize: vertical;" 
+                            ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>${value}</textarea>
+                    </div>
+                `;
+            } else {
+                return `
+                    <div ${cfgAttr} class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}">
+                        <span class="config-label">${item.label}</span>
+                        <input type="${item.type.replace('inline-', '')}" id="${item.id}" class="btn btn-outline" 
+                            style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; font-size: ${isInline ? '0.75rem' : '0.8rem'};" 
+                            value="${value}" ${item.min !== undefined ? `min="${item.min}"` : ''} ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>
+                    </div>
+                `;
+            }
+        }
+
+        function renderConfigItems(sectionKey) {
+            const schema = window.CONFIG_SCHEMAS[sectionKey];
+            if (!schema) return;
+            let html = '';
+            const items = sectionKey === 'parser' ? schema.filter(it => !it.formatGroup) : schema;
+            items.forEach(item => {
+                html += renderSingleConfigItem(item);
+            });
+            document.write(html);
+        }
+
+        function renderParserFormatSections() {
+            const schema = window.CONFIG_SCHEMAS.parser;
+            if (!schema) return;
+            let html = '';
+            window.PARSER_FORMAT_GROUPS.forEach(grp => {
+                const groupItems = schema.filter(it => it.formatGroup === grp.id);
+                if (groupItems.length === 0) return;
+                html += `
+                    <div class="parser-format-group" data-format-group="${grp.id}" data-formats="${grp.formats}">
+                        <div class="parser-format-header">
+                            <div class="parser-format-title">
+                                <span class="format-icon">${grp.icon}</span>
+                                <span>${grp.title}</span>
+                            </div>
+                            <span class="parser-format-badge hidden">Active Format</span>
                         </div>
-                    `;
-                }
+                        <div class="config-items-container">
+                            ${groupItems.map(it => renderSingleConfigItem(it)).join('')}
+                        </div>
+                    </div>
+                `;
             });
             document.write(html);
         }
@@ -3693,10 +4004,22 @@
 
                 <div class="config-bar" style="flex-direction: column; align-items: stretch; gap: 0;">
                     <!-- Parser Section -->
-                    <div class="config-group">
-                        <div class="config-group-title">Parser Configuration</div>
-                        <div class="config-items-container" id="parser-config-container">
+                    <div class="config-group" id="parser-config-group">
+                        <div class="config-group-header">
+                            <div class="config-group-title">Parser Configuration</div>
+                            <button type="button" class="btn-config-toggle" id="parser-advanced-toggle" aria-expanded="false" aria-controls="parser-config-container">
+                                <span class="toggle-text">More Settings</span>
+                                <span class="toggle-count">28</span>
+                                <svg class="toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="config-items-container is-collapsed" id="parser-config-container">
                             <script>renderConfigItems('parser');</script>
+                        </div>
+                        <div class="parser-format-sections hidden" id="parser-format-sections">
+                            <script>renderParserFormatSections();</script>
                         </div>
                     </div>
 
@@ -3708,119 +4031,160 @@
                         </div>
                     </div>
                 </div>
-                <div class="config-item full-width" style="gap: 1rem;">
-                    <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
-                        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-                            <span class="config-label">Custom Style Map</span>
-                            <div
-                                style="display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.45rem; border: 1px dashed var(--accent); border-radius: 4px; background: rgba(56, 189, 248, 0.04); color: var(--accent); font-size: 0.65rem; font-weight: 500;">
-                                <span
-                                    style="display: inline-flex; align-items: center; justify-content: center; width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--accent); font-size: 0.55rem; font-family: serif; font-weight: bold; font-style: italic; text-align: center; line-height: 1;">i</span>
-                                Mammoth.js legacy DSL is directly supported in Code mode
+                <!-- Custom Style Map & Metadata Overrides (Collapsible Card) -->
+                <div class="overrides-card is-collapsed" id="overrides-card">
+                    <div class="overrides-card-header" id="overrides-card-header">
+                        <div class="overrides-title-row">
+                            <div class="config-group-title">Custom Style Map &amp; Metadata Overrides</div>
+                            <button type="button" class="btn-config-toggle" id="overrides-toggle-btn" aria-expanded="false" aria-controls="overrides-content">
+                                <span class="toggle-text">Show Overrides</span>
+                                <svg class="toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="overrides-badges">
+                            <span class="overrides-badge">🎨 Custom Style Map</span>
+                            <span class="overrides-badge">📋 9 Metadata Fields</span>
+                            <span class="overrides-badge">🏷️ Custom Tags</span>
+                        </div>
+                        <div class="overrides-subtitle">
+                            Configure custom AST element mapping (Mammoth.js DSL &amp; visual rules), override document metadata (Title, Author, Subject...), and define custom &lt;meta&gt; properties.
+                        </div>
+                    </div>
+
+                    <div class="overrides-content" id="overrides-content">
+                        <!-- Custom Style Map -->
+                        <div class="config-item full-width" style="gap: 1rem; border: none; background: transparent; padding: 0;">
+                            <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                                <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                                    <span class="config-label">Custom Style Map</span>
+                                    <div
+                                        style="display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.45rem; border: 1px dashed var(--accent); border-radius: 4px; background: rgba(56, 189, 248, 0.04); color: var(--accent); font-size: 0.65rem; font-weight: 500;">
+                                        <span
+                                            style="display: inline-flex; align-items: center; justify-content: center; width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--accent); font-size: 0.55rem; font-family: serif; font-weight: bold; font-style: italic; text-align: center; line-height: 1;">i</span>
+                                        Mammoth.js legacy DSL is directly supported in Code mode
+                                    </div>
+                                </div>
+                                <div class="mode-toggle">
+                                    <button class="btn-toggle active" id="btn_styleMap_visual">Visual</button>
+                                    <button class="btn-toggle" id="btn_styleMap_raw">Code</button>
+                                </div>
                             </div>
-                        </div>
-                        <div class="mode-toggle">
-                            <button class="btn-toggle active" id="btn_styleMap_visual">Visual</button>
-                            <button class="btn-toggle" id="btn_styleMap_raw">Code</button>
-                        </div>
-                    </div>
-                    <div id="styleMap_visual_container" class="style-map-builder">
-                        <div id="mapping_list">
-                            <!-- Dynamic mapping rows will be injected here -->
-                        </div>
-                        <button id="add_style_mapping" class="btn-add-mapping">
-                            <span>+</span> Add Style Mapping Rule
-                        </button>
-                    </div>
-                    <div id="styleMap_code_container" class="hidden"
-                        style="display: flex; flex-direction: column; gap: 0.5rem; width: 100%;">
-                        <div
-                            style="display: flex; gap: 1rem; align-items: center; font-size: 0.85rem; padding: 0.25rem 0;">
-                            <span style="color: var(--text-dim); font-weight: 500;">Syntax:</span>
-                            <label
-                                style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer; color: var(--text-dim);">
-                                <input type="radio" name="styleMap_format" value="json" checked
-                                    style="cursor: pointer;"> JSON
-                            </label>
-                            <label
-                                style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer; color: var(--text-dim);">
-                                <input type="radio" name="styleMap_format" value="mammoth" style="cursor: pointer;">
-                                Mammoth.js DSL (Legacy)
-                            </label>
-                        </div>
-                        <textarea id="cfg_styleMap" class="btn btn-outline"
-                            style="padding: 0.6rem; width: 100%; min-height: 120px; font-size: 0.75rem; font-family: 'Ubuntu Mono', monospace; resize: vertical;"
-                            placeholder='[
+                            <div id="styleMap_visual_container" class="style-map-builder">
+                                <div id="mapping_list">
+                                    <!-- Dynamic mapping rows will be injected here -->
+                                </div>
+                                <button id="add_style_mapping" class="btn-add-mapping">
+                                    <span>+</span> Add Style Mapping Rule
+                                </button>
+                            </div>
+                            <div id="styleMap_code_container" class="hidden"
+                                style="display: flex; flex-direction: column; gap: 0.5rem; width: 100%;">
+                                <div
+                                    style="display: flex; gap: 1rem; align-items: center; font-size: 0.85rem; padding: 0.25rem 0;">
+                                    <span style="color: var(--text-dim); font-weight: 500;">Syntax:</span>
+                                    <label
+                                        style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer; color: var(--text-dim);">
+                                        <input type="radio" name="styleMap_format" value="json" checked
+                                            style="cursor: pointer;"> JSON
+                                    </label>
+                                    <label
+                                        style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer; color: var(--text-dim);">
+                                        <input type="radio" name="styleMap_format" value="mammoth" style="cursor: pointer;">
+                                        Mammoth.js DSL (Legacy)
+                                    </label>
+                                </div>
+                                <textarea id="cfg_styleMap" class="btn btn-outline"
+                                    style="padding: 0.6rem; width: 100%; min-height: 120px; font-size: 0.75rem; font-family: 'Ubuntu Mono', monospace; resize: vertical;"
+                                    placeholder='[
   {
     "selector": { "nodeType": "paragraph", "attributes": { "style": "Heading 1" } },
     "output": { "tag": "h1", "classes": ["main-title"] }
   }
 ]'></textarea>
-                    </div>
-                </div>
-                <div class="config-group">
-                    <div class="config-group-title">Metadata Overrides</div>
-                    <div class="config-items-container">
-                            <div class="config-item">
-                                <span class="config-label">Title</span>
-                                <input type="text" id="cfg_meta_title" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
                             </div>
-                            <div class="config-item">
-                                <span class="config-label">Author</span>
-                                <input type="text" id="cfg_meta_author" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Description</span>
-                                <input type="text" id="cfg_meta_description" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Subject</span>
-                                <input type="text" id="cfg_meta_subject" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Keywords</span>
-                                <input type="text" id="cfg_meta_keywords" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="comma, separated">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Last Modified By</span>
-                                <input type="text" id="cfg_meta_lastModifiedBy" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Language</span>
-                                <input type="text" id="cfg_meta_language" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="en, de-DE">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Created</span>
-                                <input type="text" id="cfg_meta_created" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="2024-01-01T00:00:00Z">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Modified</span>
-                                <input type="text" id="cfg_meta_modified" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="2024-01-01T00:00:00Z">
-                            </div>
-                    </div>
-                    <div class="config-item full-width" style="flex-direction: column; align-items: stretch; gap: 0.5rem; margin-top: 0.75rem;">
-                        <div style="font-size: 0.75rem; color: var(--text-dim); line-height: 1.5;">
-                            Applied <strong>per field</strong> on top of <code>ast.metadata</code> without mutating it.
-                            A blank field keeps the parsed value rather than blanking it.
                         </div>
-                        <div style="border-top: 1px solid var(--border); padding-top: 0.6rem;">
-                            <div style="font-size: 0.75rem; color: var(--text-dim); margin-bottom: 0.5rem; line-height: 1.5;">
-                                <code>custom</code>: any key/value pairs. Written where the format allows it
-                                (HTML <code>&lt;meta name="custom:KEY"&gt;</code>, Markdown frontmatter, LaTeX PDF info); EPUB and RTF
-                                have fixed metadata vocabularies and report a warning instead.
+
+                        <!-- Divider between style map and metadata overrides -->
+                        <div style="border-top: 1px solid var(--border); margin: 0.25rem 0;"></div>
+
+                        <!-- Metadata Overrides Section -->
+                        <div class="config-group" style="padding: 0; border-bottom: none;">
+                            <div class="config-group-title" style="margin-bottom: 0.5rem;">Metadata Overrides</div>
+                            <div class="config-items-container">
+                                    <div class="config-item">
+                                        <span class="config-label">Title</span>
+                                        <input type="text" id="cfg_meta_title" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Author</span>
+                                        <input type="text" id="cfg_meta_author" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Description</span>
+                                        <input type="text" id="cfg_meta_description" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Subject</span>
+                                        <input type="text" id="cfg_meta_subject" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Keywords</span>
+                                        <input type="text" id="cfg_meta_keywords" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="comma, separated">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Last Modified By</span>
+                                        <input type="text" id="cfg_meta_lastModifiedBy" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Language</span>
+                                        <input type="text" id="cfg_meta_language" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="en, de-DE">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Created</span>
+                                        <input type="text" id="cfg_meta_created" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="2024-01-01T00:00:00Z">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Modified</span>
+                                        <input type="text" id="cfg_meta_modified" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="2024-01-01T00:00:00Z">
+                                    </div>
                             </div>
-                            <div id="cfg_meta_custom_rows" style="display: flex; flex-direction: column; gap: 0.4rem;"></div>
-                            <button id="cfg_meta_custom_add" class="btn btn-outline"
-                                style="margin-top: 0.5rem; padding: 0.35rem 0.7rem; font-size: 0.75rem;">+ Add custom entry</button>
+                            <div class="config-item full-width" style="flex-direction: column; align-items: stretch; gap: 0.5rem; margin-top: 0.75rem; border: none; background: transparent; padding: 0;">
+                                <div style="font-size: 0.75rem; color: var(--text-dim); line-height: 1.5;">
+                                    Applied <strong>per field</strong> on top of <code>ast.metadata</code> without mutating it.
+                                    A blank field keeps the parsed value rather than blanking it.
+                                </div>
+                                <div style="border-top: 1px solid var(--border); padding-top: 0.6rem;">
+                                    <div style="font-size: 0.75rem; color: var(--text-dim); margin-bottom: 0.5rem; line-height: 1.5;">
+                                        <code>custom</code>: any key/value pairs. Written where the format allows it
+                                        (HTML <code>&lt;meta name="custom:KEY"&gt;</code>, Markdown frontmatter, LaTeX PDF info); EPUB and RTF
+                                        have fixed metadata vocabularies and report a warning instead.
+                                    </div>
+                                    <div id="cfg_meta_custom_rows" style="display: flex; flex-direction: column; gap: 0.4rem;"></div>
+                                    <button id="cfg_meta_custom_add" class="btn btn-outline"
+                                        style="margin-top: 0.5rem; padding: 0.35rem 0.7rem; font-size: 0.75rem;">+ Add custom entry</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Bottom Collapse Button -->
+                        <div style="display: flex; justify-content: flex-end; width: 100%; margin-top: 0.5rem; padding-top: 0.75rem; border-top: 1px solid var(--border);">
+                            <button type="button" class="btn-config-toggle" id="overrides-bottom-toggle-btn" aria-expanded="true" aria-controls="overrides-content">
+                                <span class="toggle-text">Hide Overrides</span>
+                                <svg class="toggle-icon" style="transform: rotate(180deg);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -4108,8 +4472,8 @@
                             i</div>
                         <div class="viewer-toggle" id="toggle-rtf">
                             <div class="toggle-slider"></div>
-                            <button class="toggle-btn active" data-state="preview">Preview</button>
-                            <button class="toggle-btn" data-state="raw">Raw</button>
+                            <button class="toggle-btn" data-state="preview">Preview</button>
+                            <button class="toggle-btn active" data-state="raw">Raw</button>
                         </div>
                     </div>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -4141,10 +4505,15 @@
             <div class="visual-panel-window" id="window-tex">
                 <div class="panel-header" style="justify-content: space-between;">
                     <h4 style="margin:0;">LATEX</h4>
-                    <div class="viewer-toggle" id="toggle-tex">
-                        <div class="toggle-slider"></div>
-                        <button class="toggle-btn" data-state="preview">Preview</button>
-                        <button class="toggle-btn active" data-state="raw">Raw</button>
+                    <div style="display: flex; gap: 0.75rem; align-items: center;">
+                        <div id="tex-info-icon" class="info-icon"
+                            style="cursor: help; background: rgba(99, 102, 241, 0.05); color: var(--primary); font-family: serif; font-weight: 800; font-style: italic; border: 1.5px solid var(--primary); border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; opacity: 0.8; transition: all 0.2s;">
+                            i</div>
+                        <div class="viewer-toggle" id="toggle-tex">
+                            <div class="toggle-slider"></div>
+                            <button class="toggle-btn" data-state="preview">Preview</button>
+                            <button class="toggle-btn active" data-state="raw">Raw</button>
+                        </div>
                     </div>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
                         <button class="btn-outline btn-maximize" onclick="openFullscreenPreview('tex')"
@@ -4694,7 +5063,7 @@
                 md: 'preview',
                 chunks: 'preview',
                 csv: 'preview',
-                rtf: 'preview',
+                rtf: 'raw',
                 tex: 'raw',
                 text: 'preview',
                 ast: 'preview'
@@ -4783,7 +5152,7 @@
             }
 
             document.addEventListener('mouseover', (e) => {
-                const target = e.target.closest('[data-tooltip]') || e.target.closest('#rtf-info-icon');
+                const target = e.target.closest('[data-tooltip]') || e.target.closest('#rtf-info-icon') || e.target.closest('#tex-info-icon');
                 if (target) {
                     let content = target.getAttribute('data-tooltip');
 
@@ -4821,6 +5190,40 @@
                                     </div>
                                 </div>
                             </div>`;
+                    } else if (target.id === 'tex-info-icon') {
+                        const sourceFormat = window.currentAst ? window.currentAst.type.toUpperCase() : 'FILE';
+
+                        content = `
+                            <div class="tooltip-header"><span>⚙️</span> LaTeX Preview Engine</div>
+                            <div style="margin-bottom: 1.25rem; opacity: 0.8; font-size: 0.75rem; line-height: 1.6;">Due to the lack of native browser-side LaTeX renderers, OfficeParser performs a dual-pass conversion to verify round-trip fidelity and enable visual previewing.</div>
+                            
+                            <div class="pipeline-container">
+                                <div class="pipeline-phase">
+                                    <div class="phase-label">Phase 1: LaTeX Generation</div>
+                                    <div class="pipeline-row">
+                                        <div class="pipeline-node active"><div class="node-icon-box">📄</div><div class="node-text">${sourceFormat}</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">🌳</div><div class="node-text">AST</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">📐</div><div class="node-text">LATEX</div></div>
+                                    </div>
+                                </div>
+                                
+                                <div class="phase-connector">▼</div>
+                                
+                                <div class="pipeline-phase">
+                                    <div class="phase-label">Phase 2: HTML Preview</div>
+                                    <div class="pipeline-row">
+                                        <div class="pipeline-node active"><div class="node-icon-box">📐</div><div class="node-text">LATEX</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">🌳</div><div class="node-text">AST</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">🌐</div><div class="node-text">HTML</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">👁️</div><div class="node-text">UI</div></div>
+                                    </div>
+                                </div>
+                            </div>`;
                     }
 
                     if (content) {
@@ -4830,7 +5233,7 @@
             });
 
             document.addEventListener('mouseout', (e) => {
-                const target = e.target.closest('[data-tooltip]') || e.target.closest('#rtf-info-icon');
+                const target = e.target.closest('[data-tooltip]') || e.target.closest('#rtf-info-icon') || e.target.closest('#tex-info-icon');
                 if (target) {
                     hideTooltip();
                 }
@@ -5175,7 +5578,9 @@
                     generateIds: document.getElementById('cfg_generateIds').checked,
                     renderMetadata: document.getElementById('cfg_renderMetadata').checked,
                     includeImages: document.getElementById('cfg_includeImages').value,
+                    maxInlineImageBytes: parseInt(document.getElementById('cfg_maxInlineImageBytes').value, 10),
                     includeCharts: document.getElementById('cfg_includeCharts').checked,
+                    ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
                     ignoreDefaultStyleMap: document.getElementById('cfg_ignoreDefaultStyleMap').checked,
                     metadataOverrides: getMetadataOverrides(),
                     styleMap: styleMap
@@ -5210,19 +5615,81 @@
                 return null;
             }
 
-            // Show only the parser items relevant to `fmt` (defaults to the resolved active format).
-            // General items (no data-cfg-formats) always show; when fmt is null everything shows.
-            // Nodes are only hidden, never removed, so every input stays in the DOM and the
-            // parse-config read sites keep working and values persist across switches.
+            // Dynamically show the first 2 rows of general parser items when collapsed,
+            // regardless of viewport width or how many items that corresponds to.
+            // Format-specific sections are shown separated only when expanded.
+            function updateParserAdvancedToggle() {
+                const container = document.getElementById('parser-config-container');
+                const toggleBtn = document.getElementById('parser-advanced-toggle');
+                const formatSections = document.getElementById('parser-format-sections');
+                if (!container || !toggleBtn) return;
+
+                const isCollapsed = container.classList.contains('is-collapsed');
+                
+                // Determine resolved number of columns in the CSS grid
+                const comp = window.getComputedStyle(container);
+                const cols = comp.gridTemplateColumns.split(' ').filter(Boolean).length || 1;
+                const maxVisible = cols * 2;
+
+                const generalItems = Array.from(container.querySelectorAll('.config-item[data-cfg-id]'));
+                const formatItemsCount = formatSections ? formatSections.querySelectorAll('.config-item[data-cfg-id]').length : 0;
+
+                if (isCollapsed) {
+                    generalItems.forEach((el, idx) => {
+                        if (idx < maxVisible) {
+                            el.classList.remove('collapsed-hidden');
+                        } else {
+                            el.classList.add('collapsed-hidden');
+                        }
+                    });
+
+                    if (formatSections) formatSections.classList.add('hidden');
+
+                    const hiddenGeneral = Math.max(0, generalItems.length - maxVisible);
+                    const totalHidden = hiddenGeneral + formatItemsCount;
+
+                    toggleBtn.classList.remove('hidden');
+                    const countBadge = toggleBtn.querySelector('.toggle-count');
+                    const labelText = toggleBtn.querySelector('.toggle-text');
+
+                    toggleBtn.setAttribute('aria-expanded', 'false');
+                    labelText.textContent = 'More Settings';
+                    if (countBadge) {
+                        countBadge.textContent = totalHidden;
+                        countBadge.style.display = 'inline-flex';
+                    }
+                } else {
+                    generalItems.forEach(el => {
+                        el.classList.remove('collapsed-hidden');
+                    });
+
+                    if (formatSections) formatSections.classList.remove('hidden');
+
+                    toggleBtn.classList.remove('hidden');
+                    const countBadge = toggleBtn.querySelector('.toggle-count');
+                    const labelText = toggleBtn.querySelector('.toggle-text');
+
+                    toggleBtn.setAttribute('aria-expanded', 'true');
+                    labelText.textContent = 'Fewer Settings';
+                    if (countBadge) countBadge.style.display = 'none';
+                }
+            }
+
             function applyParserFormatFilter(fmt) {
                 if (fmt === undefined) fmt = getActiveParserFormat();
-                const container = document.getElementById('parser-config-container');
-                if (!container) return;
-                container.querySelectorAll('[data-cfg-id]').forEach(el => {
-                    const scoped = el.getAttribute('data-cfg-formats');
-                    const show = !fmt || !scoped || scoped.split(',').includes(fmt);
-                    el.classList.toggle('hidden', !show);
-                });
+                const formatSections = document.getElementById('parser-format-sections');
+                if (formatSections) {
+                    formatSections.querySelectorAll('.parser-format-group').forEach(group => {
+                        const formatsAttr = group.getAttribute('data-formats');
+                        const formats = formatsAttr ? formatsAttr.split(',') : [];
+                        const isActive = fmt ? formats.includes(fmt) : false;
+                        group.classList.toggle('is-active-format', isActive);
+                        const badge = group.querySelector('.parser-format-badge');
+                        if (badge) {
+                            badge.classList.toggle('hidden', !isActive);
+                        }
+                    });
+                }
             }
             window.applyParserFormatFilter = applyParserFormatFilter;
 
@@ -5238,26 +5705,41 @@
                     ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_parser').checked,
                     ignorePageGeometry: document.getElementById('cfg_ignorePageGeometry').checked,
                     password: document.getElementById('cfg_password').value,
-                    pdfParserConfig: {
-                        useTags: document.getElementById('cfg_pdfUseTags').checked,
-                        detectColumns: document.getElementById('cfg_pdfDetectColumns').checked,
-                        pageRange: document.getElementById('cfg_pdfPageRange').value,
-                        extractTextColor: document.getElementById('cfg_pdfExtractTextColor').checked
-                    },
+                    ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
+                    ignoreComments: document.getElementById('cfg_ignoreComments').checked,
+                    ignoreHeadersAndFooters: document.getElementById('cfg_ignoreHeadersAndFooters').checked,
+                    ignoreSlideMasters: document.getElementById('cfg_ignoreSlideMasters').checked,
+                    includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
                     includeRawContent: document.getElementById('cfg_includeRawContent').checked,
                     serializeRawContent: document.getElementById('cfg_serializeRawContent').checked,
                     preserveXmlWhitespace: document.getElementById('cfg_preserveXmlWhitespace').checked,
-                    ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
-                    includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
-                    htmlParserConfig: { preserveAttributes: document.getElementById('cfg_preserveAttributes').checked, preserveIframes: document.getElementById('cfg_preserveIframes').checked, preserveComments: document.getElementById('cfg_preserveComments').checked },
+                    pdfParserConfig: {
+                        useTags: document.getElementById('cfg_pdfUseTags').checked,
+                        detectColumns: document.getElementById('cfg_pdfDetectColumns').checked,
+                        headingDetection: document.getElementById('cfg_pdfHeadingDetection').value,
+                        mergeHyphenatedWords: document.getElementById('cfg_pdfMergeHyphenatedWords').checked,
+                        pageRange: document.getElementById('cfg_pdfPageRange').value,
+                        normalizeText: document.getElementById('cfg_pdfNormalizeText').checked,
+                        extractTextColor: document.getElementById('cfg_pdfExtractTextColor').checked
+                    },
+                    htmlParserConfig: {
+                        preserveAttributes: document.getElementById('cfg_preserveAttributes').checked,
+                        preserveIframes: document.getElementById('cfg_preserveIframes').checked,
+                        preserveComments: document.getElementById('cfg_preserveComments').checked,
+                        embedFolkForms: document.getElementById('cfg_embedFolkForms').checked
+                    },
                     texParserConfig: { today: document.getElementById('cfg_texToday').value },
                     csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
                     pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value,
                     decompressionLimits: {
                         maxUncompressedBytes: parseInt(document.getElementById('cfg_maxUncompressedBytes').value, 10) * 1024 * 1024,
-                        maxZipEntries: parseInt(document.getElementById('cfg_maxZipEntries').value, 10)
+                        maxZipEntries: parseInt(document.getElementById('cfg_maxZipEntries').value, 10),
+                        maxTableCells: parseInt(document.getElementById('cfg_maxTableCells').value, 10),
+                        maxXmlElements: parseInt(document.getElementById('cfg_maxXmlElements').value, 10),
+                        maxRepeatedContent: parseInt(document.getElementById('cfg_maxRepeatedContent').value, 10)
                     },
                     ocrConfig: {
+                        language: document.getElementById('cfg_ocrLanguage').value || undefined,
                         preserveLayout: document.getElementById('cfg_ocrPreserveLayout').checked,
                         timeout: {
                             autoTerminate: parseInt(document.getElementById('cfg_ocrAutoTerminate').value, 10) * 1000,
@@ -5293,7 +5775,78 @@
             if (fileTypeHintEl) {
                 fileTypeHintEl.addEventListener('change', () => applyParserFormatFilter());
             }
+            function toggleParserConfigExpansion() {
+                const container = document.getElementById('parser-config-container');
+                if (!container) return;
+                const wasCollapsed = container.classList.contains('is-collapsed');
+                container.classList.toggle('is-collapsed');
+                updateParserAdvancedToggle();
+                if (!wasCollapsed) {
+                    const header = container.closest('.config-group')?.querySelector('.config-group-header');
+                    if (header && header.getBoundingClientRect().top < 0) {
+                        header.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }
+                }
+            }
+
+            const advancedToggleBtn = document.getElementById('parser-advanced-toggle');
+            if (advancedToggleBtn) {
+                advancedToggleBtn.addEventListener('click', toggleParserConfigExpansion);
+            }
+
+            let parserResizeTimer = null;
+            const handleParserResize = () => {
+                if (parserResizeTimer) cancelAnimationFrame(parserResizeTimer);
+                parserResizeTimer = requestAnimationFrame(() => {
+                    updateParserAdvancedToggle();
+                });
+            };
+            window.addEventListener('resize', handleParserResize);
+            if (window.ResizeObserver) {
+                const pContainer = document.getElementById('parser-config-container');
+                if (pContainer) {
+                    new ResizeObserver(handleParserResize).observe(pContainer);
+                }
+            }
+
             applyParserFormatFilter();
+
+            // Toggle for Custom Style Map & Metadata Overrides card
+            function toggleOverridesCard() {
+                const card = document.getElementById('overrides-card');
+                const btn = document.getElementById('overrides-toggle-btn');
+                if (!card || !btn) return;
+                const wasCollapsed = card.classList.contains('is-collapsed');
+                card.classList.toggle('is-collapsed');
+                const isCollapsed = card.classList.contains('is-collapsed');
+
+                btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+                btn.querySelector('.toggle-text').textContent = isCollapsed ? 'Show Overrides' : 'Hide Overrides';
+
+                if (!wasCollapsed) {
+                    if (card.getBoundingClientRect().top < 0) {
+                        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }
+                }
+            }
+
+            const overridesToggleBtn = document.getElementById('overrides-toggle-btn');
+            if (overridesToggleBtn) {
+                overridesToggleBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleOverridesCard();
+                });
+            }
+            const overridesHeader = document.getElementById('overrides-card-header');
+            if (overridesHeader) {
+                overridesHeader.addEventListener('click', () => {
+                    toggleOverridesCard();
+                });
+            }
+            const overridesBottomBtn = document.getElementById('overrides-bottom-toggle-btn');
+            if (overridesBottomBtn) {
+                overridesBottomBtn.addEventListener('click', toggleOverridesCard);
+            }
 
             // Instant re-render for generator and format-specific settings
             ['generator', 'html', 'md', 'chunks', 'csv', 'tex', 'text'].forEach(key => {
@@ -5807,7 +6360,7 @@
                     document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('csv'));
                 }
             });
-            ['cfg_text_preserveLayout', 'cfg_text_renderNotes', 'cfg_text_newlineDelimiter'].forEach(id => {
+            ['cfg_text_preserveLayout', 'cfg_text_renderNotes', 'cfg_text_newlineDelimiter', 'cfg_text_pageSeparator'].forEach(id => {
                 document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('text'));
                 if (document.getElementById(id).type === 'text') {
                     document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('text'));
@@ -5924,7 +6477,8 @@
                             genConfig.textConfig = {
                                 preserveLayout: document.getElementById('cfg_text_preserveLayout').checked,
                                 renderNotes: document.getElementById('cfg_text_renderNotes').checked,
-                                newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n')
+                                newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n'),
+                                pageSeparator: document.getElementById('cfg_text_pageSeparator').value.replace(/\\n/g, '\n')
                             };
                         } else if (format === 'tex') {
                             genConfig.texConfig = readTexPanelConfig();
