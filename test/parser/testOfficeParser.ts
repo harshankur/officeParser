@@ -3608,6 +3608,21 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('tagged_lists parse', false, 'parsed', e?.message || String(e));
     }
 
+    // --- pdf.js in a separate process and in this one read the same AST, fixture by fixture ---
+    try {
+        const differ: string[] = [];
+        const fixtures = [getFilePath('pdf'), ...fs.readdirSync(pdfDir).filter(f => f.endsWith('.pdf') && f !== 'encrypted.pdf').sort().map(f => path.join(pdfDir, f))];
+        const shape = (ast: any) => JSON.stringify({ content: ast.content, metadata: ast.metadata, auxiliary: ast.auxiliary, attachments: ast.attachments.map((a: any) => [a.name, a.mimeType, a.data.length]) });
+        for (const file of fixtures) {
+            const separate = await OfficeParser.parseOffice(file, { ocr: false, extractAttachments: true });
+            const here = await OfficeParser.parseOffice(file, { ocr: false, extractAttachments: true, pdfParserConfig: { separateProcess: false } });
+            if (shape(separate) !== shape(here)) differ.push(path.basename(file));
+        }
+        add('Separate process and in-process parses read the same AST', differ.length === 0, `${fixtures.length} identical`, differ.join(', ') || `${fixtures.length} identical`);
+    } catch (e: any) {
+        add('Separate process and in-process parses read the same AST', false, 'parsed', e?.message || String(e));
+    }
+
     // --- encrypted fixture: password handling (top-level password/onPassword, shared with OOXML/ODF) ---
     const encPath = path.join(pdfDir, 'encrypted.pdf');
     try {

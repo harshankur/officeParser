@@ -146,7 +146,7 @@ export enum OfficeWarningType {
     PDF_NO_TEXT_EXTRACTED = 'PDF_NO_TEXT_EXTRACTED',
     /** A PDF's bookmark outline was cut short by the depth/size cap or could not be read; `ast.auxiliary.outline` holds only what was recovered */
     PDF_OUTLINE_TRUNCATED = 'PDF_OUTLINE_TRUNCATED',
-    /** A PDF produced more text items or drawing operators than `pdfParserConfig.maxTextItems` / `maxOperators` allow; the rest of it was not read */
+    /** A PDF passed one of its content limits, which the message names: past `pdfParserConfig.maxTextItems` or `maxTimeMs` the rest of it was not read; past `maxOperators` its images, text colors and font styles from that page on were not (its text was) */
     PDF_CONTENT_LIMIT_EXCEEDED = 'PDF_CONTENT_LIMIT_EXCEEDED',
     /** pdf.js could not start in a separate process (see `pdfParserConfig.separateProcess`), so it runs in this one */
     PDF_SEPARATE_PROCESS_UNAVAILABLE = 'PDF_SEPARATE_PROCESS_UNAVAILABLE',
@@ -621,16 +621,20 @@ export interface PdfParserConfig {
      * nested forms can ask for millions of text items (2.5 KB, seven forms deep, ended the process out
      * of memory). Past the limit, the page keeps the text read so far, the rest of the document is not
      * read, and a `PDF_CONTENT_LIMIT_EXCEEDED` warning is raised. The allowance per byte keeps large
-     * documents whole; raise the base for a small file that legitimately holds more.
+     * documents whole; raise the base for a small file that legitimately holds more. `Infinity` is no
+     * limit; a negative or non-numeric value is reported (`INVALID_CONFIG_VALUE`) and the default used.
      *
      * Default is 20000.
      */
     maxTextItems?: number;
     /**
-     * Base of the drawing operators pdf.js may read from one PDF (for fonts, images and text color);
-     * the limit is this plus four per byte of the file. Nested forms that draw only shapes multiply
-     * operators as text items multiply (see `maxTextItems`). Past the limit the rest of the document
-     * is not read, with a `PDF_CONTENT_LIMIT_EXCEEDED` warning.
+     * Base of the drawing operators kept from one PDF (for images, text color and font styles); the
+     * limit is this plus four per byte of the file. Only what is kept counts: paths, which are not,
+     * cost nothing, so a drawing of thousands of shapes is read whole, and a shown string counts once
+     * more for each 64 glyphs it holds. Nested forms multiply operators as they multiply text items
+     * (see `maxTextItems`). Past the limit no more operators are read: from that page on, the
+     * document's images, text colors and font styles are missing, its text is still read, and a
+     * `PDF_CONTENT_LIMIT_EXCEEDED` warning is raised. `Infinity` is no limit.
      *
      * Default is 250000.
      */
@@ -640,19 +644,25 @@ export interface PdfParserConfig {
      * one per 32 bytes of the file. pdf.js builds every annotation a page lists, and pages may all list
      * one shared array: 58 KB of 300 pages sharing 3,000 annotations ran the process out of memory.
      * Past the limit the rest of the document's links and highlights are not read (its text is), with
-     * an `ANNOTATION_EXTRACTION_FAILED` warning.
+     * an `ANNOTATION_EXTRACTION_FAILED` warning. `Infinity` is no limit.
      *
      * Default is 10000.
      */
     maxAnnotations?: number;
     /**
-     * Base of the time, in ms, pdf.js may spend reading one PDF; the limit is this plus 20 ms per KB of
-     * the file. Every request counts: text, operators, annotations, the outline, metadata, form fields,
-     * and each link's and bookmark's destination. pdf.js reads a form XObject again at every use and drops text it places off the page,
-     * so 1.8 KB drawing one 1 MB string off the page a few hundred times kept pdf.js working for minutes
-     * with nothing for the other limits to count. Past the limit, the rest of the document is not read,
-     * with a `PDF_CONTENT_LIMIT_EXCEEDED` warning. pdf.js in a separate process (see `separateProcess`)
-     * is stopped when the time runs out; pdf.js in this process finishes the request it is on.
+     * Base of the CPU time, in ms, the separate pdf.js process (see `separateProcess`) may spend reading
+     * one PDF; the limit is this plus 20 ms per KB of the file. pdf.js reads a form XObject again at
+     * every use and drops text it places off the page, so 1.8 KB drawing one 1 MB string off the page a
+     * few hundred times kept pdf.js working for minutes with nothing for the other limits to count.
+     * It is the process's CPU time, not the time passed: a busy host, many parses at once or a loaded
+     * machine slow a document down without costing it any of its budget, so they never cut it short.
+     * Past the limit the process is ended at once, the rest of the document is not read, and a
+     * `PDF_CONTENT_LIMIT_EXCEEDED` warning is raised. `Infinity` is no limit.
+     *
+     * pdf.js in this process (`separateProcess: false`, or where no process can start) has no time
+     * limit: it shares this thread with every other parse and whatever else the host does, so no
+     * measure of time is the document's own, and any would cut documents short when the host is busy.
+     * The other limits still apply there, and `abortSignal` stops pdf.js at its next time slice.
      *
      * Default is 5000.
      */
@@ -662,18 +672,23 @@ export interface PdfParserConfig {
      * 100 KB file can hold a stream that inflates to a string pdf.js turns into gigabytes before any of
      * it reaches the parser: in this process that ends the host with a fatal out-of-memory error no
      * caller can catch. In its own process, under `processMemoryMb`, it ends that process instead and
-     * the parse rejects with `PDF_PROCESS_FAILED`. Starting the process costs about a tenth of a second
-     * (it is kept for the next parse). When a process cannot start (a runtime that cannot run its own
-     * executable as Node), pdf.js runs in this one with a `PDF_SEPARATE_PROCESS_UNAVAILABLE` warning; it also
-     * runs here, without one, when this is false or a worker is preloaded as `globalThis.pdfjsWorker`. The browser runs
-     * pdf.js in a Web Worker regardless.
+     * the parse rejects with `PDF_PROCESS_FAILED`. Starting a process costs about a tenth of a second,
+     * so processes are kept for the next parse: at most one per CPU (`os.availableParallelism()`), each
+     * reading one document at a time, a parse finding them all busy waiting for one (or until its
+     * `abortSignal` fires). They end when the host exits. When a process cannot start (a runtime that
+     * cannot run its own executable as Node), pdf.js runs in this one with a
+     * `PDF_SEPARATE_PROCESS_UNAVAILABLE` warning; it also runs here, without one, when this is false or
+     * the caller preloaded a worker as `globalThis.pdfjsWorker`. The browser runs pdf.js in a Web
+     * Worker regardless.
      *
      * Default is true.
      */
     separateProcess?: boolean;
     /**
      * The heap, in MB, the separate pdf.js process may use (see `separateProcess`). Past it the parse
-     * rejects with `PDF_PROCESS_FAILED`; raise it for PDFs that legitimately need more.
+     * rejects with `PDF_PROCESS_FAILED`; raise it for PDFs that legitimately need more. A value below
+     * 64 (too little for Node to start) or not a number is reported (`INVALID_CONFIG_VALUE`) and the
+     * default used.
      *
      * Default is 1024.
      */

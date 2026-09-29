@@ -3106,6 +3106,7 @@ async function parserHardeningTests() {
     started = Date.now();
     const outlined = await warned(deepOutline, 'pdf', { pdfParserConfig: { maxTimeMs: 200 } });
     check('pdf: bookmarks naming pages deep in a long page tree are resolved within maxTimeMs', !outlined.error && Date.now() - started < 12_000 && outlined.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${Date.now() - started}ms ${deepOutline.length} bytes ${outlined.codes} ${outlined.error}`);
+    await pdfProcessTests({ pdfFrom, flate, pdfForms, drawnOften, parseQuiet, files });
 
     // Tables write within bounds however ragged or spanned: rows padded to the widest (a 4 KB DOCX,
     // 100 million positions), a staircase of rows each spanning a thousand below (a 1.5 KB EPUB, 500 MB
@@ -3639,6 +3640,199 @@ async function parserHardeningTests() {
     let deepList: any = { type: 'list', metadata: { listType: 'unordered' }, children: Array(200_000).fill({ type: 'text', text: 'abcdef', bounds: { x: 10, y: 10, width: 36, height: 10 } }) };
     for (let i = 1; i < 1000; i++) deepList = { type: 'list', metadata: { listType: 'unordered' }, children: [deepList] };
     await timed('text: lists nested 1,000 deep over 200,000 placed runs are laid out', () => OfficeGenerator.generate({ ...astWith([{ type: 'page', metadata: { pageWidth: 600, pageHeight: 800 }, children: [deepList] }]), type: 'pdf' } as any, 'text', { onWarning: () => {} } as any));
+}
+
+/**
+ * The separate pdf.js processes and a document's budgets: a parse's abort signal reaches only that
+ * parse, a parse that ended stops reading, the time budget charges the process's CPU time (a busy
+ * host cuts nothing short), processes are pooled and end with the host, a parse in this process
+ * leaves the next in a separate one, budget options are checked, and a drawing's operators never cost
+ * the document its text.
+ */
+async function pdfProcessTests(h: {
+    pdfFrom: (objects: (string | Buffer)[]) => Buffer;
+    flate: (content: Buffer, dict?: string) => Buffer;
+    pdfForms: (depth: number, leaf: string) => Buffer;
+    drawnOften: Buffer;
+    parseQuiet: (buffer: Buffer, fileType: string, extra?: object) => Promise<{ ast: OfficeParserAST | undefined; error: string }>;
+    files: string;
+}) {
+    const { pdfFrom, flate, pdfForms, drawnOften, parseQuiet, files } = h;
+    const read = async (buffer: Buffer, extra: object = {}) => {
+        const warnings: { code: string; message: string }[] = [];
+        const result = await parseQuiet(buffer, 'pdf', { ...extra, onWarning: (issue: any) => warnings.push({ code: issue.code, message: issue.message }) });
+        const text = (result.ast?.content ?? []).map((p: any) => p.text).join('\n');
+        return { ...result, warnings, codes: warnings.map(w => w.code), pages: result.ast?.content.length ?? 0, text };
+    };
+    const named = (warnings: { code: string; message: string }[], limit: string) => warnings.some(w => w.code === 'PDF_CONTENT_LIMIT_EXCEEDED' && w.message.includes(`pdfParserConfig.${limit}`));
+    // Pages of notes, 50 lines each; with `drawing`, a first page stamping one symbol of 60 strokes 3,000 times (a plan).
+    const notes = (pages: number, drawing: boolean) => {
+        const objs: (string | Buffer)[] = ['<< /Type /Catalog /Pages 2 0 R >>', '', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+        const kids: number[] = [];
+        if (drawing) {
+            let symbol = '';
+            for (let i = 0; i < 60; i++) symbol += `${(0.2 + (i % 5) * 0.1).toFixed(1)} w ${(i % 3) / 2} ${(i % 4) / 3} ${(i % 7) / 6} RG ${i % 10} ${Math.floor(i / 10)} m ${(i * 7) % 10} ${(i * 3) % 10} l S\n`;
+            let plan = 'BT /F1 14 Tf 40 800 Td (Floor plan) Tj ET\n';
+            for (let k = 0; k < 3000; k++) plan += `q 1 0 0 1 ${20 + (k % 60) * 9} ${40 + Math.floor(k / 60) * 14} cm /S Do Q\n`;
+            objs.push(flate(Buffer.from(symbol), '/Type /XObject /Subtype /Form /BBox [0 0 10 10]'), flate(Buffer.from(plan)));
+            objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> /XObject << /S ${objs.length - 1} 0 R >> >> /Contents ${objs.length} 0 R >>`);
+            kids.push(objs.length);
+        }
+        for (let p = 1; p <= pages; p++) {
+            let body = 'BT /F1 10 Tf 12 TL 40 800 Td\n';
+            for (let l = 1; l <= 50; l++) body += `(Note ${p}.${l}: fixture schedule item for room ${p * 50 + l}.) Tj T*\n`;
+            objs.push(flate(Buffer.from(body + 'ET\n')));
+            objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${objs.length} 0 R >>`);
+            kids.push(objs.length);
+        }
+        objs[1] = `<< /Type /Pages /Kids [${kids.map(k => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`;
+        return pdfFrom(objs);
+    };
+    const testPdf = fs.readFileSync(path.join(files, 'test.pdf'));
+
+    // Operators: only those kept count, and running out of them stops operators, never text. A 21 KB
+    // plan stamping one symbol 3,000 times gave its first page, 19 characters, and "no text" warnings.
+    // (Separate processes first: pdf.js in this process comes last, at the end.)
+    const plan = notes(20, true);
+    const planned = await read(plan);
+    check('pdf: a plan of 3,000 symbols is read whole, its paths costing none of the operator budget', !planned.error && planned.pages === 21 && planned.text.includes('Note 20.50') && !planned.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED') && !planned.codes.includes('PDF_NO_TEXT_EXTRACTED'), `${planned.pages} pages ${planned.codes} ${planned.error}`);
+    const operatorChecks = async (separateProcess: boolean) => {
+        const where = separateProcess ? 'separate process' : 'in process';
+        const capped = await read(plan, { pdfParserConfig: { maxOperators: 0, separateProcess } });
+        check(`pdf: past maxOperators every later page's text is still read (${where})`, !capped.error && capped.pages === 21 && capped.text.includes('Note 20.50') && named(capped.warnings, 'maxOperators') && !capped.codes.includes('PDF_NO_TEXT_EXTRACTED'), `${capped.pages} pages ${capped.codes} ${capped.error}`);
+        // Read only for its fonts, a page's operator list stops once pdf.js has sent them: nested forms of
+        // shapes cost nothing more, in this process too, where pdf.js has no time limit.
+        let begun = Date.now();
+        const fontsOnly = await read(pdfForms(8, '0 0 1 1 re f'), { pdfParserConfig: { extractTextColor: false, separateProcess } });
+        check(`pdf: forms of shapes nested 8 deep, read for fonts only, stop once the fonts are known (${where})`, !fontsOnly.error && Date.now() - begun < 5000 && fontsOnly.text.includes('page'), `${Date.now() - begun}ms ${fontsOnly.codes} ${fontsOnly.error}`);
+        begun = Date.now();
+        const shapes = await read(pdfForms(8, '0 0 1 1 re f'), { pdfParserConfig: { separateProcess } });
+        check(`pdf: forms of shapes nested 8 deep stop at maxOperators, keeping the page's text (${where})`, !shapes.error && Date.now() - begun < 5000 && shapes.text.includes('page') && named(shapes.warnings, 'maxOperators'), `${Date.now() - begun}ms ${shapes.codes} ${shapes.error}`);
+    };
+    await operatorChecks(true);
+    const byText = await read(pdfForms(5, 'BT /F1 12 Tf 10 10 Td (xy) Tj ET'), { pdfParserConfig: { maxTextItems: 1 } });
+    const byTime = await read(drawnOften, { pdfParserConfig: { maxTimeMs: 200 } });
+    check('pdf: PDF_CONTENT_LIMIT_EXCEEDED names the limit that stopped the read', named(byText.warnings, 'maxTextItems') && !named(byText.warnings, 'maxTimeMs') && named(byTime.warnings, 'maxTimeMs') && !named(byTime.warnings, 'maxTextItems'), `${byText.warnings.map(w => w.message.slice(0, 80))} | ${byTime.warnings.map(w => w.message.slice(0, 80))}`);
+
+    // Budget options: Infinity (or past what a timer holds) is no limit, a number may be given as text,
+    // and anything else is reported and replaced by the default. Infinity made a timer of 1 ms, and
+    // every page after the third came back empty with no warning.
+    const nodeWarnings: string[] = [];
+    const onNodeWarning = (warning: Error) => nodeWarnings.push(warning.name);
+    process.on('warning', onNodeWarning);
+    try {
+        for (const [label, options] of [['maxTimeMs: Infinity', { maxTimeMs: Infinity }], ['maxTimeMs: 2^31', { maxTimeMs: 2 ** 31 }], ['maxTimeMs: 2^40', { maxTimeMs: 2 ** 40 }],
+            ['maxTextItems: "20000" (text)', { maxTextItems: '20000' }], ['maxOperators and maxAnnotations: Infinity', { maxOperators: Infinity, maxAnnotations: Infinity }]] as const) {
+            const whole = await read(testPdf, { pdfParserConfig: options });
+            check(`pdf: ${label} reads the whole document, with no warning`, !whole.error && whole.pages === 8 && whole.codes.length === 0, `${whole.pages} pages ${whole.codes} ${whole.error}`);
+        }
+        for (const [key, value] of [['maxTimeMs', NaN], ['maxTimeMs', -1], ['maxTextItems', 'many'], ['maxOperators', null], ['maxAnnotations', NaN], ['processMemoryMb', 16]] as const) {
+            const replaced = await read(testPdf, { pdfParserConfig: { [key]: value } });
+            check(`pdf: ${key} of ${String(value)} is reported, and the default used`, !replaced.error && replaced.pages === 8 && replaced.codes.join() === 'INVALID_CONFIG_VALUE' && replaced.warnings[0].message.includes(`pdfParserConfig.${key}`), `${replaced.pages} pages ${replaced.codes} ${replaced.error}`);
+        }
+    } finally {
+        process.off('warning', onNodeWarning);
+    }
+    check('pdf: no budget makes a timer Node cannot hold', !nodeWarnings.includes('TimeoutOverflowWarning') && !nodeWarnings.includes('TimeoutNaNWarning'), nodeWarnings.join());
+
+    // An abort signal is the parse's alone. Left listening after the parse, one fired later and ended the
+    // process by then reading another parse's document, which came back with 12 of 400 pages; a signal
+    // shared by many parses gathered a listener each. (A memory limit of its own gives the two parses one
+    // process, the one the first hands to the second.)
+    const book = notes(150, false);
+    const controller = new AbortController();
+    const first = await parseQuiet(testPdf, 'pdf', { abortSignal: controller.signal, pdfParserConfig: { processMemoryMb: 700 } });
+    const { getEventListeners } = require('events') as typeof import('events');
+    const listening = getEventListeners(controller.signal, 'abort').length;
+    const second = read(book, { pdfParserConfig: { processMemoryMb: 700 } });
+    setTimeout(() => controller.abort(), 50);
+    const secondRead = await second;
+    check('pdf: a parse\'s abort signal, fired after it ended, cannot end the process a later parse is using', !first.error && listening === 0 && !secondRead.error && secondRead.pages === 150 && !secondRead.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${listening} listeners, ${secondRead.pages} pages ${secondRead.codes} ${secondRead.error}`);
+
+    // A parse that ended stops reading: an aborted parse went on asking its ended process until the time
+    // budget ran out, then reported the limit to a parse that had already rejected.
+    const late: string[] = [];
+    const abortedEarly = await parseQuiet(drawnOften, 'pdf', { abortSignal: AbortSignal.timeout(300), pdfParserConfig: { maxTimeMs: 1500 }, onWarning: (w: any) => late.push(w.code) });
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    const nextRead = await read(testPdf);
+    check('pdf: an aborted parse reports nothing after it rejects, and the next parse reads whole', /abort/i.test(abortedEarly.error) && late.length === 0 && !nextRead.error && nextRead.pages === 8, `${abortedEarly.error} ${late} ${nextRead.pages}`);
+
+    // The time budget is the process's CPU time: a host too busy to read the process's replies (here,
+    // stalled most of the time) slows a document without spending its budget. Charged the time passed,
+    // 115 of 150 ordinary parses at once came back cut short.
+    const small = notes(20, false);
+    const stall = setInterval(() => { const until = Date.now() + 300; while (Date.now() < until) { /* the host is busy */ } }, 50);
+    let stalled: Awaited<ReturnType<typeof read>>;
+    try { stalled = await read(small, { pdfParserConfig: { maxTimeMs: 1000 } }); } finally { clearInterval(stall); }
+    check('pdf: a host too busy to read the process\'s replies cuts no document short', !stalled.error && stalled.pages === 20 && !stalled.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${stalled.pages} pages ${stalled.codes} ${stalled.error}`);
+
+    // Processes are pooled, one per CPU: a process per parse started 101 for 100 parses at once.
+    const childProcess = require('child_process') as typeof import('child_process');
+    const { syncBuiltinESMExports } = require('module') as typeof import('module');
+    const spawn = childProcess.spawn;
+    let running = 0, most = 0;
+    (childProcess as any).spawn = (...args: any[]) => {
+        const child = (spawn as any).apply(childProcess, args);
+        running++;
+        most = Math.max(most, running);
+        child.once('exit', () => { running--; });
+        return child;
+    };
+    syncBuiltinESMExports();
+    try {
+        const cpus = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+        const many = await Promise.all(Array.from({ length: cpus * 3 }, () => read(testPdf, { pdfParserConfig: { processMemoryMb: 600 } })));
+        check('pdf: parses at once share at most one process per CPU, and each reads whole', most > 0 && most <= cpus && many.every(r => !r.error && r.pages === 8 && !r.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED')), `${most} processes for ${cpus} CPUs, pages ${[...new Set(many.map(r => r.pages))]}`);
+    } finally {
+        (childProcess as any).spawn = spawn;
+        syncBuiltinESMExports();
+    }
+
+    // A process reading a document ends with its host: one busy drawing a long string, which it does
+    // not look up from, outlived its parent by seconds (a 100 MB string, 8 seconds).
+    const script = path.join(os.tmpdir(), `officeparser-pdf-exit-${process.pid}.ts`);
+    const pdfFile = path.join(os.tmpdir(), `officeparser-pdf-exit-${process.pid}.pdf`);
+    fs.writeFileSync(pdfFile, pdfFrom([
+        '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+        flate(Buffer.concat([Buffer.from('BT /F1 10 Tf 0 50 Td ('), Buffer.alloc(20_000_000, 'a'), Buffer.from(') Tj ET\n')])), '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ]));
+    fs.writeFileSync(script, [
+        `const childProcess = require('child_process');`,
+        `const spawn = childProcess.spawn;`,
+        `childProcess.spawn = (...args: any[]) => { const child = spawn.apply(childProcess, args); console.log('PID ' + child.pid); setTimeout(() => process.exit(0), 800); return child; };`,
+        `require('module').syncBuiltinESMExports();`,
+        `const { OfficeParser } = require(${JSON.stringify(path.join(__dirname, '..', '..', 'src', 'OfficeParser'))});`,
+        `OfficeParser.parseOffice(${JSON.stringify(pdfFile)}, { onWarning: () => {}, pdfParserConfig: { maxTimeMs: 60000 } }).catch(() => {});`,
+    ].join('\n'));
+    let pids: number[] = [];
+    try {
+        const out = childProcess.execFileSync(process.execPath, [...process.execArgv, script], { encoding: 'utf8', timeout: 60_000 });
+        pids = [...out.matchAll(/PID (\d+)/g)].map(m => Number(m[1]));
+    } catch { /* checked below */ } finally {
+        fs.rmSync(script, { force: true });
+        fs.rmSync(pdfFile, { force: true });
+    }
+    // Ended as its host exits, it is gone at once, not when it next looks up from its work.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const survivors = pids.filter(pid => { try { process.kill(pid, 0); return true; } catch { return false; } });
+    for (const pid of survivors) { try { process.kill(pid); } catch { /* gone */ } }
+    check('pdf: a pdf.js process at work ends when its host exits', pids.length > 0 && survivors.length === 0, `${pids.length} started, ${survivors.length} still running`);
+
+    // pdf.js in this process: operators still stop without costing text, and nested shapes read for
+    // fonts only stop once the fonts are known.
+    await operatorChecks(false);
+    // Where no process can start, pdf.js runs here with a warning; and having run here, it leaves the
+    // next parse in a separate process (pdf.js's own worker sets the global a caller's preloaded worker
+    // is read from, and every later parse ran here, without its memory or time limit).
+    const execPath = process.execPath;
+    process.execPath = path.join(os.tmpdir(), 'officeparser-no-such-node');
+    let fallback: Awaited<ReturnType<typeof read>>;
+    try { fallback = await read(testPdf, { pdfParserConfig: { processMemoryMb: 500 } }); } finally { process.execPath = execPath; }
+    check('pdf: where no process can start, pdf.js runs here with PDF_SEPARATE_PROCESS_UNAVAILABLE', !fallback.error && fallback.pages === 8 && fallback.codes.join() === 'PDF_SEPARATE_PROCESS_UNAVAILABLE', `${fallback.pages} pages ${fallback.codes} ${fallback.error}`);
+    const begun = Date.now();
+    const afterHere = await read(drawnOften, { pdfParserConfig: { maxTimeMs: 200 } });
+    check('pdf: after pdf.js ran in this process, the next parse still runs it in a separate one', !afterHere.error && Date.now() - begun < 4000 && named(afterHere.warnings, 'maxTimeMs'), `${Date.now() - begun}ms ${afterHere.codes} ${afterHere.error}`);
 }
 
 async function main() {

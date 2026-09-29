@@ -129,4 +129,9 @@ export interface PdfLayoutConfig {
     /** Run pdf.js's worker in a separate process (Node), under `processMemoryMb` of heap. */
     separateProcess: boolean;
     processMemoryMb: number;
+    /** The bases of the document's budgets (see PdfWorkBudget): at least 0, Infinity for no limit. */
+    maxTextItems: number;
+    maxOperators: number;
+    maxAnnotations: number;
+    maxTimeMs: number;
 }
