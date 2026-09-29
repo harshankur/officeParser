@@ -593,6 +593,67 @@ async function markdownTests() {
         await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'md' } as any);
         check(`md: ${label} parse in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
     }
+    // A paragraph is read as one text across its lines (links, emphasis and elements may run from one
+    // line to the next), and emphasis runs are paired once it is read: lines that each open something
+    // no later line closes, delimiter runs of every kind and length, runs the rule of three or the
+    // second pass decide, math beside emphasis, and the other constructs 8.1.0's review touched, all
+    // cost time linear in the text. (A backtick run per paragraph line was matched by a lazy pattern
+    // that rejoined display math lines: 1 s for 160,000 backticks, 10 s here.)
+    for (const [label, text] of [
+        ['a paragraph line of backticks and one closer short', `a ${'`'.repeat(500_000)}x${'`'.repeat(499_999)}`],
+        ['unclosed links across lines', '[a\n'.repeat(60_000)], ['unclosed link targets across lines', '[a](\n'.repeat(60_000)],
+        ['unclosed emphasis across lines', '*a\n'.repeat(60_000)], ['unclosed underscores across lines', '_a\n'.repeat(60_000)],
+        ['unclosed elements across lines', '<b>a\n'.repeat(50_000)], ['unclosed underlines across lines', '<u>a\n'.repeat(50_000)],
+        ['unclosed spans across lines', '<span style="x">a\n'.repeat(30_000)], ['unknown references across lines', '[a] [b\nc] '.repeat(40_000)],
+        ['every kind of delimiter run', '*a _b ~~c ==d '.repeat(30_000)], ['runs the rule of three decides', '*a**b'.repeat(60_000)],
+        ['runs between punctuation', '.**.*'.repeat(60_000)], ['runs only the second pass pairs', 'a*"b" '.repeat(50_000)],
+        ['closers of every length', Array.from({ length: 2_000 }, (_, i) => `*${'*'.repeat(i % 50)}a`).join(' ')],
+        ['math beside emphasis', '_a $b_ c$ '.repeat(40_000)], ['emphasis in math never closed', '*x $y* '.repeat(50_000)],
+        ['hard and soft breaks', 'a  \nb\\\nc \n'.repeat(50_000)],
+        ['definitions with targets on the next line', '[a]:\n'.repeat(80_000)], ['definitions with titles on the next line', '[a]: x\n"t\n'.repeat(60_000)],
+        ['front matter of one long list', `---\nk:\n${'  - a\n'.repeat(100_000)}---\n\nx`],
+        ['a heading of closing hashes', `# a${' #'.repeat(100_000)}`], ['a heading of a hash run', `# ${'#'.repeat(200_000)}x`],
+        ['wrapper tags standing alone', '<div align="center">\n\n'.repeat(40_000) + '</div>\n\n'.repeat(40_000)],
+        ['unclosed fenced-div admonitions', '::: {.note}\n'.repeat(25_000)],
+        ['a fenced-div class of 200,000 word characters', `::: {.x${'y'.repeat(200_000)}\nb\n:::`], ['a front matter item of spaces', `---\nk:\n  -${' '.repeat(200_000)}x\n---\n\nb`],
+        ['uppercase tags', '<IMG SRC="a.png"><B>x'.repeat(40_000)],
+    ] as const) {
+        const started = Date.now();
+        await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'md' } as any);
+        check(`md: ${label} parse in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+    }
+    // Abbreviations are found by an automaton built once, not a pattern of every definition tried at every
+    // place and built for every text (10,000 definitions over 10,000 lines took 12 seconds), nor by
+    // trying keys that share their start word by word (a key of 400 words at each of 100,000 places).
+    for (const [label, text] of [
+        ['10,000 abbreviations over 10,000 paragraphs', `${Array.from({ length: 10_000 }, (_, i) => `line K${i}x and K${(i * 7) % 10_000}x`).join('\n\n')}\n\n${Array.from({ length: 10_000 }, (_, i) => `*[K${i}x]: t${i}`).join('\n')}`],
+        ['abbreviations sharing their start', `${'a '.repeat(200_000)}\n\n${Array.from({ length: 400 }, (_, i) => `*[${'a '.repeat(i + 1).trim()}.]: t`).join('\n')}`],
+    ] as const) {
+        const started = Date.now();
+        await OfficeParser.parseOffice(Buffer.from(text), { fileType: 'md' } as any);
+        check(`md: ${label} parse in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+    }
+    // Text written as Markdown is escaped in slices: a 20 MB run was escaped a character at a time,
+    // which took a second and 700 MB of heap (140 MB ran out of it).
+    {
+        const bigRun = astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'word '.repeat(4_000_000) }] }] as any);
+        const heapBefore = process.memoryUsage().heapUsed;
+        const started = Date.now();
+        const written = (await OfficeGenerator.generate(bigRun, 'md', { onWarning: () => { } } as any)).value as string;
+        const grew = process.memoryUsage().heapUsed - heapBefore;
+        check('md: a 20 MB run is escaped in linear time and bounded memory', written.length >= 19_000_000 && Date.now() - started < 3000 && grew < 300_000_000, `${Date.now() - started}ms, ${Math.round(grew / 1e6)} MB`);
+    }
+    // The writer's checks per run (edge punctuation, the neighbour's first character, a heading's
+    // closing hashes) look at a bounded part of each run.
+    for (const [label, content] of [
+        ['emphasis at punctuation next to words', [{ type: 'paragraph', children: Array.from({ length: 100_000 }, (_, i) => ({ type: 'text', text: i % 2 ? 'w' : `.${i}.`, formatting: i % 2 ? undefined : { bold: true } })) }]],
+        ['a heading ending in a hash run', [{ type: 'heading', metadata: { level: 1 }, children: [{ type: 'text', text: `a ${'#'.repeat(200_000)}` }] }]],
+        ['a heading of line breaks', [{ type: 'heading', metadata: { level: 1 }, children: Array.from({ length: 100_000 }, (_, i) => (i % 2 ? { type: 'break', metadata: { breakType: 'textWrapping' } } : { type: 'text', text: `h${i}` })) }]],
+    ] as const) {
+        const started = Date.now();
+        await OfficeGenerator.generate(astWith(content as any), 'md', { onWarning: () => { } } as any);
+        check(`md: ${label} are written in linear time`, Date.now() - started < 5000, `${Date.now() - started}ms`);
+    }
     // A sheet's cell coordinates cannot make a grid no memory holds: one cell at Excel's last position,
     // cells along a diagonal (each row and column its own), or a span of a billion columns. Every
     // writer fills the grid between cells, and HTML draws all of it.
