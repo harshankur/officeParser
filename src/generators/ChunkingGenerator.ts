@@ -497,27 +497,13 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             return;
         }
 
-        // 'row' strategy: extract header row(s) and chunk remaining rows
-        const rows = node.children; // Each child is a 'row' node
-        const headerRows: OfficeContentNode[] = [];
-        const dataRows: OfficeContentNode[] = [];
-
-        // Heuristic: first row is the header
-        if (rows.length > 0) {
-            const firstRow = rows[0];
-            const override = await this.handleOnNode(firstRow);
-            if (override !== false) {
-                // If overridden, we use the string as header, but we still treat it as a header
-                headerRows.push(firstRow); // We still add the node to get metadata later if needed, but renderRowsAsText will handle it?
-                // Actually renderRowsAsText needs to be updated too.
-            }
-
-            for (let i = 1; i < rows.length; i++) {
-                dataRows.push(rows[i]);
-            }
-        }
-
-        const headerText = await this.renderRowsAsText(headerRows);
+        // 'row' strategy: the first row is the header, which heads the chunks of the rows after it. Each
+        // row's text is made once (onNode asked once): made again to write a chunk after it was measured,
+        // a note in a data row was taken as already written, and was in no chunk.
+        const rows = node.children;
+        const headerOverride = await this.handleOnNode(rows[0]);
+        const headerText = headerOverride === false ? '' : typeof headerOverride === 'string' ? headerOverride : this.rowText(rows[0]);
+        const dataRows = rows.slice(1);
         const baseMetadata = {
             sourceType: this.ast.type,
             closestHeading: contextStack.heading,
@@ -540,12 +526,12 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         }
 
         // Group data rows into chunks
-        let currentRows: OfficeContentNode[] = [];
+        let currentRows: string[] = [];
         let currentSize = repeatedHeader ? measure(repeatedHeader) : 0;
 
         const flushCurrentRows = async () => {
             if (currentRows.length === 0) return;
-            const rowText = await this.renderRowsAsText(currentRows);
+            const rowText = currentRows.join('\n');
             const chunkText = repeatedHeader ? `${repeatedHeader}\n${rowText}` : rowText;
             if (chunkText.trim()) {
                 emitted = true;
@@ -567,7 +553,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             const override = await this.handleOnNode(row);
             if (override === false) continue;
 
-            const rowText = typeof override === 'string' ? override : await this.renderRowsAsText([row]);
+            const rowText = typeof override === 'string' ? override : this.rowText(row);
             const rowSize = measure(rowText);
             if (currentSize + rowSize > maxChunkSize && currentRows.length > 0) {
                 await flushCurrentRows();
@@ -580,7 +566,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
                 emitted = true;
                 continue;
             }
-            currentRows.push(row);
+            currentRows.push(rowText);
             currentSize += rowSize;
         }
         await flushCurrentRows();
@@ -594,29 +580,13 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
     }
 
     /**
-     * Renders a list of row nodes as a pipe-separated text string.
+     * A row as a line of text, its cells separated by pipes: each cell's text as any content's (its runs
+     * joined as written, its pictures' alt text and its notes included), on one line.
      */
-    private async renderRowsAsText(rows: OfficeContentNode[]): Promise<string> {
-        const renderedRows: string[] = [];
-        for (const row of rows) {
-            const override = await this.handleOnNode(row);
-            if (override === false) continue;
-            if (typeof override === 'string') {
-                renderedRows.push(override);
-                continue;
-            }
-
-            if (!row.children) {
-                renderedRows.push(row.text ?? '');
-                continue;
-            }
-
-            // A cell's text as any content's (its runs joined as written, its pictures' alt text and
-            // its notes included), on one line.
-            const cells = row.children.map(cell => collectNodeText(cell, this.textContext).replace(/\n/g, ' ').trim());
-            renderedRows.push(`| ${cells.join(' | ')} |`);
-        }
-        return renderedRows.join('\n');
+    private rowText(row: OfficeContentNode): string {
+        if (!row.children) return row.text ?? '';
+        const cells = row.children.map(cell => collectNodeText(cell, this.textContext).replace(/\n/g, ' ').trim());
+        return `| ${cells.join(' | ')} |`;
     }
 
     // ─── Strategy 3: Semantic ─────────────────────────────────────────────────

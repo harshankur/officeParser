@@ -1441,6 +1441,12 @@ async function testGeneratedOutput(): Promise<void> {
     }
     const preThenParagraph = await parseHtml('<pre>code one</pre><p>Para after</p>');
     assert.strictEqual((await preThenParagraph.to('text')).value, 'code one\nPara after', 'Generated output: a code block ends its line in plain text');
+    // A note in a table's data row reaches a chunk under the row strategy: rows were rendered to measure
+    // them and again to write them, and the first rendering took the note as written.
+    for (const row of ['| h1 | h2 |\n|---|---|\n| alpha | 42[^n] |', '| h1 | h2[^n] |\n|---|---|\n| alpha | 42 |']) {
+        const noteChunks = (await (await parseMd(`${row}\n\n[^n]: The footnote text.\n`)).to('chunks')).value as any[];
+        assert.ok(noteChunks.some(c => c.text.includes('The footnote text.')), `Generated output: a table note reaches a chunk (${row.split('\n')[0]})`);
+    }
 
     console.log('  Generated output: All assertions passed ✓');
 }
