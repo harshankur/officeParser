@@ -2357,6 +2357,17 @@ async function latexParserTests() {
         const r = await parse(src);
         check(`latex parser: ${label} parses in linear time`, r.ms < TIME_BUDGET_MS, `${r.ms}ms`);
     }
+    // A .bib database is read in one pass, however its entries are broken, joined or long.
+    for (const [label, bib] of [
+        ['100k unclosed entries', '@book{k,title={'.repeat(100000)],
+        ['300k bare @', '@'.repeat(300000)],
+        ['20k entries under \\nocite{*}', Array.from({ length: 20000 }, (_, k) => `@misc{k${k}, author = {A and B and C}, title = {T${k}}}`).join('\n')],
+        ['an author list of 100k names', `@misc{x, author = {${'A B and '.repeat(100000)}Z}}`],
+        ['100k # joins', `@misc{x, title = ${'a # '.repeat(100000)}b}`],
+    ] as const) {
+        const r = await parse(zip({ 'main.tex': '\\documentclass{article}\\begin{document}\\nocite{*}\\cite{x}\\bibliography{refs}\\bibliography{refs}\\end{document}', 'refs.bib': bib }));
+        check(`latex parser: a .bib of ${label} is read in linear time`, r.ms < TIME_BUDGET_MS && r.json.length < 20 * SIZE_BUDGET, `${r.ms}ms ${r.json.length}`);
+    }
     // Picking a project's main file reads every file once, whatever the files include.
     const manyFiles = Object.fromEntries(Array.from({ length: 3000 }, (_, k) => [`ch/${k}.tex`, `\\input{ch/${k + 1}}\\include{${k + 2}}\\subfile{../x}\n% \\documentclass{article}\n`]));
     const mainPick = await parse(zip({ ...manyFiles, 'main.tex': '\\input{preamble}\\begin{document}Body\\end{document}', 'preamble.tex': '\\documentclass{article}' }));

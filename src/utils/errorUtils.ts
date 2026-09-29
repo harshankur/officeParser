@@ -149,6 +149,11 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
         }
         return parts.join(' ');
     },
+    [OfficeWarningType.CITATIONS_NOT_RESOLVED]: (info: { keys: string[]; more: number }) => {
+        const n = info.keys.length + info.more;
+        const named = info.keys.map(k => `'${k}'`).join(', ') + (info.more ? ` and ${info.more} more` : '');
+        return `The LaTeX output cites ${n === 1 ? 'a key' : `${n} keys`} (${named}) that ${n === 1 ? 'has' : 'have'} no entry in a bibliography it holds, so \\cite prints [?] for ${n === 1 ? 'it' : 'them'} until one is added: a \\bibliography{file} with a .bib file that has ${n === 1 ? 'it' : 'them'}, or a thebibliography list.`;
+    },
     [OfficeWarningType.LATEX_CONSTRUCT_NOT_INTERPRETED]: (info: { constructs: string[] }) => `The LaTeX input uses ${info.constructs.map(c => `'${c}'`).join(', ')}, which the parser does not interpret. Text inside ${info.constructs.length === 1 ? 'it' : 'them'} was kept where there was any; drawing environments (such as TikZ pictures) were omitted.`,
     [OfficeWarningType.LATEX_EXPANSION_LIMIT_REACHED]: (info: { limit: string }) => `The LaTeX input reached the ${info.limit} limit, which bounds how much work a document can demand; macros or included files past it were not expanded.`,
     [OfficeWarningType.LATEX_FILE_NOT_FOUND]: (info: { files: string[] }) => `The LaTeX input references ${info.files.length === 1 ? 'a file' : 'files'} the parser could not read (${info.files.map(f => `'${f}'`).join(', ')}). A .tex file holds only the files it carries in filecontents blocks; parse the project as a .zip (for example an Overleaf download) to include the others. Images were kept as references to their path.`

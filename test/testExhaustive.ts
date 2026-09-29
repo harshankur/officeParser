@@ -2090,8 +2090,9 @@ async function testLatexGeneration(): Promise<void> {
     assert.ok(tex.includes('\\rule{0.5\\linewidth}{0.5pt}'), 'TEX: thematic break -> rule');
     assert.ok(tex.includes('\\newunicodechar{\u2764}{\\ding{170}}') && tex.includes('\\usepackage{pifont}'), 'TEX: symbol fallback for a character the fonts lack');
     assert.ok(tex.includes('-{}-{}-{}-{}- not actually'), 'TEX: hyphen runs keep every hyphen');
-    // Only the remote image cannot be represented.
-    assert.deepStrictEqual([...new Set(warnings.map(w => w.code))], ['CONTENT_NOT_REPRESENTABLE'], 'TEX: only warning is the remote image');
+    // Only the remote image cannot be represented, and the citation has no bibliography to resolve it.
+    assert.deepStrictEqual([...new Set(warnings.map(w => w.code))], ['CONTENT_NOT_REPRESENTABLE', 'CITATIONS_NOT_RESOLVED'], 'TEX: only warnings are the remote image and the unresolved citation');
+    assert.strictEqual(warnings.find(w => w.code === 'CITATIONS_NOT_RESOLVED')?.message, `The LaTeX output cites a key ('smith2023') that has no entry in a bibliography it holds, so \\cite prints [?] for it until one is added: a \\bibliography{file} with a .bib file that has it, or a thebibliography list.`, 'TEX: CITATIONS_NOT_RESOLVED exact message');
     const live = liveLatex(tex).replace(/\\[{}]/g, '');
     assert.strictEqual((live.match(/\{/g) || []).length, (live.match(/\}/g) || []).length, 'TEX: braces balance outside verbatim/comments');
     assert.strictEqual((live.match(/\\begin\{/g) || []).length, (live.match(/\\end\{/g) || []).length, 'TEX: every \\begin has an \\end');
@@ -2804,6 +2805,38 @@ c &= d
     assert.deepStrictEqual(dialectWarnings.map(w => [w.code, w.details?.feature]), [['CONTENT_NOT_REPRESENTABLE', 'math commands no package the output loads defines (\\zork), each printed as its name']], 'TEX: the unknown math command is reported');
     const dialectAgain = (await (await OfficeParser.parseOffice(Buffer.from(dialectTex), { fileType: 'tex' } as any)).to('tex', { onWarning: () => {} } as any)).value as string;
     assert.strictEqual(dialectAgain, dialectTex, 'TEX round trip: the math definitions and rewritten macros are a fixed point');
+
+    // \bibliography and \printbibliography print the cited entries of the .bib database (the project's
+    // .bbl when it ships one, as compiling reads it); a key with no entry, or a database the parser
+    // cannot read, prints the key, and the file is reported.
+    const refsBib = '% refs\n@string{aw = "Addison-Wesley"}\n@book{knuth, author = {Knuth, Donald E.}, title = {The {\\TeX}book}, publisher = aw, year = 1984}\n'
+        + '@article{lamport, author = {Leslie Lamport and Frank Mittelbach and Michel Goossens}, title = {On Things}, journal = {J. Things}, year = {1994}}\n@comment{@book{fake, title={no}}}\n@misc(extra, title = "Extra", howpublished = "Online", year = 2001)\n';
+    const bibMain = (tail: string) => `\\documentclass{article}\\begin{document}See \\cite{knuth,lamport} and \\cite{missing}.\\nocite{extra}\n${tail}\\end{document}`;
+    // (A heading's generated id is not compared: the generator labels every heading.)
+    const bibParas = (a: any) => collectAllNodes(a).filter(n => n.type === 'heading' || n.type === 'list').map(n => [n.type, n.text, n.type === 'list' ? (n.metadata as any).anchorIds?.[0] : undefined]);
+    const bibProject = await texOf(Buffer.from(zipSync({ 'main.tex': strToU8(bibMain('\\bibliographystyle{plain}\\bibliography{refs}')), 'refs.bib': strToU8(refsBib) })));
+    const bibExpected = [['heading', 'References', undefined], ['list', 'Donald E. Knuth. The TeXbook. Addison-Wesley, 1984.', 'knuth'],
+        ['list', 'Leslie Lamport, Frank Mittelbach and Michel Goossens. On Things. J. Things, 1994.', 'lamport'], ['list', 'missing', 'missing'], ['list', 'Extra. Online, 2001.', 'extra']];
+    assert.deepStrictEqual([bibParas(bibProject.ast), bibProject.warnings.length], [bibExpected, 0], 'TEX parse: \\bibliography prints the cited entries of the .bib');
+    const bibLatex = await texOf(Buffer.from(zipSync({ 'main.tex': strToU8(bibMain('\\printbibliography[title={Works Cited}]').replace('\\begin{document}', '\\addbibresource{refs.bib}\\begin{document}')), 'refs.bib': strToU8(refsBib) })));
+    assert.deepStrictEqual(bibParas(bibLatex.ast), [['heading', 'Works Cited', undefined], ...bibExpected.slice(1)], 'TEX parse: biblatex \\printbibliography with a title');
+    const bibBbl = await texOf(Buffer.from(zipSync({ 'main.tex': strToU8(bibMain('\\bibliography{refs}')), 'main.bbl': strToU8('\\begin{thebibliography}{1}\n\\bibitem{knuth} From the bbl.\n\\end{thebibliography}\n') })));
+    assert.deepStrictEqual(bibParas(bibBbl.ast), [['heading', 'References', undefined], ['list', 'From the bbl.', 'knuth']], 'TEX parse: a project\'s .bbl is its bibliography');
+    const bibLone = await texOf(bibMain('\\bibliography{refs}'));
+    assert.deepStrictEqual([bibParas(bibLone.ast).map(p => p[1]), bibLone.warnings.map(w => w.code)], [['References', 'knuth', 'lamport', 'missing', 'extra'], ['LATEX_FILE_NOT_FOUND']], 'TEX parse: without its .bib, a bibliography lists the keys and the file is reported');
+    // The generator writes a bibliography as thebibliography, so the citations resolve; a citation with no
+    // entry is reported.
+    const bibWarnings: any[] = [];
+    const bibTex = (await bibProject.ast.to('tex', { onWarning: (w: any) => bibWarnings.push(w) } as any)).value as string;
+    assert.ok(/\\begin\{thebibliography\}\{9\}\n\\bibitem\{knuth\} Donald E\. Knuth\. \\textit\{The TeXbook\}\. Addison-Wesley, 1984\.\n\\bibitem\{lamport\}/.test(bibTex) && !bibTex.includes('\\section{References}') && !bibWarnings.length, 'TEX: a bibliography is written as thebibliography under its own heading');
+    assert.deepStrictEqual(bibParas(await OfficeParser.parseOffice(Buffer.from(bibTex), { fileType: 'tex' } as any)), bibExpected, 'TEX round trip: the bibliography parses back the same');
+    const worksCited = (await bibLatex.ast.to('tex')).value as string;
+    assert.ok(worksCited.includes('\\renewcommand{\\refname}{Works Cited}\n\\begin{thebibliography}'), 'TEX: a bibliography under another heading renames \\refname');
+    // beamer's and llncs' \institute: a line of the title block.
+    const institute = await texOf(String.raw`\documentclass{beamer}\title{T}\author{A \and B}\institute{Uni \and Lab}\begin{document}\begin{frame}\titlepage\end{frame}\end{document}`);
+    assert.deepStrictEqual([institute.ast.content[0].children!.map(c => [(c.metadata as any).style, c.text]), (institute.ast.metadata.nativeProperties as any).institute],
+        [[['Title', 'T'], ['Author', 'A, B'], ['Institute', 'Uni, Lab']], 'Uni, Lab'], 'TEX parse: \\institute in the title block');
+    assert.ok(/\\author\{A, B\}\n\\institute\{Uni, Lab\}\n/.test((await institute.ast.to('tex')).value as string), 'TEX beamer: the institute line regenerates as \\institute');
 
     // \today prints the date of the parse (as LaTeX prints the date of the compile), in the document's
     // language, or the text texParserConfig.today sets; it is never dropped.

@@ -172,6 +172,12 @@ export enum OfficeWarningType {
      * package. The message names each.
      */
     IMAGES_NOT_BUNDLED = 'IMAGES_NOT_BUNDLED',
+    /**
+     * LaTeX output cites keys (`\cite{key}`) that have no entry in a bibliography it holds, so LaTeX
+     * prints `[?]` for them until one is added (a `\bibliography{file}` with a `.bib` file, or a
+     * `thebibliography` list). The message names the keys.
+     */
+    CITATIONS_NOT_RESOLVED = 'CITATIONS_NOT_RESOLVED',
     /** LaTeX input used commands or environments the parser does not interpret; their text content was kept where it had any */
     LATEX_CONSTRUCT_NOT_INTERPRETED = 'LATEX_CONSTRUCT_NOT_INTERPRETED',
     /** LaTeX input hit a macro-expansion, file-inclusion or nesting-depth limit; the rest of the affected construct was not expanded (content nested past the limit is kept as plain text) */

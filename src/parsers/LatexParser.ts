@@ -346,7 +346,7 @@ const IGNORED_COMMANDS: Record<string, string> = {
     settowidth: 'mm', newlength: 'm', addtocounter: 'mm', stepcounter: 'm', refstepcounter: 'm', newcounter: 'mo',
     selectfont: '', usefont: 'mmmm', fontfamily: 'm', fontseries: 'm', fontshape: 'm', linespread: 'm', strut: '',
     relax: '', protect: '', leavevmode: '', null: '', ignorespaces: '', unskip: '', vphantom: 'm', index: 'm',
-    glossary: 'm', nocite: 'm', bibliographystyle: 'm', bibliography: 'm', printbibliography: 'o', addbibresource: 'om',
+    glossary: 'm', bibliographystyle: 'm',
     hypersetup: 'm', lstset: 'm', setbeamertemplate: 'mo', setbeamercolor: 'mm', setbeamerfont: 'mm', usetheme: 'om',
     usecolortheme: 'om', usefonttheme: 'om', useinnertheme: 'om', useoutertheme: 'om', setbeameroption: 'm', pause: 'o',
     titlepage: '', graphicspath: 'm', DeclareGraphicsExtensions: 'm', geometry: 'm', newgeometry: 'm', restoregeometry: '',
@@ -359,7 +359,7 @@ const IGNORED_COMMANDS: Record<string, string> = {
     AtBeginDocument: 'm', AtEndDocument: 'm', listfiles: '', hyphenation: 'm',
     enlargethispage: 'sm', newpage: '', color: '', label: '', column: 'om', textwidth: '', linewidth: '',
     columnwidth: '', paperwidth: '', textheight: '', paperheight: '', baselineskip: '', parindent_: '', tabcolsep: '',
-    arraybackslash: '', arrayrulewidth: '', dimexpr: '', fboxsep: '', setbeamersize: 'm', logo: 'm', institute: 'om',
+    arraybackslash: '', arrayrulewidth: '', dimexpr: '', fboxsep: '', setbeamersize: 'm', logo: 'm',
     documentstyle: 'om', NeedsTeXFormat: 'mo', ProvidesPackage: 'mo', ProvidesClass: 'mo', ProvidesFile: 'mo',
     PassOptionsToPackage: 'mm', PassOptionsToClass: 'mm', setCJKmainfont: 'omo', setCJKsansfont: 'omo', setCJKmonofont: 'omo',
     setCJKfamilyfont: 'momo', setCJKfallbackfamilyfont: 'mom', xeCJKsetup: 'm', xeCJKDeclareCharClass: 'mm', setmainjfont: 'omo',
@@ -963,7 +963,7 @@ class LatexReader {
     metadata: OfficeMetadata = {};
     private native: Record<string, any> = { packages: [] as string[] };
     /** Raw `\title`/`\subtitle`/`\author`/`\date` arguments, for the block `\maketitle` typesets. */
-    private titleParts: { title?: string; subtitle?: string; author?: string; date?: string } = {};
+    private titleParts: { title?: string; subtitle?: string; author?: string; institute?: string; date?: string } = {};
     private titleTypeset = false;
     /** The last `\title` checked for text of its own (see typesetTitleBlock). */
     private titleChecked: { raw: string; empty: boolean } | undefined;
@@ -1044,6 +1044,18 @@ class LatexReader {
     private enumNumbers: number[] = [];
     private unknown = new Set<string>();
     private missingFiles = new Set<string>();
+    /** The main file's project path, whose name a BibTeX `.bbl` shares. */
+    private mainFile: string | undefined;
+    /** Bibliography database files (`\bibliography`, `\addbibresource`), as named. */
+    private bibFiles: string[] = [];
+    /** Keys cited (`\cite`, `\nocite`) in order of first citation, and whether `\nocite{*}` asked for every entry. */
+    private citedKeys = new Set<string>();
+    private nociteAll = false;
+    /** The entries of the database files, each file read once (see bibliographyBlocks). */
+    private bibEntries: Map<string, BibEntry> | undefined;
+    private bibFilesRead = new Set<string>();
+    /** How many bibliographies have been printed (each after the first is charged as repeated content). */
+    private bibliographiesPrinted = 0;
     private bodyStarted = false;
     private docFlow: Flow | null = null;
 
@@ -1061,6 +1073,7 @@ class LatexReader {
     // ── entry ──
 
     parse(src: string, file?: string): OfficeContentNode[] {
+        this.mainFile = file;
         this.prescan(src);
         const flow = new Flow();
         this.docFlow = flow;
@@ -2158,7 +2171,7 @@ class LatexReader {
             }
             case 'cite': case 'citep': case 'citet': case 'parencite': case 'textcite': case 'autocite': case 'footcite':
             case 'Cite': case 'Citep': case 'Citet': case 'Parencite': case 'Textcite': case 'Autocite': case 'citealp': case 'citealt':
-            case 'citeauthor': case 'citeyear': case 'supercite': case 'smartcite': case 'nocite_': {
+            case 'citeauthor': case 'citeyear': case 'supercite': case 'smartcite': {
                 sc.readStar();
                 sc.readRawOptional();
                 sc.readRawOptional();
@@ -2166,7 +2179,29 @@ class LatexReader {
                 keys.forEach((key, k) => {
                     if (k > 0) this.addText(flow, '; ');
                     this.addInline(flow, { type: 'text', text: key, ...this.runFormatting(), metadata: { citationKey: key } as TextMetadata });
+                    this.citedKeys.add(key);
                 });
+                return;
+            }
+            // Listed in the bibliography without a citation in the text (`*`: every entry of the database).
+            case 'nocite':
+                for (const key of (sc.readRawGroup() ?? '').split(',').map(k => k.trim()).filter(Boolean)) {
+                    if (key === '*') this.nociteAll = true;
+                    else this.citedKeys.add(key);
+                }
+                return;
+            // BibTeX's and biblatex's bibliography, made from the database file where it is printed (see bibliographyBlocks).
+            case 'bibliography': case 'addbibresource': case 'addglobalbib': case 'printbibliography': {
+                const options = name === 'bibliography' ? null : sc.readRawOptional();
+                const files = name === 'printbibliography' ? [] : (sc.readRawGroup() ?? '').split(',').map(f => f.trim()).filter(Boolean);
+                for (const file of files) if (!this.bibFiles.includes(file)) this.bibFiles.push(file);
+                if (name === 'addbibresource' || name === 'addglobalbib') return;
+                // BibTeX writes the list LaTeX reads back as `<main file>.bbl`: a project that ships it (arXiv
+                // sources do) is read with it, as compiling it would.
+                const bbl = this.mainFile ? this.mainFile.replace(/^.*\//, '').replace(/\.[^.]*$/, '') + '.bbl' : null;
+                if (name === 'bibliography' && bbl && this.findProjectFile(bbl, [''])) { this.includeFile(sc, flow, bbl); return; }
+                const kv = new Map(this.keyValues(options ?? ''));
+                this.addBlock(flow, { type: 'list', __bibliography: { title: kv.get('title'), heading: kv.get('heading')?.trim() } } as any);
                 return;
             }
             case 'ref': case 'autoref': case 'cref': case 'Cref': case 'eqref': case 'pageref': case 'nameref': case 'vref': case 'Autoref': {
@@ -2431,6 +2466,15 @@ class LatexReader {
             }
             case 'date': { const raw = sc.readRawGroup(); this.titleParts.date = raw ?? undefined; const d = this.plainText(raw); if (d) this.native.date = d; return; }
             case 'subtitle': { sc.readRawOptional(); const raw = sc.readRawGroup(); this.titleParts.subtitle = raw ?? undefined; const t = this.plainText(raw); if (t) this.native.subtitle = t; return; }
+            // beamer's and llncs' affiliations, printed in the title block under the authors.
+            case 'institute': {
+                sc.readRawOptional();
+                const raw = sc.readRawGroup();
+                this.titleParts.institute = raw ?? undefined;
+                const t = (raw ?? '').split(/\\and\b|\\AND\b/).map(a => this.plainText(a.replace(/\\\\/g, ' '))).filter(Boolean).join(', ');
+                if (t) this.native.institute = t;
+                return;
+            }
             case 'maketitle': this.typesetTitle(flow); return;
             case 'keywords': case 'keyword': this.keywords(flow, sc.readRawGroup(), false); return;
             // amsart's author information, printed at the end of the article: kept as properties.
@@ -2685,7 +2729,7 @@ class LatexReader {
     }
 
     private typesetTitleBlock(flow: Flow): void {
-        const { title, subtitle, author, date } = this.titleParts;
+        const { title, subtitle, author, institute, date } = this.titleParts;
         // LaTeX refuses \maketitle without a \title, and empties the title after typesetting it once.
         if (!title || (this.titleTypeset && !this.beamer)) return;
         // beamer typesets the block at every \maketitle (a title frame per section is common), reading
@@ -2693,7 +2737,7 @@ class LatexReader {
         // repeated-content budget (see repeatUtils) before it is read, past which it is the start of the
         // title's text. 2,000 title frames of a 100 KB title took 76 seconds and made 400 MB of HTML.
         if (this.titleTypeset) {
-            const weight = title.length + (subtitle?.length ?? 0) + (author?.length ?? 0) + (date?.length ?? 0);
+            const weight = title.length + (subtitle?.length ?? 0) + (author?.length ?? 0) + (institute?.length ?? 0) + (date?.length ?? 0);
             if (takeRepeats(this.config, 1, weight) === 0) {
                 this.endParagraph(flow);
                 this.pushBlock(flow, { type: 'paragraph', text: repeatPreview(this.firstTitleText ?? ''), children: [{ type: 'text', text: repeatPreview(this.firstTitleText ?? '') }], metadata: { style: 'Title', alignment: 'center' } as ParagraphMetadata });
@@ -2719,6 +2763,8 @@ class LatexReader {
         line(subtitle, 'Subtitle');
         // Authors are separated by \and; each one's own lines (affiliations) run together.
         line(author === undefined ? undefined : author.split(/\\and\b|\\AND\b/).map(a => a.trim()).filter(Boolean).join(', '), 'Author');
+        // The authors' institutions, under them as beamer and llncs print them (`\and` and `\\` separate them).
+        line(institute === undefined ? undefined : institute.split(/\\and\b|\\AND\b/).map(a => a.trim()).filter(Boolean).join(', '), 'Institute');
         line(date, 'Date');
         // A \label written right after \maketitle names the title.
         flow.labelTarget = heading;
@@ -3565,23 +3611,90 @@ class LatexReader {
 
     private bibliography(sc: Scanner, flow: Flow, env: string): StopReason | void {
         this.endParagraph(flow);
-        this.pushBlock(flow, { type: 'heading', text: 'References', children: [{ type: 'text', text: 'References' }], metadata: { level: 1 } as HeadingMetadata });
+        const heading = this.bibliographyHeading();
+        if (heading) this.pushBlock(flow, heading);
         const listId = `tex-list-${++this.listCounter}`;
         let index = 0;
         let r = this.parseFlow(sc, new Flow(), { env, items: 'bibitem' });
-        while (r === 'bibitem' as any || r === 'item') {
+        while (r === 'item') {
             sc.next(this.atLetter);
             sc.readRawOptional();
             const key = (sc.readRawGroup() ?? '').trim();
             const itemFlow = new Flow();
             r = this.parseFlow(sc, itemFlow, { env, items: 'bibitem' });
             this.endParagraph(itemFlow);
-            const children = itemFlow.blocks.flatMap(b => b.children ?? []);
-            const meta: ListMetadata = { listType: 'ordered', indentation: 0, alignment: 'left', listId, itemIndex: index++ };
-            if (key && !this.config.ignoreInternalLinks) meta.anchorIds = [key];
-            this.pushBlock(flow, { type: 'list', text: textOf(children), children, metadata: meta });
+            this.pushBlock(flow, this.bibliographyItem(listId, index++, key, itemFlow.blocks.flatMap(b => b.children ?? [])));
         }
         if (r === 'enddoc') return r;
+    }
+
+    /** One entry of a bibliography list, anchored by its key (what `\cite` names it by). */
+    private bibliographyItem(listId: string, itemIndex: number, key: string, children: OfficeContentNode[]): OfficeContentNode {
+        const meta: ListMetadata = { listType: 'ordered', indentation: 0, alignment: 'left', listId, itemIndex };
+        if (key && !this.config.ignoreInternalLinks) meta.anchorIds = [key];
+        return { type: 'list', text: textOf(children), children, metadata: meta };
+    }
+
+    /**
+     * The heading a bibliography prints: `title` when one is given, else `\refname` (or, in a class
+     * with chapters, `\bibname`) as the document defines it, else the class's own ("References", or
+     * "Bibliography" as a chapter). None in beamer, whose bibliography is a list in its frame, or when
+     * the name is empty.
+     */
+    private bibliographyHeading(title?: string): OfficeContentNode | null {
+        if (this.beamer && title === undefined) return null;
+        const chapters = CHAPTER_CLASSES.has(this.native.documentClass);
+        const defined = this.macros.get(chapters ? 'bibname' : 'refname');
+        const raw = title ?? (defined && defined.nargs === 0 ? defined.body : chapters ? 'Bibliography' : 'References');
+        const heading = this.headingNode(raw, this.headingLevel(chapters ? 'chapter' : 'section'));
+        return heading.text?.trim() ? heading : null;
+    }
+
+    /**
+     * The bibliography `\bibliography` or `\printbibliography` prints, made where the document ends
+     * (when every citation is known): each key cited (`\cite`, `\nocite`; `\nocite{*}` every entry)
+     * in order of first citation, as its entry of the database files reads (see bibEntrySource), or as
+     * the key itself when no database file has it (a file that could not be read is reported). A
+     * bibliography printed again is charged to the document's repeated-content budget.
+     */
+    private bibliographyBlocks(spec: { title?: string; heading?: string }): OfficeContentNode[] {
+        const saved = this.finished;
+        this.finished = false;
+        try {
+            const entries = this.readBibEntries();
+            const keys = [...this.citedKeys];
+            if (this.nociteAll) for (const key of entries.keys()) if (!this.citedKeys.has(key)) keys.push(key);
+            const heading = spec.heading === 'none' ? null : this.bibliographyHeading(spec.title);
+            const sources = keys.map(key => { const entry = entries.get(key); return entry ? bibEntrySource(entry) : null; });
+            if (this.bibliographiesPrinted++ > 0) {
+                const weight = keys.reduce((sum, key, k) => sum + key.length + (sources[k]?.length ?? 0) + 16, 0);
+                if (takeRepeats(this.config, 1, weight) === 0) {
+                    const preview = repeatPreview(sources.map((s, k) => s ?? keys[k]).join(' '));
+                    return [...(heading ? [heading] : []), { type: 'paragraph', text: preview, children: [{ type: 'text', text: preview }], metadata: {} as ParagraphMetadata }];
+                }
+            }
+            const listId = `tex-list-${++this.listCounter}`;
+            const items = keys.map((key, k) => {
+                const source = sources[k];
+                const children = source === null ? [{ type: 'text', text: key } as OfficeContentNode] : this.parseBlocksOf(source).flatMap(b => b.children ?? []);
+                return this.bibliographyItem(listId, k, key, children);
+            });
+            return [...(heading ? [heading] : []), ...items];
+        } finally { this.finished = saved; }
+    }
+
+    /** The entries of the database files named so far, each file read once; a file the project lacks is reported. */
+    private readBibEntries(): Map<string, BibEntry> {
+        const entries = this.bibEntries ??= new Map();
+        for (const file of this.bibFiles) {
+            if (this.bibFilesRead.has(file)) continue;
+            this.bibFilesRead.add(file);
+            const resolved = this.project ? this.findProjectFile(file, ['', '.bib']) : null;
+            if (!resolved) { this.missingFiles.add(/\.bib$/i.test(file) ? file : `${file}.bib`); continue; }
+            const text = decodeTex(this.project!.files.get(resolved)!, this.inputEncoding).text;
+            for (const [key, entry] of parseBib(text)) if (!entries.has(key)) entries.set(key, entry);
+        }
+        return entries;
     }
 
     // ── beamer ──
@@ -3827,6 +3940,17 @@ class LatexReader {
         const clean = (nodes: OfficeContentNode[]): OfficeContentNode[] => {
             const out: OfficeContentNode[] = [];
             for (const n of nodes) {
+                const bibliography = (n as any).__bibliography;
+                if (bibliography) {
+                    // Made now, when every citation is known; the anchors and comments the spot took go to its first block.
+                    const blocks = clean(this.bibliographyBlocks(bibliography));
+                    const first = blocks[0];
+                    const anchors = (n.metadata as any)?.anchorIds as string[] | undefined;
+                    if (first && anchors?.length) (first.metadata as any).anchorIds = [...anchors, ...((first.metadata as any).anchorIds ?? [])];
+                    if (first && n.comments?.length) first.comments = [...n.comments, ...(first.comments ?? [])];
+                    appendAll(out, blocks);
+                    continue;
+                }
                 delete (n as any).__open;
                 if (n.children) n.children = n.type === 'paragraph' || n.type === 'heading' || n.type === 'list' || n.type === 'definitionTerm' || n.type === 'definitionDescription'
                     ? this.mergeRuns(clean(n.children)) : clean(n.children);
@@ -3993,6 +4117,134 @@ function decodeTex(buf: Buffer, inherited?: string): { text: string; declared?: 
     if (label === 'utf-8') return { text: buf.toString('utf8'), declared };
     try { return { text: new TextDecoder(label).decode(buf), declared }; }
     catch { return { text: new TextDecoder('windows-1252').decode(buf), declared }; }
+}
+
+/** A BibTeX database entry: its type and fields, each value LaTeX with `@string` abbreviations and `#` joins resolved. */
+interface BibEntry { type: string; fields: Map<string, string>; }
+
+/** The month abbreviations BibTeX defines. */
+const BIB_MONTHS: [string, string][] = [['jan', 'January'], ['feb', 'February'], ['mar', 'March'], ['apr', 'April'], ['may', 'May'],
+    ['jun', 'June'], ['jul', 'July'], ['aug', 'August'], ['sep', 'September'], ['oct', 'October'], ['nov', 'November'], ['dec', 'December']];
+
+/**
+ * The entries of a BibTeX database by key (the first entry of a key wins, as BibTeX keeps it). Read in
+ * one forward pass: text outside entries is a comment, `@comment` and `@preamble` are skipped, and an
+ * `@string` abbreviation is resolved in the values after it. A malformed entry ends where reading it
+ * failed, and reading goes on from there.
+ */
+function parseBib(text: string): Map<string, BibEntry> {
+    const entries = new Map<string, BibEntry>();
+    const strings = new Map<string, string>(BIB_MONTHS);
+    const n = text.length;
+    let i = 0;
+    const blanks = () => { while (i < n && /\s/.test(text[i])) i++; };
+    const word = (stop: RegExp) => { const start = i; while (i < n && !stop.test(text[i])) i++; return text.slice(start, i); };
+    // A group opened by `text[i]` (`{`, or `"` whose end is a `"` outside braces); its text, and `i` after it.
+    const group = (): string => {
+        const quote = text[i] === '"';
+        const start = ++i;
+        let depth = quote ? 0 : 1;
+        for (; i < n; i++) {
+            const c = text[i];
+            if (c === '\\') { i++; continue; }
+            if (c === '{') depth++;
+            else if (c === '}' && --depth === 0 && !quote) return text.slice(start, i++);
+            else if (c === '"' && quote && depth === 0) return text.slice(start, i++);
+        }
+        return text.slice(start);
+    };
+    // A value: groups, numbers and abbreviations joined by `#`.
+    const value = (): string => {
+        const parts: string[] = [];
+        for (;;) {
+            blanks();
+            const c = text[i];
+            if (c === '{' || c === '"') parts.push(group());
+            else {
+                const token = word(/[\s,#{}()"=]/);
+                if (!token) break;
+                parts.push(/^\d+$/.test(token) ? token : strings.get(token.toLowerCase()) ?? '');
+            }
+            blanks();
+            if (text[i] !== '#') break;
+            i++;
+        }
+        return parts.join('');
+    };
+    for (let at = text.indexOf('@'); at >= 0 && at < n; at = text.indexOf('@', i)) {
+        i = at + 1;
+        const type = word(/[^A-Za-z]/).toLowerCase();
+        blanks();
+        const open = text[i];
+        if (open !== '{' && open !== '(') continue;
+        const close = open === '{' ? '}' : ')';
+        if (type === 'comment' || type === 'preamble') {
+            if (open === '{') group();
+            else { i++; while (i < n && text[i] !== ')') i++; }
+            continue;
+        }
+        i++;
+        blanks();
+        if (type === 'string') {
+            const name = word(/[\s=]/).toLowerCase();
+            blanks();
+            if (text[i] !== '=') continue;
+            i++;
+            if (name) strings.set(name, value());
+            continue;
+        }
+        const key = word(/[\s,{}()]/);
+        const fields = new Map<string, string>();
+        for (;;) {
+            blanks();
+            if (text[i] === ',') { i++; continue; }
+            if (i >= n || text[i] === close) { i++; break; }
+            const name = word(/[\s=,{}()"#]/).toLowerCase();
+            blanks();
+            if (!name || text[i] !== '=') break;
+            i++;
+            fields.set(name, value());
+        }
+        if (key && !entries.has(key)) entries.set(key, { type, fields });
+    }
+    return entries;
+}
+
+/** Names from a BibTeX `author`/`editor` value (`Last, First and First Last`), each as it is printed ("First Last"). */
+function bibNames(value: string): string[] {
+    const names: string[] = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i <= value.length; i++) {
+        const c = value[i];
+        if (c === '{') depth++;
+        else if (c === '}') depth--;
+        else if (i === value.length || (depth === 0 && /\s/.test(c ?? '') && /^and\s/.test(value.slice(i + 1, i + 5)))) {
+            names.push(value.slice(start, i).trim());
+            if (i < value.length) { i += 4; start = i + 1; }
+        }
+    }
+    return names.filter(Boolean).map(name => {
+        const parts = name.split(',').map(p => p.trim());
+        return parts.length >= 2 ? `${parts.slice(1).join(' ')} ${parts[0]}`.trim() : name;
+    });
+}
+
+/**
+ * An entry as a reference list prints it, as LaTeX: authors (or editors), title, where it appeared,
+ * year. A book's title is italic, as is an article's journal.
+ */
+function bibEntrySource(entry: BibEntry): string {
+    const field = (k: string) => entry.fields.get(k)?.trim() ?? '';
+    const join = (names: string[]) => (names.length <= 2 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+    const authors = field('author') ? join(bibNames(field('author'))) : field('editor') ? `${join(bibNames(field('editor')))} (ed.)` : '';
+    const bookLike = /^(book|booklet|manual|phdthesis|mastersthesis|thesis|proceedings|collection|report|techreport)$/.test(entry.type);
+    const title = field('title') ? (bookLike ? `\\emph{${field('title')}}` : field('title')) : '';
+    const venue = field('journal') || field('journaltitle') ? `\\emph{${field('journal') || field('journaltitle')}}` : field('booktitle') ? `In \\emph{${field('booktitle')}}` : '';
+    const year = field('year') || field('date');
+    const where = [venue, field('publisher'), field('school'), field('institution'), field('organization'), field('howpublished'), year].filter(Boolean).join(', ');
+    const parts = [authors, title, where].filter(Boolean);
+    // Each part ends in a period, unless it ends in punctuation already.
+    return parts.map(p => (/[.!?]\}*$/.test(p) ? p : `${p}.`)).join(' ');
 }
 
 const ZIP_MAGIC = [0x50, 0x4b];

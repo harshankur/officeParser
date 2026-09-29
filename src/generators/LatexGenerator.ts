@@ -199,6 +199,14 @@ function labelName(raw: string): string {
     return `${name.slice(0, MAX_LABEL_LENGTH - 9)}-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
+/**
+ * A citation key as `\cite` and `\bibitem` write it: the characters MarkdownParser's own citation
+ * recognizer accepts, which also keep the key from closing the argument.
+ */
+function citationKeyName(key: unknown): string {
+    return String(key ?? '').replace(/[^a-zA-Z0-9_:.-]/g, '');
+}
+
 /** Expands tabs to spaces at {@link CODE_TAB_WIDTH}-column stops. */
 function expandTabs(line: string): string {
     let out = '';
@@ -230,6 +238,7 @@ function expandTabs(line: string): string {
 interface TitleBlock {
     title: OfficeContentNode;
     subtitle?: OfficeContentNode;
+    institute?: OfficeContentNode;
     author?: OfficeContentNode;
     date?: OfficeContentNode;
     /** The slide holding the block, or null when it is at the top level. */
@@ -279,6 +288,10 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private readonly colors = new Set<string>();
     /** The control words the formulas written use, for the packages and definitions they need (see planLatexMath). */
     private readonly mathCommands = new Set<string>();
+    /** Every key the AST cites (found before rendering, for finding its bibliography), and those `\cite` wrote and `\bibitem` defined. */
+    private readonly citationKeys = new Set<string>();
+    private readonly citedKeys = new Set<string>();
+    private readonly bibitemKeys = new Set<string>();
     private readonly warnedFeatures = new Set<string>();
 
     /** Set while rendering a heading whose every run is bold: the heading is bold already. */
@@ -293,7 +306,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
      */
     private titleNodes: TitleBlock | null = null;
     /** The title block's `\title`/`\subtitle`/`\author`/`\date` arguments. */
-    private titleFields: { title: string; subtitle: string; author: string; date: string } | null = null;
+    private titleFields: { title: string; subtitle: string; author: string; institute: string; date: string } | null = null;
 
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'tex'>) {
         super('tex', ast, config);
@@ -334,6 +347,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         const unicode = planLatexUnicode([headerSetup, meta.title, ...meta.hypersetup, ...parts].join('\n'));
         if (unicode.packages.has('amssymb')) this.uses.amssymb = true;
         const math = this.mathPlan();
+        // A \cite with no \bibitem in the output prints [?] until the user adds a bibliography: said.
+        const unresolved = [...this.citedKeys].filter(key => !this.bibitemKeys.has(key));
+        if (unresolved.length) this.warn(OfficeWarningType.CITATIONS_NOT_RESOLVED, { keys: unresolved.slice(0, 20), more: Math.max(0, unresolved.length - 20) });
         let tex: string;
         const carried = this.carriedImageBlocks();
         if (standalone) {
@@ -388,6 +404,10 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 }
             }
             if (n.type === 'text') {
+                if (meta?.citationKey) {
+                    const key = citationKeyName(meta.citationKey);
+                    if (key) this.citationKeys.add(key);
+                }
                 if (meta?.link && (meta.linkType === 'internal' || meta.link.startsWith('#') || meta.wikilink)) {
                     for (const candidate of this.labelCandidates(meta.link)) this.linkTargets.add(candidate);
                 }
@@ -560,7 +580,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 const run: OfficeContentNode[] = [];
                 while (i < items.length && items[i].type === 'list' && String((items[i].metadata as ListMetadata)?.listId ?? '') === listId) run.push(items[i++]);
                 i--;
-                const list = await this.renderListRun(run);
+                const list = this.isBibliography(run) ? await this.bibliographyList(run, null) : await this.renderListRun(run);
                 if (list) blocks.push(list);
                 prevPaginated = null;
                 continue;
@@ -578,6 +598,19 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             const override = await this.handleOnNode(node);
             if (override === false) continue;
             if (typeof override === 'string') { blocks.push(override); prevPaginated = null; continue; }
+            // A top-level heading over a bibliography is the heading thebibliography prints (see bibliographyList).
+            if (node.type === 'heading' && this.ctx.sections && !this.beamer && ((node.metadata as HeadingMetadata)?.level ?? 1) === 1) {
+                let end = i + 1;
+                const listId = String((items[end]?.metadata as ListMetadata | undefined)?.listId ?? '');
+                while (end < items.length && items[end].type === 'list' && String((items[end].metadata as ListMetadata)?.listId ?? '') === listId) end++;
+                const run = items.slice(i + 1, end);
+                if (this.isBibliography(run)) {
+                    blocks.push(await this.bibliographyList(run, node));
+                    i = end - 1;
+                    prevPaginated = null;
+                    continue;
+                }
+            }
             if ((node.type === 'page' || node.type === 'slide') && prevPaginated === node.type) blocks.push('\\clearpage');
             const out = (await this.renderBlockNode(node)).trim();
             if (out) blocks.push(out);
@@ -848,10 +881,11 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     private textRun(node: OfficeContentNode): string {
         const meta = node.metadata as TextMetadata | undefined;
         if (meta?.citationKey) {
-            // The character class MarkdownParser's own citation recognizer accepts, which also keeps
-            // the key from closing the \cite argument.
-            const key = String(meta.citationKey).replace(/[^a-zA-Z0-9_:.-]/g, '');
-            if (key) return `${this.cmd('cite')}{${key}}`;
+            const key = citationKeyName(meta.citationKey);
+            if (key) {
+                this.citedKeys.add(key);
+                return `${this.cmd('cite')}{${key}}`;
+            }
         }
         const raw = node.text || '';
         return this.formatRun(escapeLatex(raw, this.ctx.moving ? ' ' : LINE_BREAK), raw, node.formatting);
@@ -1136,6 +1170,57 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         }
         while (stack.length > 0) close();
         return out.trimEnd();
+    }
+
+    /**
+     * Whether a run of list items is a bibliography: numbered entries, each anchored by the key a
+     * citation names it by (what the LaTeX parser reads `thebibliography` and a `.bib` database as),
+     * at least one of them cited.
+     */
+    private isBibliography(run: OfficeContentNode[]): boolean {
+        if (!run.length || !this.citationKeys.size) return false;
+        let cited = false;
+        for (const item of run) {
+            const meta = item.metadata as ListMetadata | undefined;
+            const key = citationKeyName(meta?.anchorIds?.[0]);
+            if (item.type !== 'list' || meta?.listType !== 'ordered' || Number(meta?.indentation) > 0 || !key) return false;
+            if (this.citationKeys.has(key)) cited = true;
+        }
+        return cited;
+    }
+
+    /**
+     * A bibliography as `thebibliography`, each entry a `\bibitem` under its key, so the document's
+     * `\cite`s resolve to it. The list prints its own heading, `\refname` (`\bibname` in a class with
+     * chapters): the heading over it (none when there is none) is set as that name, where it is not
+     * the name already.
+     */
+    private async bibliographyList(run: OfficeContentNode[], heading: OfficeContentNode | null): Promise<string> {
+        const lines: string[] = [];
+        if (!this.beamer) {
+            const chapters = this.docClass === 'report' || this.docClass === 'book';
+            const title = heading
+                ? await this.withCtx({ moving: true, display: false, verbatim: false, sections: false, labels: false, longtable: false },
+                    () => this.headingRuns(heading, this.hasUniformFormatting(heading, f => f?.bold === true)))
+                : '';
+            const before = heading ? `${this.commentsBefore(heading)}${this.anchorsFor(heading, true)}`.trimEnd() : '';
+            if (before) lines.push(before);
+            if (title !== (chapters ? 'Bibliography' : 'References')) lines.push(`\\renewcommand{\\${chapters ? 'bibname' : 'refname'}}{${title}}`);
+        }
+        lines.push(`\\begin{thebibliography}{${'9'.repeat(String(run.length).length)}}`);
+        for (const item of run) {
+            checkAbortSignal(this.config.abortSignal);
+            const override = await this.handleOnNode(item);
+            if (override === false) continue;
+            const key = citationKeyName((item.metadata as ListMetadata).anchorIds![0]);
+            this.bibitemKeys.add(key);
+            const content = typeof override === 'string'
+                ? override
+                : (await this.withCtx({ sections: false, longtable: false }, () => this.renderFlow(this.inlineChildren(item)))).trim() + await this.notesFor(item);
+            lines.push(`${this.commentsBefore(item)}\\bibitem{${key}} ${this.anchorsFor(item, true)}${content}`);
+        }
+        lines.push('\\end{thebibliography}');
+        return lines.join('\n');
     }
 
     /** A run of definition terms and descriptions as one `description` list. */
@@ -2009,7 +2094,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             // author or date where the block has none (LaTeX would otherwise print today's date).
             out.push(`\\title{${f.title}}`);
             if (f.subtitle) out.push(`\\subtitle{${f.subtitle}}`);
-            out.push(`\\author{${f.author}}`, `\\date{${f.date}}`);
+            out.push(`\\author{${f.author}}`);
+            if (f.institute) out.push(`\\institute{${f.institute}}`);
+            out.push(`\\date{${f.date}}`);
         } else {
             if (m.title) out.push(`\\title{${esc(m.title)}}`);
             if (m.author) out.push(`\\author{${esc(m.author)}}`);
@@ -2045,8 +2132,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
 
     /**
      * Finds the title block: the first heading styled `Title` at the top level (or, failing that, on
-     * a slide), with the `Subtitle` (beamer only: `article` has no `\subtitle`), `Author` and `Date`
-     * lines that directly follow it, each at most once.
+     * a slide), with the `Subtitle` and `Institute` (beamer only: `article` has neither `\subtitle` nor
+     * `\institute`), `Author` and `Date` lines that directly follow it, each at most once.
      */
     private findTitleBlock(): TitleBlock | null {
         const scan = (siblings: OfficeContentNode[], container: OfficeContentNode | null): TitleBlock | null => {
@@ -2055,7 +2142,9 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             const block: TitleBlock = { title: siblings[i], container, nodes: new Set([siblings[i]]) };
             for (const n of siblings.slice(i + 1)) {
                 const style = n.type === 'paragraph' ? (n.metadata as ParagraphMetadata | undefined)?.style : undefined;
-                const key = style === 'Subtitle' && this.beamer ? 'subtitle' : style === 'Author' ? 'author' : style === 'Date' ? 'date' : null;
+                // An institute line is beamer's `\\institute`; `article` has none, so there it stays a line of its own after the block.
+                if (style === 'Institute' && !this.beamer) continue;
+                const key = style === 'Subtitle' && this.beamer ? 'subtitle' : style === 'Institute' ? 'institute' : style === 'Author' ? 'author' : style === 'Date' ? 'date' : null;
                 if (!key || block[key]) break;
                 block[key] = n;
                 block.nodes.add(n);
@@ -2073,7 +2162,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
     }
 
     /** The title block's lines as `\title`/`\subtitle`/`\author`/`\date` arguments; notes become `\thanks`. */
-    private async renderTitleFields(block: TitleBlock): Promise<{ title: string; subtitle: string; author: string; date: string }> {
+    private async renderTitleFields(block: TitleBlock): Promise<{ title: string; subtitle: string; author: string; institute: string; date: string }> {
         const field = async (node: OfficeContentNode | undefined): Promise<string> => {
             if (!node) return '';
             return this.withCtx({ moving: true, display: false, verbatim: false, sections: false, labels: false, longtable: false, notes: 'omit' }, async () => {
@@ -2086,7 +2175,7 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
                 return runs + thanks;
             });
         };
-        return { title: await field(block.title), subtitle: await field(block.subtitle), author: await field(block.author), date: await field(block.date) };
+        return { title: await field(block.title), subtitle: await field(block.subtitle), author: await field(block.author), institute: await field(block.institute), date: await field(block.date) };
     }
 
     private titleBlock(): string {
