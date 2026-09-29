@@ -451,8 +451,10 @@ function classifyListType(label: string): 'ordered' | 'unordered' {
 
 /** Collapses TOC dot-leaders ("Title ...... 3" -> "Title 3") in a node's text and text-run children. */
 function stripDotLeaders(node: OfficeContentNode): void {
-    // A match starts where whitespace does, not at each space of a run (each read to its end).
-    const clean = (s: string | undefined) => (s || '').replace(/(?<!\s)\s*\.{4,}\s*/g, ' ');
+    // One leader, however many runs of dots it is split into ("Scope .... .... 12"), is one space. A
+    // match starts where whitespace does, not at each space of a run (each read to its end); once its
+    // first dots are found nothing after them can fail, so it never goes back over what it read.
+    const clean = (s: string | undefined) => (s || '').replace(/(?<!\s)\s*\.{4,}(?:\s*\.{4,})*\s*/g, ' ');
     if (node.text) node.text = clean(node.text).trim();
     for (const c of node.children || []) {
         if (c.type === 'text') c.text = clean(c.text);

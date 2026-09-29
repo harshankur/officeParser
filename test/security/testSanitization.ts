@@ -26,6 +26,8 @@ import { parseXmlString } from '../../src/utils/xmlUtils';
 import { getOfficeError, getWrappedError } from '../../src/utils/errorUtils';
 import { terminateOcr } from '../../src/utils/ocrUtils';
 import { OfficeErrorType } from '../../src/types';
+import { buildTaggedNodes } from '../../src/parsers/pdf/structTree';
+import { computeDocContext } from '../../src/parsers/pdf/textLayout';
 
 let passed = 0;
 let failed = 0;
@@ -2955,6 +2957,20 @@ async function parserHardeningTests() {
     const strictPdf = await warned(pdfForms(5, 'BT /F1 12 Tf 10 10 Td (xy) Tj ET'), 'pdf', { pdfParserConfig: { maxTextItems: 1 } });
     const roomyPdf = await warned(pdfForms(5, 'BT /F1 12 Tf 10 10 Td (xy) Tj ET'), 'pdf', { pdfParserConfig: { maxTextItems: 100_000, maxOperators: 1_000_000 } });
     check('pdf: maxTextItems is the base of the limit', strictPdf.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED') && !roomyPdf.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${strictPdf.codes} | ${roomyPdf.codes}`);
+    // A table of contents' dot leaders (tagged TOCI) collapse in time linear in the entry, however its
+    // dots and spaces run: an entry four times as long takes about four times as long.
+    const tocMs = (text: string) => {
+        const run: any = { text, x: 72, yTop: 90, yBaseline: 100, width: 300, height: 12, fontSize: 10, dir: 'ltr', angle: 0, mcid: 'm0', inArtifact: false, formatting: {} };
+        const layout: any = { useTags: true, detectColumns: true, mergeHyphenatedWords: true, lineToleranceFactor: 0.35, spaceToleranceFactor: 0.25, headingDetection: 'auto', normalizeText: true, extractTextColor: false, includeBounds: true };
+        const begun = performance.now();
+        buildTaggedNodes({ role: 'Root', children: [{ role: 'TOCI', children: [{ type: 'content', id: 'm0' }] }] }, new Map([['m0', [run]]]), { pageNumber: 1, authoredW: 612, authoredH: 792, rotation: 0 }, computeDocContext([run], layout, '\n'), { ignoreNotes: false, listCounter: { n: 0 } });
+        return performance.now() - begun;
+    };
+    for (const [label, lead, unit] of [['one leader of many runs of dots', 'Title', ' ....'], ['a run of spaces before three dots', 'x', ' '], ['runs of three dots', 'x', '... '], ['spaced single dots', 'x', '. ']] as const) {
+        const small = tocMs(lead + unit.repeat(50_000) + '...12');
+        const large = tocMs(lead + unit.repeat(200_000) + '...12');
+        check(`pdf: TOC dot leaders in ${label} collapse in linear time`, large < 5000 && large < Math.max(100, small * 8), `${Math.round(small)}ms, four times as long: ${Math.round(large)}ms`);
+    }
 
     // Templates, raw source and chunks.
     await timed('template: a part of 160,000 unclosed <w:p is rendered', () => OfficeTemplate.render(Buffer.from(zipSync({ '[Content_Types].xml': enc('<Types/>'), 'word/document.xml': enc('<w:p '.repeat(160000)) })), { data: { a: 1 } }).catch(() => undefined));

@@ -12,6 +12,7 @@
  */
 
 import { blockToNodes, buildLines, computeDocContext, detectTables, PageContext, recoverTaggedGrids, segmentIntoBlocks } from '../../src/parsers/pdf/textLayout';
+import { buildTaggedNodes } from '../../src/parsers/pdf/structTree';
 import { makeColorLookup } from '../../src/parsers/pdf/pdfColor';
 import { PdfLayoutConfig, RawRun } from '../../src/parsers/pdf/pdfTypes';
 import { layoutOcrText, sniffImageMime } from '../../src/utils/ocrUtils';
@@ -325,6 +326,20 @@ export async function testTextLayout(): Promise<LayoutTest[]> {
         for (let i = 0; i < 5; i++) { nodes.push(paraNode('L' + i, 100, 100 + i * 20, 8, 12), paraNode('R' + i, 300, 100 + i * 20, 8, 12)); }
         const out = recoverTaggedGrids(nodes);
         add('Two-column short paragraphs are not a table', !out.some(n => n.type === 'table'), 'no table', `${out.filter(n => n.type === 'table').length} table(s)`);
+    }
+
+    // ── Tagged TOC entries: a dot leader is one space, however many runs of dots it is split into ──
+    {
+        const entry = (texts: string[]) => {
+            const runsByMcid = new Map<string, RawRun[]>();
+            const kids = texts.map((t, i) => { runsByMcid.set(`m${i}`, [{ ...run(t, 72 + i * 60, 100), mcid: `m${i}` }]); return { type: 'content', id: `m${i}` }; });
+            const all = [...runsByMcid.values()].flat();
+            const { nodes } = buildTaggedNodes({ role: 'Root', children: [{ role: 'TOCI', children: kids }] }, runsByMcid, PAGE, computeDocContext(all, CFG, '\n'), { ignoreNotes: false, listCounter: { n: 0 } });
+            return (nodes[0]?.text ?? '').replace(/\s+/g, ' ');
+        };
+        const split = entry(['Scope', '....', '....', '....', '12']);
+        const joined = entry(['Scope ................ 12']);
+        add('TOC dot leaders split into runs collapse to one space', split === 'Scope 12' && joined === 'Scope 12', 'Scope 12 (both)', `${JSON.stringify(split)} / ${JSON.stringify(joined)}`);
     }
 
     // ── L-SS: super/subscript merging vs a caption ──────────────────────────
