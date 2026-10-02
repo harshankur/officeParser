@@ -63,7 +63,7 @@
 import { attachmentLookup } from '../utils/repeatUtils.js';
 import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, ImageMetadata, IndentationMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
-import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
+import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
@@ -114,6 +114,9 @@ const DOCUMENT_BUDGETS: ReadonlySet<string> = new Set([
 
 /** The instruction of a complex field, kept up to this length: a NOTEREF's is a few words. */
 const MAX_FIELD_INSTRUCTION = 256;
+
+/** Maximum nesting depth for paragraph children (hyperlinks, fields, fallback wrappers) before DoS rejection. */
+const MAX_WORD_CHILD_DEPTH = 512;
 
 /**
  * A NOTEREF field (a note's number, shown again where its bookmark names): its bookmark, then its
@@ -926,7 +929,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         // Traverse children of paragraph (runs, hyperlinks, etc.)
         // Whether a hyperlink enclosing the node being read gives its runs their link (see w:hyperlink).
         let insideLink = false;
-        const processChildNode = (node: Node) => {
+        const processChildNode = (node: Node, depth = 0) => {
+            if (depth > MAX_WORD_CHILD_DEPTH) throw getOfficeError(OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED, config);
             if (isElement(node) && (node.nodeName === 'w:r' || node.nodeName === 'm:r')) {
                 const runNode = node;
                 const rPr = getDirectChildren(runNode, "w:rPr")[0];
@@ -1225,7 +1229,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const wasInside = insideLink;
                 if (applies) insideLink = true;
                 const startIndex = children.length;
-                for (const child of Array.from(hlNode.childNodes)) processChildNode(child);
+                for (const child of Array.from(hlNode.childNodes)) processChildNode(child, depth + 1);
                 insideLink = wasInside;
                 if (applies) {
                     for (let i = startIndex; i < children.length; i++) {
@@ -1248,11 +1252,11 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 const reference = noteRefField(node.getAttribute("w:instr") || '');
                 if (reference?.note) attach(reference.note, 'notes');
                 if (!reference || (!reference.note && !config.ignoreNotes)) {
-                    for (const child of Array.from(node.childNodes)) processChildNode(child);
+                    for (const child of Array.from(node.childNodes)) processChildNode(child, depth + 1);
                 }
             } else if (isElement(node) && isAlternateContent(node)) {
                 const resolved = resolveAlternateContent(node);
-                for (const rNode of resolved) processChildNode(rNode);
+                for (const rNode of resolved) processChildNode(rNode, depth + 1);
             } else if (isElement(node) && (node.nodeName === 'w:pict' || node.nodeName === 'pict' || node.nodeName === 'w:drawing' || node.nodeName === 'drawing')) {
                 // A legacy shape or a drawing standing in the paragraph itself: its SmartArt and its own
                 // text boxes' blocks, read after the paragraph. The picture's own text boxes, not those in
@@ -1284,7 +1288,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 // document's text (read, moved text came out twice). Insertions are read as text.
             } else if (node.childNodes.length > 0) {
                 // Generic fallback for unknown elements that might contain content
-                for (const child of Array.from(node.childNodes)) processChildNode(child);
+                for (const child of Array.from(node.childNodes)) processChildNode(child, depth + 1);
             }
         };
 
