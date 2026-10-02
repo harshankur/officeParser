@@ -1593,7 +1593,7 @@ async function runMetadataOverrideTests(): Promise<GenFeatureTest[]> {
     const content: OfficeContentNode[] = [
         { type: 'paragraph', children: [{ type: 'text', text: 'Body' }] } as OfficeContentNode,
     ];
-    const makeAst = () => createAST('docx', { ...sourceMeta }, content, [], parserConfig, undefined, () => 'Body');
+    const makeAst = () => createAST('docx', { ...sourceMeta }, content, [], parserConfig, undefined);
 
     // --- Per-field merge: overriding one field must not blank the others ---
     const astMerge = makeAst();
@@ -1799,7 +1799,7 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
     const content: OfficeContentNode[] = [
         { type: 'paragraph', children: [{ type: 'text', text: leadingWhitespaceText }] } as OfficeContentNode,
     ];
-    const parserConfig: OfficeParserConfig = { newlineDelimiter: '\n' };
+    const parserConfig: OfficeParserConfig = { ...PARSER_CONFIG };
     const ast = createAST('docx', {}, content, [], parserConfig, undefined);
 
     // --- .to('text') emits the paragraph's text verbatim, leading whitespace and all ---
@@ -1911,7 +1911,7 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
             } as OfficeContentNode],
         } as OfficeContentNode,
     ];
-    const cellAst = createAST('docx', undefined as any, cellRowContent, [], parserConfig, undefined, () => '');
+    const cellAst = createAST('docx', undefined as any, cellRowContent, [], parserConfig, undefined);
     const { value: flatCells } = await cellAst.to('text', { textConfig: { preserveLayout: false } } as any);
     results.push(mk('text', 'cells are separated when not rendering a grid',
         'ITEM and NEEDED separated', JSON.stringify(flatCells),
@@ -1939,7 +1939,7 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
             children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'text', text: 'Cell' }] }] } as OfficeContentNode],
         } as OfficeContentNode,
     ];
-    const tableOnlyAst = createAST('docx', undefined as any, tableOnlyContent, [], parserConfig, undefined, () => '');
+    const tableOnlyAst = createAST('docx', undefined as any, tableOnlyContent, [], parserConfig, undefined);
     const { value: tableOnlyText } = await tableOnlyAst.to('text', { textConfig: { preserveLayout: true } } as any);
     results.push(mk('text', '.to(text) strips renderTable\'s leading separator artifact too', 'does not start with "\\n"', !tableOnlyText.startsWith('\n'), !tableOnlyText.startsWith('\n'), 'renderTable seeds a leading newline as a separator from a preceding sibling - with none, it must not leak through'));
 
@@ -1982,7 +1982,7 @@ const GIF_1PX = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 const synthAst = (type: string, content: OfficeContentNode[], attachments: any[] = []) =>
-    createAST(type as any, {}, content, attachments, { newlineDelimiter: '\n' }, undefined, () => '');
+    createAST(type as any, {}, content, attachments, { ...PARSER_CONFIG }, undefined);
 
 /**
  * Regressions for the native PDF engine (`pdfConfig.engine: 'native'`), which lays a PDF out itself

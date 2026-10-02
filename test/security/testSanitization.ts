@@ -2629,7 +2629,7 @@ async function parserHardeningTests() {
     await timed('md: indented code of 200k blank lines before its last line parses', () => parseQuiet(Buffer.from('    a' + '\n'.repeat(200000) + '    b\n'), 'md'));
     await timed('html: 100k unclosed <style>s parse', () => parseQuiet(Buffer.from('<p><style>'.repeat(100000)), 'html'));
     await timed('html: 80k cells of unclosed <script>s parse', () => parseQuiet(Buffer.from('<table><tr>' + '<td><script>'.repeat(80000)), 'html'));
-    await timed('csv: a 1 MB run of digits is checked as a formula', async () => csvSafeCell('1'.repeat(1_000_000) + 'x'));
+    await timed('csv: a 1 MB run of digits is checked as a formula', async () => csvSafeCell('1'.repeat(1_000_000) + 'x', ','));
     await timed('xlsx: 1 MB of & in an inline string decodes', () => parseQuiet(withSheetData('<row r="1"><c r="A1" t="inlineStr"><is><t>' + '&amp;'.repeat(200000) + '</t></is></c></row>'), 'xlsx'));
     await timed('docx: an image width of 200 KB of spaces is written', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'image', metadata: { url: 'a.png', width: '1' + ' '.repeat(200000) + 'x' } }] }]), 'docx' as any, { onWarning: () => {} } as any));
     await timed('md: block math of 200 KB of spaces is written inline', () => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'a' }, { type: 'code', text: 'x' + ' '.repeat(200000) + 'y', metadata: { math: 'block' } }] }]), 'md' as any, { onWarning: () => {} } as any));
@@ -3351,9 +3351,14 @@ async function parserHardeningTests() {
     const linkStarted = Date.now();
     const nestedLinks = await parseQuiet(docxOf(`<w:p>${'<w:hyperlink w:anchor="a">'.repeat(400)}${'<w:r><w:t>x</w:t></w:r>'.repeat(2000)}${'</w:hyperlink>'.repeat(400)}</w:p>`), 'docx');
     check('docx: 2,000 runs in hyperlinks nested 400 deep parse in linear time', Date.now() - linkStarted < 5000, `${Date.now() - linkStarted}ms`);
+    const atBound = await parseQuiet(docxOf(`<w:p>${'<w:hyperlink w:anchor="a">'.repeat(512)}<w:r><w:t>x</w:t></w:r>${'</w:hyperlink>'.repeat(512)}</w:p>`), 'docx');
+    check('docx: hyperlinks nested at the 512-level bound parse', !atBound.error, String(atBound.error));
     let deepLinksError: any;
-    try { await OfficeParser.parseOffice(docxOf(`<w:p>${'<w:hyperlink w:anchor="a">'.repeat(5000)}<w:r><w:t>x</w:t></w:r>${'</w:hyperlink>'.repeat(5000)}</w:p>`), { fileType: 'docx', onWarning: () => {} } as any); } catch (e) { deepLinksError = e; }
-    check('docx: hyperlinks nested past what the stack holds are a nesting error', deepLinksError?.officeIssue?.code === 'MAX_NESTING_DEPTH_EXCEEDED', String(deepLinksError));
+    try { await OfficeParser.parseOffice(docxOf(`<w:p>${'<w:hyperlink w:anchor="a">'.repeat(513)}<w:r><w:t>x</w:t></w:r>${'</w:hyperlink>'.repeat(513)}</w:p>`), { fileType: 'docx', onWarning: () => {} } as any); } catch (e) { deepLinksError = e; }
+    check('docx: hyperlinks nested past the 512-level bound are a nesting error', deepLinksError?.officeIssue?.code === 'MAX_NESTING_DEPTH_EXCEEDED', String(deepLinksError));
+    let deepTablesError: any;
+    try { await OfficeParser.parseOffice(docxOf(`${'<w:tbl><w:tr><w:tc>'.repeat(5000)}<w:p><w:r><w:t>x</w:t></w:r></w:p>${'</w:tc></w:tr></w:tbl>'.repeat(5000)}`), { fileType: 'docx', onWarning: () => {} } as any); } catch (e) { deepTablesError = e; }
+    check('docx: tables nested past what the stack holds are a nesting error', deepTablesError?.officeIssue?.code === 'MAX_NESTING_DEPTH_EXCEEDED', String(deepTablesError));
     const linkedRuns = JSON.stringify(nestedLinks.ast?.content ?? []).split('"link":"#a"').length - 1;
     check('docx: runs in nested hyperlinks keep the outermost link', !nestedLinks.error && linkedRuns === 2000, `${nestedLinks.error} ${linkedRuns}`);
 

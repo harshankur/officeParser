@@ -4576,7 +4576,7 @@ async function testDocxReadingReview(): Promise<void> {
         assert.ok(out.includes('Box title') && out.includes('bullet two') && !/text\.Box|titleBox|twobullet|onebullet/.test(out), `${format}: a text box's paragraphs keep their word boundaries`);
     }
     for (const format of ['docx', 'odt'] as const) {
-        const back = await OfficeParser.parseOffice(Buffer.from((await boxed.ast.to(format)).value as Uint8Array), { fileType: format } as any);
+        const back = await OfficeParser.parseOffice(Buffer.from((await boxed.ast.to(format)).value as any), { fileType: format } as any);
         assert.deepStrictEqual(back.content.map(n => n.text).filter(Boolean), ['Intro text.', 'Box title', 'Box line two', 'bullet one', 'bullet two', 'After'], `${format}: a text box's paragraphs are written apart`);
     }
     const emoji = await parse(docx(`<w:p>${r('I love ')}<w:r><mc:AlternateContent xmlns:w16se="http://schemas.microsoft.com/office/word/2015/wordml/symex"><mc:Choice Requires="w16se"><w16se:symEx w16se:font="Segoe UI Emoji" w16se:char="1F600"/></mc:Choice><mc:Fallback><w:t>😀</w:t></mc:Fallback></mc:AlternateContent></w:r>${r(' emoji')}</w:p>`));
