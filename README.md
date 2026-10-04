@@ -724,7 +724,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `OCR_REQUIRES_ATTACHMENTS` | parse | `ocr: true` without `extractAttachments: true`; no OCR ran. Set both. |
 | `PDF_NO_TEXT_EXTRACTED` | parse | A PDF yielded ~no text (likely scanned). Set `ocr: true` + `extractAttachments: true`. |
 | `PDF_STRUCT_TREE_UNRELIABLE` | parse | PDF tag tree absent/incomplete; structure recovered geometrically. |
-| `PDF_TEXT_ENCODING_SUSPECT` | parse | PDF glyphs mostly unmappable (broken ToUnicode); text may be garbage. Consider OCR. |
+| `PDF_TEXT_ENCODING_SUSPECT` | parse | A fifth or more of a PDF's characters (of at least 50) are unmappable glyphs (broken ToUnicode); text may be garbage. Consider OCR. |
 | `PDF_OUTLINE_TRUNCATED` | parse | Bookmark outline hit the depth/size cap; `ast.auxiliary.outline` is partial. |
 | `PDF_WORKER_MISSING` / `PDF_WORKER_FALLBACK` | parse | The pdf.js worker could not be loaded / a fallback was used (set `pdfWorkerSrc`). |
 | `NO_WORKSHEETS_FOUND` / `NO_SLIDES_FOUND` | parse | A legitimately empty workbook/presentation. |
@@ -733,7 +733,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `PDF_SEPARATE_PROCESS_UNAVAILABLE` | parse | pdf.js could not start in a separate process (Node), so it runs in the host; a hostile PDF can then exhaust its memory, and pdf.js's time is not bounded (bound it with `abortSignal`). |
 | `PDF_CONTENT_LIMIT_EXCEEDED` | parse | A PDF passed one of its content limits (plus an allowance per byte), which the message names: past `pdfParserConfig.maxTextItems` or `maxTimeMs` the rest of it was not read; past `maxOperators` its images, text colours and font styles from that page on were not (its text was). |
 | `ALT_CHUNK_NOT_READ` | parse | A DOCX alternative-format chunk (`w:altChunk`) was not read: its part is missing, is of a format other than HTML, MHT, RTF, plain text or DOCX, is a DOCX inside a DOCX chunk, or could not be read (not a ZIP, no document part, nested too deep). The rest of the document is read; a chunk past the document's limits (`maxXmlElements`, `maxUncompressedBytes`) still fails the parse. Saving the document again in Word merges chunks into it. |
-| `CONTENT_PART_NOT_READ` | parse | A chapter an EPUB's spine lists was not read: its file is missing from the archive (or has an extension other than `.xhtml`, `.html`, `.htm`, `.xht` or `.xml`), or it is encrypted (DRM, listed in `META-INF/encryption.xml`). A book whose chapters are all encrypted throws `DOCUMENT_DECRYPTION_FAILED` instead. |
+| `CONTENT_PART_NOT_READ` | parse | A part of the document was not read. A chapter an EPUB's spine lists: its file is missing from the archive (or has an extension other than `.xhtml`, `.html`, `.htm`, `.xht` or `.xml`), or it is encrypted (DRM, listed in `META-INF/encryption.xml`); a book whose chapters are all encrypted throws `DOCUMENT_DECRYPTION_FAILED` instead. In a PPTX, a part that is not XML and holds none of the slides' text: the presentation's slide list or relationships (the slides are then read in the order of their file numbers), or the relationships of a notes page or a slide master (its links and pictures are then not resolved). |
 | `RAW_CONTENT_LIMIT_EXCEEDED` | parse | With `includeRawContent`, the document's nodes reached `decompressionLimits.maxRawContentLength` of raw content; the remaining nodes carry none. |
 | `IMAGE_EXTRACTION_FAILED` / `IMAGE_PROCESSING_FAILED` / `ATTACHMENT_EXTRACTION_FAILED` | parse | An image/attachment could not be extracted or decoded; it was skipped or degraded. |
 | `ANNOTATION_EXTRACTION_FAILED` / `CHART_DATA_EXTRACTION_FAILED` | parse | A PDF annotation / a chart's data could not be read. |
@@ -805,6 +805,13 @@ tables, after the paragraph drawing them) and alternative-format chunks (`w:altC
 plain text or a DOCX, in the body, headers, footers, notes and comments), and RTF shape text boxes (as
 blocks right after the paragraph the shape is anchored in). Text a tracked
 change deleted or moved away (DOCX, ODT) is not read; insertions are.
+
+A PPTX's slides are read in the order its slide list (`p:sldIdLst`) shows them, not the order of their
+file names, and `slideNumber` is a slide's place in that order. Each slide has the notes page its own
+relationships name. A slide part the list no longer names (a deleted slide an editor left in the
+package) is not read. A slide list or presentation relationships that are not XML leave the slides in
+the order of their file numbers, and relationships of a notes page or a slide master that are not XML
+leave its links and pictures unresolved; each is reported with a `CONTENT_PART_NOT_READ` warning.
 
 ---
 
@@ -1066,12 +1073,14 @@ save→reload cycle:
 | HTML attribute | AST field | Notes |
 |---|---|---|
 | `data-width` / `data-align` / inline `style="width:…"` on `<img>` | `ImageMetadata.width` / `.align` | |
-| `data-align` on `<table>` | `TableMetadata.align` | Emitted/parsed as per-column GFM markers (`:---`, `:---:`, `---:`); alignment rides `CellMetadata.align` |
+| `data-align` on `<table>` | `TableMetadata.align` | Where the table stands on the page, not how its columns are aligned. In Markdown it is an attribute list under the table (`{align=right}`), in a dialect that writes one there (`attributeLists: 'brace'`, as `extended` has; the `pandoc` preset writes none, since Pandoc shows that line as text) |
+| `text-align` on `<th>`/`<td>` | `CellMetadata.align` | A column's alignment, written as the GFM markers (`:---`, `:---:`, `---:`) of the delimiter row |
+| `<th>`, and any cell of a `<thead>` | `CellMetadata.style: 'header'` | A header row stays one, whether or not its text is bold |
 | `title` on `<a>` / `<img>` | `TextMetadata.title` / `ImageMetadata.title` | Survives both directions (`[text](url "Title")` in Markdown) |
 | `<a href>` around `<img>` | `ImageMetadata.link` / `.linkType` / `.linkTitle` | A linked picture (a badge); written back the same way, and as a linked picture in DOCX, ODT, RTF and LaTeX |
 | `colspan` / `rowspan` on `<td>`/`<th>` | `CellMetadata.colSpan` / `.rowSpan` | Previously dropped on HTML import; merged cells now survive a save→reload cycle |
 | `<div data-youtube-video="ID">` / `<iframe src="...youtube.com...">` | `type: 'embed'` | |
-| `<ul data-type="taskList">` / `<li data-checked>` | `ListMetadata.isTask` / `.checked` | |
+| `<ul data-type="taskList">` / `<li data-checked data-type="taskItem">` | `ListMetadata.isTask` / `.checked` | The shape Tiptap's task list reads and writes |
 
 ---
 
@@ -1843,6 +1852,9 @@ Five bundles are available in the `dist/` directory:
 
 ### Manifest V3 & Extension Compliance (Slim Bundles)
 For strict browser environments like **Chrome/Edge Manifest V3 extensions**, remotely hosted code is forbidden. Use the **slim** bundles (`officeparser.browser.slim.mjs` or `officeparser.browser.slim.iife.js`) as they do not include default remote CDN urls or the Tesseract OCR engine.
+
+### Content Security Policy
+Every browser bundle loads under a policy with no `'unsafe-eval'` (`script-src 'self'`): none evaluates code from a string as it loads. What a policy still has to allow is what you choose to load: the pdf.js worker for PDF input (`pdfWorkerSrc`, a CDN by default, so host it yourself under `'self'`), and for OCR, Tesseract's worker and WebAssembly.
 
 ### ESM (Vite / Webpack / Next.js)
 

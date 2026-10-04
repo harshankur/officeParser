@@ -160,8 +160,10 @@
     <h3>2. Tables</h3>
     <ul>
         <li><strong><code>table</code></strong>: The container. Carries <code>TableMetadata</code> with optional
-            <code>anchorIds</code> and <code>align</code> (<code>'left' | 'center' | 'right'</code>, round-tripped
-            from HTML <code>data-align</code>).</li>
+            <code>anchorIds</code> and <code>align</code> (<code>'left' | 'center' | 'right'</code>): where the table
+            stands on the page, not how its columns are aligned (that is each cell's own <code>align</code>).
+            Round-tripped from HTML <code>data-align</code> and, in Markdown, from an attribute list under the
+            table (<code>{align=right}</code>).</li>
         <li><strong><code>row</code></strong>: A horizontal group of cells.</li>
         <li><strong><code>cell</code></strong>: A container for other content (paragraphs, images, or even nested
             tables). Use <code>metadata</code> for <code>rowSpan</code>, <code>colSpan</code>, and
@@ -173,7 +175,8 @@
     <p>These nodes represent large-scale document sections:</p>
     <ul>
         <li><strong><code>slide</code></strong>: Container for PPTX/ODP slides and LaTeX <code>beamer</code> frames. <code>metadata.slideNumber</code>
-            provides the position. Slide speaker notes are now attached via <code>slideNode.notes[]</code> instead of
+            provides the position: for PPTX, the slide's place in the presentation's slide list, which is also the
+            order slides are read in (a slide part the list no longer names is not read). Slide speaker notes are now attached via <code>slideNode.notes[]</code> instead of
             being inserted as top-level <code>note</code> nodes.</li>
         <li><strong><code>page</code></strong>: Container for PDF pages. <code>metadata.pageNumber</code> provides the
             position.</li>

@@ -366,7 +366,7 @@
             <tr><td><code>'github'</code></td><td>GFM: <code>&gt; [!NOTE]</code> admonitions, footnotes, strikethrough, native tables. No definition lists, citations, wikilinks or attribute lists.</td></tr>
             <tr><td><code>'gitlab'</code></td><td>GLFM: <code>:::note</code> fenced-div admonitions, otherwise as GitHub.</td></tr>
             <tr><td><code>'obsidian'</code></td><td>As GitHub, plus <code>[[wikilinks]]</code>.</td></tr>
-            <tr><td><code>'pandoc'</code></td><td><code>::: {.note}</code> admonitions, definition lists, citations and attribute lists on.</td></tr>
+            <tr><td><code>'pandoc'</code></td><td><code>::: {.note}</code> admonitions, definition lists and citations on, and attribute lists after images (<code>'brace-inline'</code>).</td></tr>
             <tr><td><code>'commonmark'</code></td><td>Strict CommonMark: no admonition syntax (plain blockquote), no footnote references (inlined as parentheticals), no strikethrough, and tables forced to HTML, since CommonMark has no table syntax.</td></tr>
         </tbody>
     </table>
@@ -393,7 +393,7 @@
             <tr><td><code>footnotes</code></td><td><code>'caret' | 'none'</code></td><td><code>[^id]</code> references with a definition block. <code>'none'</code> inlines note content as a parenthetical at the reference point rather than dropping it.</td></tr>
             <tr><td><code>citations</code></td><td><code>'at' | 'none'</code></td><td>Pandoc <code>[@citekey]</code> syntax. <code>'none'</code> emits the key as plain <code>[key]</code>.</td></tr>
             <tr><td><code>wikilinks</code></td><td><code>'double-bracket' | 'none'</code></td><td>Obsidian <code>[[Page]]</code> / <code>[[Page|Alias]]</code> syntax. <code>'none'</code> makes wikilinks ordinary links.</td></tr>
-            <tr><td><code>attributeLists</code></td><td><code>'brace' | 'none'</code></td><td>Pandoc-style <code>{width=50% align=center}</code> after an image or table.</td></tr>
+            <tr><td><code>attributeLists</code></td><td><code>'brace' | 'brace-inline' | 'none'</code></td><td><code>{width=50% align=center}</code> attribute lists. <code>'brace'</code> writes one after an image and one on the line under a pipe table (<code>{align=right}</code>, where the table stands on the page). <code>'brace-inline'</code> writes one after an image only, which is what Pandoc reads: it shows a list under a table as text.</td></tr>
             <tr><td><code>strikethrough</code></td><td><code>'tilde' | 'none'</code></td><td><code>~~struck~~</code>. <code>'none'</code> drops the formatting.</td></tr>
             <tr><td><code>embeds</code></td><td><code>'html' | 'directive' | 'link' | 'thumbnail'</code></td><td>How an <code>embed</code> node is written: <code>'html'</code> (default; the <code>&lt;div data-youtube-video&gt;</code> / <code>&lt;iframe&gt;</code> block), <code>'directive'</code> (a <code>::youtube[…]{…}</code> / <code>::embed[…]{…}</code> leaf directive; an editor round-trip form, rendered verbatim on GitHub), <code>'link'</code> (a plain link), <code>'thumbnail'</code> (YouTube-only clickable preview). Authority for embed form; supersedes the deprecated <code>fallbackToHtml.embeds</code> boolean.</td></tr>
         </tbody>
