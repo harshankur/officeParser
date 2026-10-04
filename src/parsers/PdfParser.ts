@@ -505,7 +505,7 @@ function linkForBox(x: number, yTop: number, w: number, h: number, links: Resolv
     return undefined;
 }
 
-/** Warns when a document's extracted text is dominated by unmappable glyphs (bad/missing ToUnicode). */
+/** Warns when a fifth or more of a document's characters (of at least 50) are unmappable glyphs (bad/missing ToUnicode). */
 function warnIfEncodingSuspect(runs: RawRun[], config: FullOfficeParserConfig): void {
     let total = 0, bad = 0;
     for (const r of runs) {
@@ -1615,7 +1615,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     const layoutCfg: PdfLayoutConfig = { ...pdfCfg, includeBounds: true };
     const docCtx = computeDocContext(allRuns, layoutCfg, config.newlineDelimiter);
 
-    // Warn when extracted text is mostly unmappable glyphs (broken/missing ToUnicode), so consumers
+    // Warn when much of the extracted text is unmappable glyphs (broken/missing ToUnicode), so consumers
     // can tell "genuinely empty" from "font could not be decoded" and reach for OCR.
     warnIfEncodingSuspect(allRuns, config);
 
