@@ -1778,8 +1778,13 @@ export type FootnoteSyntax = 'caret' | 'none';
 export type CitationSyntax = 'at' | 'none';
 /** `[[Page]]` wikilinks (`'double-bracket'`), or `'none'`. */
 export type WikilinkSyntax = 'double-bracket' | 'none';
-/** `{width=50%}` attribute lists (`'brace'`), or `'none'`. */
-export type AttributeListSyntax = 'brace' | 'none';
+/**
+ * `{…}` attribute lists: after an image (`![alt](src){width=50%}`) and on the line under a pipe table
+ * (`{align=right}`, where the table stands on the page) with `'brace'`; after an image alone with
+ * `'brace-inline'`, which is what Pandoc reads (it has attributes for an image, and shows a list under
+ * a table as text); or `'none'`.
+ */
+export type AttributeListSyntax = 'brace' | 'brace-inline' | 'none';
 /**
  * How an `embed` node is written to Markdown:
  * - `'html'` (default): the single-line `<div data-youtube-video="ID">` / `<iframe src=...>` block
@@ -1855,9 +1860,10 @@ export interface MarkdownDialectConfig {
     /** Inline `$...$`/block `$$...$$` math delimiters (`'dollar'`), or `'none'` for bare LaTeX text. */
     math?: 'dollar' | 'none';
     /**
-     * Pandoc-style `{width=50% .centered}` attribute lists after images/tables (`'brace'`), or
-     * `'none'`. Omit to inherit from `extends`. Passing a boolean is deprecated: `true` = `'brace'`,
-     * `false` = `'none'` (removed next major).
+     * `{width=50% align=center}` attribute lists: after an image and under a table (`'brace'`), after
+     * an image alone (`'brace-inline'`, all that Pandoc reads), or `'none'`. Omit to inherit from
+     * `extends`. Passing a boolean is deprecated: `true` = the preset's own syntax (`'brace'` when the
+     * preset has none), `false` = `'none'` (removed next major).
      */
     attributeLists?: AttributeListSyntax | DeprecatedDialectToggle;
     /**
@@ -2636,7 +2642,11 @@ export interface TableMetadata {
     /** Unique anchor IDs for internal linking. */
     anchorIds?: string[];
     /**
-     * Layout alignment of the table on the page (e.g. an editor's custom table node).
+     * Layout alignment of the table on the page (e.g. an editor's custom table node): where the table
+     * stands, not how the text in its columns is aligned, which is each cell's own
+     * (`CellMetadata.align`). HTML holds it as `data-align` on the `<table>`, and Markdown as an
+     * attribute list under the table (`{align=right}`) in a dialect that writes one there
+     * (`attributeLists: 'brace'`, as `extended` has).
      * @example 'center'
      */
     align?: 'left' | 'center' | 'right';

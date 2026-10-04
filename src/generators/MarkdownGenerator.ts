@@ -1,5 +1,6 @@
 import { AdmonitionMetadata, AdmonitionSyntax, AttributeListSyntax, BreakMetadata, CitationSyntax, CodeMetadata, ConversionResult, DefinitionListSyntax, DeprecatedAdmonitionFlavor, EmbedMetadata, EmbedSyntax, FallbackToHtmlConfig, FootnoteSyntax, GeneratorConfig, HeadingMetadata, HighlightSyntax, ImageMetadata, ListMetadata, MarkdownDialectConfig, MarkdownDialectPreset, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, StrikethroughSyntax, TableMetadata, TextFormatting, TextMetadata, WikilinkSyntax } from '../types.js';
 import { escapeHtml, markdownEscapeInline, markdownEscapePlain, markdownEscapeTags, markdownEscapeText, sanitizeCommentText, sanitizeCssValue, sanitizeImageUrl, sanitizeMarkdownUrl, sanitizeUrl } from '../utils/sanitize.js';
+import { isDefaultHighlight } from '../utils/colorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { base64ByteLength, resolveEmbed } from '../utils/officeGenUtils.js';
 import { clampInt, clampRepeat } from '../utils/numberUtils.js';
@@ -241,7 +242,7 @@ const MARKDOWN_DIALECT_PRESETS: Record<MarkdownDialectPreset, ResolvedMarkdownDi
     github: { admonitions: 'blockquote', definitionLists: 'none', footnotes: 'caret', citations: 'none', wikilinks: 'none', math: 'dollar', attributeLists: 'none', strikethrough: 'tilde', highlight: 'none', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
     gitlab: { admonitions: 'fence', definitionLists: 'none', footnotes: 'caret', citations: 'none', wikilinks: 'none', math: 'dollar', attributeLists: 'none', strikethrough: 'tilde', highlight: 'none', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
     obsidian: { admonitions: 'blockquote', definitionLists: 'none', footnotes: 'caret', citations: 'none', wikilinks: 'double-bracket', math: 'dollar', attributeLists: 'none', strikethrough: 'tilde', highlight: 'equals', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
-    pandoc: { admonitions: 'fence-attribute', definitionLists: 'colon', footnotes: 'caret', citations: 'at', wikilinks: 'none', math: 'dollar', attributeLists: 'brace', strikethrough: 'tilde', highlight: 'none', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
+    pandoc: { admonitions: 'fence-attribute', definitionLists: 'colon', footnotes: 'caret', citations: 'at', wikilinks: 'none', math: 'dollar', attributeLists: 'brace-inline', strikethrough: 'tilde', highlight: 'none', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'native' },
     commonmark: { admonitions: 'none', definitionLists: 'none', footnotes: 'none', citations: 'none', wikilinks: 'none', math: 'none', attributeLists: 'none', strikethrough: 'none', highlight: 'none', bulletListMarker: '-', orderedListMarker: '.', emphasisMarker: 'asterisk', tables: 'html' },
 };
 
@@ -286,7 +287,8 @@ function resolveDialect(dialect: MarkdownDialectPreset | MarkdownDialectConfig |
         citations: resolveToggle(dialect.citations, 'at', base.citations),
         wikilinks: resolveToggle(dialect.wikilinks, 'double-bracket', base.wikilinks),
         math: dialect.math ?? base.math,
-        attributeLists: resolveToggle(dialect.attributeLists, 'brace', base.attributeLists),
+        // The deprecated `true` is the preset's own syntax, where it has one.
+        attributeLists: resolveToggle(dialect.attributeLists, base.attributeLists === 'none' ? 'brace' : base.attributeLists, base.attributeLists),
         strikethrough: resolveToggle(dialect.strikethrough, 'tilde', base.strikethrough),
         highlight: dialect.highlight ?? base.highlight,
         bulletListMarker: dialect.bulletListMarker ?? base.bulletListMarker,
@@ -368,6 +370,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private inImplicitBold = false;
     /** Rendering a pipe-table cell, where a fenced block cannot go: code there stays an inline span. */
     private inPipeTableCell = false;
+    /**
+     * The alignment the pipe table's delimiter row gives the column of the cell being rendered, if any.
+     * A paragraph in the cell aligned the same way says nothing more, and gets no wrapper of its own.
+     */
+    private pipeColumnAlign: string | undefined;
     /**
      * Anchors of an empty paragraph (a bookmark on an empty line), written with those of the next block
      * that writes anchors: where the parser gives an anchor standing alone, so a save reads back as itself.
@@ -497,12 +504,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     /**
      * Renders a Pandoc-style attribute list (e.g. `{width=50% align=left}`) from
      * ImageMetadata/TableMetadata's width/align fields - the canonical form is always
-     * `key=value`, matching MarkdownParser's own vocabulary (MARKDOWN_DIALECT.md §15).
+     * `key=value`, matching MarkdownParser's own vocabulary (MARKDOWN_DIALECT.md §15). For a table,
+     * `align` is where it stands on the page (TableMetadata.align), which the parser reads back from
+     * this list and from nothing else; whether a table has a list at all is its caller's to say (see
+     * AttributeListSyntax).
      */
-    private renderAttributeList(meta: { width?: string; align?: string } | undefined, options: { skipAlign?: boolean } = {}): string {
+    private renderAttributeList(meta: { width?: string; align?: string } | undefined): string {
         if (this.resolvedDialect.attributeLists === 'none') return '';
         if (!meta) return '';
-        const align = options.skipAlign ? undefined : meta.align;
+        const align = meta.align;
         if (!meta.width && !align) return '';
         const parts: string[] = [];
         // Allowlist, not escape. These land in `metadata.width`/`align` on reparse, which the
@@ -714,9 +724,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                         // so its exact colour survives. With `inlineFormatting` off (no span to hold it)
                         // even a coloured highlight degrades to `==` rather than being dropped. In
                         // GFM/CommonMark `==` is literal, so a highlight falls through to the <span> path.
-                        const isDefaultHighlight = node.formatting.backgroundColor === '#ffff00';
+                        const defaultHighlight = isDefaultHighlight(node.formatting.backgroundColor);
                         const emitHighlightMark = !!node.formatting.backgroundColor && this.resolvedDialect.highlight !== 'none'
-                            && (isDefaultHighlight || !this.resolvedFallbackToHtml.inlineFormatting);
+                            && (defaultHighlight || !this.resolvedFallbackToHtml.inlineFormatting);
                         const emphasis = !!core && ((node.formatting.bold && !this.inImplicitBold) || !!node.formatting.italic);
                         const strike = !!core && !!node.formatting.strikethrough && this.resolvedDialect.strikethrough !== 'none';
                         const highlight = !!core && emitHighlightMark;
@@ -880,8 +890,11 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     }
                     const anchors = this.inOneLine ? this.deferAnchors(meta) : this.renderAnchors(meta);
 
-                    // Alignment fallback via HTML div/p
-                    if (this.resolvedFallbackToHtml.alignment && meta?.alignment && meta.alignment !== 'left') {
+                    // Alignment fallback via HTML div/p. A paragraph in a pipe-table cell aligned as its
+                    // column is needs none: the delimiter row says it (`---:`), and the wrapper said it
+                    // again in every cell of the column.
+                    const alignedByColumn = this.inPipeTableCell && meta?.alignment === this.pipeColumnAlign;
+                    if (this.resolvedFallbackToHtml.alignment && meta?.alignment && meta.alignment !== 'left' && !alignedByColumn) {
                         content = `<div style="text-align: ${sanitizeCssValue(meta.alignment)}">${content}</div>`;
                     }
 
@@ -985,12 +998,17 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 case 'table': {
                     const anchors = this.renderAnchors(node.metadata);
                     const tableOutput = await this.renderMarkdownTable(node, processor);
-                    // The HTML-fallback path (merged cells/nested tables, or a dialect that forces
-                    // HTML tables outright) already carries data-align on the <table> tag directly -
-                    // only the plain pipe-table form needs the attribute-list syntax for alignment.
+                    // Where the table stands on the page (TableMetadata.align) is written as an
+                    // attribute list under a pipe table (`{align=right}`), in the dialects that write
+                    // one there (`attributeLists: 'brace'`): it is what the parser reads a table's place
+                    // from, and it leaves the columns' own alignment (the delimiter row) alone. Pandoc
+                    // has no such list (it shows the line as a paragraph of text), so its dialect
+                    // (`'brace-inline'`) writes none. The HTML-fallback path (merged cells/nested
+                    // tables, or a dialect that forces HTML tables outright) carries it as data-align
+                    // on the <table> tag instead.
                     const usedHtmlFallback = this.resolvedDialect.tables === 'html' ||
                         (this.resolvedFallbackToHtml.tables && (this.hasNestedTable(node) || this.hasColspanOrRowspan(node)));
-                    const attrList = usedHtmlFallback ? '' : this.renderAttributeList(node.metadata as TableMetadata, { skipAlign: true });
+                    const attrList = usedHtmlFallback || this.resolvedDialect.attributeLists !== 'brace' ? '' : this.renderAttributeList(node.metadata as TableMetadata);
                     if (attrList) {
                         // Must glue directly below the last row with no blank line, or
                         // MarkdownParser's block splitter won't see it as part of the same block.
@@ -1613,6 +1631,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         let tableOutput = '';
         let maxCols = 0;
 
+        // A column's alignment: that of its cell in the header row.
+        const headerCells = (node.children?.[0]?.children || []).filter(c => c.type === 'cell');
+        const columnAlign = (i: number): string | undefined => (headerCells[i]?.metadata as any)?.align;
+
         // First pass: Process rows and determine max columns (accounting for colspans)
         const processedRows: string[][] = [];
         for (const rowNode of (node.children ?? [])) {
@@ -1670,12 +1692,15 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
 
                         // Process cell content
                         const wasInPipeTableCell = this.inPipeTableCell;
+                        const outerColumnAlign = this.pipeColumnAlign;
                         this.inPipeTableCell = true;
+                        this.pipeColumnAlign = columnAlign(rowCells.length);
                         let cellContent: string;
                         try {
                             cellContent = await this.processNodeRecursive(cellNode, processor);
                         } finally {
                             this.inPipeTableCell = wasInPipeTableCell;
+                            this.pipeColumnAlign = outerColumnAlign;
                         }
                         // Use <br> fallback only if allowed, otherwise space
                         const br = this.resolvedFallbackToHtml.cellLineBreaks ? '<br>' : ' ';
@@ -1700,14 +1725,13 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         }
 
         // Second pass: Build table string with separator. The separator carries standard GFM
-        // per-column alignment (`:---`/`:---:`/`---:`) from columnAlignments, or the single table-level
-        // align applied to every column, rather than a non-standard trailing `{align}` attribute list.
-        const tableMeta = node.metadata as TableMetadata | undefined;
-        // Column alignment lives on each cell (CellMetadata.align); read it off the header row.
-        // Fall back to the single table-level align (an editor's data-align) for every column.
-        const headerCells = (node.children?.[0]?.children || []).filter(c => c.type === 'cell');
+        // per-column alignment (`:---`/`:---:`/`---:`), which lives on each cell (CellMetadata.align)
+        // and is read off the header row (see columnAlign). The table's own align (TableMetadata.align)
+        // is where the table stands on the page, written apart from it (an attribute list under the
+        // table, see the `table` case): written as every column's alignment, a table an editor had
+        // centred on the page came back with every column centred.
         const alignMarker = (i: number): string => {
-            const a = (headerCells[i]?.metadata as any)?.align ?? tableMeta?.align;
+            const a = columnAlign(i);
             return a === 'center' ? ':---:' : a === 'left' ? ':---' : a === 'right' ? '---:' : '---';
         };
         for (let i = 0; i < processedRows.length; i++) {
@@ -1788,8 +1812,9 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (f.strikethrough) text = `<s>${text}</s>`;
                     if (f.subscript) text = `<sub>${text}</sub>`;
                     if (f.superscript) text = `<sup>${text}</sup>`;
-                    if (f.backgroundColor === '#ffff00') text = `<mark>${text}</mark>`;
-                    const styles = [['color', f.color], ['background-color', f.backgroundColor !== '#ffff00' ? f.backgroundColor : undefined], ['font-size', f.size]]
+                    const defaultHighlight = isDefaultHighlight(f.backgroundColor);
+                    if (defaultHighlight) text = `<mark>${text}</mark>`;
+                    const styles = [['color', f.color], ['background-color', defaultHighlight ? undefined : f.backgroundColor], ['font-size', f.size]]
                         .map(([prop, value]) => [prop, value ? sanitizeCssValue(value) : ''])
                         .filter(([, value]) => value).map(([prop, value]) => `${prop}: ${value}`);
                     if (styles.length) text = `<span style="${esc(styles.join('; '))}">${text}</span>`;

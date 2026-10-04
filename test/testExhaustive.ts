@@ -1310,11 +1310,16 @@ async function testGeneratedOutput(): Promise<void> {
     }
 
     // 4.B: a highlight emits <mark> (Tiptap's Highlight extension parseHTML matches exactly `mark`),
-    // not a <span style="background-color">, and the generated <mark> re-parses as a highlight.
-    const hlHtml = String((await OfficeGenerator.generate(await parseHtml('<p><span style="background-color:#ffff00">hi</span></p>'), 'html', { htmlConfig: { standalone: false } })).value);
+    // not a <span style="background-color">, and the generated <mark> re-parses as a highlight. A
+    // highlight in a colour of its own carries it; one in the default colour is a plain <mark> (see
+    // testEditorSaveShapes).
+    const hlHtml = String((await OfficeGenerator.generate(await parseHtml('<p><span style="background-color:#b8f5c0">hi</span></p>'), 'html', { htmlConfig: { standalone: false } })).value);
     assert.ok(/<mark[^>]*background-color/.test(hlHtml), '4.B: highlight emits <mark> carrying the background-color');
     assert.ok(!/<span[^>]*background-color/.test(hlHtml), '4.B: highlight is not a background-color <span>');
-    assert.ok(collectAllNodes(await parseHtml(hlHtml)).some(n => !!n.formatting?.backgroundColor), '4.B: generated <mark> round-trips back to a highlight');
+    assert.ok(collectAllNodes(await parseHtml(hlHtml)).some(n => n.formatting?.backgroundColor === '#b8f5c0'), '4.B: generated <mark> round-trips back to a highlight in its colour');
+    const defaultHlHtml = String((await OfficeGenerator.generate(await parseHtml('<p><span style="background-color:#ffff00">hi</span></p>'), 'html', { htmlConfig: { standalone: false } })).value);
+    assert.ok(defaultHlHtml.includes('<mark>hi</mark>') && !/<span[^>]*background-color/.test(defaultHlHtml), '4.B: a highlight in the default colour is a plain <mark>');
+    assert.ok(collectAllNodes(await parseHtml(defaultHlHtml)).some(n => !!n.formatting?.backgroundColor), '4.B: a plain <mark> round-trips back to a highlight');
 
     // 4.C: a footnote body is searchable in RAG chunks (folded into the referencing node's text).
     const fnChunks = ((await OfficeGenerator.generate(await parseMd('Para[^1].\n\n[^1]: Searchable footnote body.'), 'chunks')).value as any[]).map(c => c.text).join('  ');
@@ -1494,12 +1499,32 @@ async function testGeneratedOutput(): Promise<void> {
     const plainHtml = String((await OfficeGenerator.generate(await parseMd('| A | B |\n| --- | --- |\n| 1 | 2 |'), 'html', { htmlConfig: { standalone: false } })).value);
     assert.ok(!/text-align/.test(plainHtml), '8.G: an unaligned table emits no text-align');
 
-    // 8.G: html -> md reads BOTH the new per-cell `text-align` form and the existing table-level
-    // `<table data-align>` form.
+    // 8.G: html -> md reads the per-cell `text-align` form into the separator. The table-level
+    // `<table data-align>` form is where the table stands on the page, not its columns' alignment
+    // (it was written as every column's, so a table an editor had centred came back with every
+    // column centred), and how a Markdown table's columns are aligned is not where it stands either.
     const fromCells = String((await OfficeGenerator.generate(await parseHtml('<table><thead><tr><th style="text-align:right">A</th></tr></thead><tbody><tr><td style="text-align:right">1</td></tr></tbody></table>'), 'md', { mdConfig: { dialect: 'extended' } })).value);
     assert.ok(/\|\s*---:\s*\|/.test(fromCells), '8.G: html -> md reads per-cell text-align into the separator');
     const fromTableAlign = String((await OfficeGenerator.generate(await parseHtml('<table data-align="center"><thead><tr><th>A</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>'), 'md', { mdConfig: { dialect: 'extended' } })).value);
-    assert.ok(/\|\s*:---:\s*\|/.test(fromTableAlign), '8.G: html -> md still reads the table-level data-align form');
+    assert.strictEqual(fromTableAlign, '| A |\n| --- |\n| 1 |\n{align=center}', '8.G: a table\'s place on the page is written under it, not as its columns\' alignment');
+    const fromTableAlignGithub = String((await OfficeGenerator.generate(await parseHtml('<table data-align="center"><thead><tr><th>A</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>'), 'md', { mdConfig: { dialect: 'github' } })).value);
+    assert.strictEqual(fromTableAlignGithub, '| A |\n| --- |\n| 1 |', '8.G: a dialect without attribute lists writes no placement');
+    // Pandoc reads an attribute list after an image, and shows one under a table as a paragraph of
+    // text (`<p>{align=center}</p>`, pandoc 3.12): its dialect writes the first and not the second.
+    const placedWithImage = await parseHtml('<table data-align="center"><thead><tr><th>A</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table><p><img src="a.png" alt="x" width="50%"></p>');
+    const inDialect = async (dialect: any) => String((await OfficeGenerator.generate(placedWithImage, 'md', { mdConfig: { dialect } })).value);
+    assert.strictEqual(await inDialect('pandoc'), '| A |\n| --- |\n| 1 |\n\n![x](a.png){width=50%}', '8.G: the pandoc dialect writes an image\'s attribute list, and none under a table');
+    assert.strictEqual(await inDialect('extended'), '| A |\n| --- |\n| 1 |\n{align=center}\n\n![x](a.png){width=50%}', '8.G: the extended dialect writes both');
+    assert.strictEqual(await inDialect({ extends: 'extended', attributeLists: 'brace-inline' }), await inDialect('pandoc'), '8.G: brace-inline is an attribute list after an image alone');
+    assert.strictEqual(await inDialect({ extends: 'pandoc', attributeLists: 'brace' }), await inDialect('extended'), '8.G: brace is an attribute list under a table too');
+    // The deprecated `true` is the preset's own syntax, and `brace` for a preset that has none.
+    assert.strictEqual(await inDialect({ extends: 'pandoc', attributeLists: true }), await inDialect('pandoc'), '8.G: attributeLists: true keeps the pandoc preset\'s syntax');
+    assert.strictEqual(await inDialect({ extends: 'github', attributeLists: true }), await inDialect('extended'), '8.G: attributeLists: true on a preset with none is brace');
+    assert.strictEqual(await inDialect({ extends: 'extended', attributeLists: false }), '| A |\n| --- |\n| 1 |\n\n![x](a.png)', '8.G: attributeLists: false writes none');
+    const uniformColumns = await parseMd('| A | B |\n| ---: | ---: |\n| 1 | 2 |');
+    assert.strictEqual((uniformColumns.content[0].metadata as any)?.align, undefined, '8.G: columns aligned alike do not place their table on the page');
+    assert.ok(!/data-align|margin-/.test(String((await OfficeGenerator.generate(uniformColumns, 'html', { htmlConfig: { standalone: false } })).value)), '8.G: a table of right-aligned columns is not moved to the right of the page');
+    assert.strictEqual((await parseMd('| A |\n| --- |\n| 1 |\n{align=right}')).content[0].metadata && ((await parseMd('| A |\n| --- |\n| 1 |\n{align=right}')).content[0].metadata as any).align, 'right', '8.G: an attribute list after a table still places it');
 
     // ── Round 9: embeds (leaf directive, dialect.embeds modes, parser parity, gated contract) ──
     const embedMeta = (ast: OfficeParserAST) => collectAllNodes(ast).find(n => n.type === 'embed')?.metadata as any;
@@ -1883,6 +1908,81 @@ async function testPptxSlideOrderAndParts(): Promise<void> {
     assert.deepStrictEqual(sample.content.map(s => (s.notes ?? []).map(n => (n.metadata as any).noteId)), [['slide-note-1'], ['slide-note-2'], ['slide-note-3'], [], ['slide-note-5'], [], [], [], []], 'PPTX: the sample deck\'s notes are on the slides that name them');
     assert.ok(sample.content[4].notes![0].children![0].text!.startsWith('Now calendars') && sample.content[4].children![0].text!.includes('calendar'), 'PPTX: the calendar slide has the calendar notes');
     console.log('  PPTX slide order and parts: All assertions passed ✓');
+}
+
+/**
+ * A note opened in an editor and saved with no edit is the note that was opened. Markdown is written as
+ * HTML for the editor (Tiptap's shapes) and the editor's HTML is written back as Markdown; the editor's
+ * HTML here is what one produces, recorded from a running editor.
+ */
+async function testEditorSaveShapes(): Promise<void> {
+    const quiet = { onWarning: () => { } };
+    const editorHtml = { htmlConfig: { sourceAttributes: true, standalone: { document: false, styles: 'none' as const } } };
+    const saved = { generateIds: false, mdConfig: { dialect: 'extended' as const, fallbackToHtml: { inlineFormatting: true } } };
+    const toEditor = async (md: string) => String((await OfficeGenerator.generate(await OfficeParser.parseOffice(Buffer.from(md), { fileType: 'md', ...quiet }), 'html', editorHtml)).value);
+    const toMarkdown = async (html: string) => String((await OfficeGenerator.generate(await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html', ...quiet }), 'md', saved)).value);
+    const toHtml = async (html: string) => String((await OfficeGenerator.generate(await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html', ...quiet }), 'html', editorHtml)).value);
+
+    // A task item is marked as one (Tiptap reads only `li[data-type="taskItem"]`), at every depth.
+    const tasks = await toEditor('- [ ] open task\n- [x] done task\n  - [ ] nested\n');
+    assert.strictEqual(tasks.split('<li ').length - 1, 3, 'three task items are written');
+    assert.strictEqual(tasks.split('data-type="taskItem"').length - 1, 3, 'HTML: every task item is marked data-type="taskItem"');
+    assert.ok(tasks.includes('<li data-checked="true" data-type="taskItem"') && tasks.includes('<li data-checked="false" data-type="taskItem"'), 'HTML: a task item keeps its checked state beside the marker');
+    assert.strictEqual(await toMarkdown('<ul data-type="taskList"><li data-checked="false" data-type="taskItem"><label><input type="checkbox"><span></span></label><div><p>open task</p></div></li><li data-checked="true" data-type="taskItem"><label><input type="checkbox" checked="checked"><span></span></label><div><p>done task</p></div></li></ul>'),
+        '- [ ] open task\n- [x] done task', 'Markdown: an editor\'s task items are written back as they were');
+
+    // A footnote's back-link, which the editor keeps as the note's content, is not the note's text.
+    assert.strictEqual(await toMarkdown('<p>A footnote<sup data-footnote-ref="1"></sup>.</p><section data-footnotes="true"><div data-footnote-id="1"><p>The note text. <a target="_blank" rel="noopener noreferrer nofollow" href="#footnote-ref-1">↩</a></p></div></section>'),
+        'A footnote[^1].\n\n[^1]: The note text.', 'Markdown: a footnote\'s back-link is not written into the note');
+
+    // A highlight that names no colour is a plain <mark>, and a mark in that colour is `==text==`
+    // however the colour is written and whatever the editor adds (`color: inherit`).
+    assert.ok((await toEditor('Some ==highlighted== text.\n')).includes('<p>Some <mark>highlighted</mark> text.</p>'), 'HTML: ==text== is a plain <mark>');
+    assert.strictEqual(await toMarkdown('<p>Some <mark data-color="#ffff00" style="background-color: rgb(255, 255, 0); color: inherit;">highlighted</mark> text.</p>'),
+        'Some ==highlighted== text.', 'Markdown: the editor\'s mark in the default colour is ==text==');
+    assert.strictEqual(await toMarkdown('<p><mark>a</mark> <span style="background-color: yellow">b</span> <mark data-color="#FF0">c</mark> <mark style="background-color: #FFFF00">d</mark></p>'),
+        '==a== ==b== ==c== ==d==', 'Markdown: the default highlight colour is the same colour however it is written');
+    // A yellow that is partly see-through is a colour of its own: written as the default, it came out solid.
+    for (const translucent of ['rgba(255, 255, 0, 0.3)', '#ffff0080', '#ff08', 'rgb(255 255 0 / 30%)', 'hsla(60, 100%, 50%, 0.3)']) {
+        assert.ok((await toHtml(`<p><span style="background-color: ${translucent}">x</span></p>`)).includes(`style="background-color: ${translucent}">x</mark>`), `HTML: a see-through yellow (${translucent}) keeps its colour`);
+        assert.strictEqual(await toMarkdown(`<p><span style="background-color: ${translucent}">x</span></p>`), `<span style="background-color: ${translucent}">x</span>`, `Markdown: a see-through yellow (${translucent}) keeps its colour`);
+    }
+    assert.strictEqual(await toMarkdown('<p><mark style="background-color: rgba(255, 255, 0, 1)">a</mark> <mark style="background-color: #ffff00ff">b</mark> <mark style="background-color: rgb(255 255 0 / 100%)">c</mark></p>'),
+        '==a== ==b== ==c==', 'Markdown: a yellow whose alpha is 1 is the default highlight');
+    // A highlight in a colour of its own keeps it, both ways.
+    assert.strictEqual(await toMarkdown('<p>Some <mark data-color="#b8f5c0" style="background-color: #b8f5c0; color: inherit">x</mark> text.</p>'),
+        'Some <span style="background-color: #b8f5c0">x</span> text.', 'Markdown: a highlight in another colour keeps its colour');
+    assert.ok((await toHtml('<p><mark data-color="#b8f5c0">x</mark></p>')).includes('<mark data-color="#b8f5c0" style="background-color: #b8f5c0">x</mark>'), 'HTML: a highlight in another colour is written with it');
+    // CSS's keywords are no colours: `inherit` keeps the colour the text has, `initial` is the default
+    // one, and a transparent background is none.
+    assert.strictEqual(await toMarkdown('<p><span style="color: red">red <span style="color: inherit">still red</span></span> <span style="color: initial">plain</span> <mark style="background-color: transparent">unmarked</mark></p>'),
+        '<span style="color: red">red still red</span> plain unmarked', 'Markdown: inherit, initial and transparent are not written as colours');
+
+    // Where a table stands on the page is not its columns' alignment, and a column's alignment is said
+    // once, in the delimiter row.
+    const placed = '<table data-align="center" style="margin-left: auto; margin-right: auto;"><tbody><tr><th colspan="1" rowspan="1" style="text-align: right;"><p>a</p></th><th colspan="1" rowspan="1"><p>b</p></th></tr><tr><td colspan="1" rowspan="1" style="text-align: right;"><p>1</p></td><td colspan="1" rowspan="1"><p>2</p></td></tr></tbody></table>';
+    assert.strictEqual(await toMarkdown(placed), '| a | b |\n| ---: | --- |\n| 1 | 2 |\n{align=center}', 'Markdown: a centred table\'s columns keep their own alignment, written once, and its place is written under it');
+    assert.ok((await toHtml(placed)).includes('<table data-align="center"'), 'HTML: a table keeps its place on the page');
+    // A table's place and its columns' alignment are kept apart, both ways, and a table with no place has none written.
+    const placedMarkdown = '| a | b |\n| :--- | :--- |\n| 1 | 2 |\n{align=right}';
+    const placedHtml = await toEditor(placedMarkdown);
+    assert.ok(placedHtml.includes('<table data-align="right" style="margin-left: auto; margin-right: 0">') && placedHtml.split('text-align: left').length - 1 === 4, `HTML: placement right and left-aligned cells are both written: ${placedHtml}`);
+    assert.strictEqual(await toMarkdown(placedHtml), placedMarkdown, 'Markdown: a placed table with aligned columns round-trips');
+    assert.ok(!(await toEditor('| a | b |\n| ---: | ---: |\n| 1 | 2 |\n')).includes('data-align'), 'HTML: columns aligned alike do not place the table');
+    assert.strictEqual(await toMarkdown(placed.replace(' data-align="center" style="margin-left: auto; margin-right: auto;"', '')), '| a | b |\n| ---: | --- |\n| 1 | 2 |', 'Markdown: a table with no place has none written');
+    assert.strictEqual(await toMarkdown(await toEditor('| a | b |\n| :--- | ---: |\n| 1 | 2 |\n')), '| a | b |\n| :--- | ---: |\n| 1 | 2 |', 'Markdown: column alignment round-trips');
+    // A cell aligned unlike its column still says so.
+    assert.strictEqual(await toMarkdown('<table><tbody><tr><th><p>a</p></th><th style="text-align: right;"><p>b</p></th></tr><tr><td style="text-align: center;"><p>1</p></td><td style="text-align: right;"><p>2</p></td></tr></tbody></table>'),
+        '| a | b |\n| --- | ---: |\n| <div style="text-align: center">1</div> | 2 |', 'Markdown: a cell aligned unlike its column keeps its own alignment');
+
+    // A header cell stays one: `<th>`, and any cell of a `<thead>`, whether or not its text is bold.
+    const oneLine = (html: string) => html.replace(/\n/g, '');
+    assert.ok(oneLine(await toHtml('<table><tbody><tr><th colspan="1" rowspan="1"><p>a</p></th></tr><tr><td colspan="1" rowspan="1"><p>1</p></td></tr></tbody></table>')).includes('<thead><tr><th><p>a</p></th></tr></thead><tbody><tr><td><p>1</p></td></tr>'), 'HTML: a <th> row is written as a header row');
+    assert.ok(oneLine(await toHtml('<table><thead><tr><td>a</td></tr></thead><tbody><tr><td>1</td></tr></tbody></table>')).includes('<thead><tr><th>a</th></tr></thead>'), 'HTML: a <thead> row is a header row');
+    const nestedInHead = await OfficeParser.parseOffice(Buffer.from('<table><thead><tr><th>h<table><tr><td>inner</td></tr></table></th></tr></thead><tr><td>1</td></tr></table>'), { fileType: 'html', ...quiet });
+    const cellStyles = collectAllNodes(nestedInHead).filter(n => n.type === 'cell').map(n => [n.text, (n.metadata as any)?.style]);
+    assert.deepStrictEqual(cellStyles.filter(([, style]) => style === 'header').length, 1, `HTML: a table nested in a header cell is no part of the head: ${JSON.stringify(cellStyles)}`);
+    console.log('  Editor save shapes: All assertions passed ✓');
 }
 
 /**
@@ -5093,6 +5193,7 @@ async function runTests(): Promise<void> {
         ['ODFComments', testOdfComments],
         ['PPTX comments', testPptxComments],
         ['PPTX slide order and parts', testPptxSlideOrderAndParts],
+        ['Editor save shapes', testEditorSaveShapes],
         ['ConsistencyBehaviors', testConsistencyBehaviors],
         ['DOCX', testDocxGeneration],
         ['DOCX notes and bookmarks', testDocxNotesAndBookmarks],

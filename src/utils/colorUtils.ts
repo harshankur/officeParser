@@ -52,6 +52,28 @@ const cssNumber = (part: string | undefined, whole: number): number => {
  * RTF colour table, which RTF readers refuse whole.
  */
 export function cssColorHex(value: unknown): string | null {
+    return parseCssColor(value)?.hex ?? null;
+}
+
+/**
+ * Whether a background colour is the one a highlight has when it names none (Markdown's `==text==`, a
+ * bare `<mark>`): opaque yellow, however it is written (`#ffff00`, `#FF0`, `yellow`,
+ * `rgb(255, 255, 0)`). Compared as the text `#ffff00` alone, the same highlight come back from an
+ * editor as `rgb(255, 255, 0)`, or read from a Word file as `#FFFF00`, was taken for a colour of its
+ * own. A yellow that is partly see-through (`rgba(255, 255, 0, 0.3)`, `#ffff0080`) is a colour of its
+ * own: written as the default, it came out solid.
+ */
+export function isDefaultHighlight(color: unknown): boolean {
+    const parsed = parseCssColor(color);
+    return parsed?.hex === 'FFFF00' && parsed.alpha === 1;
+}
+
+/**
+ * A CSS colour as six upper-case hex digits and its alpha, from 0 to 1 (1 for a colour that names
+ * none, NaN for an alpha that is not a number or a percentage). Null for what is not a colour (see
+ * cssColorHex).
+ */
+function parseCssColor(value: unknown): { hex: string, alpha: number } | null {
     if (typeof value !== 'string') return null;
     const v = value.trim().toLowerCase();
     // Longer than any colour: not read, so a hostile value costs nothing.
@@ -59,17 +81,21 @@ export function cssColorHex(value: unknown): string | null {
     const hex = /^#?([0-9a-f]{3,8})$/.exec(v);
     if (hex) {
         const h = hex[1];
-        if (h.length === 3 || h.length === 4) return (h[0] + h[0] + h[1] + h[1] + h[2] + h[2]).toUpperCase();
-        return h.length === 6 || h.length === 8 ? h.slice(0, 6).toUpperCase() : null;
+        if (h.length === 3 || h.length === 4) {
+            return { hex: (h[0] + h[0] + h[1] + h[1] + h[2] + h[2]).toUpperCase(), alpha: h.length === 4 ? parseInt(h[3] + h[3], 16) / 255 : 1 };
+        }
+        if (h.length !== 6 && h.length !== 8) return null;
+        return { hex: h.slice(0, 6).toUpperCase(), alpha: h.length === 8 ? parseInt(h.slice(6), 16) / 255 : 1 };
     }
     const named = NAMED_COLORS[v];
-    if (named) return named;
+    if (named) return { hex: named, alpha: 1 };
     const fn = /^(rgba?|hsla?)\(([^()]*)\)$/.exec(v);
     if (!fn) return null;
     const parts = fn[2].split(/[\s,/]+/).filter(Boolean);
+    const alpha = parts[3] === undefined ? 1 : Math.min(1, Math.max(0, cssNumber(parts[3], 1)));
     if (fn[1].startsWith('rgb')) {
         const [r, g, b] = [0, 1, 2].map(i => cssNumber(parts[i], 255));
-        return [r, g, b].some(isNaN) ? null : hexByte(r) + hexByte(g) + hexByte(b);
+        return [r, g, b].some(isNaN) ? null : { hex: hexByte(r) + hexByte(g) + hexByte(b), alpha };
     }
     const hue = parseFloat(parts[0] ?? '');
     const saturation = cssNumber(parts[1], 1), lightness = cssNumber(parts[2], 1);
@@ -81,5 +107,5 @@ export function cssColorHex(value: unknown): string | null {
         const u = t < 0 ? t + 1 : t > 1 ? t - 1 : t;
         return 255 * (u < 1 / 6 ? p + (q - p) * 6 * u : u < 1 / 2 ? q : u < 2 / 3 ? p + (q - p) * (2 / 3 - u) * 6 : p);
     };
-    return hexByte(channel(h + 1 / 3)) + hexByte(channel(h)) + hexByte(channel(h - 1 / 3));
+    return { hex: hexByte(channel(h + 1 / 3)) + hexByte(channel(h)) + hexByte(channel(h - 1 / 3)), alpha };
 }

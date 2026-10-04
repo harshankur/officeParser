@@ -3,6 +3,7 @@ import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed } from '../utils/officeGenUtils.js';
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
+import { isDefaultHighlight } from '../utils/colorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { clampInt } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
@@ -1333,7 +1334,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // this item before it closes. See `listStack`/`liClose` there.
                 const meta = node.metadata as ListMetadata;
                 if (meta?.isTask) {
-                    const checkedAttr = ` data-checked="${meta.checked ? 'true' : 'false'}"`;
+                    // A task item is marked as its list is (`data-type="taskList"`, see the list
+                    // wrapper): Tiptap's TaskItem reads only `li[data-type="taskItem"]`, so without the
+                    // marker an editor took the items for a plain list and lost their checked state.
+                    const checkedAttr = ` data-checked="${meta.checked ? 'true' : 'false'}" data-type="taskItem"`;
                     const checkedBool = meta.checked ? ' checked' : '';
                     return `${extraAnchors}<li${checkedAttr}${idAttr}${className}${mappedAttrs}${styleAttr}><label><input type="checkbox"${checkedBool}><span></span></label><div>${childrenOutput}`;
                 }
@@ -1831,10 +1835,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // outside the colour/size span above so a run carrying both still rehydrates both. The
             // widened HtmlParser reads this shape back (style wins over data-color). Behaviour
             // change (was a span), noted in the changelog.
+            // A highlight in the colour one has when it names none (Markdown's `==text==`) is a plain
+            // <mark>, which is what that means in HTML: given the colour, an editor kept it as a colour of
+            // the text's own, and the highlight was no longer the plain one when written back.
             if (f.backgroundColor) {
                 const safeBg = sanitizeCssValue(f.backgroundColor);
                 if (safeBg) {
-                    result = `<mark data-color="${this.escape(safeBg)}" style="background-color: ${safeBg}">${result}</mark>`;
+                    result = isDefaultHighlight(f.backgroundColor)
+                        ? `<mark>${result}</mark>`
+                        : `<mark data-color="${this.escape(safeBg)}" style="background-color: ${safeBg}">${result}</mark>`;
                 }
             }
         }

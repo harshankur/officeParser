@@ -2776,12 +2776,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                     });
                     rows.push({ type: 'row', children: cells });
                 }
-                // If every explicitly-aligned column agrees, also expose it as the table-level align,
-                // so an editor that models one alignment per table (and HTML data-align) round-trips.
-                const explicitAligns = columnAligns.filter((a): a is 'left' | 'center' | 'right' => a !== null);
-                const uniformAlign = explicitAligns.length > 0 && explicitAligns.every(a => a === explicitAligns[0]) ? explicitAligns[0] : undefined;
-                const resolvedTableAlign = tableAlign || uniformAlign;
-                content.push({ type: 'table', metadata: resolvedTableAlign ? { align: resolvedTableAlign } : undefined, children: rows });
+                // The table's own align is where it stands on the page, which only an attribute list
+                // after it says (see tableAlign). How its columns are aligned says nothing of that: taken
+                // as the table's align when every column agreed, a table of right-aligned columns was
+                // moved to the right of the page by an editor reading its HTML.
+                content.push({ type: 'table', metadata: tableAlign ? { align: tableAlign } : undefined, children: rows });
                 continue;
             }
         }
