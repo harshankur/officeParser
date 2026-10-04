@@ -179,6 +179,59 @@ server.listen(0, async () => {
         );
         console.log('SUCCESS: Enlarge modal opens, displays correct filename, and closes successfully!');
 
+        // --- The LaTeX preview is the page LaTeX typesets, not a web page ---
+        console.log('Loading test.docx and switching the LaTeX window to its preview...');
+        const docxButton = await page.evaluateHandle(() => Array.from(document.querySelectorAll('.sample-btn')).find(btn => btn.textContent.includes('test.docx')));
+        await docxButton.click();
+        await page.waitForFunction(() => document.getElementById('status-msg')?.textContent.includes('Successfully parsed test.docx'), { timeout: 30000 });
+        await page.$eval('#toggle-tex .toggle-btn[data-state="preview"]', button => button.click());
+        const texFrameElement = await page.waitForSelector('#visual-tex iframe', { timeout: 15000 });
+        const texFrame = await texFrameElement.contentFrame();
+        await texFrame.waitForSelector('.tex-sheet', { timeout: 15000 });
+
+        // What the generated LaTeX asks for, read from the source the window made.
+        const texSource = await page.evaluate(async () => (await window.currentAst.to('tex')).value);
+        const geometry = /\\usepackage\[([^\]]*)\]\{geometry\}/.exec(texSource)[1];
+        const asked = name => Number(new RegExp(`(?:^|,)${name}=([0-9.]+)pt`).exec(geometry)[1]);
+        const classSize = Number(/\\documentclass\[[^\]]*?(\d+)pt/.exec(texSource)[1]);
+        const bodySize = { 10: 10, 11: 10.95, 12: 12 }[classSize];
+
+        const typeset = await texFrame.evaluate(async () => {
+            await document.fonts.ready;
+            const sheet = document.querySelector('.tex-sheet');
+            const style = getComputedStyle(sheet);
+            const zoom = Number(document.documentElement.style.getPropertyValue('--tex-zoom')) || 1;
+            const points = px => parseFloat(px) * 0.75;
+            const title = document.querySelector('.tex-title');
+            const paragraph = sheet.querySelector('article > p:not([class])');
+            return {
+                zoom,
+                family: style.fontFamily,
+                loaded: [...document.fonts].filter(face => face.status === 'loaded').map(face => face.family),
+                size: points(style.fontSize),
+                width: points(style.width),
+                padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft].map(points),
+                align: getComputedStyle(paragraph).textAlign,
+                titleWeight: title ? getComputedStyle(title).fontWeight : null,
+                titleAlign: title ? getComputedStyle(title).textAlign : null,
+                titleSize: title ? points(getComputedStyle(title).fontSize) : null,
+                overflows: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+            };
+        });
+        console.log('Typeset preview:', JSON.stringify(typeset));
+        const near = (value, wanted) => Math.abs(value - wanted) < 0.2;
+        if (!/TeX Roman/.test(typeset.family)) throw new Error(`The LaTeX preview is not set in LaTeX's font: ${typeset.family}`);
+        if (!near(typeset.size, bodySize)) throw new Error(`The LaTeX preview's text is ${typeset.size}pt; the source's class sets ${bodySize}pt`);
+        if (!near(typeset.width, asked('paperwidth'))) throw new Error(`The LaTeX preview's paper is ${typeset.width}pt wide; the source asks for ${asked('paperwidth')}pt`);
+        const margins = ['top', 'right', 'bottom', 'left'].map(asked);
+        if (!typeset.padding.every((value, i) => near(value, margins[i]))) throw new Error(`The LaTeX preview's margins are ${typeset.padding}; the source asks for ${margins}`);
+        if (typeset.align !== 'justify') throw new Error(`The LaTeX preview's paragraphs are not justified: ${typeset.align}`);
+        if (typeset.titleWeight !== '400' || typeset.titleAlign !== 'center' || !near(typeset.titleSize, 17.28)) {
+            throw new Error(`The LaTeX preview's title is not set as \\maketitle sets it: ${typeset.titleSize}pt, weight ${typeset.titleWeight}, ${typeset.titleAlign}`);
+        }
+        if (typeset.overflows) throw new Error('The LaTeX preview scrolls sideways: the page is wider than its window');
+        console.log('SUCCESS: The LaTeX preview is set in LaTeX\'s font, at the size, on the paper and inside the margins the generated source asks for!');
+
         process.exit(0);
 
     } catch (err) {
