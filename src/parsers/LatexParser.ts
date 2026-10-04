@@ -2,6 +2,7 @@ import { AdmonitionMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOf
 import { UniqueNames } from '../utils/uniqueNames.js';
 import { attachmentLookup, repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
 import { trimEndChars } from '../utils/textUtils.js';
+import { decodeWindows1252, textDecoder } from '../utils/encodingUtils.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
@@ -4180,8 +4181,8 @@ function decodeTex(buf: Buffer, inherited?: string): { text: string; declared?: 
         label = multibyte > replaced ? 'utf-8' : 'windows-1252';
     }
     if (label === 'utf-8') return { text: buf.toString('utf8'), declared };
-    try { return { text: new TextDecoder(label).decode(buf), declared }; }
-    catch { return { text: new TextDecoder('windows-1252').decode(buf), declared }; }
+    try { return { text: textDecoder(label).decode(buf), declared }; }
+    catch { return { text: decodeWindows1252(buf), declared }; }
 }
 
 /** A BibTeX database entry: its type and fields, each value LaTeX with `@string` abbreviations and `#` joins resolved. */

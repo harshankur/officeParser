@@ -6,6 +6,8 @@
  * Read in one pass over the message: each boundary is found once, from where the last one ended.
  */
 
+import { ByteDecoder, textDecoder } from './encodingUtils.js';
+
 /** One part of an MHT message, its body decoded. */
 export interface MhtPart {
     /** The part's media type, lower case (`text/html`, `image/png`). */
@@ -130,9 +132,9 @@ export const readMht = (buffer: Buffer, charge: (count: number) => void = () => 
 };
 
 /** A decoder for the encoding `label` names, or none when this runtime cannot decode it. */
-const decoderFor = (label: string): TextDecoder | undefined => {
+const decoderFor = (label: string): ByteDecoder | undefined => {
     try {
-        return new TextDecoder(label.trim());
+        return textDecoder(label.trim());
     } catch {
         return undefined;
     }
@@ -142,7 +144,7 @@ const decoderFor = (label: string): TextDecoder | undefined => {
  * The encoding an HTML page's `<meta>` names (`charset`, or `http-equiv` Content-Type's `charset`) in its
  * first 1,024 bytes, where a browser looks for it; UTF-16 there is UTF-8, as a browser takes it.
  */
-const metaDecoder = (bytes: Uint8Array): TextDecoder | undefined => {
+const metaDecoder = (bytes: Uint8Array): ByteDecoder | undefined => {
     const head = Buffer.from(bytes.buffer, bytes.byteOffset, Math.min(bytes.length, 1024)).toString('latin1');
     const label = /<meta\b[^>]*?\bcharset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head)?.[1];
     const decoder = label ? decoderFor(label) : undefined;

@@ -47,6 +47,7 @@ import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { chargeRawContent } from '../utils/xmlUtils.js';
 import { attachmentLookup } from '../utils/repeatUtils.js';
+import { ByteDecoder, textDecoder } from '../utils/encodingUtils.js';
 
 /**
  * Represents an RTF group (content enclosed in braces).
@@ -243,7 +244,7 @@ export class SimpleRtfParser {
     private readonly codePageStack: number[] = [];
 
     /** Cached TextDecoders for different code pages */
-    private decoders: { [key: number]: TextDecoder } = {};
+    private decoders: { [key: number]: ByteDecoder } = {};
 
     /** Buffer for consecutive text bytes to handle multi-byte encodings and UTF-8 detection */
     private pendingBytes = new Uint8Array(1024);
@@ -572,11 +573,11 @@ export class SimpleRtfParser {
             const encoding = CODE_PAGE_ENCODINGS.get(codePage) ?? `windows-${codePage}`;
 
             try {
-                this.decoders[codePage] = new TextDecoder(encoding);
+                this.decoders[codePage] = textDecoder(encoding);
             } catch (e) {
                 if (codePage !== 1252) {
                     try {
-                        this.decoders[codePage] = new TextDecoder('windows-1252');
+                        this.decoders[codePage] = textDecoder('windows-1252');
                     } catch (e2) {
                         return latin1Text(bytes);
                     }

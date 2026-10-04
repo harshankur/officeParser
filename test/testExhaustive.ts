@@ -14,6 +14,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type { ImageMetadata, OfficeContentNode, OfficeParserAST } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
+import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
 import { imageFromPdf, imageToTextPdf, newDecodeBudget } from '../src/utils/textPdf';
 import { decodeBase64, hexColor, isHeaderRow, lengthToPt, resolveZipInstant, sniffImageSize, toBookmarkNameRaw } from '../src/utils/officeGenUtils';
@@ -4974,6 +4975,27 @@ async function testHtmlBrowserReading(): Promise<void> {
     assert.strictEqual((await parse('<body><title>T</title><p>x</p></body>')).metadata.title, 'T', 'HTML: a title outside the head is the title, not text');
     const windows1252 = Buffer.concat([Buffer.from('<meta http-equiv="Content-Type" content="text/html; charset=windows-1252"><p>caf'), Buffer.from([0xE9, 0x20, 0x92, 0x71, 0x92]), Buffer.from('</p>')]);
     assert.strictEqual(collectAllNodes(await parse(windows1252)).find(n => n.type === 'text')?.text, 'café \u2019q\u2019', 'HTML: a page in its declared encoding');
+    // Windows-1252 is decoded by the library, not by the runtime: Node 22's TextDecoder reads its bytes
+    // 0x80 to 0x9F as Latin-1 (nodejs/node#56542), so a page's curly quotes came out as control
+    // characters there. Every byte, against the Encoding Standard's table, written out here.
+    const high1252 = [0x20AC, 0x81, 0x201A, 0x192, 0x201E, 0x2026, 0x2020, 0x2021, 0x2C6, 0x2030, 0x160, 0x2039, 0x152, 0x8D, 0x17D, 0x8F,
+        0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x2DC, 0x2122, 0x161, 0x203A, 0x153, 0x9D, 0x17E, 0x178];
+    const everyByte = Uint8Array.from({ length: 256 }, (_, i) => i);
+    assert.deepStrictEqual([...decodeWindows1252(everyByte)].map(c => c.codePointAt(0)), [...everyByte].map(b => b >= 0x80 && b <= 0x9F ? high1252[b - 0x80] : b), 'Windows-1252: every byte is its character');
+    const longRun = new Uint8Array(20_001).fill(0x92);
+    assert.strictEqual(decodeWindows1252(longRun), '\u2019'.repeat(20_001), 'Windows-1252: a long run is decoded whole');
+    assert.strictEqual(decodeWindows1252(new Uint8Array(0)), '', 'Windows-1252: no bytes are no text');
+    for (const label of ['windows-1252', 'latin1', 'ISO-8859-1', 'ascii', ' cp1252 ']) {
+        assert.deepStrictEqual([textDecoder(label).encoding, textDecoder(label).decode(Uint8Array.of(0x80, 0x92, 0xE9))], ['windows-1252', '\u20AC\u2019\u00E9'], `Windows-1252: the label ${label.trim()} is decoded as it`);
+    }
+    assert.deepStrictEqual([textDecoder('iso-8859-2').encoding, textDecoder('iso-8859-2').decode(Uint8Array.of(0xB1))], ['iso-8859-2', '\u0105'], 'An encoding other than Windows-1252 is the runtime\'s to decode');
+    assert.throws(() => textDecoder('no-such-encoding'), RangeError, 'A label that names no encoding is refused, as TextDecoder refuses it');
+    // The other readers of a Windows-1252 document: RTF (its code page), LaTeX (a file that is not
+    // UTF-8) and an MHT chunk's page.
+    const rtf1252 = await OfficeParser.parseOffice(Buffer.from("{\\rtf1\\ansi\\ansicpg1252 it\\'92s 5\\'80}"), { fileType: 'rtf' } as any);
+    assert.strictEqual(String((await rtf1252.to('text')).value).trim(), 'it\u2019s 5\u20AC', 'RTF: a code page 1252 byte is its Windows-1252 character');
+    const tex1252 = await OfficeParser.parseOffice(Buffer.concat([Buffer.from('\\documentclass{article}\\begin{document}it'), Buffer.from([0x92]), Buffer.from('s caf'), Buffer.from([0xE9]), Buffer.from('\\end{document}')]), { fileType: 'tex', onWarning: () => { } } as any);
+    assert.strictEqual(String((await tex1252.to('text')).value).trim(), 'it\u2019s caf\u00E9', 'LaTeX: a file that is not UTF-8 is read as Windows-1252');
     assert.strictEqual(collectAllNodes(await parse(Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from('<p>h\u00E9llo</p>', 'utf16le')]))).find(n => n.type === 'text')?.text, 'h\u00E9llo', 'HTML: a UTF-16 page with its byte order mark');
     assert.strictEqual(collectAllNodes(await parse('<meta charset="windows-1252"><p>\u00E9</p>')).find(n => n.type === 'text')?.text, '\u00E9', 'HTML: UTF-8 bytes stay UTF-8 whatever the page declares');
     const based = await read('<head><base href="https://example.com/dir/"></head><a href="page.html">p</a> <a href="#frag">f</a> <img src="i.png"> <img srcset="small.png 1x, big.png 2x">');

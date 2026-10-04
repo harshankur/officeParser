@@ -9,6 +9,7 @@ import { isSafeHtmlAttributeName, iframeAllowed } from '../utils/sanitize.js';
 import { setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
+import { textDecoder } from '../utils/encodingUtils.js';
 
 /**
  * Maximum element nesting depth accepted from an HTML/XHTML source before the parser gives up
@@ -974,7 +975,7 @@ const decodeHtmlBytes = (buffer: Buffer): string => {
     const declared = declaredEncoding(Buffer.from(buffer.subarray(0, 1024)).toString('latin1'));
     if (declared) {
         try {
-            return new TextDecoder(declared).decode(buffer);
+            return textDecoder(declared).decode(buffer);
         } catch { /* an encoding this runtime does not decode */ }
     }
     return new TextDecoder('utf-8').decode(buffer);
