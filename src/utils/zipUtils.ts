@@ -229,6 +229,20 @@ export const extractFiles = (
 };
 
 /**
+ * A relationship's target as a package path, resolved against the folder of the part naming it
+ * (`ppt/slides/` and `../notesSlides/notesSlide1.xml` give `ppt/notesSlides/notesSlide1.xml`). A target
+ * starting with `/` is from the package root.
+ */
+export const resolvePartPath = (folder: string, target: string): string => {
+    const segments: string[] = [];
+    for (const segment of (target.startsWith('/') ? target.slice(1) : folder + target).split('/')) {
+        if (segment === '..') segments.pop();
+        else if (segment && segment !== '.') segments.push(segment);
+    }
+    return segments.join('/');
+};
+
+/**
  * Finds the archive part that every document of a given format must contain, and fails loudly
  * when it is absent.
  *

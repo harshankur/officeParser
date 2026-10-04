@@ -1767,6 +1767,125 @@ async function testPptxComments(): Promise<void> {
 }
 
 /**
+ * PowerPoint parts are related by relationships, not by the numbers in their file names: the slides are
+ * in the order of the presentation's slide list, a slide's notes are the notes page it names, and a
+ * notes page's and a slide master's `r:id`s are their own.
+ */
+async function testPptxSlideOrderAndParts(): Promise<void> {
+    const { relsOf, rel, parse } = ooxmlHelpers();
+    const pns = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
+    const shape = (runs: string, placeholder = '') => `<p:sp><p:nvSpPr><p:cNvPr id="2" name="T"/><p:cNvSpPr/><p:nvPr>${placeholder}</p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p>${runs}</a:p></p:txBody></p:sp>`;
+    const run = (text: string, linkId = '') => `<a:r>${linkId ? `<a:rPr><a:hlinkClick r:id="${linkId}"/></a:rPr>` : ''}<a:t>${text}</a:t></a:r>`;
+    const part = (root: string, shapes: string) => `<?xml version="1.0"?><p:${root} ${pns}><p:cSld><p:spTree>${shapes}</p:spTree></p:cSld></p:${root}>`;
+    const slide = (text: string) => part('sld', shape(run(text)));
+    const notes = (text: string) => part('notes', shape(run(text), '<p:ph type="body" idx="1"/>'));
+    const presentation = (...ids: string[]) => `<?xml version="1.0"?><p:presentation ${pns}><p:sldIdLst>${ids.map((id, i) => `<p:sldId id="${256 + i}" r:id="${id}"/>`).join('')}</p:sldIdLst></p:presentation>`;
+    const link = (id: string, url: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${url}" TargetMode="External"/>`;
+    const deck = (parts: Record<string, string>) => Buffer.from(zipSync(Object.fromEntries(Object.entries(parts).map(([name, value]) => [name, strToU8(value)]))));
+    /** Each slide as its number, its text, and its notes' ids and text. */
+    const outline = (ast: OfficeParserAST) => ast.content.map(s => [(s.metadata as any).slideNumber, s.children?.map(c => c.text).join('|'), ...(s.notes ?? []).map(n => `${(n.metadata as any).noteId}=${n.children?.map(c => c.text).join('|')}`)]);
+    const linksIn = (nodes: OfficeContentNode[]): string[] => nodes.flatMap(n => [...((n.metadata as any)?.link ? [`${n.text}=>${(n.metadata as any).link}`] : []), ...linksIn(n.children ?? [])]);
+
+    // The slide list orders the deck. Here it shows `slide7.xml` first and `slide2.xml` second, and no
+    // longer names `slide1.xml`, a deleted slide whose part an editor left in the package; a slide is
+    // numbered by its place, as PowerPoint numbers it. An entry naming no slide part, and a second one
+    // naming a slide already listed, add nothing.
+    const reordered = deck({
+        'ppt/presentation.xml': presentation('rId7', 'rIdMissing', 'rId2', 'rId7', 'rIdMaster'),
+        'ppt/_rels/presentation.xml.rels': relsOf(rel('rId1', 'slide', 'slides/slide1.xml') + rel('rId2', 'slide', '/ppt/slides/slide2.xml') + rel('rId7', 'slide', 'slides/slide7.xml') + rel('rIdMaster', 'slideMaster', 'slideMasters/slideMaster1.xml')),
+        'ppt/slides/slide1.xml': slide('DELETED'),
+        'ppt/slides/slide2.xml': slide('SHOWN SECOND'),
+        'ppt/slides/slide7.xml': slide('SHOWN FIRST'),
+        // The only notes page is the second slide's, and both of that slide's relationships to it are one page.
+        'ppt/slides/_rels/slide2.xml.rels': relsOf(rel('rId1', 'notesSlide', '../notesSlides/notesSlide1.xml') + rel('rId3', 'notesSlide', '../notesSlides/notesSlide1.xml') + link('rId2', 'https://slide.example/')),
+        'ppt/notesSlides/notesSlide1.xml': part('notes', shape(run('NOTES OF THE SECOND', 'rId2'), '<p:ph type="body" idx="1"/>')),
+        'ppt/notesSlides/_rels/notesSlide1.xml.rels': relsOf(rel('rId1', 'slide', '../slides/slide2.xml') + link('rId2', 'https://notes.example/')),
+        // A notes page no slide names is no slide's.
+        'ppt/notesSlides/notesSlide7.xml': notes('NOTES OF NO SLIDE'),
+        'ppt/slideMasters/slideMaster1.xml': part('sldMaster', shape(run('MASTER', 'rId2'))),
+        'ppt/slideMasters/_rels/slideMaster1.xml.rels': relsOf(link('rId2', 'https://master.example/')),
+    });
+    const { ast: shown } = await parse(reordered, {}, 'pptx');
+    assert.deepStrictEqual(outline(shown), [[1, 'SHOWN FIRST'], [2, 'SHOWN SECOND', 'slide-note-2=NOTES OF THE SECOND']],
+        'PPTX: slides are in the order of the slide list, numbered by their place, with the notes page each names; a slide the list does not name is not read');
+    assert.ok(!JSON.stringify(shown).includes('NOTES OF NO SLIDE'), 'PPTX: a notes page no slide names is not read');
+    // A notes page's and a slide master's ids are their own, not those of the slide with their number.
+    assert.deepStrictEqual(linksIn(shown.content[1].notes!), ['NOTES OF THE SECOND=>https://notes.example/'], 'PPTX: a link in a notes page is the notes page\'s relationship');
+    assert.deepStrictEqual(linksIn(shown.auxiliary!.slideMasters!), ['MASTER=>https://master.example/'], 'PPTX: a link in a slide master is the master\'s relationship');
+    assert.strictEqual((await parse(reordered, { ignoreNotes: true }, 'pptx')).ast.content.some(s => s.notes?.length), false, 'PPTX: ignoreNotes leaves the notes out');
+    // What is written from the tree follows the deck: a slide's number in a chunk, and the order of the text.
+    const chunks = (await shown.to('chunks', { chunksConfig: { strategy: 'document-structure', splitBy: 'slide' } })).value;
+    assert.deepStrictEqual(chunks.filter(c => c.text.startsWith('SHOWN')).map(c => [c.metadata.slideNumber, c.text]), [[1, 'SHOWN FIRST'], [2, 'SHOWN SECOND']], 'PPTX: a chunk\'s slide number is the slide\'s place in the deck');
+    const text = String((await shown.to('text')).value);
+    assert.ok(text.indexOf('SHOWN FIRST') >= 0 && text.indexOf('SHOWN FIRST') < text.indexOf('SHOWN SECOND') && !text.includes('DELETED'), 'PPTX: text is written in the order of the deck');
+
+    // A presentation whose slide list names no slide part (it has none, or names none there is, or
+    // the part cannot be read) has every slide part, in the order of their numbers, numbered by place.
+    for (const [label, presentationXml] of [
+        ['no slide list', `<?xml version="1.0"?><p:presentation ${pns}/>`],
+        ['a slide list naming no part', presentation('rIdMissing')],
+        ['a presentation part that is not XML', 'not xml <<<'],
+    ] as const) {
+        const { ast } = await parse(deck({ 'ppt/presentation.xml': presentationXml, 'ppt/slides/slide7.xml': slide('SEVEN'), 'ppt/slides/slide2.xml': slide('TWO') }), {}, 'pptx');
+        assert.deepStrictEqual(outline(ast), [[1, 'TWO'], [2, 'SEVEN']], `PPTX: ${label} leaves the slides in the order of their file numbers`);
+    }
+
+    // A deck is read without the parts that hold none of its slides' text: the presentation's slide
+    // list and relationships, and the relationships of a notes page and of a slide master. One that is
+    // not XML is reported, and the deck is read as it is without it: the slides in the order of their
+    // file numbers, or the links of the part it belongs to left unresolved.
+    const notXml = '<?xml version="1.0"?><Relationships><Relationship Id="rId1"';
+    const sound: Record<string, string> = {
+        'ppt/presentation.xml': presentation('rId2', 'rId1'),
+        'ppt/_rels/presentation.xml.rels': relsOf(rel('rId1', 'slide', 'slides/slide1.xml') + rel('rId2', 'slide', 'slides/slide2.xml')),
+        'ppt/slides/slide1.xml': slide('ONE'),
+        'ppt/slides/slide2.xml': slide('TWO'),
+        'ppt/slides/_rels/slide1.xml.rels': relsOf(rel('rId1', 'notesSlide', '../notesSlides/notesSlide1.xml')),
+        'ppt/notesSlides/notesSlide1.xml': part('notes', shape(run('NOTES', 'rId2'), '<p:ph type="body" idx="1"/>')),
+        'ppt/notesSlides/_rels/notesSlide1.xml.rels': relsOf(link('rId2', 'https://notes.example/')),
+        'ppt/slideMasters/slideMaster1.xml': part('sldMaster', shape(run('MASTER', 'rId2'))),
+        'ppt/slideMasters/_rels/slideMaster1.xml.rels': relsOf(link('rId2', 'https://master.example/')),
+    };
+    const listed = [[1, 'TWO'], [2, 'ONE', 'slide-note-2=NOTES']], byFileNumber = [[1, 'ONE', 'slide-note-1=NOTES'], [2, 'TWO']];
+    const allLinks = (ast: OfficeParserAST) => [...linksIn(ast.content.flatMap(s => s.notes ?? [])), ...linksIn(ast.auxiliary?.slideMasters ?? [])];
+    assert.deepStrictEqual(await parse(deck(sound), {}, 'pptx').then(({ ast, issues }) => [outline(ast), allLinks(ast), issues.length]),
+        [listed, ['NOTES=>https://notes.example/', 'MASTER=>https://master.example/'], 0], 'PPTX: the deck these checks break a part of is read whole');
+    for (const [brokenPart, slides, links] of [
+        ['ppt/presentation.xml', byFileNumber, ['NOTES=>https://notes.example/', 'MASTER=>https://master.example/']],
+        ['ppt/_rels/presentation.xml.rels', byFileNumber, ['NOTES=>https://notes.example/', 'MASTER=>https://master.example/']],
+        ['ppt/notesSlides/_rels/notesSlide1.xml.rels', listed, ['MASTER=>https://master.example/']],
+        ['ppt/slideMasters/_rels/slideMaster1.xml.rels', listed, ['NOTES=>https://notes.example/']],
+    ] as const) {
+        const { ast, issues } = await parse(deck({ ...sound, [brokenPart]: notXml }), {}, 'pptx');
+        assert.deepStrictEqual([outline(ast), allLinks(ast)], [slides, links], `PPTX: a deck whose ${brokenPart} is not XML is read without it`);
+        assert.ok(issues.length === 1 && issues[0].code === 'CONTENT_PART_NOT_READ' && issues[0].message.includes(brokenPart), `PPTX: a ${brokenPart} that is not XML is reported`);
+    }
+    // A slide's own relationships are how its notes, comments and pictures are found: not XML, they
+    // end the parse, as a slide that is not XML does.
+    await assert.rejects(parse(deck({ ...sound, 'ppt/slides/_rels/slide1.xml.rels': notXml }), { onError: () => { } }, 'pptx'), /unclosed xml tag/, 'PPTX: a slide\'s relationships that are not XML end the parse');
+    // A limit the document is held to as a whole ends the parse in these parts too.
+    const manyRelationships = relsOf(Array.from({ length: 3000 }, (_, i) => link(`rId${i}`, 'https://notes.example/')).join(''));
+    await assert.rejects(parse(deck({ ...sound, 'ppt/notesSlides/_rels/notesSlide1.xml.rels': manyRelationships }), { decompressionLimits: { maxXmlElements: 1000 }, onError: () => { } }, 'pptx'),
+        (e: any) => e?.officeIssue?.code === 'XML_ELEMENT_LIMIT_EXCEEDED', 'PPTX: a notes page\'s relationships count against maxXmlElements');
+
+    // A slide holding only comments is still a slide.
+    const commented = deck({
+        'ppt/presentation.xml': presentation('rId1'),
+        'ppt/_rels/presentation.xml.rels': relsOf(rel('rId1', 'slide', 'slides/slide1.xml')),
+        'ppt/slides/slide1.xml': part('sld', ''),
+        'ppt/slides/_rels/slide1.xml.rels': relsOf(rel('rId1', 'comments', '../comments/comment1.xml')),
+        'ppt/comments/comment1.xml': `<?xml version="1.0"?><p:cmLst ${pns}><p:cm authorId="0" idx="1"><p:text>ONLY A COMMENT</p:text></p:cm></p:cmLst>`,
+    });
+    assert.deepStrictEqual((await parse(commented, {}, 'pptx')).ast.content.map(s => s.comments?.map(c => c.text)), [['ONLY A COMMENT']], 'PPTX: a slide with nothing but comments keeps them');
+
+    // The sample deck: its fifth slide's notes page is `notesSlide4.xml`, and was the fourth slide's.
+    const sample = await OfficeParser.parseOffice(path.join(__dirname, 'files/test.pptx'));
+    assert.deepStrictEqual(sample.content.map(s => (s.notes ?? []).map(n => (n.metadata as any).noteId)), [['slide-note-1'], ['slide-note-2'], ['slide-note-3'], [], ['slide-note-5'], [], [], [], []], 'PPTX: the sample deck\'s notes are on the slides that name them');
+    assert.ok(sample.content[4].notes![0].children![0].text!.startsWith('Now calendars') && sample.content[4].children![0].text!.includes('calendar'), 'PPTX: the calendar slide has the calendar notes');
+    console.log('  PPTX slide order and parts: All assertions passed ✓');
+}
+
+/**
  * Cross-format consistency guarantees a user relies on (from the consistency review): an option must
  * not silently no-op where a user would expect it to work, and the CLI and library must agree.
  */
@@ -4973,6 +5092,7 @@ async function runTests(): Promise<void> {
         ['ODG', testOdg],
         ['ODFComments', testOdfComments],
         ['PPTX comments', testPptxComments],
+        ['PPTX slide order and parts', testPptxSlideOrderAndParts],
         ['ConsistencyBehaviors', testConsistencyBehaviors],
         ['DOCX', testDocxGeneration],
         ['DOCX notes and bookmarks', testDocxNotesAndBookmarks],

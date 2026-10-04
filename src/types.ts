@@ -120,7 +120,7 @@ export enum OfficeWarningType {
     REPEATED_CONTENT_LIMIT_EXCEEDED = 'REPEATED_CONTENT_LIMIT_EXCEEDED',
     /** A DOCX alternative-format chunk (`w:altChunk`) could not be read (its part is missing, of a format not read, a DOCX inside a DOCX chunk, or unreadable: not a ZIP, no document part, nested too deep); its content is not in the AST, and the rest of the document is */
     ALT_CHUNK_NOT_READ = 'ALT_CHUNK_NOT_READ',
-    /** A part of the document its package lists (an EPUB chapter) was not read: it is missing from the archive, or encrypted; its content is not in the AST */
+    /** A part of the document was not read, and what it holds is not in the AST: an EPUB chapter its package lists that is missing from the archive or encrypted; or, in a PPTX, the presentation's slide list or relationships, or the relationships of a notes page or a slide master, that are not XML */
     CONTENT_PART_NOT_READ = 'CONTENT_PART_NOT_READ',
     /** A metadata override could not be represented in the destination format's vocabulary */
     METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE',
@@ -2461,7 +2461,11 @@ export interface TextFormatting {
  * Metadata for a slide in PowerPoint.
  */
 export interface SlideMetadata {
-    /** The slide number (1-based). */
+    /**
+     * The slide's place in the presentation (1-based), as the presentation numbers it: for PPTX the
+     * place its slide list gives the slide, whatever number its part's file name carries. A slide
+     * master's is the number of its part.
+     */
     slideNumber: number;
 
     /**

@@ -68,7 +68,7 @@ import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { getAllElementsByTagName, getChildElements, getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes, takeXmlElements, countByte } from '../utils/xmlUtils.js';
-import { extractFiles, findRequiredPart, maxUncompressedBytesOf } from '../utils/zipUtils.js';
+import { extractFiles, findRequiredPart, maxUncompressedBytesOf, resolvePartPath } from '../utils/zipUtils.js';
 import { lookupTable, plainRecord, setOwn } from '../utils/lookupUtils.js';
 import { cellSpan, MAX_COL_SPAN } from '../utils/numberUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
@@ -123,16 +123,6 @@ const MAX_WORD_CHILD_DEPTH = 512;
  * switches. Formatted as the note's reference mark (`\f`), it is how Word writes a note referred to again.
  */
 const noteRefFieldRegex = /^\s*NOTEREF\s+"?([^\s"\\]+)"?([^]*)$/i;
-
-/** A relationship's target as a package path, resolved against the folder of the part naming it. */
-const resolvePartPath = (folder: string, target: string): string => {
-    const segments: string[] = [];
-    for (const segment of (target.startsWith('/') ? target.slice(1) : folder + target).split('/')) {
-        if (segment === '..') segments.pop();
-        else if (segment && segment !== '.') segments.push(segment);
-    }
-    return segments.join('/');
-};
 
 /** A text box's content, which the text box's own blocks are parsed from (see ownFirst). */
 const TEXT_BOX: ReadonlySet<string> = new Set(['w:txbxContent', 'txbxContent']);

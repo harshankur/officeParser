@@ -31,7 +31,7 @@ import { createAttachment } from '../utils/imageUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { getChildElements, getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
-import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
+import { extractFiles, findRequiredPart, resolvePartPath } from '../utils/zipUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 import { diagramList, readDiagram } from '../utils/diagramUtils.js';
@@ -86,6 +86,13 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     const allFilesRegex = /ppt\/(notesSlides|slides)\/(notesSlide|slide)\d+.xml/g;
     const slidesRegex = /ppt\/slides\/slide\d+.xml/g;
     const slideRelsRegex = /ppt\/slides\/_rels\/slide\d+\.xml\.rels/;
+    // The relationships of the other parts read by them: a notes page's and a slide master's own
+    // (their `r:id`s are not a slide's), and the presentation's, which name its slides in order.
+    const notesRelsRegex = /ppt\/notesSlides\/_rels\/notesSlide\d+\.xml\.rels/;
+    const slideMasterRelsRegex = /ppt\/slideMasters\/_rels\/slideMaster\d+\.xml\.rels/;
+    const presentationRelsRegex = /ppt\/_rels\/presentation\.xml\.rels/;
+    /** A relationships part: the folder of the part it belongs to, and that part's name. */
+    const relsPartRegex = /^(.*\/)?_rels\/([^/]+)\.rels$/;
     const slideNumberRegex = /lide(\d+)\.xml/;
     const mediaFileRegex = /ppt\/media\/.*/;
     const chartFileRegex = /ppt\/charts\/chart\d+\.xml/;
@@ -109,9 +116,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             !!x.match(customPropsFileRegex) ||
             !!x.match(appPropsFileRegex) ||
             !!x.match(slideRelsRegex) ||
+            (!config.ignoreNotes && !!x.match(notesRelsRegex)) ||
             (!config.ignoreComments && (!!x.match(commentsFileRegex) || !!x.match(commentAuthorsRegex))) ||
-            (!config.ignoreSlideMasters && !!x.match(slideMastersRegex)) ||
+            (!config.ignoreSlideMasters && (!!x.match(slideMastersRegex) || !!x.match(slideMasterRelsRegex))) ||
             !!x.match(presentationFileRegex) ||
+            !!x.match(presentationRelsRegex) ||
             !!x.match(diagramDataRegex) ||
             (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(chartFileRegex))),
         config.decompressionLimits,
@@ -151,7 +160,17 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     });
 
     const content: OfficeContentNode[] = [];
-    const slideRelsMap: Record<number, Record<string, { type: string, target: string }>> = {};
+    /**
+     * A part's relationships by id. `type` is a short keyword (image, hyperlink, chart, slide, notes,
+     * comments, or other). `target` is an external target's address, and of an internal one the file
+     * name alone, which is what attachments and the parts looked up by name go by; `path` is an
+     * internal target's whole path in the package.
+     */
+    type PartRelationships = Record<string, { type: string, target: string, path?: string }>;
+    // Each part's relationships, by the part's path. A part's ids are its own: a notes page's and a slide
+    // master's were looked up among those of the slide whose file had the same number, so a link or a
+    // picture in one was another part's (or none).
+    const relsByPart = new Map<string, PartRelationships>();
 
     // Null-prototype, as every map keyed by the document's own ids is here.
     const authorMap: Record<string, { author?: string, initials?: string }> = Object.create(null);
@@ -189,7 +208,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     // process out of memory. The writers write a shared comment once.
     const commentsByPart = new Map<string, OfficeContentNode[]>();
     const attachedCommentParts = new Set<string>();
-    // The package's parts by file name (what a slide relationship's target keeps, see slideRelsMap), the
+    // The package's parts by file name (what a relationship's `target` keeps, see PartRelationships), the
     // first of each: a scan of every part for each comments target took targets x parts.
     const fileByName = new Map<string, (typeof files)[number]>();
     for (const f of files) { const name = f.path.slice(f.path.lastIndexOf('/') + 1); if (!fileByName.has(name)) fileByName.set(name, f); }
@@ -380,14 +399,15 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     };
 
     /**
-     * Where an `a:hlinkClick` leads, for a run or a picture on the given slide: a hyperlink
-     * relationship is external, a slide relationship or a bare action (such as the next slide) internal.
+     * Where an `a:hlinkClick` leads, for a run or a picture in a part with the given relationships: a
+     * hyperlink relationship is external, a slide relationship or a bare action (such as the next slide)
+     * internal.
      */
-    const hlinkClickTarget = (hlinkClick: Element | null | undefined, slideNumber: number): { link: string; linkType: 'internal' | 'external' } | undefined => {
+    const hlinkClickTarget = (hlinkClick: Element | null | undefined, rels: PartRelationships | undefined): { link: string; linkType: 'internal' | 'external' } | undefined => {
         if (!hlinkClick) return undefined;
         const rId = hlinkClick.getAttribute("r:id");
         const action = hlinkClick.getAttribute("action");
-        const rel = rId ? slideRelsMap[slideNumber]?.[rId] : undefined;
+        const rel = rId ? rels?.[rId] : undefined;
         if (rel?.type === "hyperlink") return { link: rel.target, linkType: "external" };
         if (rel?.type === "slide") return { link: rel.target, linkType: "internal" };
         if (action) return { link: action, linkType: "internal" };
@@ -395,14 +415,14 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     };
 
     /** Extract an AST node for p:pic */
-    const extractImageNode = (imageNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode | null => {
+    const extractImageNode = (imageNode: Element, rels: PartRelationships | undefined, xmlContentString: string): OfficeContentNode | null => {
         const blip = getFirstElementByTagName(imageNode, "a:blip");
         if (!blip) return null;
 
         const rId = blip.getAttribute("r:embed");
         if (!rId) return null;
 
-        const rel = slideRelsMap[slideNumber]?.[rId];
+        const rel = rels?.[rId];
         if (!rel || rel.type !== "image") return null;
 
         const attachmentName = rel.target;
@@ -412,7 +432,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
         const altText = cNvPr?.getAttribute("descr") || undefined;
         // A picture that is a link (its click action is a hyperlink or a jump to a slide).
-        const link = hlinkClickTarget(cNvPr ? getFirstElementByTagName(cNvPr, "a:hlinkClick") : null, slideNumber);
+        const link = hlinkClickTarget(cNvPr ? getFirstElementByTagName(cNvPr, "a:hlinkClick") : null, rels);
 
         return {
             type: "image",
@@ -430,7 +450,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
      * Extract an AST node for p:graphicFrame that contains a chart.
      * ... (comments omitted for brevity) ...
      */
-    const extractChartNode = (frameNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode | null => {
+    const extractChartNode = (frameNode: Element, rels: PartRelationships | undefined, xmlContentString: string): OfficeContentNode | null => {
         // Step 1: Find <a:graphicData>
         const graphicData = getFirstElementByTagName(frameNode, "a:graphicData");
         if (!graphicData) {
@@ -457,8 +477,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             return null;
         }
 
-        // Step 5: Resolve relationship target from slideRelsMap
-        const rel = slideRelsMap[slideNumber]?.[rId];
+        // Step 5: Resolve relationship target from the part's relationships
+        const rel = rels?.[rId];
         if (!rel || rel.type !== "chart") {
             return null;
         }
@@ -486,7 +506,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     };
 
     /** Extract an AST node for p:graphicFrame */
-    const extractGraphicFrameNode = (frameNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode | null => {
+    const extractGraphicFrameNode = (frameNode: Element, rels: PartRelationships | undefined, xmlContentString: string): OfficeContentNode | null => {
         const tbl = getFirstElementByTagName(frameNode, "a:tbl");
         if (tbl) {
             const tableNode = parseTable(tbl, xmlContentString);
@@ -498,7 +518,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             }
         }
         if (frameNode.getElementsByTagName("c:chart").length > 0) {
-            const chartNode = extractChartNode(frameNode, slideNumber, xmlContentString);
+            const chartNode = extractChartNode(frameNode, rels, xmlContentString);
             if (chartNode) {
                 return chartNode;
             }
@@ -511,11 +531,11 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     const readDiagrams = new Set<string>();
     let diagramCount = 0;
     /** A SmartArt frame's text as a list (see readDiagram); undefined for a frame that is not SmartArt. */
-    const extractDiagramNodes = (frameNode: Element, slideNumber: number): OfficeContentNode[] | undefined => {
+    const extractDiagramNodes = (frameNode: Element, rels: PartRelationships | undefined): OfficeContentNode[] | undefined => {
         const relIds = getFirstElementByTagName(frameNode, "dgm:relIds");
         if (!relIds) return undefined;
         const rId = relIds.getAttribute("r:dm");
-        const target = rId ? slideRelsMap[slideNumber]?.[rId]?.target : undefined;
+        const target = rId ? rels?.[rId]?.target : undefined;
         const file = target ? fileByName.get(target) : undefined;
         if (!file || !diagramDataRegex.test(file.path) || readDiagrams.has(file.path)) return [];
         readDiagrams.add(file.path);
@@ -523,7 +543,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     };
 
     /** Extract text and hyperlinks from a p:sp shape. */
-    const extractShapeNodes = (spNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode[] => {
+    const extractShapeNodes = (spNode: Element, rels: PartRelationships | undefined, xmlContentString: string): OfficeContentNode[] => {
         const nodes: OfficeContentNode[] = [];
         // Check for placeholder type (title, body, etc.)
         const nvSpPr = getFirstElementByTagName(spNode, "p:nvSpPr");
@@ -751,7 +771,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
                             };
 
                             // Check for Hyperlinks
-                            const link = hlinkClickTarget(getFirstElementByTagName(element, "a:hlinkClick"), slideNumber);
+                            const link = hlinkClickTarget(getFirstElementByTagName(element, "a:hlinkClick"), rels);
                             if (link) {
                                 textNode.metadata = link;
                             }
@@ -818,10 +838,10 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
      * transforms so nested groups inherit positional transforms.
      *
      * @param treeNode The XML node representing <p:spTree>
-     * @param slideNumber Current slide number for relationship resolution
+     * @param rels The relationships of the part the tree is in, which its `r:id`s are looked up in
      * @param xmlContentString The source XML string for raw content extraction
      */
-    function traverseSpTree(treeNode: Element, slideNumber: number, xmlContentString: string): OfficeContentNode[] {
+    function traverseSpTree(treeNode: Element, rels: PartRelationships | undefined, xmlContentString: string): OfficeContentNode[] {
         const nodes: OfficeContentNode[] = [];
         // Process children in XML order (this preserves Z-order), a branch of mc:AlternateContent in its place
         const pending: Node[] = [];
@@ -838,22 +858,22 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
 
             // Case 1: Normal shape
             if (tag === "p:sp") {
-                appendAll(nodes, extractShapeNodes(element, slideNumber, xmlContentString));
+                appendAll(nodes, extractShapeNodes(element, rels, xmlContentString));
             }
             // Case 2: Inline picture
             else if (tag === "p:pic") {
-                const imageNode = extractImageNode(element, slideNumber, xmlContentString);
+                const imageNode = extractImageNode(element, rels, xmlContentString);
                 if (imageNode) {
                     nodes.push(imageNode);
                 }
             }
             // Case 3: Chart or other graphic frame
             else if (tag === "p:graphicFrame") {
-                const diagram = extractDiagramNodes(element, slideNumber);
+                const diagram = extractDiagramNodes(element, rels);
                 if (diagram) {
                     appendAll(nodes, diagram);
                 } else {
-                    const tableNode = extractGraphicFrameNode(element, slideNumber, xmlContentString);
+                    const tableNode = extractGraphicFrameNode(element, rels, xmlContentString);
                     if (tableNode) {
                         nodes.push(tableNode);
                     }
@@ -862,7 +882,7 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
             // Case 4: Grouped shape (recursive!)
             else if (tag === "p:grpSp") {
                 // Recurse into the group element itself which holds the child shapes
-                appendAll(nodes, traverseSpTree(element, slideNumber, xmlContentString));
+                appendAll(nodes, traverseSpTree(element, rels, xmlContentString));
             }
             // Case 5: Shapes written for newer readers (an equation, a 3D model, a chart of a newer kind)
             // beside a fallback for older ones: the branch this reader understands (see
@@ -875,198 +895,166 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
         return nodes;
     }
 
-    // First pass: Process relationships
-    for (const file of files) {
-        // Check whether this file is a slideX.xml.rels file
-        if (file.path.match(slideRelsRegex)) {
-            /**
-             * Builds a map of slide number to a map of relationship IDs containing:
-             * - type: The relationship category (image, hyperlink, chart, etc)
-             * - target: The fully normalized target path inside the PPTX zip
-             *
-             * Example structure:
-             * {
-             *     1: {
-             *         "rId2": { type: "image", target: "ppt/media/image3.png" },
-             *         "rId5": { type: "hyperlink", target: "https://example.com" }
-             *     }
-             * }
-             *
-             * @param files All extracted PPTX ZIP files.
-             * @param slideRelsMap A map of slide number to relationship info.
-             */
-            // Extract slide number from path
-            const match = file.path.match(/slide(\d+)\.xml\.rels/);
-            if (match) {
-                // Convert matched number to integer
-                const slideNum = parseInt(match[1]);
-                // Prepare map for this slide
-                slideRelsMap[slideNum] = Object.create(null);
-                // Parse the rels XML
-                const relsXml = parseXmlString(file.content.toString(), { config });
-                // Get all Relationship nodes
-                const relationships = getElementsByTagName(relsXml, "Relationship");
-                // Loop through each relationship node
-                for (let i = 0; i < relationships.length; i++) {
-                    // Relationship ID, Example: "rId2"
-                    const id = relationships[i].getAttribute("Id");
-                    // Relationship Type, Example: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
-                    const typeAttr = relationships[i].getAttribute("Type");
-                    // Raw Target, may be relative or absolute
-                    const targetRaw = relationships[i].getAttribute("Target");
-                    // Only proceed if ID and Type exist
-                    if (id && typeAttr && targetRaw) {
-                        // Simplify Type to a short keyword (image, hyperlink, chart, etc)
-                        // This is optional but very useful.
-                        let simplifiedType = "other";
-                        // Check image
-                        if (typeAttr.includes("relationships/image")) {
-                            simplifiedType = "image";
-                        }
-                        // Check hyperlink
-                        else if (typeAttr.includes("relationships/hyperlink")) {
-                            simplifiedType = "hyperlink";
-                        }
-                        // Check chart
-                        else if (typeAttr.includes("relationships/chart")) {
-                            simplifiedType = "chart";
-                        }
-                        // Check slide references
-                        else if (typeAttr.includes("relationships/slide")) {
-                            simplifiedType = "slide";
-                        }
-                        // Check notes
-                        else if (typeAttr.includes("relationships/notesSlide")) {
-                            simplifiedType = "notes";
-                        }
-                        // Check comments
-                        else if (typeAttr.includes("relationships/comments")) {
-                            simplifiedType = "comments";
-                        }
-                        // Now normalize the target only if it is a local file path.
-                        // Hyperlinks are external and should not be normalized.
-                        let normalizedTarget = targetRaw;
-                        // Local paths never contain "http" or "https"
-                        const isExternal = targetRaw.startsWith("http://") || targetRaw.startsWith("https://");
+    type PackageFile = (typeof files)[number];
 
-                        // If not external, normalize the target which is just the name of the item.
-                        if (!isExternal) {
-                            normalizedTarget = normalizedTarget.split('/').pop() || '';
-                        }
-                        // Finally store full relationship info
-                        slideRelsMap[slideNum][id] = {
-                            type: simplifiedType,
-                            target: normalizedTarget
-                        };
-                    }
-                }
-            }
+    /**
+     * The XML of a part a deck is still read without: the presentation's slide list and its
+     * relationships (without either, the slides are read in the order of their file numbers), and the
+     * relationships of a notes page and of a slide master (without them, the links and pictures the
+     * page names are not resolved). One that is not XML is reported (CONTENT_PART_NOT_READ) and
+     * undefined: read as every other part is, where bad XML ends the parse, a deck whose slides are
+     * all readable was refused for a part that holds none of its text. A limit the document is held to
+     * as a whole ends the parse, as it does in any other part.
+     */
+    const readDispensablePart = (file: PackageFile, without: string): ReturnType<typeof parseXmlString> | undefined => {
+        try {
+            return parseXmlString(file.content.toString(), { config });
+        } catch (error: any) {
+            if (error?.officeIssue || error?.name === 'AbortError') throw error;
+            const detail = String(error?.message ?? error).slice(0, 200);
+            logWarning(OfficeWarningType.CONTENT_PART_NOT_READ, config, { part: file.path, reason: `it is not XML that can be read (${detail}), so ${without}` });
+            return undefined;
+        }
+    };
+
+    // First pass: each part's relationships, by the part they belong to.
+    for (const file of files) {
+        const relsPart = file.path.match(relsPartRegex);
+        if (!relsPart) continue;
+        // The folder of the part the relationships belong to, which their targets are relative to.
+        const folder = relsPart[1] ?? '';
+        // Null-prototype, as every map keyed by the document's own ids is here.
+        const partRels: PartRelationships = Object.create(null);
+        relsByPart.set(folder + relsPart[2], partRels);
+        // Parse the rels XML. A slide's own relationships are how its notes, comments and pictures are
+        // found: not readable, they end the parse as the slide itself would.
+        const relsXml = slideRelsRegex.test(file.path)
+            ? parseXmlString(file.content.toString(), { config })
+            : readDispensablePart(file, presentationRelsRegex.test(file.path)
+                ? 'the slides are read in the order of their file numbers'
+                : 'the links and pictures its part names are not resolved');
+        if (!relsXml) continue;
+        // Loop through each relationship node
+        for (const relationship of getElementsByTagName(relsXml, "Relationship")) {
+            // Relationship ID, Example: "rId2"
+            const id = relationship.getAttribute("Id");
+            // Relationship Type, Example: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+            const typeAttr = relationship.getAttribute("Type");
+            // Raw Target, may be relative or absolute
+            const targetRaw = relationship.getAttribute("Target");
+            // Only proceed if ID and Type exist
+            if (!id || !typeAttr || !targetRaw) continue;
+            // Simplify Type to a short keyword (image, hyperlink, chart, etc)
+            let simplifiedType = "other";
+            if (typeAttr.includes("relationships/image")) simplifiedType = "image";
+            else if (typeAttr.includes("relationships/hyperlink")) simplifiedType = "hyperlink";
+            else if (typeAttr.includes("relationships/chart")) simplifiedType = "chart";
+            else if (typeAttr.includes("relationships/slide")) simplifiedType = "slide";
+            else if (typeAttr.includes("relationships/notesSlide")) simplifiedType = "notes";
+            else if (typeAttr.includes("relationships/comments")) simplifiedType = "comments";
+            // A hyperlink's address is external and kept as it is. A local target is kept as its file
+            // name and as its whole path in the package (see PartRelationships).
+            const isExternal = targetRaw.startsWith("http://") || targetRaw.startsWith("https://");
+            partRels[id] = isExternal
+                ? { type: simplifiedType, target: targetRaw }
+                : { type: simplifiedType, target: targetRaw.split('/').pop() || '', path: resolvePartPath(folder, targetRaw) };
         }
     }
 
-    const slidesMap: Record<number, OfficeContentNode> = {};
-    const slideMasters: OfficeContentNode[] = [];
+    const fileByPath = new Map<string, PackageFile>();
+    for (const f of files) if (!fileByPath.has(f.path)) fileByPath.set(f.path, f);
 
-    // Now for processing all the other files - slides and notes.
-    for (const file of files) {
-        checkAbortSignal(config.abortSignal);
-        if (file.path.match(mediaFileRegex)) continue;
-        if (file.path.match(chartFileRegex)) continue;
-        if (file.path.match(slideRelsRegex)) continue;
-        // All three document-property parts are extracted for metadata and were read earlier;
-        // only the core one was skipped here, leaving the other two to be parsed again as if
-        // they might be slides.
-        if (file.path.match(corePropsFileRegex)) continue;
-        if (file.path.match(appPropsFileRegex)) continue;
-        if (file.path.match(customPropsFileRegex)) continue;
-        if (file.path.includes("comment")) continue;
-        if (file.path.match(commentAuthorsRegex)) continue;
-        // This loop treats every remaining file as a slide or note, so the presentation part
-        // has to be skipped explicitly: it carries no slide number and would otherwise be
-        // added to the deck as an empty slide.
-        if (file.path.match(presentationFileRegex)) continue;
-        if (file.path.match(diagramDataRegex)) continue;
+    // The slides in the order the presentation shows them: its slide list (`p:sldIdLst`), whose entries
+    // each name a slide part by relationship. The number in a part's name is not its place: an editor
+    // that moves a slide by rewriting the list leaves the parts' names as they were, and one that
+    // deletes a slide by dropping its entry can leave its part in the package. Read in the order of
+    // their file numbers, such a deck's slides came out in the wrong order, the deleted ones among them.
+    // A presentation whose list names no slide part there is has every slide part, in the order of
+    // their numbers (which `files` is in).
+    const slideParts = files.filter(f => !!f.path.match(slidesRegex));
+    const isSlidePart = new Set(slideParts);
+    const listedSlides = new Set<PackageFile>();
+    const presentationFile = files.find(f => !!f.path.match(presentationFileRegex));
+    if (presentationFile) {
+        // A presentation part that cannot be read names no slides.
+        const presentationXml = readDispensablePart(presentationFile, 'the slides are read in the order of their file numbers');
+        const slideList = presentationXml ? getFirstElementByTagName(presentationXml, "p:sldIdLst") : undefined;
+        const presentationRels = relsByPart.get(presentationFile.path);
+        for (const entry of slideList ? getChildElements(slideList, "p:sldId") : []) {
+            const rId = entry.getAttribute("r:id");
+            const path = rId ? presentationRels?.[rId]?.path : undefined;
+            const slidePart = path ? fileByPath.get(path) : undefined;
+            if (slidePart && isSlidePart.has(slidePart)) listedSlides.add(slidePart);
+        }
+    }
+    const deck = listedSlides.size > 0 ? [...listedSlides] : slideParts;
 
+    /**
+     * Fills the node of a slide, a notes page or a slide master from its part: what the part's shape
+     * tree holds, read with the part's own relationships.
+     */
+    const readPart = (file: PackageFile, node: OfficeContentNode): OfficeContentNode => {
         const xmlContentString = file.content.toString();
         const xml = parseXmlString(xmlContentString, { config, locator: config.includeRawContent });
-
-        const slideMatch = file.path.match(slideNumberRegex);
-        const slideNumber = slideMatch ? parseInt(slideMatch[1]) : 0;
-
-        const masterMatch = file.path.match(/slideMaster(\d+)\.xml/);
-        const masterNumber = masterMatch ? parseInt(masterMatch[1]) : 0;
-
-        const isNote = file.path.includes("notesSlide");
-        const isMaster = file.path.includes("slideMaster");
-        const nodeType = isNote ? 'note' : (isMaster ? 'slideMaster' : 'slide');
-        const nodeNumber = isMaster ? masterNumber : slideNumber;
-
-        let slideNode: OfficeContentNode;
-        if (isNote) {
-            slideNode = {
-                type: 'note',
-                children: [],
-                metadata: {
-                    slideNumber: nodeNumber,
-                    noteId: `slide-note-${slideNumber}`
-                }
-            };
-        } else {
-            slideNode = {
-                type: isMaster ? 'slideMaster' : 'slide',
-                children: [],
-                metadata: {
-                    slideNumber: nodeNumber
-                }
-            };
-        }
-
         if (config.includeRawContent) {
-            slideNode.rawContent = getRawContent(xml, xmlContentString, config);
+            node.rawContent = getRawContent(xml, xmlContentString, config);
         }
-
         const spTree = getFirstElementByTagName(xml, "p:spTree");
-        if (spTree) {
-            if (slideNode.children) appendAll(slideNode.children, traverseSpTree(spTree, nodeNumber, xmlContentString));
-        }
+        if (spTree) appendAll(node.children!, traverseSpTree(spTree, relsByPart.get(file.path), xmlContentString));
+        return node;
+    };
 
-        if (slideNode.children && slideNode.children.length > 0) {
-            if (isMaster) {
-                slideMasters.push(slideNode);
-            } else if (isNote) {
-                if (!slidesMap[slideNumber]) slidesMap[slideNumber] = { type: 'slide', children: [], metadata: { slideNumber } as SlideMetadata };
-                if (!slidesMap[slideNumber].notes) slidesMap[slideNumber].notes = [];
-                slidesMap[slideNumber].notes.push(slideNode);
-            } else {
-                if (!slidesMap[slideNumber]) {
-                    slidesMap[slideNumber] = slideNode;
-                } else {
-                    slidesMap[slideNumber].children = slideNode.children;
-                    slidesMap[slideNumber].rawContent = slideNode.rawContent;
-                }
-
-                // Process comments
-                if (!config.ignoreComments && slideRelsMap[slideNumber]) {
-                    const commentRels = Object.values(slideRelsMap[slideNumber]).filter(r => r.type === "comments");
-                    for (const rel of commentRels) {
-                        // Each comments part once, on the first slide naming it (a part is one slide's):
-                        // attached for every relationship, or every slide, naming it, one large part
-                        // was repeated thousands of times (see commentsOfPart).
-                        if (attachedCommentParts.has(rel.target)) continue;
-                        attachedCommentParts.add(rel.target);
-                        const comments = commentsOfPart(rel.target);
-                        if (!comments.length) continue;
-                        const slideComments = slidesMap[slideNumber].comments ??= [];
-                        for (const comment of comments) slideComments.push(comment);
-                    }
-                }
-            }
-        }
+    const slideMasters: OfficeContentNode[] = [];
+    for (const file of files) {
+        if (!file.path.match(slideMastersRegex)) continue;
+        checkAbortSignal(config.abortSignal);
+        const masterMatch = file.path.match(/slideMaster(\d+)\.xml/);
+        const master = readPart(file, { type: 'slideMaster', children: [], metadata: { slideNumber: masterMatch ? parseInt(masterMatch[1]) : 0 } });
+        if (master.children!.length > 0) slideMasters.push(master);
     }
 
-    const sortedSlideNumbers = Object.keys(slidesMap).map(Number).sort((a, b) => a - b);
-    for (const num of sortedSlideNumbers) {
-        content.push(slidesMap[num]);
+    // Notes pages read so far: each is one slide's, read once, for the first slide naming it (read for
+    // every relationship naming it, one page named thousands of times is read thousands of times).
+    const readNotesPages = new Set<PackageFile>();
+    for (let index = 0; index < deck.length; index++) {
+        checkAbortSignal(config.abortSignal);
+        const file = deck[index];
+        // A slide's number is its place in the presentation, as PowerPoint numbers it.
+        const slideNumber = index + 1;
+        const slideNode = readPart(file, { type: 'slide', children: [], metadata: { slideNumber } });
+        const slideRels = relsByPart.get(file.path);
+        const relationships = slideRels ? Object.values(slideRels) : [];
+
+        // Process comments
+        if (!config.ignoreComments) {
+            for (const rel of relationships) {
+                if (rel.type !== "comments") continue;
+                // Each comments part once, on the first slide naming it (a part is one slide's):
+                // attached for every relationship, or every slide, naming it, one large part
+                // was repeated thousands of times (see commentsOfPart).
+                if (attachedCommentParts.has(rel.target)) continue;
+                attachedCommentParts.add(rel.target);
+                const comments = commentsOfPart(rel.target);
+                if (!comments.length) continue;
+                const slideComments = slideNode.comments ??= [];
+                for (const comment of comments) slideComments.push(comment);
+            }
+        }
+
+        // The slide's notes: the notes page its relationships name. A notes page's file number is not
+        // its slide's (PowerPoint numbers notes pages in the order they are made, so a deck whose third
+        // slide alone has notes holds `notesSlide1.xml`): matched by number, notes were given to the
+        // slide before or after their own.
+        for (const rel of relationships) {
+            const notesFile = rel.type === "notes" && rel.path ? fileByPath.get(rel.path) : undefined;
+            if (!notesFile || readNotesPages.has(notesFile)) continue;
+            readNotesPages.add(notesFile);
+            const note = readPart(notesFile, { type: 'note', children: [], metadata: { slideNumber, noteId: `slide-note-${slideNumber}` } });
+            if (note.children!.length > 0) (slideNode.notes ??= []).push(note);
+        }
+
+        // A slide holding nothing (no content, notes or comments) is not a node.
+        if (slideNode.children!.length > 0 || slideNode.notes || slideNode.comments) content.push(slideNode);
     }
 
     const attachments: OfficeAttachment[] = [];
