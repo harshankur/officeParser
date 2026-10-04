@@ -2903,6 +2903,17 @@ async function testLatexParsing(): Promise<void> {
     const nodes = collectAllNodes(ast);
     const texts = (n: OfficeContentNode) => (n.children || []).map(c => c.text || '').join('');
     assert.strictEqual(ast.type, 'tex', 'TEX parse: AST type');
+    // Plain text is read in runs, and reads as it does a character at a time (which is how it is read
+    // inside \\MakeUppercase, where each character's case is changed on its own): the characters that
+    // are not plain end a run, and every other one is in it.
+    const runText = async (body: string) => {
+        const read = await OfficeParser.parseOffice(Buffer.from(`\\documentclass{article}\\begin{document}${body}\\end{document}`), { fileType: 'tex', onWarning: () => { } } as any);
+        return read.content.map(n => n.text).join('|');
+    };
+    const plainRun = "a~b # ^ _ [x] * = , 1.5 < > | @ ``q'' --- it's \ud83d\ude00 {grouped} 50\\% \\& more % a comment\n next";
+    assert.strictEqual(await runText(plainRun), 'a\u00A0b # ^ _ [x] * = , 1.5 < > | @ \u201Cq\u201D \u2014 it\u2019s \ud83d\ude00 grouped 50% & more next', 'TEX parse: a run of plain text is its characters, the ones that are not plain read as they are');
+    assert.strictEqual(await runText(`\\MakeUppercase{${plainRun}}`), (await runText(plainRun)).toUpperCase(), 'TEX parse: text read a character at a time is the text read in runs');
+    assert.strictEqual(await runText(`${'word '.repeat(20_000)}\n\n${'x'.repeat(200_000)}`), `${'word '.repeat(20_000).trim()}|${'x'.repeat(200_000)}`, 'TEX parse: a long run is read whole');
     // Metadata from \title/\author/\date/\hypersetup and the class.
     assert.strictEqual(ast.metadata.title, 'Exhaustive LaTeX Test', 'TEX parse: \\title (with \\thanks dropped, \\LaTeX expanded)');
     assert.strictEqual(ast.metadata.author, 'Ada Lovelace, Alan Turing', 'TEX parse: \\author split on \\and');

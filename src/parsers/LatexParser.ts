@@ -416,6 +416,13 @@ type Tok =
 interface Snapshot { frames: Frame[]; idx: number[]; afterCs: boolean; lineStart: boolean; }
 
 /**
+ * A run of the characters the scanner gives as plain `text` tokens of themselves: not a backslash, a
+ * comment's `%`, the whitespace it reads as a space or a paragraph break, a brace, `$`, `&`, or `~`
+ * (which is a space).
+ */
+const PLAIN_TEXT_RUN = /[^\\%{}$&~ \t\n\r]+/y;
+
+/**
  * Reads LaTeX source the way TeX tokenizes it: control words (a backslash and letters, with the
  * spaces and single line end after them skipped), control symbols, groups, math shifts, comments,
  * and whitespace, where a blank line is a paragraph break. Source is a stack of frames, so macro
@@ -562,6 +569,20 @@ class Scanner {
                 default: return { t: 'text', v: c };
             }
         }
+    }
+
+    /**
+     * The rest of a run of ordinary characters, taken at once: the ones `next` gives one at a time as
+     * a `text` token of themselves, up to the first that is anything else or the end of the source
+     * they are in. Read a token each, a long run of plain text cost a token's work for every character.
+     */
+    takeTextRun(): string {
+        const f = this.frames[this.frames.length - 1];
+        if (!f || f.i >= f.s.length) return '';
+        PLAIN_TEXT_RUN.lastIndex = f.i;
+        const run = PLAIN_TEXT_RUN.exec(f.s)?.[0] ?? '';
+        f.i += run.length;
+        return run;
     }
 
     /** Skips whitespace and comments (not paragraph breaks' meaning: used only before arguments). */
@@ -829,6 +850,25 @@ interface ParseState {
 
 const cloneState = (s: ParseState): ParseState => ({ ...s, fmt: { ...s.fmt } });
 
+/**
+ * Whether two runs have the same formatting, as comparing `JSON.stringify` of each says (the keys in
+ * their order, one holding `undefined` as absent). It is asked for every character of text, and the
+ * answer is nearly always yes, found by looking at the values: serializing both each time was most of
+ * the time text took to read.
+ */
+function sameFormatting(a: TextFormatting, b: TextFormatting): boolean {
+    if (a === b) return true;
+    const keysA = Object.keys(a), keysB = Object.keys(b);
+    if (keysA.length === keysB.length) {
+        let same = true;
+        for (let i = 0; same && i < keysA.length; i++) {
+            same = keysA[i] === keysB[i] && (a as Record<string, unknown>)[keysA[i]] === (b as Record<string, unknown>)[keysB[i]];
+        }
+        if (same) return true;
+    }
+    return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /** One container being filled: the blocks it holds and the paragraph being built. */
 class Flow {
     blocks: OfficeContentNode[] = [];
@@ -911,6 +951,8 @@ function alph(n: number): string {
 
 /** Applies TeX's input ligatures to a run of text (not in a typewriter font, where there are none). */
 function ligatures(s: string): string {
+    // Most runs hold none: one look says so, where each of the replacements below reads the whole run.
+    if (!/--|[`']/.test(s)) return s;
     return s
         .replace(/---/g, '—').replace(/--/g, '–')
         .replace(/``/g, '“').replace(/''/g, '”')
@@ -1188,7 +1230,7 @@ class LatexReader {
     // ── text accumulation ──
 
     private sameRunState(a: ParseState, b: ParseState): boolean {
-        return JSON.stringify(a.fmt) === JSON.stringify(b.fmt) && a.link?.url === b.link?.url;
+        return a.link?.url === b.link?.url && sameFormatting(a.fmt, b.fmt);
     }
 
     private addText(flow: Flow, s: string, literal = false): void {
@@ -1388,7 +1430,9 @@ class LatexReader {
                     break;
                 case 'par': this.endParagraph(flow); break;
                 case 'space': this.addSpace(flow); break;
-                case 'text': this.addText(flow, tok.v); break;
+                // The plain characters after it are taken with it. Inside \MakeUppercase they are read one
+                // at a time, as the case of each is changed on its own.
+                case 'text': this.addText(flow, this.state.textCase ? tok.v : tok.v + sc.takeTextRun()); break;
                 case 'amp': break;
                 case 'dollar': this.readDollarMath(sc, flow); break;
                 case 'comment': this.handleComment(flow, tok.v, sc); break;
