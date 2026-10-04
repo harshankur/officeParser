@@ -4986,9 +4986,10 @@ async function testHtmlBrowserReading(): Promise<void> {
     assert.strictEqual((await parse('<body><title>T</title><p>x</p></body>')).metadata.title, 'T', 'HTML: a title outside the head is the title, not text');
     const windows1252 = Buffer.concat([Buffer.from('<meta http-equiv="Content-Type" content="text/html; charset=windows-1252"><p>caf'), Buffer.from([0xE9, 0x20, 0x92, 0x71, 0x92]), Buffer.from('</p>')]);
     assert.strictEqual(collectAllNodes(await parse(windows1252)).find(n => n.type === 'text')?.text, 'café \u2019q\u2019', 'HTML: a page in its declared encoding');
-    // Windows-1252 is decoded by the library, not by the runtime: Node 22's TextDecoder reads its bytes
-    // 0x80 to 0x9F as Latin-1 (nodejs/node#56542), so a page's curly quotes came out as control
-    // characters there. Every byte, against the Encoding Standard's table, written out here.
+    // Windows-1252 is decoded by the library, not by the runtime: the TextDecoder of Node 22.13.0 to
+    // 22.22.0 reads its bytes 0x80 to 0x9F as Latin-1 (nodejs/node#56542), so a page's curly quotes
+    // came out as control characters there. Every byte, against the Encoding Standard's table, written
+    // out here.
     const high1252 = [0x20AC, 0x81, 0x201A, 0x192, 0x201E, 0x2026, 0x2020, 0x2021, 0x2C6, 0x2030, 0x160, 0x2039, 0x152, 0x8D, 0x17D, 0x8F,
         0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x2DC, 0x2122, 0x161, 0x203A, 0x153, 0x9D, 0x17E, 0x178];
     const everyByte = Uint8Array.from({ length: 256 }, (_, i) => i);
