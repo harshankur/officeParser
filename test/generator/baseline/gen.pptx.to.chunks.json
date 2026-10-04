@@ -253,46 +253,6 @@
     }
   },
   {
-    "text": "Now calendars",
-    "metadata": {
-      "sourceType": "pptx",
-      "closestHeading": "Tables",
-      "slideNumber": 4
-    }
-  },
-  {
-    "text": "Sun",
-    "metadata": {
-      "sourceType": "pptx",
-      "closestHeading": "Tables",
-      "slideNumber": 4
-    }
-  },
-  {
-    "text": "Mon",
-    "metadata": {
-      "sourceType": "pptx",
-      "closestHeading": "Tables",
-      "slideNumber": 4
-    }
-  },
-  {
-    "text": "7. Sat",
-    "metadata": {
-      "sourceType": "pptx",
-      "closestHeading": "Tables",
-      "slideNumber": 4
-    }
-  },
-  {
-    "text": "5",
-    "metadata": {
-      "sourceType": "pptx",
-      "closestHeading": "Tables",
-      "slideNumber": 4
-    }
-  },
-  {
     "text": "We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.",
     "metadata": {
       "sourceType": "pptx",
@@ -307,6 +267,46 @@
       "closestHeading": "Tables",
       "slideNumber": 5,
       "isTableChunk": true
+    }
+  },
+  {
+    "text": "Now calendars",
+    "metadata": {
+      "sourceType": "pptx",
+      "closestHeading": "Tables",
+      "slideNumber": 5
+    }
+  },
+  {
+    "text": "Sun",
+    "metadata": {
+      "sourceType": "pptx",
+      "closestHeading": "Tables",
+      "slideNumber": 5
+    }
+  },
+  {
+    "text": "Mon",
+    "metadata": {
+      "sourceType": "pptx",
+      "closestHeading": "Tables",
+      "slideNumber": 5
+    }
+  },
+  {
+    "text": "7. Sat",
+    "metadata": {
+      "sourceType": "pptx",
+      "closestHeading": "Tables",
+      "slideNumber": 5
+    }
+  },
+  {
+    "text": "5",
+    "metadata": {
+      "sourceType": "pptx",
+      "closestHeading": "Tables",
+      "slideNumber": 5
     }
   },
   {

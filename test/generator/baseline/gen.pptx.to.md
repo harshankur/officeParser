@@ -99,15 +99,6 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 |   | To the left is a table inside a table, with some cells merged.  |
 | --- | --- |
 
-> **Note:** Now calendars
-
-1. Sun
-2. Mon
-
-7\. Sat
-
-5
-
 ---
 
  We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.
@@ -126,6 +117,15 @@ Next, we have something a little more complex, a nested table, i.e. a table in
 | 23  |   | 24  |   | 25  |   | 26  |   | 27  |   | 28  |   | 29  |  |
 |   |   |   |   |   |   |   |   |   |   |   |   |   |  |
 | 30  |   | 31  |   |   |   |   |   |   |   |   |   |   |  |
+
+> **Note:** Now calendars
+
+1. Sun
+2. Mon
+
+7\. Sat
+
+5
 
 ---
 
