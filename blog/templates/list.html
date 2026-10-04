@@ -1,0 +1,47 @@
+        <section class="hero-section">
+            <p class="hero-subtitle">Engineering &amp; Architecture</p>
+            <h1 class="hero-title">The Document Systems Blog</h1>
+            <p class="hero-description">
+                How document formats work inside, how officeParser reads and writes them, where it falls short,
+                and how to chunk documents for retrieval.
+            </p>
+
+            <!-- Shown by the script, which is what makes it work. -->
+            <div class="post-search" id="post-search" role="search" hidden>
+                <label class="visually-hidden" for="post-search-input">Search articles</label>
+                <input class="post-search-input" id="post-search-input" type="search" placeholder="Search articles"
+                    autocomplete="off" spellcheck="false">
+            </div>
+
+            <div class="filter-tabs" id="filter-tabs" role="group" aria-label="Filter articles by topic">
+                <button class="filter-btn active" type="button" data-category="all" aria-pressed="true">All
+                    Articles</button>
+{{#categories}}
+                <button class="filter-btn" type="button" data-category="{{id}}" aria-pressed="false">{{label}}</button>
+{{/categories}}
+            </div>
+        </section>
+
+        <section class="articles-container" aria-label="Articles">
+            <p class="search-status" id="search-status" role="status" hidden></p>
+            <div class="article-grid" id="article-grid">
+{{#posts}}
+                <a class="article-card" data-category="{{category}}" data-slug="{{slug}}" href="{{link}}">
+                    <div class="card-top">
+                        <span class="card-tag">{{categoryLabel}}</span>
+                        <h2 class="card-title">{{title}}</h2>
+                        <p class="card-excerpt">{{description}}</p>
+                        <p class="card-match" hidden></p>
+                    </div>
+                    <div class="card-footer">
+                        <span><time datetime="{{published}}">{{dateShort}}</time> · {{minutes}} min read</span>
+                        <span class="read-more">Read article &rarr;</span>
+                    </div>
+                </a>
+{{/posts}}
+            </div>
+            <div class="no-results" id="no-results" hidden>
+                <p>No articles match your search.</p>
+                <button class="clear-search" id="clear-search" type="button">Clear search</button>
+            </div>
+        </section>
