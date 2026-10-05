@@ -397,8 +397,13 @@
 
         .nav-links {
             display: flex;
-            gap: 1.5rem;
+            gap: 1.1rem;
             align-items: center;
+        }
+
+        /* A link's name stays on one line: the header gives the buttons up to their icons before it breaks one. */
+        .nav-links a {
+            white-space: nowrap;
         }
 
         .nav-links a {
@@ -449,7 +454,7 @@
 
         .github-btn {
             background: var(--border);
-            padding: 0.5rem 1.25rem;
+            padding: 0.5rem 1rem;
             border-radius: 9999px;
             display: flex;
             align-items: center;
@@ -470,13 +475,13 @@
         .header-right {
             display: flex;
             align-items: center;
-            gap: 1.5rem;
+            gap: 1.25rem;
         }
 
         .action-buttons {
             display: flex;
             align-items: center;
-            gap: 0.75rem;
+            gap: 0.6rem;
         }
 
         /* Hamburger Button */
@@ -557,7 +562,7 @@
             background: rgba(234, 74, 170, 0.1);
             color: #ea4aaa !important;
             border: 1px solid rgba(234, 74, 170, 0.2);
-            padding: 0.5rem 1.25rem;
+            padding: 0.5rem 1rem;
             border-radius: 9999px;
             display: flex;
             align-items: center;
@@ -572,6 +577,29 @@
             background: rgba(234, 74, 170, 0.2);
             border-color: #ea4aaa;
             box-shadow: 0 4px 12px rgba(234, 74, 170, 0.3);
+            transform: translateY(-2px);
+        }
+
+        /* The blog's button, in the site's own colour: its icon and its name, the icon alone where the header is narrow. */
+        .blog-nav-btn {
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary) !important;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .blog-nav-btn:hover {
+            background: rgba(99, 102, 241, 0.2);
+            border-color: var(--primary);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
             transform: translateY(-2px);
         }
 
@@ -1871,27 +1899,16 @@
             }
         }
 
-        @media (max-width: 1200px) {
-            header {
-                padding: 1rem 1.5rem;
-            }
-
-            .nav-links {
-                display: none;
-            }
-
-            .action-buttons .theme-switcher {
-                display: none;
-            }
-
-            .hamburger {
-                display: flex;
-            }
-
+        /*
+         * The header's buttons show their names only where there is room for them beside the links:
+         * past the width the header itself stops growing at. Under it they are their icons.
+         */
+        @media (max-width: 1400px) {
             .action-buttons .btn-text {
                 display: none;
             }
 
+            .blog-nav-btn,
             .sponsor-nav-btn,
             .github-btn {
                 padding: 0.5rem;
@@ -1899,8 +1916,10 @@
                 height: 36px;
                 justify-content: center;
                 gap: 0;
+                flex: none;
             }
 
+            .blog-nav-btn svg,
             .sponsor-nav-btn svg,
             .github-btn svg {
                 margin: 0;
@@ -1919,6 +1938,25 @@
                 width: 36px;
                 border-radius: 50%;
             }
+        }
+
+        @media (max-width: 1200px) {
+            header {
+                padding: 1rem 1.5rem;
+            }
+
+            .nav-links {
+                display: none;
+            }
+
+            .action-buttons .theme-switcher {
+                display: none;
+            }
+
+            .hamburger {
+                display: flex;
+            }
+
         }
 
         @media (max-width: 768px) {
@@ -1961,6 +1999,51 @@
 
             .section-title h2 {
                 font-size: 2rem;
+            }
+        }
+
+        /* A phone: the name, four buttons and the menu fit on one line, none over another. */
+        @media (max-width: 480px) {
+            header {
+                padding: 0.9rem 1rem;
+            }
+
+            .header-container {
+                padding: 0;
+            }
+
+            .header-right {
+                gap: 0.5rem;
+            }
+
+            .action-buttons {
+                gap: 0.5rem;
+            }
+
+            .logo {
+                font-size: 1.25rem;
+            }
+        }
+
+        @media (max-width: 350px) {
+            .logo {
+                font-size: 1.05rem;
+            }
+
+            .action-buttons {
+                gap: 0.35rem;
+            }
+
+            .blog-nav-btn,
+            .sponsor-nav-btn,
+            .github-btn {
+                width: 32px;
+                height: 32px;
+            }
+
+            .bmc-nav-btn img {
+                width: 32px;
+                height: 32px;
             }
         }
 
@@ -3512,7 +3595,6 @@
                     <a href="#specs">Specifications</a>
                     <a href="#visualizer">Visualizer</a>
                     <a href="#template-studio">Template Studio</a>
-                    <a href="./blog/">Blog</a>
                 </nav>
                 <div class="action-buttons">
                     <div class="theme-switcher">
@@ -3520,6 +3602,16 @@
                         <button class="theme-btn theme-btn-dark">🌙</button>
                         <button class="theme-btn theme-btn-auto">💻</button>
                     </div>
+                    <a href="./blog/" class="blog-nav-btn" aria-label="Blog" title="Blog">
+                        <!-- A post: a page with its headline and the lines under it. -->
+                        <svg height="16" width="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="2.25" y="1.75" width="11.5" height="12.5" rx="2"></rect>
+                            <path d="M5.25 5.25h5.5" stroke-width="2"></path>
+                            <path d="M5.25 8.5h5.5M5.25 11h3.25"></path>
+                        </svg>
+                        <span class="btn-text">Blog</span>
+                    </a>
                     <a href="https://github.com/sponsors/harshankur" class="sponsor-nav-btn" target="_blank">
                         <svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor">
                             <path
