@@ -5198,7 +5198,8 @@
 
                         content = `
                             <div class="tooltip-header"><span>⚙️</span> LaTeX Preview Engine</div>
-                            <div style="margin-bottom: 1.25rem; opacity: 0.8; font-size: 0.75rem; line-height: 1.6;">No browser compiles LaTeX, so the preview is drawn from the document the generated source parses back to, and set the way LaTeX typesets that source: in LaTeX's own fonts (Latin Modern), at the sizes, on the paper and inside the margins its preamble asks for. The LaTeX itself is not changed for the preview. Where pages break, and page numbers and running headers, are not shown.</div>
+                            <div style="margin-bottom: 0.75rem; opacity: 0.8; font-size: 0.75rem; line-height: 1.6;"><strong>How this preview is made.</strong> A browser cannot run LaTeX, so this is not a compiled PDF. officeParser reads the generated LaTeX back and lays it out the way LaTeX would: in LaTeX's own fonts (Latin Modern), at the font size, on the paper and inside the margins the generated source asks for. The LaTeX you download is not changed for the preview.</div>
+                            <div style="margin-bottom: 1.25rem; opacity: 0.8; font-size: 0.75rem; line-height: 1.6;"><strong>What differs when you compile it.</strong> Built with a LaTeX engine (pdfLaTeX, XeLaTeX, LuaLaTeX, or on Overleaf), the same source comes out slightly different: LaTeX breaks and hyphenates lines better than a browser, so a line may end a word sooner or later; it splits the document into pages, with page numbers and any running header, where this shows one long page; and each footnote stands at the foot of its own page, not at the end.</div>
                             
                             <div class="pipeline-container">
                                 <div class="pipeline-phase">
@@ -6385,6 +6386,17 @@
                 11: { scriptsize: [8, 9.5], footnotesize: [9, 11], small: [10, 12], normalsize: [10.95, 13.6], large: [12, 14], Large: [14.4, 18], LARGE: [17.28, 22], huge: [20.74, 25], Huge: [24.88, 30] },
                 12: { scriptsize: [8, 9.5], footnotesize: [10, 12], small: [10.95, 13.6], normalsize: [12, 14.5], large: [14.4, 18], Large: [17.28, 22], LARGE: [20.74, 25], huge: [24.88, 30], Huge: [24.88, 30] },
             };
+            /** The papers `geometry` knows by name, upright, as [width, height] in points of 1/72 inch. */
+            const GEOMETRY_PAPERS = {
+                a0paper: [2383.94, 3370.39], a1paper: [1683.78, 2383.94], a2paper: [1190.55, 1683.78], a3paper: [841.89, 1190.55],
+                a4paper: [595.28, 841.89], a5paper: [419.53, 595.28], a6paper: [297.64, 419.53],
+                letterpaper: [612, 792], legalpaper: [612, 1008], executivepaper: [522, 756], ansibpaper: [792, 1224],
+            };
+            /** A length as LaTeX writes it (`1in`, `25mm`, `595.28bp`), in points of 1/72 inch: TeX's own `pt` is a little less. */
+            const texPoints = raw => {
+                const length = /^([0-9.]+)\s*(pt|bp|in|cm|mm)$/.exec(String(raw ?? '').trim());
+                return length ? Number(length[1]) * { pt: 72 / 72.27, bp: 1, in: 72, cm: 72 / 2.54, mm: 72 / 25.4 }[length[2]] : undefined;
+            };
             /** The width of the text in a standard class with no `geometry`, by its size option, in points. */
             const TEX_TEXT_WIDTH = { 10: 345, 11: 360, 12: 390 };
             /** beamer's slides in points (it sets them in millimetres), by its `aspectratio` option. */
@@ -6417,10 +6429,15 @@
                 const beamer = documentClass === 'beamer';
                 const stated = Number(/(?:^|[,\s])(\d+)pt/.exec(options)?.[1]);
                 const size = beamer ? (stated >= 8 && stated <= 20 ? stated : 11) : ([10, 11, 12].includes(stated) ? stated : 10);
-                const geometry = /\\usepackage\[([^\]]*)\]\{geometry\}/.exec(preamble)?.[1] ?? '';
-                const length = key => { const found = new RegExp(`(?:^|,)\\s*${key}=([0-9.]+)pt`).exec(geometry); return found ? Number(found[1]) : undefined; };
+                // What `geometry` is asked for: a paper by its name or its size, turned for landscape, and
+                // one margin for all four sides or one each.
+                const geometry = Object.fromEntries((/\\usepackage\[([^\]]*)\]\{geometry\}/.exec(preamble)?.[1] ?? '').split(',').map(option => option.trim()).filter(Boolean)
+                    .map(option => (option.includes('=') ? [option.slice(0, option.indexOf('=')), option.slice(option.indexOf('=') + 1)] : [option, true])));
+                const named = GEOMETRY_PAPERS[Object.keys(geometry).find(option => GEOMETRY_PAPERS[option])];
                 // US letter, and margins that leave the class's text width, when the source names no paper.
-                const paperWidth = length('paperwidth') ?? 614.3, paperHeight = length('paperheight') ?? 795;
+                let paperWidth = texPoints(geometry.paperwidth) ?? named?.[0] ?? 612, paperHeight = texPoints(geometry.paperheight) ?? named?.[1] ?? 792;
+                if (geometry.landscape && paperWidth < paperHeight) [paperWidth, paperHeight] = [paperHeight, paperWidth];
+                const length = key => texPoints(geometry[key]) ?? texPoints(geometry.margin);
                 const side = (paperWidth - TEX_TEXT_WIDTH[beamer ? 10 : size]) / 2;
                 const slide = BEAMER_SLIDES[/aspectratio=(\d+)/.exec(options)?.[1] ?? 43] ?? BEAMER_SLIDES[43];
                 return {
@@ -6639,6 +6656,13 @@ ${sectioning.filter(Boolean).join('\n')}
                     else if (columns >= 9) table.classList.add('tex-footnotesize');
                     else if (columns >= 6) table.classList.add('tex-small');
                 }
+                // A line break that ends a paragraph leaves an empty line under it in LaTeX; a browser
+                // shows none unless something stands on that line.
+                for (const br of doc.querySelectorAll('.tex-sheet :is(p, li, td, th, dd) > br')) {
+                    let node = br.nextSibling;
+                    while (node && node.nodeType === 3 && !node.textContent.trim()) node = node.nextSibling;
+                    if (!node) br.after(String.fromCharCode(0x200B));
+                }
                 if (!layout.beamer) {
                     for (const title of doc.querySelectorAll('.tex-title')) {
                         // The lines the block has, in the order \maketitle sets them: one it lacks is an empty line.
@@ -6730,7 +6754,12 @@ ${sectioning.filter(Boolean).join('\n')}
                     : `<div style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${htmlResult.value}</div>`;
                 doc.write(styledHtml);
                 doc.close();
-                if (layout) finishTexPreview(contentFrame, layout);
+                // Once the document is all read: a script it loads (the charts') holds the reading up
+                // the first time, and the page is not there to mark until it has come.
+                if (layout) {
+                    if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', () => finishTexPreview(contentFrame, layout), { once: true });
+                    else finishTexPreview(contentFrame, layout);
+                }
 
                 contentFrame.style.height = '100%';
                 contentFrame.style.display = 'block';

@@ -189,10 +189,12 @@ server.listen(0, async () => {
         const texFrame = await texFrameElement.contentFrame();
         await texFrame.waitForSelector('.tex-sheet', { timeout: 15000 });
 
-        // What the generated LaTeX asks for, read from the source the window made.
+        // What the generated LaTeX asks for, read from the source the window made: A4 by its name and
+        // an inch of margin all round, which is what the window's defaults give.
         const texSource = await page.evaluate(async () => (await window.currentAst.to('tex')).value);
         const geometry = /\\usepackage\[([^\]]*)\]\{geometry\}/.exec(texSource)[1];
-        const asked = name => Number(new RegExp(`(?:^|,)${name}=([0-9.]+)pt`).exec(geometry)[1]);
+        if (geometry !== 'a4paper,margin=1in') throw new Error(`The generated LaTeX's page is not the default one this test reads: ${geometry}`);
+        const asked = name => ({ paperwidth: 595.28, top: 72, right: 72, bottom: 72, left: 72 })[name];
         const classSize = Number(/\\documentclass\[[^\]]*?(\d+)pt/.exec(texSource)[1]);
         const bodySize = { 10: 10, 11: 10.95, 12: 12 }[classSize];
 
