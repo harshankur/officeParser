@@ -1189,6 +1189,140 @@ async function testWordParagraphMarkFormatting(): Promise<void> {
 }
 
 /**
+ * Excel stores a date or a time as a day count and shows it through the cell's number format. An
+ * XLSX is built in-memory with built-in and custom date/time formats, number formats that only look
+ * like dates, and both date systems; every cell must read as the sheet shows it.
+ */
+async function testExcelDates(): Promise<void> {
+    console.log('\n=== Running Excel Date/Time Cell Tests ===');
+
+    const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="16">
+    <numFmt numFmtId="164" formatCode="yyyy-mm-dd"/>
+    <numFmt numFmtId="165" formatCode="yyyy-mm-dd h:mm:ss"/>
+    <numFmt numFmtId="166" formatCode="0.00"/>
+    <numFmt numFmtId="167" formatCode="0.0 &quot;days&quot;"/>
+    <numFmt numFmtId="168" formatCode="[$-x-systime]h:mm:ss AM/PM"/>
+    <numFmt numFmtId="169" formatCode="DD.MM.YYYY"/>
+    <numFmt numFmtId="170" formatCode="mmm yyyy"/>
+    <numFmt numFmtId="171" formatCode="d-mmm"/>
+    <numFmt numFmtId="172" formatCode="mm:ss"/>
+    <numFmt numFmtId="173" formatCode="h:mm"/>
+    <numFmt numFmtId="174" formatCode="0.0\\ \\h"/>
+    <numFmt numFmtId="175" formatCode="[h]:mm"/>
+    <numFmt numFmtId="176" formatCode="mmmm"/>
+    <numFmt numFmtId="177" formatCode="[mm]:ss"/>
+    <numFmt numFmtId="178" formatCode="[ss]"/>
+    <numFmt numFmtId="179" formatCode="0 &quot;min&quot;"/>
+  </numFmts>
+  <cellXfs count="21">
+    <xf numFmtId="0"/><xf numFmtId="164"/><xf numFmtId="165"/><xf numFmtId="20"/><xf numFmtId="46"/>
+    <xf numFmtId="14"/><xf numFmtId="22"/><xf numFmtId="166"/><xf numFmtId="167"/><xf numFmtId="168"/>
+    <xf numFmtId="169"/><xf numFmtId="170"/><xf numFmtId="171"/><xf numFmtId="172"/><xf numFmtId="173"/>
+    <xf numFmtId="174"/><xf numFmtId="175"/><xf numFmtId="176"/><xf numFmtId="177"/><xf numFmtId="178"/>
+    <xf numFmtId="179"/>
+  </cellXfs>
+</styleSheet>`;
+    const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" s="1"><v>45565</v></c>
+      <c r="B1" s="2"><v>45565.586804398</v></c>
+      <c r="C1" s="3"><v>0.25</v></c>
+      <c r="D1" s="4"><v>1.5</v></c>
+      <c r="E1" s="5"><v>45292</v></c>
+      <c r="F1" s="6"><v>45292.395833333336</v></c>
+      <c r="G1" s="10"><v>45565</v></c>
+      <c r="H1" s="1"><f>A1+30</f><v>45595</v></c>
+      <c r="I1" s="11"><v>45566</v></c>
+      <c r="J1" s="12"><v>45565</v></c>
+      <c r="K1" s="13"><v>0.0625</v></c>
+      <c r="L1" s="14"><v>0.75</v></c>
+      <c r="M1" s="16"><v>1.25</v></c>
+      <c r="N1" s="17"><v>45565</v></c>
+      <c r="O1" s="18"><v>1.0420138888888889</v></c>
+      <c r="P1" s="19"><v>1.0420138888888889</v></c>
+    </row>
+    <row r="2">
+      <c r="A2" s="7"><v>12.5</v></c>
+      <c r="B2" s="8"><v>3.5</v></c>
+      <c r="C2" s="9"><v>0.5</v></c>
+      <c r="D2" s="1"><v>59</v></c>
+      <c r="E2" s="1"><v>61</v></c>
+      <c r="F2" s="1"><v>3000000</v></c>
+      <c r="G2" s="1" t="inlineStr"><is><t>not a date</t></is></c>
+      <c r="H2" s="20"><v>2.5</v></c>
+      <c r="J2"><v>45565</v></c>
+      <c r="K2" s="15"><v>7.5</v></c>
+      <c r="L2" s="1"><v>-1</v></c>
+      <c r="M2" s="1"><v></v></c>
+      <c r="N2" s="1" t="str"><f>TEXT(A1,"yyyy")</f><v>2024</v></c>
+    </row>
+  </sheetData>
+</worksheet>`;
+    const workbook = (date1904?: string) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  ${date1904 ? `<workbookPr date1904="${date1904}"/>` : '<workbookPr/>'}
+  <sheets><sheet name="Dates" sheetId="1" r:id="rId1"/></sheets>
+</workbook>`;
+    const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>`;
+    const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`;
+    const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+    const parseCells = async (date1904?: string): Promise<(string | undefined)[]> => {
+        const zip = zipSync({
+            '[Content_Types].xml': strToU8(contentTypes),
+            '_rels/.rels': strToU8(rels),
+            'xl/workbook.xml': strToU8(workbook(date1904)),
+            'xl/_rels/workbook.xml.rels': strToU8(workbookRels),
+            'xl/styles.xml': strToU8(stylesXml),
+            'xl/worksheets/sheet1.xml': strToU8(sheetXml),
+        });
+        const ast = await OfficeParser.parseOffice(Buffer.from(zip), { fileType: 'xlsx' });
+        return collectAllNodes(ast).filter(n => n.type === 'cell').map(n => n.text);
+    };
+
+    assert.deepStrictEqual(await parseCells(), [
+        // Date, rounded date-time, built-in time and elapsed duration, built-in date and date-time,
+        // an upper-case format, a formula result in a date style, a year without a day, a day
+        // without a year, minutes and seconds, hours and minutes, a custom elapsed duration, a
+        // month alone, and durations counted in total minutes and in total seconds
+        '2024-09-30', '2024-09-30 14:05:00', '06:00:00', '36:00:00', '2024-01-01', '2024-01-01 09:30:00',
+        '2024-09-30', '2024-10-30', '2024-10-01', '2024-09-30', '01:30:00', '18:00:00', '30:00:00',
+        '2024-09-30', '1500:30', '90030',
+        // Number formats (with "days" and "min" in quoted text), a time whose [$-x-systime] section
+        // contains a "y", the 1900 system around its fictitious 1900-02-29, a serial past 9999-12-31,
+        // text in a date style, a number with no style, a number with an escaped unit, a negative
+        // serial, and a text formula result in a date style. The empty value makes no cell.
+        '12.5', '3.5', '12:00:00', '1900-02-28', '1900-03-01', '3000000', 'not a date', '2.5',
+        '45565', '7.5', '-1', '2024',
+    ], 'Excel: cells read as the sheet shows them');
+
+    for (const date1904 of ['1', 'true']) {
+        const cells = await parseCells(date1904);
+        assert.strictEqual(cells[0], '2028-10-01', `Excel: date1904="${date1904}" counts from 1904-01-01`);
+        assert.strictEqual(cells[2], '06:00:00', 'Excel: a time of day does not depend on the date system');
+    }
+
+    console.log('  Excel date/time cells: All assertions passed ✓');
+}
+
+/**
  * Round 3: generated-output assertions. The suite historically asserted parse results but almost
  * never what the generators emit, which is how the frontmatter and footnote-markup bugs shipped
  * unnoticed. Covers chunking text retention (3.A), empty-frontmatter round trip (3.B), footnote
@@ -5210,6 +5344,7 @@ async function runTests(): Promise<void> {
         ['AttributeRoundtrip', testAttributeRoundtrip],
         ['BlobInput', testBlobInput],
         ['WordParagraphMark', testWordParagraphMarkFormatting],
+        ['ExcelDates', testExcelDates],
         ['GeneratedOutput', testGeneratedOutput],
         ['ODG', testOdg],
         ['ODFComments', testOdfComments],
