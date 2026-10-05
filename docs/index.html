@@ -637,6 +637,35 @@
             display: inline-block;
         }
 
+        /* The badges over the headline, side by side: the package's version, and how much it is used. */
+        .hero-badges {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .hero-badges .badge {
+            margin-bottom: 0;
+        }
+
+        /* The version is the one filled in: it is what a visitor checks first. Written as it is, not in capitals. */
+        .badge-version {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
+            text-transform: none;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .badge-link:hover .badge-version {
+            background: var(--primary);
+            border-color: var(--primary);
+            filter: brightness(1.12);
+        }
+
         .badge-link:hover .badge {
             background: rgba(99, 102, 241, 0.15);
             border-color: rgba(99, 102, 241, 0.4);
@@ -3558,11 +3587,19 @@
         <div id="custom-tooltip" class="custom-tooltip"></div>
         <section class="hero">
             <div class="hero-container">
-                <a id="weekly-badge-link"
-                    href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser" target="_blank"
-                    class="badge-link">
-                    <div class="badge shimmer" id="weekly-badge">--- Weekly Downloads</div>
-                </a>
+                <div class="hero-badges">
+                    <!-- package-version:start (written from package.json by scripts/sync-site-version.js: do not edit) -->
+                    <a class="badge-link" href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md" target="_blank"
+                        rel="noopener" aria-label="officeParser version 8.1.1: see what changed">
+                        <div class="badge badge-version" id="version-badge">v8.1.1</div>
+                    </a>
+                    <!-- package-version:end -->
+                    <a id="weekly-badge-link"
+                        href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser" target="_blank"
+                        class="badge-link">
+                        <div class="badge shimmer" id="weekly-badge">--- Weekly Downloads</div>
+                    </a>
+                </div>
                 <h1>The Industry's First <span class="gradient-text">Parser & Generator</span></h1>
                 <p>One library, every transformation. Parse complex documents, LaTeX included, into a structured AST
                     and generate high-fidelity Word, OpenDocument, LaTeX, PDF, EPUB, Markdown, HTML, or RAG-ready
