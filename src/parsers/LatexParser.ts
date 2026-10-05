@@ -2760,11 +2760,18 @@ class LatexReader {
         return this.dimenPt(raw);
     }
 
+    /**
+     * A TeX length in the points the tree measures in, which are 1/72 of an inch (TeX's `bp`). An
+     * inch, a centimetre, a millimetre and a big point are that exactly: an inch read as 72.27 points
+     * made such a length 0.4% long, and what the LaTeX generator writes (`36bp`) did not read back as
+     * what it was written from. TeX's own `pt` (1/72.27 of an inch) is read as a point, as a font's
+     * size is (`10pt` is 10 points everywhere): `12pt` is 12, not 11.96.
+     */
     private dimenPt(raw: string): number | undefined {
         const m = /^\s*([-+]?[\d.]+)\s*(?:(pt|bp|in|cm|mm|pc|em|ex|px|sp)\s*)?$/.exec(raw);
         if (!m) return undefined;
         const n = parseFloat(m[1]);
-        const factor: Record<string, number> = { pt: 1, bp: 1.00375, in: 72.27, cm: 28.4528, mm: 2.84528, pc: 12, em: 10, ex: 4.3, px: 0.75, sp: 1 / 65536 };
+        const factor: Record<string, number> = { pt: 1, bp: 1, in: 72, cm: 72 / 2.54, mm: 72 / 25.4, pc: 12, em: 10, ex: 4.3, px: 0.75, sp: 1 / 65536 };
         return Number.isFinite(n) ? Math.round(n * (factor[m[2] ?? 'pt'] ?? 1) * 100) / 100 : undefined;
     }
 
