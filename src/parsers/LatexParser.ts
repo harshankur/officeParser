@@ -1348,13 +1348,17 @@ class LatexReader {
         flow.labelTarget = null;
     }
 
+    /**
+     * A paragraph's runs without the spaces at its two ends. A line break that ends it stays: LaTeX
+     * sets an empty line there, and dropped, a paragraph written with one (`text\\hfil\\break{}`, as
+     * the LaTeX generator writes a Word paragraph ending in a line break) did not read back as it was.
+     */
     private trimInline(nodes: OfficeContentNode[]): OfficeContentNode[] {
         const out = nodes.slice();
         const first = out.find(n => n.type === 'text');
         if (first && out.indexOf(first) === 0) first.text = (first.text ?? '').replace(/^[ \t]+/, '');
         const last = [...out].reverse().find(n => n.type === 'text');
         if (last && out.indexOf(last) === out.length - 1) last.text = trimEndChars(last.text ?? '', ' \t');
-        while (out.length && out[out.length - 1].type === 'break' && (out[out.length - 1].metadata as any)?.breakType === 'carriageReturn') out.pop();
         return out.filter(n => !(n.type === 'text' && n.text === '' && !n.notes?.length && !n.comments?.length));
     }
 

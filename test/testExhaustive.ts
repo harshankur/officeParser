@@ -2937,6 +2937,14 @@ async function testLatexParsing(): Promise<void> {
     assert.deepStrictEqual([await indentOf('1in'), await indentOf('72bp'), await indentOf('2.54cm'), await indentOf('25.4mm'), await indentOf('72pt'), await indentOf('36pt')], [1440, 1440, 1440, 1440, 1440, 720],
         'TEX parse: a length is in points of 1/72 inch, whatever unit it is written in');
     assert.strictEqual(collectAllNodes({ content: await readBody('\\includegraphics[width=5cm]{figure.png}') } as any).find(n => n.type === 'image')?.metadata && (collectAllNodes({ content: await readBody('\\includegraphics[width=5cm]{figure.png}') } as any).find(n => n.type === 'image')!.metadata as any).width, '141.73pt', 'TEX parse: a picture\'s width in centimetres is its width in points');
+    // A line break that ends a paragraph is a line of its own in LaTeX, and stays one: dropped, a
+    // paragraph written with one did not read back as it was.
+    const kinds = (nodes: OfficeContentNode[]) => nodes.map(n => (n.children ?? []).map(c => (c.type === 'break' ? 'break' : c.text)));
+    assert.deepStrictEqual(kinds(await readBody('First line.\\hfil\\break{}\n\nSecond.')), [['First line.', 'break'], ['Second.']], 'TEX parse: a line break at the end of a paragraph is kept');
+    assert.deepStrictEqual(kinds(await readBody('One\\\\\nTwo\\\\\n\nThree')), [['One', 'break', ' Two', 'break'], ['Three']], 'TEX parse: so is one written \\\\');
+    const brokenAtEnd = { type: 'docx', content: [{ type: 'paragraph', text: 'Ends in a break.', children: [{ type: 'text', text: 'Ends in a break.' }, { type: 'break', metadata: { breakType: 'carriageReturn' } }] }, { type: 'paragraph', text: 'Next.', children: [{ type: 'text', text: 'Next.' }] }], metadata: {}, attachments: [] } as any;
+    const brokenTex = (await OfficeGenerator.generate(brokenAtEnd, 'tex')).value as string;
+    assert.deepStrictEqual(kinds(await OfficeParser.parseOffice(Buffer.from(brokenTex), { fileType: 'tex', onWarning: () => { } } as any).then(read => read.content)), [['Ends in a break.', 'break'], ['Next.']], 'TEX: a paragraph ending in a line break reads back from the LaTeX written for it');
     // Metadata from \title/\author/\date/\hypersetup and the class.
     assert.strictEqual(ast.metadata.title, 'Exhaustive LaTeX Test', 'TEX parse: \\title (with \\thanks dropped, \\LaTeX expanded)');
     assert.strictEqual(ast.metadata.author, 'Ada Lovelace, Alan Turing', 'TEX parse: \\author split on \\and');
