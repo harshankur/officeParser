@@ -47,9 +47,9 @@ export function decodeWindows1252(bytes: Uint8Array): string {
  * `new TextDecoder(label)` does, for a label this runtime does not decode.
  *
  * Windows-1252 (which `latin1`, `iso-8859-1` and `ascii` are labels of too) is decoded here and not by
- * the runtime: Node 22's `TextDecoder` reads its bytes 0x80 to 0x9F as Latin-1 (nodejs/node#56542), so
- * the curly quotes, dashes and euro signs of a Windows-1252 page, an RTF file or a `.tex` file came
- * out as control characters there.
+ * the runtime: the `TextDecoder` of Node 22.13.0 to 22.22.0 reads its bytes 0x80 to 0x9F as Latin-1
+ * (nodejs/node#56542, corrected in 22.22.1), so the curly quotes, dashes and euro signs of a
+ * Windows-1252 page, an RTF file or a `.tex` file came out as control characters there.
  */
 export function textDecoder(label: string): ByteDecoder {
     const native = new TextDecoder(label);

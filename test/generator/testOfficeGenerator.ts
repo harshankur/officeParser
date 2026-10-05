@@ -1112,7 +1112,7 @@ async function testGeneratorConfigs(
             if (ct.id === 'G-tex' && destFmt === 'tex' && typeof result.value === 'string') {
                 const tex = result.value;
                 const ok = /\\documentclass\[[^\]]*\]\{report\}/.test(tex) && !tex.includes('secnumdepth')
-                    && /\\usepackage\[paperwidth=612pt,paperheight=792pt,landscape,top=36pt,bottom=36pt,left=18pt,right=18pt\]\{geometry\}/.test(tex);
+                    && tex.includes('\\usepackage[letterpaper,landscape,top=0.5in,bottom=0.5in,left=0.25in,right=0.25in]{geometry}');
                 results.push({
                     category, feature: `${ct.id}: class/numbering/geometry applied`, sourceFormat: srcFmt, destFormat: destFmt,
                     result: { status: ok ? 'PASS' : 'FAIL', expected: 'report class, numbered, Letter landscape 36/18pt', actual: tex.slice(0, 160), details: 'texConfig must reach the preamble' }

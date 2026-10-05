@@ -178,14 +178,43 @@ const MAX_DIMENSION_PT = 16000;
 /** Largest counter start written (`\setcounter` rejects numbers past 2^31-1 as "Number too big"). */
 const MAX_LIST_START = 1000000;
 
+/** A length within TeX's range, so a hostile value can neither overflow it nor print in exponent notation. */
+const clampLength = (n: number): number => (Number.isFinite(n) ? Math.max(-MAX_DIMENSION_PT, Math.min(MAX_DIMENSION_PT, n)) : 0);
+
 /**
- * Formats a length with at most two decimals, clamped to TeX's range so a hostile value can neither
- * overflow it nor print in exponent notation. Deterministic across platforms.
+ * Formats a length in TeX's own points with at most two decimals: a font's size and what is worked
+ * out from one. Deterministic across platforms.
  */
 function fmtPt(n: number): string {
-    const clamped = Number.isFinite(n) ? Math.max(-MAX_DIMENSION_PT, Math.min(MAX_DIMENSION_PT, n)) : 0;
-    return `${Math.round(clamped * 100) / 100}pt`;
+    return `${Math.round(clampLength(n) * 100) / 100}pt`;
 }
+
+/**
+ * Formats a length the document or the configuration gives in points. A point there is 1/72 of an
+ * inch, which TeX calls a big point (`bp`): its own `pt` is 1/72.27 of an inch, so such a length
+ * written as `pt` came out 0.4% short (an A4 page of `595.28pt` was 593.06 points wide).
+ */
+function fmtBp(n: number): string {
+    return `${Math.round(clampLength(n) * 100) / 100}bp`;
+}
+
+/**
+ * A page length in points (1/72 inch) as a person writes it for `geometry`: in inches or millimetres
+ * when it is a round number of them (`1in`, `25mm`), else in big points.
+ */
+function pageLength(points: number): string {
+    const length = clampLength(points);
+    const inches = Math.round(length / 72 * 100) / 100, millimetres = Math.round(length / (72 / 25.4) * 10) / 10;
+    if (Math.abs(inches * 72 - length) < 0.005) return `${inches}in`;
+    if (Math.abs(millimetres * (72 / 25.4) - length) < 0.005) return `${millimetres}mm`;
+    return fmtBp(length);
+}
+
+/** `geometry`'s name for a paper format, where it has one for the sheet upright. */
+const GEOMETRY_PAPER: Record<string, string> = lookupTable({
+    letter: 'letterpaper', legal: 'legalpaper', tabloid: 'ansibpaper',
+    a0: 'a0paper', a1: 'a1paper', a2: 'a2paper', a3: 'a3paper', a4: 'a4paper', a5: 'a5paper', a6: 'a6paper',
+});
 
 /** Reduces an anchor id or link target to a label name TeX and hyperref accept verbatim. */
 function labelName(raw: string): string {
@@ -720,11 +749,11 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         let setup = '';
         const left = Number(ind.left) > 0 ? Number(ind.left) / 20 : 0;
         const right = Number(ind.right) > 0 ? Number(ind.right) / 20 : 0;
-        if (left) setup += `\\leftskip=${fmtPt(left)}`;
-        if (right) setup += `\\rightskip=${fmtPt(right)}`;
+        if (left) setup += `\\leftskip=${fmtBp(left)}`;
+        if (right) setup += `\\rightskip=${fmtBp(right)}`;
         let lead = '';
-        if (Number(ind.firstLine) > 0) lead = `\\hspace*{${fmtPt(Number(ind.firstLine) / 20)}}`;
-        else if (Number(ind.hanging) > 0) setup += `\\hangindent=${fmtPt(Number(ind.hanging) / 20)}\\hangafter=1`;
+        if (Number(ind.firstLine) > 0) lead = `\\hspace*{${fmtBp(Number(ind.firstLine) / 20)}}`;
+        else if (Number(ind.hanging) > 0) setup += `\\hangindent=${fmtBp(Number(ind.hanging) / 20)}\\hangafter=1`;
         if (!setup && !lead) return body;
         return `{${setup}${setup ? ' ' : ''}${lead}${body}\\par}`;
     }
@@ -1698,8 +1727,8 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         }
         // An image of unknown size drawn from a path keeps its natural size, as its source did.
         if (!w) return natural ? '' : `width=\\linewidth,height=${maxH},keepaspectratio`;
-        const width = `{\\ifdim ${fmtPt(w)}>\\linewidth\\linewidth\\else ${fmtPt(w)}\\fi}`;
-        const height = h ? `{\\ifdim ${fmtPt(h)}>${maxH}${maxH}\\else ${fmtPt(h)}\\fi}` : maxH;
+        const width = `{\\ifdim ${fmtBp(w)}>\\linewidth\\linewidth\\else ${fmtBp(w)}\\fi}`;
+        const height = h ? `{\\ifdim ${fmtBp(h)}>${maxH}${maxH}\\else ${fmtBp(h)}\\fi}` : maxH;
         return `width=${width},height=${height},keepaspectratio`;
     }
 
@@ -2271,13 +2300,18 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             '\\fi',
         ];
         if (!this.beamer) {
+            // The page as a person asks `geometry` for it: the paper by its name, and one `margin` when
+            // the four are the same (`a4paper,margin=1in`).
             const cfg = this.config.texConfig;
-            const paper = paperSizePt(cfg.format);
+            const format = (cfg.format || 'a4').toLowerCase();
+            const paper = paperSizePt(format);
+            const named = GEOMETRY_PAPER[format] ?? (paper === paperSizePt(undefined) ? GEOMETRY_PAPER.a4 : undefined);
+            const margin = { top: marginPt(cfg.margin?.top), bottom: marginPt(cfg.margin?.bottom), left: marginPt(cfg.margin?.left), right: marginPt(cfg.margin?.right) };
+            const sides = (['top', 'bottom', 'left', 'right'] as const).map(side => `${side}=${pageLength(margin[side])}`);
             const geometry = [
-                `paperwidth=${fmtPt(paper.w)}`, `paperheight=${fmtPt(paper.h)}`,
+                ...(named ? [named] : [`paperwidth=${pageLength(paper.w)}`, `paperheight=${pageLength(paper.h)}`]),
                 ...(cfg.landscape ? ['landscape'] : []),
-                `top=${fmtPt(marginPt(cfg.margin?.top))}`, `bottom=${fmtPt(marginPt(cfg.margin?.bottom))}`,
-                `left=${fmtPt(marginPt(cfg.margin?.left))}`, `right=${fmtPt(marginPt(cfg.margin?.right))}`,
+                ...(new Set(sides.map(side => side.split('=')[1])).size === 1 ? [`margin=${pageLength(margin.top)}`] : sides),
             ];
             lines.push(`\\usepackage[${geometry.join(',')}]{geometry}`);
             lines.push('\\usepackage{parskip}');

@@ -397,8 +397,13 @@
 
         .nav-links {
             display: flex;
-            gap: 1.5rem;
+            gap: 1.1rem;
             align-items: center;
+        }
+
+        /* A link's name stays on one line: the header gives the buttons up to their icons before it breaks one. */
+        .nav-links a {
+            white-space: nowrap;
         }
 
         .nav-links a {
@@ -449,7 +454,7 @@
 
         .github-btn {
             background: var(--border);
-            padding: 0.5rem 1.25rem;
+            padding: 0.5rem 1rem;
             border-radius: 9999px;
             display: flex;
             align-items: center;
@@ -470,13 +475,13 @@
         .header-right {
             display: flex;
             align-items: center;
-            gap: 1.5rem;
+            gap: 1.25rem;
         }
 
         .action-buttons {
             display: flex;
             align-items: center;
-            gap: 0.75rem;
+            gap: 0.6rem;
         }
 
         /* Hamburger Button */
@@ -557,7 +562,7 @@
             background: rgba(234, 74, 170, 0.1);
             color: #ea4aaa !important;
             border: 1px solid rgba(234, 74, 170, 0.2);
-            padding: 0.5rem 1.25rem;
+            padding: 0.5rem 1rem;
             border-radius: 9999px;
             display: flex;
             align-items: center;
@@ -572,6 +577,29 @@
             background: rgba(234, 74, 170, 0.2);
             border-color: #ea4aaa;
             box-shadow: 0 4px 12px rgba(234, 74, 170, 0.3);
+            transform: translateY(-2px);
+        }
+
+        /* The blog's button, in the site's own colour: its icon and its name, the icon alone where the header is narrow. */
+        .blog-nav-btn {
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary) !important;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .blog-nav-btn:hover {
+            background: rgba(99, 102, 241, 0.2);
+            border-color: var(--primary);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
             transform: translateY(-2px);
         }
 
@@ -635,6 +663,35 @@
         .badge-link {
             text-decoration: none;
             display: inline-block;
+        }
+
+        /* The badges over the headline, side by side: the package's version, and how much it is used. */
+        .hero-badges {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .hero-badges .badge {
+            margin-bottom: 0;
+        }
+
+        /* The version is the one filled in: it is what a visitor checks first. Written as it is, not in capitals. */
+        .badge-version {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
+            text-transform: none;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .badge-link:hover .badge-version {
+            background: var(--primary);
+            border-color: var(--primary);
+            filter: brightness(1.12);
         }
 
         .badge-link:hover .badge {
@@ -1842,27 +1899,16 @@
             }
         }
 
-        @media (max-width: 1200px) {
-            header {
-                padding: 1rem 1.5rem;
-            }
-
-            .nav-links {
-                display: none;
-            }
-
-            .action-buttons .theme-switcher {
-                display: none;
-            }
-
-            .hamburger {
-                display: flex;
-            }
-
+        /*
+         * The header's buttons show their names only where there is room for them beside the links:
+         * past the width the header itself stops growing at. Under it they are their icons.
+         */
+        @media (max-width: 1400px) {
             .action-buttons .btn-text {
                 display: none;
             }
 
+            .blog-nav-btn,
             .sponsor-nav-btn,
             .github-btn {
                 padding: 0.5rem;
@@ -1870,8 +1916,10 @@
                 height: 36px;
                 justify-content: center;
                 gap: 0;
+                flex: none;
             }
 
+            .blog-nav-btn svg,
             .sponsor-nav-btn svg,
             .github-btn svg {
                 margin: 0;
@@ -1890,6 +1938,25 @@
                 width: 36px;
                 border-radius: 50%;
             }
+        }
+
+        @media (max-width: 1200px) {
+            header {
+                padding: 1rem 1.5rem;
+            }
+
+            .nav-links {
+                display: none;
+            }
+
+            .action-buttons .theme-switcher {
+                display: none;
+            }
+
+            .hamburger {
+                display: flex;
+            }
+
         }
 
         @media (max-width: 768px) {
@@ -1932,6 +1999,51 @@
 
             .section-title h2 {
                 font-size: 2rem;
+            }
+        }
+
+        /* A phone: the name, four buttons and the menu fit on one line, none over another. */
+        @media (max-width: 480px) {
+            header {
+                padding: 0.9rem 1rem;
+            }
+
+            .header-container {
+                padding: 0;
+            }
+
+            .header-right {
+                gap: 0.5rem;
+            }
+
+            .action-buttons {
+                gap: 0.5rem;
+            }
+
+            .logo {
+                font-size: 1.25rem;
+            }
+        }
+
+        @media (max-width: 350px) {
+            .logo {
+                font-size: 1.05rem;
+            }
+
+            .action-buttons {
+                gap: 0.35rem;
+            }
+
+            .blog-nav-btn,
+            .sponsor-nav-btn,
+            .github-btn {
+                width: 32px;
+                height: 32px;
+            }
+
+            .bmc-nav-btn img {
+                width: 32px;
+                height: 32px;
             }
         }
 
@@ -3483,7 +3595,6 @@
                     <a href="#specs">Specifications</a>
                     <a href="#visualizer">Visualizer</a>
                     <a href="#template-studio">Template Studio</a>
-                    <a href="./blog/">Blog</a>
                 </nav>
                 <div class="action-buttons">
                     <div class="theme-switcher">
@@ -3491,6 +3602,16 @@
                         <button class="theme-btn theme-btn-dark">🌙</button>
                         <button class="theme-btn theme-btn-auto">💻</button>
                     </div>
+                    <a href="./blog/" class="blog-nav-btn" aria-label="Blog" title="Blog">
+                        <!-- A post: a page with its headline and the lines under it. -->
+                        <svg height="16" width="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="2.25" y="1.75" width="11.5" height="12.5" rx="2"></rect>
+                            <path d="M5.25 5.25h5.5" stroke-width="2"></path>
+                            <path d="M5.25 8.5h5.5M5.25 11h3.25"></path>
+                        </svg>
+                        <span class="btn-text">Blog</span>
+                    </a>
                     <a href="https://github.com/sponsors/harshankur" class="sponsor-nav-btn" target="_blank">
                         <svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor">
                             <path
@@ -3532,7 +3653,6 @@
             <a href="#specs">Specifications</a>
             <a href="#visualizer">Visualizer</a>
             <a href="#template-studio">Template Studio</a>
-            <a href="./blog/">Blog</a>
             <div class="theme-switcher-mobile"
                 style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid var(--border);">
                 <p
@@ -3558,11 +3678,19 @@
         <div id="custom-tooltip" class="custom-tooltip"></div>
         <section class="hero">
             <div class="hero-container">
-                <a id="weekly-badge-link"
-                    href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser" target="_blank"
-                    class="badge-link">
-                    <div class="badge shimmer" id="weekly-badge">--- Weekly Downloads</div>
-                </a>
+                <div class="hero-badges">
+                    <!-- package-version:start (written from package.json by scripts/sync-site-version.js: do not edit) -->
+                    <a class="badge-link" href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md" target="_blank"
+                        rel="noopener" aria-label="officeParser version 8.1.1: see what changed">
+                        <div class="badge badge-version" id="version-badge">v8.1.1</div>
+                    </a>
+                    <!-- package-version:end -->
+                    <a id="weekly-badge-link"
+                        href="https://api.npmjs.org/downloads/point/2026-05-05:2026-05-11/officeparser" target="_blank"
+                        class="badge-link">
+                        <div class="badge shimmer" id="weekly-badge">--- Weekly Downloads</div>
+                    </a>
+                </div>
                 <h1>The Industry's First <span class="gradient-text">Parser & Generator</span></h1>
                 <p>One library, every transformation. Parse complex documents, LaTeX included, into a structured AST
                     and generate high-fidelity Word, OpenDocument, LaTeX, PDF, EPUB, Markdown, HTML, or RAG-ready
@@ -5198,7 +5326,8 @@
 
                         content = `
                             <div class="tooltip-header"><span>⚙️</span> LaTeX Preview Engine</div>
-                            <div style="margin-bottom: 1.25rem; opacity: 0.8; font-size: 0.75rem; line-height: 1.6;">Due to the lack of native browser-side LaTeX renderers, OfficeParser performs a dual-pass conversion to verify round-trip fidelity and enable visual previewing.</div>
+                            <div style="margin-bottom: 0.75rem; opacity: 0.8; font-size: 0.75rem; line-height: 1.6;"><strong>How this preview is made.</strong> A browser cannot run LaTeX, so this is not a compiled PDF. officeParser reads the generated LaTeX back and lays it out the way LaTeX would: in LaTeX's own fonts (Latin Modern), at the font size, on the paper and inside the margins the generated source asks for. The LaTeX you download is not changed for the preview.</div>
+                            <div style="margin-bottom: 1.25rem; opacity: 0.8; font-size: 0.75rem; line-height: 1.6;"><strong>What differs when you compile it.</strong> Built with a LaTeX engine (pdfLaTeX, XeLaTeX, LuaLaTeX, or on Overleaf), the same source comes out slightly different: LaTeX breaks and hyphenates lines better than a browser, so a line may end a word sooner or later; it splits the document into pages, with page numbers and any running header, where this shows one long page; and each footnote stands at the foot of its own page, not at the end.</div>
                             
                             <div class="pipeline-container">
                                 <div class="pipeline-phase">
@@ -5215,7 +5344,7 @@
                                 <div class="phase-connector">▼</div>
                                 
                                 <div class="pipeline-phase">
-                                    <div class="phase-label">Phase 2: HTML Preview</div>
+                                    <div class="phase-label">Phase 2: Typeset Preview</div>
                                     <div class="pipeline-row">
                                         <div class="pipeline-node active"><div class="node-icon-box">📐</div><div class="node-text">LATEX</div></div>
                                         <div class="pipeline-arrow">➜</div>
@@ -6370,21 +6499,369 @@
                 }
             });
 
+            // ── The LaTeX preview: the page LaTeX typesets ──
+            //
+            // No browser compiles LaTeX, so the preview is drawn from the document the generated source
+            // parses back to. It is drawn as LaTeX would set it, not as a web page: in LaTeX's own fonts
+            // (Latin Modern), at the sizes, on the paper and inside the margins the generated preamble
+            // asks for, with a class's headings, title block, lists, tables and footnotes. Nothing in
+            // the generated LaTeX is changed for it: the preview follows the source, never the reverse.
+            // What it cannot show is where pages break.
+
+            /** LaTeX's font sizes, as [size, baseline] in points, for a class's 10pt, 11pt and 12pt options. */
+            const TEX_SIZES = {
+                10: { scriptsize: [7, 8], footnotesize: [8, 9.5], small: [9, 11], normalsize: [10, 12], large: [12, 14], Large: [14.4, 18], LARGE: [17.28, 22], huge: [20.74, 25], Huge: [24.88, 30] },
+                11: { scriptsize: [8, 9.5], footnotesize: [9, 11], small: [10, 12], normalsize: [10.95, 13.6], large: [12, 14], Large: [14.4, 18], LARGE: [17.28, 22], huge: [20.74, 25], Huge: [24.88, 30] },
+                12: { scriptsize: [8, 9.5], footnotesize: [10, 12], small: [10.95, 13.6], normalsize: [12, 14.5], large: [14.4, 18], Large: [17.28, 22], LARGE: [20.74, 25], huge: [24.88, 30], Huge: [24.88, 30] },
+            };
+            /** The papers `geometry` knows by name, upright, as [width, height] in points of 1/72 inch. */
+            const GEOMETRY_PAPERS = {
+                a0paper: [2383.94, 3370.39], a1paper: [1683.78, 2383.94], a2paper: [1190.55, 1683.78], a3paper: [841.89, 1190.55],
+                a4paper: [595.28, 841.89], a5paper: [419.53, 595.28], a6paper: [297.64, 419.53],
+                letterpaper: [612, 792], legalpaper: [612, 1008], executivepaper: [522, 756], ansibpaper: [792, 1224],
+            };
+            /** A length as LaTeX writes it (`1in`, `25mm`, `595.28bp`), in points of 1/72 inch: TeX's own `pt` is a little less. */
+            const texPoints = raw => {
+                const length = /^([0-9.]+)\s*(pt|bp|in|cm|mm)$/.exec(String(raw ?? '').trim());
+                return length ? Number(length[1]) * { pt: 72 / 72.27, bp: 1, in: 72, cm: 72 / 2.54, mm: 72 / 25.4 }[length[2]] : undefined;
+            };
+            /** The width of the text in a standard class with no `geometry`, by its size option, in points. */
+            const TEX_TEXT_WIDTH = { 10: 345, 11: 360, 12: 390 };
+            /** beamer's slides in points (it sets them in millimetres), by its `aspectratio` option. */
+            const BEAMER_SLIDES = { 43: [362.83, 272.13], 169: [453.54, 255.12], 1610: [453.54, 283.46], 149: [396.85, 255.12], 54: [354.33, 283.46], 32: [382.68, 255.12], 141: [420.94, 297.64] };
+            /** What LaTeX sets in a way of its own, marked so it is set that way: the title block `\maketitle` typesets (not a section), and a caption. */
+            const TEX_STYLE_MAP = [
+                { selector: { nodeType: 'heading', attributes: { style: 'Title' } }, output: { tag: 'h1', classes: ['tex-title'], fresh: true } },
+                ...['Subtitle', 'Author', 'Institute', 'Date', 'Caption'].map(style => (
+                    { selector: { nodeType: 'paragraph', attributes: { style } }, output: { tag: 'p', classes: [`tex-${style.toLowerCase()}`], fresh: true } })),
+            ];
+            /** The typesetter for formulas, whose fonts are Computer Modern's: loaded when a document has one. */
+            const TEX_MATH = 'https://cdn.jsdelivr.net/npm/katex@0.19.0/dist/katex.min';
+            /** Where the fonts are loaded from when the reader's machine has no TeX fonts of its own. */
+            const TEX_FONTS = {
+                roman: 'https://cdn.jsdelivr.net/npm/latex.css@1.14.0/fonts/LM-',
+                modern: 'https://cdn.jsdelivr.net/npm/computer-modern@0.1.3/fonts/cmu-',
+            };
+
+            /**
+             * What generated LaTeX says of its own layout, read from its preamble: the class and its size
+             * option, the paper and the margins `geometry` is given, whether paragraphs are set apart
+             * (`parskip`) or indented, and whether sections are numbered. Source with no preamble (the
+             * body alone) is laid out as `article` sets it by default.
+             */
+            function texLayoutOf(tex) {
+                const preamble = tex.slice(0, Math.max(0, tex.indexOf('\\begin{document}')));
+                const declared = /\\documentclass(?:\[([^\]]*)\])?\{([A-Za-z]+)\}/.exec(preamble);
+                const options = declared?.[1] ?? '';
+                const documentClass = declared?.[2] ?? 'article';
+                const beamer = documentClass === 'beamer';
+                const stated = Number(/(?:^|[,\s])(\d+)pt/.exec(options)?.[1]);
+                const size = beamer ? (stated >= 8 && stated <= 20 ? stated : 11) : ([10, 11, 12].includes(stated) ? stated : 10);
+                // What `geometry` is asked for: a paper by its name or its size, turned for landscape, and
+                // one margin for all four sides or one each.
+                const geometry = Object.fromEntries((/\\usepackage\[([^\]]*)\]\{geometry\}/.exec(preamble)?.[1] ?? '').split(',').map(option => option.trim()).filter(Boolean)
+                    .map(option => (option.includes('=') ? [option.slice(0, option.indexOf('=')), option.slice(option.indexOf('=') + 1)] : [option, true])));
+                const named = GEOMETRY_PAPERS[Object.keys(geometry).find(option => GEOMETRY_PAPERS[option])];
+                // US letter, and margins that leave the class's text width, when the source names no paper.
+                let paperWidth = texPoints(geometry.paperwidth) ?? named?.[0] ?? 612, paperHeight = texPoints(geometry.paperheight) ?? named?.[1] ?? 792;
+                if (geometry.landscape && paperWidth < paperHeight) [paperWidth, paperHeight] = [paperHeight, paperWidth];
+                const length = key => texPoints(geometry[key]) ?? texPoints(geometry.margin);
+                const side = (paperWidth - TEX_TEXT_WIDTH[beamer ? 10 : size]) / 2;
+                const slide = BEAMER_SLIDES[/aspectratio=(\d+)/.exec(options)?.[1] ?? 43] ?? BEAMER_SLIDES[43];
+                return {
+                    documentClass, beamer, size,
+                    chapters: documentClass === 'report' || documentClass === 'book',
+                    width: beamer ? slide[0] : paperWidth,
+                    height: beamer ? slide[1] : paperHeight,
+                    margin: { top: length('top') ?? 109, right: length('right') ?? side, bottom: length('bottom') ?? 109, left: length('left') ?? side },
+                    parskip: /\\usepackage(?:\[[^\]]*\])?\{parskip\}/.test(preamble),
+                    numbered: !!declared && !/\\setcounter\{secnumdepth\}\{-/.test(preamble),
+                    language: /pdflang=\{?([A-Za-z-]+)/.exec(preamble)?.[1] ?? 'en',
+                };
+            }
+
+            /** The stylesheet that sets a reparsed document as LaTeX sets its source (see texLayoutOf). */
+            function texPreviewCss(layout) {
+                const sizes = TEX_SIZES[layout.beamer ? 10 : layout.size];
+                const font = name => `font-size: ${sizes[name][0]}pt; line-height: ${sizes[name][1]}pt;`;
+                const face = (family, weight, style, local, url) =>
+                    `@font-face { font-family: '${family}'; font-weight: ${weight}; font-style: ${style}; font-display: swap; src: ${local.map(name => `local('${name}')`).join(', ')}, url('${url}.woff2') format('woff2'); }`;
+                const fonts = [
+                    face('TeX Roman', 400, 'normal', ['Latin Modern Roman', 'LMRoman10-Regular'], `${TEX_FONTS.roman}regular`),
+                    face('TeX Roman', 400, 'italic', ['Latin Modern Roman Italic', 'LMRoman10-Italic'], `${TEX_FONTS.roman}italic`),
+                    face('TeX Roman', 700, 'normal', ['Latin Modern Roman Bold', 'LMRoman10-Bold'], `${TEX_FONTS.roman}bold`),
+                    face('TeX Roman', 700, 'italic', ['Latin Modern Roman Bold Italic', 'LMRoman10-BoldItalic'], `${TEX_FONTS.roman}bold-italic`),
+                    // Greek and Cyrillic, which Latin Modern lacks: Computer Modern Unicode, as the generated source asks for.
+                    face('TeX Roman Unicode', 400, 'normal', ['CMU Serif'], `${TEX_FONTS.modern}serif-500-roman`),
+                    face('TeX Roman Unicode', 400, 'italic', ['CMU Serif Italic'], `${TEX_FONTS.modern}serif-500-italic`),
+                    face('TeX Roman Unicode', 700, 'normal', ['CMU Serif Bold'], `${TEX_FONTS.modern}serif-700-roman`),
+                    face('TeX Roman Unicode', 700, 'italic', ['CMU Serif Bold Italic'], `${TEX_FONTS.modern}serif-700-italic`),
+                    face('TeX Sans', 400, 'normal', ['Latin Modern Sans', 'LMSans10-Regular', 'CMU Sans Serif'], `${TEX_FONTS.modern}sans-serif-500-roman`),
+                    face('TeX Sans', 400, 'italic', ['Latin Modern Sans Oblique', 'LMSans10-Oblique', 'CMU Sans Serif Oblique'], `${TEX_FONTS.modern}sans-serif-500-italic`),
+                    face('TeX Sans', 700, 'normal', ['Latin Modern Sans Bold', 'LMSans10-Bold', 'CMU Sans Serif Bold'], `${TEX_FONTS.modern}sans-serif-700-roman`),
+                    face('TeX Sans', 700, 'italic', ['Latin Modern Sans Bold Oblique', 'LMSans10-BoldOblique', 'CMU Sans Serif Bold Oblique'], `${TEX_FONTS.modern}sans-serif-700-italic`),
+                    face('TeX Mono', 400, 'normal', ['Latin Modern Mono', 'LMMono10-Regular', 'CMU Typewriter Text'], `${TEX_FONTS.modern}typewriter-text-500-roman`),
+                    face('TeX Mono', 400, 'italic', ['Latin Modern Mono Italic', 'LMMono10-Italic', 'CMU Typewriter Text Italic'], `${TEX_FONTS.modern}typewriter-text-500-italic`),
+                    face('TeX Mono', 700, 'normal', ['Latin Modern Mono Bold', 'CMU Typewriter Text Bold'], `${TEX_FONTS.modern}typewriter-text-700-roman`),
+                ].join('\n');
+                const roman = `'TeX Roman', 'TeX Roman Unicode', 'Latin Modern Roman', 'CMU Serif', 'Computer Modern', serif`;
+                const sans = `'TeX Sans', 'Latin Modern Sans', 'CMU Sans Serif', sans-serif`;
+                const mono = `'TeX Mono', 'Latin Modern Mono', 'CMU Typewriter Text', monospace`;
+
+                // What every class shares: the desk the paper lies on, and how runs, lists, tables, code,
+                // pictures and footnotes are set. Lengths are LaTeX's own, in points and ems.
+                const shared = `
+${fonts}
+html { background: #d7dae0; }
+body { margin: 0; padding: 20px 12px 36px; color: #000; -webkit-text-size-adjust: 100%; }
+* { box-sizing: border-box; }
+.tex-sheet { zoom: var(--tex-zoom, 1); margin: 0 auto; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28), 0 10px 28px rgba(0, 0, 0, 0.14);
+    font-kerning: normal; font-variant-ligatures: common-ligatures; overflow-wrap: break-word; }
+.tex-sheet p { margin: 0; }
+.tex-sheet b, .tex-sheet strong { font-weight: 700; }
+.tex-sheet code, .tex-sheet tt, .tex-sheet kbd, .tex-sheet samp { font-family: ${mono}; font-size: 1em; }
+.tex-sheet pre { font-family: ${mono}; ${font('small')} margin: ${sizes.normalsize[1] / 2}pt 0; white-space: pre-wrap; text-align: left; hyphens: none; }
+.tex-sheet pre code { font-size: 1em; }
+.tex-sheet a { color: #0000ff; text-decoration: none; }
+/* Text set in a size of its own has that size's lines (\\fontsize{10pt}{12pt}), not the body's. */
+.tex-sheet [style*="font-size"] { line-height: 1.2; }
+.tex-sheet sup, .tex-sheet sub { font-size: 0.7em; line-height: 0; }
+.tex-sheet mark { color: inherit; padding: 0.15em 0.1em; }
+.tex-sheet img { max-width: 100%; height: auto; }
+.tex-sheet .image-container { margin: 0; }
+/* The name of a picture's file is not printed: a caption is what \\caption gives, and it is a paragraph. */
+.tex-sheet .image-container > .caption { display: none; }
+.tex-sheet ul, .tex-sheet ol { margin: 0; padding-left: 2.5em; }
+.tex-sheet ul { list-style-type: disc; }
+.tex-sheet ul ul { list-style-type: '\\2013\\00a0\\00a0'; padding-left: 2.2em; }
+.tex-sheet ul ul ul { list-style-type: '\\2217\\00a0\\00a0'; padding-left: 1.87em; }
+.tex-sheet ol ol { list-style-type: lower-alpha; padding-left: 2.2em; }
+.tex-sheet ol ol > li::marker { content: '(' counter(list-item, lower-alpha) ')\\00a0'; }
+.tex-sheet ol ol ol { list-style-type: lower-roman; padding-left: 1.87em; }
+.tex-sheet ol ol ol > li::marker { content: counter(list-item, lower-roman) '.\\00a0'; }
+.tex-sheet blockquote { margin: 0 2.5em; }
+/* A task is an item whose label is a box, empty or crossed (\\item[$\\square$], \\item[$\\boxtimes$]). */
+.tex-sheet ul[data-type="taskList"] { list-style: none; }
+.tex-sheet li[data-type="taskItem"] { display: flex; align-items: baseline; gap: 0.5em; margin-left: -1.35em; }
+.tex-sheet li[data-type="taskItem"] > label { flex: none; }
+.tex-sheet li[data-type="taskItem"] > label input { display: none; }
+.tex-sheet li[data-type="taskItem"] > label span { display: inline-block; width: 0.68em; height: 0.68em; border: 0.05em solid currentColor; }
+.tex-sheet li[data-type="taskItem"][data-checked="true"] > label span {
+    background:
+        linear-gradient(to top right, transparent calc(50% - 0.03em), currentColor calc(50% - 0.03em), currentColor calc(50% + 0.03em), transparent calc(50% + 0.03em)),
+        linear-gradient(to bottom right, transparent calc(50% - 0.03em), currentColor calc(50% - 0.03em), currentColor calc(50% + 0.03em), transparent calc(50% + 0.03em)); }
+.tex-sheet li[data-type="taskItem"] > div { flex: 1; }
+/* A description: its term in bold at the margin, what it means on the same line, further lines hung under it. */
+.tex-sheet dl { margin: 0; padding-left: 2.5em; }
+.tex-sheet dt { display: inline; font-weight: 700; margin-left: -2.5em; padding-right: 0.5em; }
+.tex-sheet dd { display: inline; margin: 0; }
+.tex-sheet dd::after { content: ''; display: block; }
+/* A caption is centred and numbered: a table's over the table, a figure's under the picture. */
+.tex-sheet .tex-caption { text-align: center; text-indent: 0; }
+.tex-sheet .tex-caption:has(+ .table-container)::before, .tex-sheet .table-container + .tex-caption::before { counter-increment: tex-table; content: 'Table ' counter(tex-table) ': '; }
+.tex-sheet :is(.image-container, div:has(> .image-container)) + .tex-caption::before { counter-increment: tex-figure; content: 'Figure ' counter(tex-figure) ': '; }
+.tex-sheet .math-block { display: block; text-align: center; margin: ${sizes.normalsize[1] * 0.7}pt 0; }
+.tex-sheet .katex { font-size: 1em; }
+/* A table as the generator writes it: a ruled grid as wide as the line, its columns sharing the width. */
+.tex-sheet .table-container { margin: 0; }
+.tex-sheet table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.tex-sheet td, .tex-sheet th { border: 0.4pt solid #000; padding: 0 6pt; vertical-align: top; text-align: left; font-weight: inherit; hyphens: auto; }
+.tex-sheet table.tex-small { ${font('small')} }
+.tex-sheet table.tex-small td, .tex-sheet table.tex-small th { padding: 0 4pt; }
+.tex-sheet table.tex-footnotesize { ${font('footnotesize')} }
+.tex-sheet table.tex-footnotesize td, .tex-sheet table.tex-footnotesize th { padding: 0 3pt; }
+.tex-sheet table.tex-scriptsize { ${font('scriptsize')} }
+.tex-sheet table.tex-scriptsize td, .tex-sheet table.tex-scriptsize th { padding: 0 2pt; }
+/* Footnotes stand under a short rule, numbered, with no way back: there is none on paper. */
+.tex-sheet section[data-footnotes] { ${font('footnotesize')} margin-top: 2em; text-align: justify; }
+.tex-sheet section[data-footnotes]::before { content: ''; display: block; width: 2in; max-width: 40%; border-top: 0.4pt solid #000; margin-bottom: 2.6pt; }
+.tex-sheet section[data-footnotes] > div { text-indent: 1.8em; }
+.tex-sheet section[data-footnotes] > div::before { content: attr(data-tex-mark); font-size: 0.7em; vertical-align: super; line-height: 0; }
+.tex-sheet section[data-footnotes] p { display: inline; margin: 0 !important; text-indent: 0; }
+.tex-sheet section[data-footnotes] a[href^="#footnote-ref"] { display: none; }
+.tex-sheet sup[data-footnote-ref] a { color: inherit; }
+`;
+                if (layout.beamer) {
+                    // beamer's default theme: a slide of sans-serif text, its title at the top left in the
+                    // theme's blue, the text a centimetre in from the sides, paragraphs neither set apart
+                    // nor indented. A slide with more than fits grows here, where beamer breaks the frame.
+                    const baseline = layout.size * 1.2;
+                    return `${shared}
+.presentation-container article { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.tex-sheet { width: ${layout.width}pt; min-height: ${layout.height}pt; padding: 0 28.35pt 8pt; font-family: ${sans}; font-size: ${layout.size}pt; line-height: ${baseline}pt; text-align: left; overflow: hidden; }
+.tex-sheet h1 { margin: 0 -19.85pt; padding: 5.5pt 0 ${baseline * 0.35}pt; font-family: ${sans}; font-size: ${layout.size * 1.44}pt; line-height: 1.2; font-weight: 400; color: #3333b3; text-align: left; }
+.tex-sheet h2 { margin: 0 -19.85pt ${baseline * 0.2}pt; font-size: ${layout.size}pt; line-height: 1.2; font-weight: 400; color: #3333b3; }
+.tex-sheet h3, .tex-sheet h4, .tex-sheet h5, .tex-sheet h6 { margin: 0; font-size: 1em; font-weight: 700; color: #3333b3; }
+.tex-sheet ul, .tex-sheet ol { padding-left: 2.2em; }
+.tex-sheet ul { list-style-type: '\\25B8\\00a0'; }
+.tex-sheet ul > li::marker, .tex-sheet ol > li::marker { color: #3333b3; }
+.tex-sheet .tex-title { margin: 1.2em 0 0.6em; padding: 0; font-size: ${layout.size * 1.44}pt; text-align: center; }
+.tex-sheet .tex-subtitle, .tex-sheet .tex-author, .tex-sheet .tex-institute, .tex-sheet .tex-date { text-align: center; margin: 0 0 0.9em; }
+.tex-sheet .tex-institute, .tex-sheet .tex-date { font-size: 0.85em; }
+/* Notes are not on beamer's slides: they stand under the slide here, as a remark about it. */
+.slide-note { width: calc(${layout.width}pt * var(--tex-zoom, 1)); margin: -8px 0 4px; padding: 4px 8px; font: 12px/1.45 system-ui, sans-serif; color: #5b6170; }
+.slide-note::before { content: 'Speaker note, not on the slide: '; font-weight: 600; }
+.slide-note p { display: inline; margin: 0; }
+`;
+                }
+
+                const [body, baseline] = sizes.normalsize;
+                const ex = body * 0.43, em = body;
+                // A paragraph is set apart from the one before it (parskip) or indented, never both: and
+                // the one after a heading is not indented.
+                const paragraphs = layout.parskip
+                    ? `.tex-sheet p, .tex-sheet ul, .tex-sheet ol, .tex-sheet pre, .tex-sheet blockquote, .tex-sheet .image-container { margin-top: ${baseline / 2}pt; }
+.tex-sheet .table-container { margin: ${baseline * 0.8}pt 0 ${baseline * 1.5}pt; }
+.tex-sheet td .table-container { margin: 0; }
+.tex-sheet li + li, .tex-sheet dl { margin-top: ${baseline / 2}pt; }
+.tex-sheet dd:not(:last-child)::after { height: ${baseline / 2}pt; }
+.tex-sheet li > p:first-child, .tex-sheet td > p:first-child, .tex-sheet th > p:first-child, .tex-sheet article > :first-child { margin-top: 0; }`
+                    : `.tex-sheet p { text-indent: ${layout.size === 10 ? 15 : layout.size === 11 ? 17 : 1.5 * em}pt; }
+.tex-sheet :is(h1, h2, h3, h4, h5, h6) + p, .tex-sheet :is(li, td, th, blockquote) > p, .tex-sheet p[style*="text-align"] { text-indent: 0; }
+.tex-sheet ul, .tex-sheet ol, .tex-sheet pre, .tex-sheet blockquote { margin: ${baseline * 0.7}pt 0; }
+.tex-sheet .table-container { margin: ${baseline * 0.9}pt 0 ${baseline * 1.1}pt; }
+.tex-sheet td .table-container { margin: 0; }
+.tex-sheet li + li { margin-top: 8pt; }
+.tex-sheet li li + li { margin-top: 4pt; }
+.tex-sheet li > ul, .tex-sheet li > ol { margin: 4pt 0 0; }
+.tex-sheet dl { margin: ${baseline * 0.7}pt 0; }
+.tex-sheet dd:not(:last-child)::after { height: 8pt; }`;
+                // A section's heading: its size, and the space over and under it (\\@startsection's, in ex of the text).
+                const heading = (tag, sizeName, before, after, counter) => `.tex-sheet ${tag} { font-family: ${roman}; ${font(sizeName)} font-weight: 700; text-align: left; hyphens: none; margin: ${before * ex}pt 0 ${after * ex}pt; }${counter ? `\n.tex-sheet ${tag}:not(.tex-title)::before { ${counter} }` : ''}`;
+                const number = (resets, shown) => layout.numbered ? `counter-increment: ${resets}; content: ${shown} '\\2003';` : '';
+                const sectioning = layout.chapters
+                    ? [
+                        `.tex-sheet h1 { font-family: ${roman}; ${font('Huge')} font-weight: 700; text-align: left; hyphens: none; margin: 50pt 0 40pt; }`,
+                        layout.numbered ? `.tex-sheet h1:not(.tex-title)::before { counter-increment: tex-chapter; content: 'Chapter ' counter(tex-chapter); display: block; ${font('huge')} margin-bottom: 20pt; }\n.tex-sheet h1 { counter-reset: tex-section; }` : '',
+                        heading('h2', 'Large', 3.5, 2.3, number('tex-section', `counter(tex-chapter) '.' counter(tex-section)`)),
+                        heading('h3', 'large', 3.25, 1.5, number('tex-subsection', `counter(tex-chapter) '.' counter(tex-section) '.' counter(tex-subsection)`)),
+                        heading('h4', 'normalsize', 3.25, 1.5, ''),
+                        layout.numbered ? '.tex-sheet h2 { counter-reset: tex-subsection; }' : '',
+                    ]
+                    : [
+                        heading('h1', 'Large', 3.5, 2.3, number('tex-section', 'counter(tex-section)')),
+                        heading('h2', 'large', 3.25, 1.5, number('tex-subsection', `counter(tex-section) '.' counter(tex-subsection)`)),
+                        heading('h3', 'normalsize', 3.25, 1.5, number('tex-subsubsection', `counter(tex-section) '.' counter(tex-subsection) '.' counter(tex-subsubsection)`)),
+                        heading('h4', 'normalsize', 3.25, 1.5, ''),
+                        layout.numbered ? '.tex-sheet h1 { counter-reset: tex-subsection; }\n.tex-sheet h2 { counter-reset: tex-subsubsection; }' : '',
+                    ];
+                return `${shared}
+.tex-sheet { width: ${layout.width}pt; min-height: ${layout.height}pt; padding: ${layout.margin.top}pt ${layout.margin.right}pt ${layout.margin.bottom}pt ${layout.margin.left}pt;
+    font-family: ${roman}; ${font('normalsize')} text-align: justify; hyphens: auto; -webkit-hyphens: auto; counter-reset: tex-chapter tex-section tex-subsection tex-subsubsection tex-table tex-figure; }
+${paragraphs}
+${sectioning.filter(Boolean).join('\n')}
+.tex-sheet h5, .tex-sheet h6 { font-family: ${roman}; ${font('normalsize')} font-weight: 700; margin: ${3.25 * ex}pt 0 ${1.5 * ex}pt; }
+/* A heading straight after a heading (its anchor may stand between) adds no space over itself: the first one's is all there is. */
+.tex-sheet :is(h1, h2, h3, h4, h5, h6) + :is(h1, h2, h3, h4, h5, h6):not(.tex-title),
+.tex-sheet :is(h1, h2, h3, h4, h5, h6) + a:empty + :is(h1, h2, h3, h4, h5, h6):not(.tex-title) { margin-top: 0; }
+/*
+ * \\maketitle: the title over the author and the date, centred, none of them bold. Its spaces are the
+ * ones it sets (2em over the title, 1.5em under it, 1em under the authors, 1.5em under the block) and
+ * the one the centring leaves under itself. An empty author is still a line; an empty date is none.
+ */
+.tex-sheet .tex-title { ${font('LARGE')} font-weight: 400; text-align: center; margin: ${2 * em + sizes.normalsize[1] + 0.3}pt 0 0; padding-bottom: ${1.5 * em - 1.2}pt; }
+.tex-sheet .tex-title::before { content: none; }
+.tex-sheet .tex-subtitle, .tex-sheet .tex-author, .tex-sheet .tex-institute, .tex-sheet .tex-date { ${font('large')} text-align: center; text-indent: 0; margin: 0 !important; padding-bottom: ${em}pt; }
+.tex-sheet .tex-author { min-height: ${sizes.large[1] + em}pt; }
+.tex-sheet .tex-date { padding-bottom: ${1.5 * em + (layout.size - 2) - 2.5}pt; }
+`;
+            }
+
+            /**
+             * Finishes a typeset preview once its document is written: marks the sheet (the page, or each
+             * slide), gives a wide table the smaller type the generator sets it in, puts the empty author
+             * and date lines \maketitle still leaves room for, and scales the sheet to the window when it
+             * is narrower than the paper.
+             */
+            function finishTexPreview(frame, layout) {
+                const doc = frame.contentDocument;
+                doc.documentElement.lang = layout.language;
+                const sheets = layout.beamer ? [...doc.querySelectorAll('.slide')] : [...doc.querySelectorAll('.container')];
+                for (const sheet of sheets) sheet.classList.add('tex-sheet');
+                for (const table of doc.querySelectorAll('.tex-sheet table')) {
+                    const columns = Math.max(0, ...[...table.rows].map(row => [...row.cells].reduce((count, cell) => count + cell.colSpan, 0)));
+                    if (columns >= 13) table.classList.add('tex-scriptsize');
+                    else if (columns >= 9) table.classList.add('tex-footnotesize');
+                    else if (columns >= 6) table.classList.add('tex-small');
+                }
+                // A line break that ends a paragraph leaves an empty line under it in LaTeX; a browser
+                // shows none unless something stands on that line.
+                for (const br of doc.querySelectorAll('.tex-sheet :is(p, li, td, th, dd) > br')) {
+                    let node = br.nextSibling;
+                    while (node && node.nodeType === 3 && !node.textContent.trim()) node = node.nextSibling;
+                    if (!node) br.after(String.fromCharCode(0x200B));
+                }
+                if (!layout.beamer) {
+                    for (const title of doc.querySelectorAll('.tex-title')) {
+                        // The lines the block has, in the order \maketitle sets them: one it lacks is an empty line.
+                        let last = title;
+                        while (last.nextElementSibling && /\btex-(?:subtitle|author|institute|date)\b/.test(last.nextElementSibling.className)) last = last.nextElementSibling;
+                        const has = name => { for (let el = title.nextElementSibling; el && el !== last.nextElementSibling; el = el.nextElementSibling) if (el.classList.contains(`tex-${name}`)) return true; return false; };
+                        for (const name of ['author', 'date']) {
+                            if (has(name)) continue;
+                            const empty = doc.createElement('p');
+                            empty.className = `tex-${name}`;
+                            if (name === 'author') title.after(empty); else { last.after(empty); }
+                            if (last === title) last = empty;
+                        }
+                    }
+                }
+                // A note of the title block (\thanks) is marked with a symbol, and the text's notes are
+                // numbered from one after them, as LaTeX numbers them.
+                const symbols = ['*', '\u2020', '\u2021', '\u00A7', '\u00B6', '\u2016'];
+                let thanks = 0, numbered = 0;
+                for (const mark of doc.querySelectorAll('sup[data-footnote-ref]')) {
+                    const label = mark.closest('.tex-title, .tex-subtitle, .tex-author, .tex-institute, .tex-date') ? (symbols[thanks++] ?? '*'.repeat(thanks)) : String(++numbered);
+                    const link = mark.querySelector('a') ?? mark;
+                    link.textContent = label;
+                    doc.querySelector(`[data-footnote-id="${CSS.escape(mark.dataset.footnoteRef)}"]`)?.setAttribute('data-tex-mark', label);
+                }
+                // Formulas are typeset, in the font LaTeX sets them in.
+                const formulas = [...doc.querySelectorAll('.math')];
+                if (formulas.length) {
+                    const sheet = doc.createElement('link');
+                    sheet.rel = 'stylesheet';
+                    sheet.href = `${TEX_MATH}.css`;
+                    const script = doc.createElement('script');
+                    script.src = `${TEX_MATH}.js`;
+                    script.onload = () => {
+                        for (const formula of formulas) {
+                            const display = formula.classList.contains('math-block');
+                            // The source without the marks around it, and without the label LaTeX reads and does not print.
+                            const source = formula.textContent.trim().replace(/^\$\$?|\$\$?$/g, '').replace(/\\label\{[^}]*\}/g, '');
+                            try { frame.contentWindow.katex.render(source, formula, { displayMode: display, throwOnError: false }); } catch { /* shown as its source */ }
+                        }
+                    };
+                    doc.head.append(sheet, script);
+                }
+                // As wide as the paper, or as the window when that is narrower; a slide may also grow to it.
+                const paper = layout.width * 96 / 72;
+                const fit = () => {
+                    const available = doc.documentElement.clientWidth - 24;
+                    const scale = Math.min(layout.beamer ? 1.6 : 1, available / paper);
+                    doc.documentElement.style.setProperty('--tex-zoom', String(Math.max(0.2, scale)));
+                };
+                fit();
+                new frame.contentWindow.ResizeObserver(fit).observe(doc.documentElement);
+            }
+
             /**
              * Parse generated source (RTF or LaTeX) back into an AST and render that AST as HTML in an
-             * iframe inside `container`. Used by the windows whose output has no browser renderer.
+             * iframe inside `container`. Used by the windows whose output has no browser renderer. Given
+             * the LaTeX itself (`tex`), the document is set as LaTeX would typeset it (see texLayoutOf).
              */
-            async function renderReparsedPreview(source, fileType, container) {
+            async function renderReparsedPreview(source, fileType, container, tex) {
                 // A string is the generated source; bytes are a LaTeX bundle (main.tex plus its images).
                 const bytes = typeof source === 'string' ? new TextEncoder().encode(source) : source;
                 const reparsed = await window.officeParser.parseOffice(bytes, { fileType, extractAttachments: true });
-                const htmlResult = await reparsed.to('html');
+                const layout = typeof tex === 'string' ? texLayoutOf(tex) : null;
+                const htmlResult = await reparsed.to('html', layout ? { htmlConfig: { standalone: { styles: 'none' } }, styleMap: TEX_STYLE_MAP } : undefined);
 
                 const contentFrame = document.createElement('iframe');
                 contentFrame.className = 'html-iframe';
                 contentFrame.style.width = '100%';
                 contentFrame.style.border = 'none';
-                container.style.padding = '2rem';
+                container.style.padding = layout ? '0' : '2rem';
                 container.appendChild(contentFrame);
                 const doc = contentFrame.contentDocument || contentFrame.contentWindow.document;
                 doc.open();
@@ -6398,11 +6875,19 @@
                 }
                 const maxWidth = isModal ? '100%' : widthVal;
 
-                const styledHtml = /<body/i.test(htmlResult.value)
+                const styledHtml = layout
+                    ? htmlResult.value.replace(/<\/head>/i, () => `<style>${texPreviewCss(layout)}</style></head>`)
+                    : /<body/i.test(htmlResult.value)
                     ? htmlResult.value.replace(/<body[^>]*>/i, `<body style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
                     : `<div style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${htmlResult.value}</div>`;
                 doc.write(styledHtml);
                 doc.close();
+                // Once the document is all read: a script it loads (the charts') holds the reading up
+                // the first time, and the page is not there to mark until it has come.
+                if (layout) {
+                    if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', () => finishTexPreview(contentFrame, layout), { once: true });
+                    else finishTexPreview(contentFrame, layout);
+                }
 
                 contentFrame.style.height = '100%';
                 contentFrame.style.display = 'block';
@@ -6633,7 +7118,7 @@
                                     onWarning: () => { }
                                 })).value
                                 : result.value;
-                            await renderReparsedPreview(source, format, container);
+                            await renderReparsedPreview(source, format, container, format === 'tex' ? result.value : undefined);
                         } catch (e) {
                             container.innerHTML = '';
                             const err = document.createElement('div');

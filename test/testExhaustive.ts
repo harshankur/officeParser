@@ -2760,7 +2760,7 @@ async function testLatexGeneration(): Promise<void> {
     assert.ok(docxTex.includes('\\usepackage{endnotes}') && /\\endnote\{Endnotes are typically/.test(docxTex) && docxTex.includes('\\theendnotes\n\n\\end{document}'), 'TEX docx: endnotes via the endnotes package');
     assert.ok(/\\footnote\{In paged media/.test(docxTex), 'TEX docx: footnote body without the note run size');
     // The image travels inside the .tex: a filecontents* block writes it as a PDF, which \includegraphics reads.
-    const carriedImage = /\\includegraphics\[bb=0 0 810 810,width=\{\\ifdim [\d.]+pt>\\linewidth\\linewidth\\else [\d.]+pt\\fi\},height=\{[^}]+\},keepaspectratio,alt=\{[^}]*\}\]\{(image-[0-9a-f]{8}\.pdf)\}/.exec(docxTex);
+    const carriedImage = /\\includegraphics\[bb=0 0 810 810,width=\{\\ifdim [\d.]+bp>\\linewidth\\linewidth\\else [\d.]+bp\\fi\},height=\{[^}]+\},keepaspectratio,alt=\{[^}]*\}\]\{(image-[0-9a-f]{8}\.pdf)\}/.exec(docxTex);
     assert.ok(carriedImage, 'TEX docx: image bounded to the line and page, carried as a PDF of its stated size');
     const carriedBlock = new RegExp(`\\\\begin\\{filecontents\\*\\}\\{${carriedImage![1].replace('.', '\\.')}\\}\\n([^]*?)\\n\\\\end\\{filecontents\\*\\}`).exec(docxTex);
     assert.ok(carriedBlock && docxTex.indexOf(carriedBlock[0]) < docxTex.indexOf('\\begin{document}'), 'TEX docx: the image is carried in a filecontents* block in the preamble');
@@ -3001,7 +3001,22 @@ async function testLatexGeneration(): Promise<void> {
     // ── Tier 3: texConfig knobs and generic options ───────────────────────────
     const report = (await OfficeGenerator.generate(synthetic, 'tex', { texConfig: { documentClass: 'report', numberSections: true, format: 'Legal', landscape: true, margin: { top: '1in', right: 18, bottom: '2cm', left: 36 } } } as any)).value as string;
     assert.ok(report.includes('\\documentclass[\\officeparserdriver 11pt]{report}') && report.includes('\\chapter{Intro}') && !report.includes('secnumdepth'), 'TEX config: report class, chapters, numbering');
-    assert.ok(report.includes('\\usepackage[paperwidth=612pt,paperheight=1008pt,landscape,top=72pt,bottom=56.69pt,left=36pt,right=18pt]{geometry}'), 'TEX config: paper, orientation and margins');
+    assert.ok(report.includes('\\usepackage[legalpaper,landscape,top=1in,bottom=20mm,left=0.5in,right=0.25in]{geometry}'), 'TEX config: paper, orientation and margins');
+    // The page as a person asks for it: the paper by its name, one margin when the four agree, in
+    // inches or millimetres when the length is a round number of them. A point of the configuration
+    // is 1/72 inch, TeX's `bp`: written as `pt` (1/72.27 inch), an A4 page came out 0.4% small.
+    const geometryOf = async (texConfig: object) => /\\usepackage\[([^\]]*)\]\{geometry\}/.exec((await OfficeGenerator.generate(synthetic, 'tex', { texConfig } as any)).value as string)?.[1];
+    assert.strictEqual(await geometryOf({}), 'a4paper,margin=1in', 'TEX config: the default page is A4 with inch margins');
+    assert.strictEqual(await geometryOf({ format: 'Letter', margin: { top: 50, right: 50, bottom: 50, left: 50 } }), 'letterpaper,margin=50bp', 'TEX config: a length that is no round number of inches or millimetres is in big points');
+    assert.strictEqual(await geometryOf({ format: 'Tabloid', margin: { top: '25mm', right: '25mm', bottom: '25mm', left: '25mm' } }), 'ansibpaper,margin=25mm', 'TEX config: tabloid is geometry\'s ANSI B');
+    assert.strictEqual(await geometryOf({ format: 'Ledger' }), 'paperwidth=17in,paperheight=11in,margin=1in', 'TEX config: a sheet geometry has no upright name for is given by its size');
+    assert.strictEqual(await geometryOf({ format: 'A5', landscape: true }), 'a5paper,landscape,margin=1in', 'TEX config: landscape turns the named paper');
+    // A paragraph's indents and a picture's size are the document's points too.
+    const indented = { type: 'docx', content: [{ type: 'paragraph', text: 'Indented.', children: [{ type: 'text', text: 'Indented.' }], metadata: { paragraphIndentation: { left: 720, right: 360, hanging: 240 } } }], metadata: {}, attachments: [] } as any;
+    const indentedTex = (await OfficeGenerator.generate(indented, 'tex')).value as string;
+    assert.ok(indentedTex.includes('{\\leftskip=36bp\\rightskip=18bp\\hangindent=12bp\\hangafter=1 Indented.\\par}'), 'TEX: a paragraph\'s indents are written in big points');
+    const indentedBack = await OfficeParser.parseOffice(Buffer.from(indentedTex), { fileType: 'tex', onWarning: () => { } } as any);
+    assert.deepStrictEqual((indentedBack.content[0].metadata as any).paragraphIndentation, { left: 720, right: 360, hanging: 240 }, 'TEX: the indents read back as they were written');
     const frag = (await OfficeGenerator.generate(synthetic, 'tex', { texConfig: { standalone: false } } as any)).value as string;
     assert.ok(frag.startsWith('% Required preamble packages for this fragment:\n% \\usepackage{iftex}\n% \\usepackage{amsmath,amssymb}\n') && !frag.includes('\\documentclass') && frag.includes('\n\\definecolor{hex9A6700}{HTML}{9A6700}'), 'TEX config: fragment lists packages and defines its colours in the body');
     const plain = (await OfficeGenerator.generate(synthetic, 'tex', { includeFormatting: false, ignoreInternalLinks: true, generateIds: false, includeImages: 'none', includeCharts: false } as any)).value as string;
@@ -3037,6 +3052,33 @@ async function testLatexParsing(): Promise<void> {
     const nodes = collectAllNodes(ast);
     const texts = (n: OfficeContentNode) => (n.children || []).map(c => c.text || '').join('');
     assert.strictEqual(ast.type, 'tex', 'TEX parse: AST type');
+    // Plain text is read in runs, and reads as it does a character at a time (which is how it is read
+    // inside \\MakeUppercase, where each character's case is changed on its own): the characters that
+    // are not plain end a run, and every other one is in it.
+    const runText = async (body: string) => {
+        const read = await OfficeParser.parseOffice(Buffer.from(`\\documentclass{article}\\begin{document}${body}\\end{document}`), { fileType: 'tex', onWarning: () => { } } as any);
+        return read.content.map(n => n.text).join('|');
+    };
+    const plainRun = "a~b # ^ _ [x] * = , 1.5 < > | @ ``q'' --- it's \ud83d\ude00 {grouped} 50\\% \\& more % a comment\n next";
+    assert.strictEqual(await runText(plainRun), 'a\u00A0b # ^ _ [x] * = , 1.5 < > | @ \u201Cq\u201D \u2014 it\u2019s \ud83d\ude00 grouped 50% & more next', 'TEX parse: a run of plain text is its characters, the ones that are not plain read as they are');
+    assert.strictEqual(await runText(`\\MakeUppercase{${plainRun}}`), (await runText(plainRun)).toUpperCase(), 'TEX parse: text read a character at a time is the text read in runs');
+    assert.strictEqual(await runText(`${'word '.repeat(20_000)}\n\n${'x'.repeat(200_000)}`), `${'word '.repeat(20_000).trim()}|${'x'.repeat(200_000)}`, 'TEX parse: a long run is read whole');
+    // A length is read in the points the tree measures in, 1/72 of an inch: an inch is 72 of them
+    // (it was read as TeX's 72.27) and a big point is one. TeX's own point is read as a point, as a
+    // font's size is.
+    const readBody = async (body: string) => (await OfficeParser.parseOffice(Buffer.from(`\\documentclass{article}\\begin{document}${body}\\end{document}`), { fileType: 'tex', onWarning: () => { } } as any)).content;
+    const indentOf = async (length: string) => ((await readBody(`{\\leftskip=${length} Indented.\\par}`))[0].metadata as any).paragraphIndentation.left;
+    assert.deepStrictEqual([await indentOf('1in'), await indentOf('72bp'), await indentOf('2.54cm'), await indentOf('25.4mm'), await indentOf('72pt'), await indentOf('36pt')], [1440, 1440, 1440, 1440, 1440, 720],
+        'TEX parse: a length is in points of 1/72 inch, whatever unit it is written in');
+    assert.strictEqual(collectAllNodes({ content: await readBody('\\includegraphics[width=5cm]{figure.png}') } as any).find(n => n.type === 'image')?.metadata && (collectAllNodes({ content: await readBody('\\includegraphics[width=5cm]{figure.png}') } as any).find(n => n.type === 'image')!.metadata as any).width, '141.73pt', 'TEX parse: a picture\'s width in centimetres is its width in points');
+    // A line break that ends a paragraph is a line of its own in LaTeX, and stays one: dropped, a
+    // paragraph written with one did not read back as it was.
+    const kinds = (nodes: OfficeContentNode[]) => nodes.map(n => (n.children ?? []).map(c => (c.type === 'break' ? 'break' : c.text)));
+    assert.deepStrictEqual(kinds(await readBody('First line.\\hfil\\break{}\n\nSecond.')), [['First line.', 'break'], ['Second.']], 'TEX parse: a line break at the end of a paragraph is kept');
+    assert.deepStrictEqual(kinds(await readBody('One\\\\\nTwo\\\\\n\nThree')), [['One', 'break', ' Two', 'break'], ['Three']], 'TEX parse: so is one written \\\\');
+    const brokenAtEnd = { type: 'docx', content: [{ type: 'paragraph', text: 'Ends in a break.', children: [{ type: 'text', text: 'Ends in a break.' }, { type: 'break', metadata: { breakType: 'carriageReturn' } }] }, { type: 'paragraph', text: 'Next.', children: [{ type: 'text', text: 'Next.' }] }], metadata: {}, attachments: [] } as any;
+    const brokenTex = (await OfficeGenerator.generate(brokenAtEnd, 'tex')).value as string;
+    assert.deepStrictEqual(kinds(await OfficeParser.parseOffice(Buffer.from(brokenTex), { fileType: 'tex', onWarning: () => { } } as any).then(read => read.content)), [['Ends in a break.', 'break'], ['Next.']], 'TEX: a paragraph ending in a line break reads back from the LaTeX written for it');
     // Metadata from \title/\author/\date/\hypersetup and the class.
     assert.strictEqual(ast.metadata.title, 'Exhaustive LaTeX Test', 'TEX parse: \\title (with \\thanks dropped, \\LaTeX expanded)');
     assert.strictEqual(ast.metadata.author, 'Ada Lovelace, Alan Turing', 'TEX parse: \\author split on \\and');
@@ -3839,7 +3881,7 @@ async function testConfigConsistency(): Promise<void> {
         'Invalid texConfig.margin.top: "1 inch". Expected a number of points or a length such as \'1in\', \'2cm\', \'36pt\'; the default (72) is used instead.',
     ], 'Config: invalid texConfig values are reported with what the option accepts');
     const texOut = String(tex.result.value);
-    assert.ok(texOut.includes('\\documentclass[\\officeparserdriver 11pt]{article}') && texOut.includes('top=72pt') && texOut.includes('left=56.69pt'), 'Config: the defaults replace invalid values; valid ones are kept');
+    assert.ok(texOut.includes('\\documentclass[\\officeparserdriver 11pt]{article}') && texOut.includes('[a4paper,top=1in,bottom=1in,left=20mm,right=1in]{geometry}'), 'Config: the defaults replace invalid values; valid ones are kept');
     assert.ok(tex.messages.some((m: string) => m.startsWith('Invalid texConfig.documentClass')), 'Config: configuration warnings are among the result\'s messages');
     for (const [destination, config, option] of [
         ['md', { mdConfig: { dialect: 'githb' } }, 'mdConfig.dialect'],
@@ -5109,9 +5151,10 @@ async function testHtmlBrowserReading(): Promise<void> {
     assert.strictEqual((await parse('<body><title>T</title><p>x</p></body>')).metadata.title, 'T', 'HTML: a title outside the head is the title, not text');
     const windows1252 = Buffer.concat([Buffer.from('<meta http-equiv="Content-Type" content="text/html; charset=windows-1252"><p>caf'), Buffer.from([0xE9, 0x20, 0x92, 0x71, 0x92]), Buffer.from('</p>')]);
     assert.strictEqual(collectAllNodes(await parse(windows1252)).find(n => n.type === 'text')?.text, 'café \u2019q\u2019', 'HTML: a page in its declared encoding');
-    // Windows-1252 is decoded by the library, not by the runtime: Node 22's TextDecoder reads its bytes
-    // 0x80 to 0x9F as Latin-1 (nodejs/node#56542), so a page's curly quotes came out as control
-    // characters there. Every byte, against the Encoding Standard's table, written out here.
+    // Windows-1252 is decoded by the library, not by the runtime: the TextDecoder of Node 22.13.0 to
+    // 22.22.0 reads its bytes 0x80 to 0x9F as Latin-1 (nodejs/node#56542), so a page's curly quotes
+    // came out as control characters there. Every byte, against the Encoding Standard's table, written
+    // out here.
     const high1252 = [0x20AC, 0x81, 0x201A, 0x192, 0x201E, 0x2026, 0x2020, 0x2021, 0x2C6, 0x2030, 0x160, 0x2039, 0x152, 0x8D, 0x17D, 0x8F,
         0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x2DC, 0x2122, 0x161, 0x203A, 0x153, 0x9D, 0x17E, 0x178];
     const everyByte = Uint8Array.from({ length: 256 }, (_, i) => i);
