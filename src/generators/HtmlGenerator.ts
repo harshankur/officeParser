@@ -1,8 +1,39 @@
-import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
-import { base64ByteLength, isHeaderRow } from '../utils/officeGenUtils.js';
-import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
+import { base64ByteLength, documentLanguage, isHeaderRow, resolveEmbed } from '../utils/officeGenUtils.js';
+import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
+import { isDefaultHighlight } from '../utils/colorUtils.js';
+import { isSourceComment } from '../utils/commentUtils.js';
+import { clampInt } from '../utils/numberUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
+
+/** Node types written as block elements (a <div>, <table>, <ul>, <dl>, <section>...), which a <p> cannot hold. */
+const BLOCK_TYPES = new Set<string>(['paragraph', 'heading', 'list', 'table', 'sheet', 'row', 'cell', 'chart', 'embed', 'admonition',
+    'definitionList', 'definitionTerm', 'definitionDescription', 'slide', 'page', 'note']);
+
+/** Node types written as their children alone: blocks when one of their children is. */
+const TRANSPARENT_TYPES = new Set<string>(['drawing', 'header', 'footer', 'slideMaster']);
+
+/**
+ * A child that is a block of its own, which a <p> cannot hold: a code block or display equation, a
+ * rule or page break (an <hr>; a Word page break is a break in its paragraph), and every node written
+ * as a block element (a table, a list, an embed's <div>...), or holding one. Only these were split
+ * out, so a paragraph holding a table or a video wrote a <div> inside its <p>, which a DOM parser
+ * closes the paragraph at and XHTML (EPUB's) rejects.
+ */
+const isBlockInParagraph = (child: OfficeContentNode): boolean =>
+    BLOCK_TYPES.has(child.type)
+    || (child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math !== 'inline')
+    || (child.type === 'break' && ['thematic', 'page'].includes((child.metadata as { breakType?: string } | undefined)?.breakType ?? ''))
+    || ((TRANSPARENT_TYPES.has(child.type) || (child.type === 'comment' && !isSourceComment(child))) && !!child.children?.some(isBlockInParagraph));
+
+/**
+ * Elements a styleMap can write a paragraph as that hold flow content (blocks included), so a block the
+ * paragraph holds stays inside it: a quoted code block is `<blockquote><pre>`, not a bare `<pre>`.
+ */
+const FLOW_CONTAINER_TAGS = new Set(['blockquote', 'div', 'section', 'article', 'aside', 'header', 'footer', 'main', 'figure',
+    'figcaption', 'address', 'li', 'dd', 'dt']);
 
 type ResolvedStandalone = Required<StandaloneConfig>;
 
@@ -21,6 +52,36 @@ type OnNodeVerdict = { value: string | false | void };
 const URL_BEARING_ATTRS = new Set([
     'href', 'src', 'srcset', 'action', 'formaction', 'poster', 'cite', 'data', 'background', 'ping',
 ]);
+
+/**
+ * A `srcset` with each candidate's URL checked as a picture's (sanitizeImageUrl), read as HTML reads
+ * one: a URL is a run of non-whitespace (so a `data:` URL keeps its commas), then its descriptors up to
+ * a comma. A candidate whose URL is refused is left out; the result is escaped for an attribute.
+ */
+function sanitizeSrcset(value: string): string {
+    const out: string[] = [];
+    let i = 0;
+    while (i < value.length) {
+        while (i < value.length && /[\s,]/.test(value[i])) i++;
+        const urlStart = i;
+        while (i < value.length && !/\s/.test(value[i])) i++;
+        let url = value.slice(urlStart, i);
+        let descriptors = '';
+        if (url.endsWith(',')) {
+            // Its trailing commas end the candidate, counted from the end (`/,+$/` retried every comma in the URL).
+            let end = url.length;
+            while (end > 0 && url[end - 1] === ',') end--;
+            url = url.slice(0, end);
+        } else {
+            const comma = value.indexOf(',', i);
+            descriptors = value.slice(i, comma === -1 ? value.length : comma).trim();
+            i = comma === -1 ? value.length : comma + 1;
+        }
+        const safe = url ? sanitizeImageUrl(url) : '';
+        if (safe) out.push(descriptors ? `${safe} ${escapeHtml(descriptors)}` : safe);
+    }
+    return out.join(', ');
+}
 
 /**
  * Renders `node.htmlAttributes` (see `BaseContentNode.htmlAttributes`) as an attribute string.
@@ -52,6 +113,13 @@ function renderHtmlAttributeBag(
 
         if (key === 'class') {
             className = String(rawValue);
+            continue;
+        }
+        if (key === 'srcset' || key === 'ping') {
+            // Lists of URLs, each checked: checked as one URL, only the first was (a later
+            // `//host/x 2x` candidate reached a page opened from disk as file://host).
+            const safe = key === 'srcset' ? sanitizeSrcset(String(rawValue)) : String(rawValue).split(/\s+/).map(u => u && sanitizeUrl(u)).filter(Boolean).join(' ');
+            if (safe) attrs += ` ${key}="${safe}"`;
             continue;
         }
         if (URL_BEARING_ATTRS.has(key)) {
@@ -114,7 +182,30 @@ function isNearDefaultColor(color: string): boolean {
  * Generates semantic, high-fidelity HTML from an AST.
  */
 export class HtmlGenerator extends BaseGenerator<'html'> {
+    /**
+     * Where a packager keeps an attachment's picture (EPUB: a file in the package), so an `<img>` points
+     * at it rather than carrying its data; undefined leaves the picture inlined as usual.
+     */
+    imageSourceFor?: (attachment: OfficeAttachment) => string | undefined;
     private chartCounter = 0;
+    /** Each top-level sheet's place among the document's sheets, found once (see sheetIndex). */
+    private sheetIndexes: Map<OfficeContentNode, number> | undefined;
+    /**
+     * `sheet`'s place among the document's top-level sheets (-1 for none): the sheets were listed again
+     * for each, so 40,000 sheets (3 KB of ODS) took over a minute to write.
+     */
+    private sheetIndex(sheet: OfficeContentNode): number {
+        if (!this.sheetIndexes) {
+            this.sheetIndexes = new Map();
+            for (const node of this.ast?.content ?? []) if (node.type === 'sheet') this.sheetIndexes.set(node, this.sheetIndexes.size);
+        }
+        return this.sheetIndexes.get(sheet) ?? -1;
+    }
+    /**
+     * The id of the element holding each chart attachment's data, written with its first chart: written
+     * into every chart showing it, one 100 KB chart framed 2,000 times made 400 MB of HTML.
+     */
+    private readonly chartDataIds = new Map<object, string>();
     private isSpreadsheetMode = false;
     /**
      * Set while rendering a heading's children, so `formatText` can drop the run-level bold and
@@ -156,37 +247,34 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let bodyContent = await this.processNodeArray(this.ast.content);
 
         if (this.collectedNotes.length > 0) {
-            // De-duplicate by node identity first. A table row with sparse column metadata
-            // re-processes its cells in `case 'row'` after they were already processed for
-            // `childrenOutput`, so a footnote referenced inside a cell gets pushed here twice -
-            // the same object reference both times, which a Set collapses back to one. Genuinely
-            // distinct notes (even two references to the same id) are different objects and stay.
-            const collectedNotes = [...new Set(this.collectedNotes)];
-            // Footnotes/endnotes get their own <section data-footnotes> (the agreed
-            // contract with attribute-driven editors' footnote nodes); other note types (e.g.
-            // slide speaker notes) keep the existing generic notes wrapper.
-            const footnotes = collectedNotes.filter(n => {
-                const t = (n.metadata as any)?.noteType;
-                return t === 'footnote' || t === 'endnote';
-            });
-            const otherNotes = collectedNotes.filter(n => !footnotes.includes(n));
-
-            if (footnotes.length > 0) {
-                let footnotesHtml = '';
-                for (const note of footnotes) {
-                    footnotesHtml += await this.processNodeRecursive(note, this.boundNodeProcessor, this.collectedNoteOverrides.get(note));
-                }
+            // De-duplicate by node identity. A table row with sparse column metadata re-processes its
+            // cells in `case 'row'` after they were already processed for `childrenOutput`, so a
+            // footnote referenced inside a cell gets pushed here twice - the same object reference
+            // both times. Genuinely distinct notes (even two references to the same id) are
+            // different objects and stay. The notes a note refers to are collected while it is
+            // written, so the list is read as it grows: a note cited only from another note was
+            // left out. Footnotes/endnotes get their own <section data-footnotes> (the agreed
+            // contract with attribute-driven editors' footnote nodes); other note types (e.g. slide
+            // speaker notes) keep the existing generic notes wrapper.
+            const written = new Set<OfficeContentNode>();
+            let footnotesHtml = '';
+            let notesHtml = '';
+            for (let i = 0; i < this.collectedNotes.length; i++) {
+                const note = this.collectedNotes[i];
+                if (written.has(note)) continue;
+                written.add(note);
+                const noteType = (note.metadata as any)?.noteType;
+                const html = await this.processNodeRecursive(note, this.boundNodeProcessor, this.collectedNoteOverrides.get(note));
+                if (noteType === 'footnote' || noteType === 'endnote') footnotesHtml += html;
+                else notesHtml += html;
+            }
+            if (footnotesHtml) {
                 // data-footnotes carries an explicit empty value (not a bare attribute) so
                 // the markup is valid XHTML too - EpubGenerator embeds this verbatim, and
                 // XML rejects valueless attributes. HtmlParser only checks for presence.
                 bodyContent += `\n<section data-footnotes="">\n${footnotesHtml}\n</section>\n`;
             }
-
-            if (otherNotes.length > 0) {
-                let notesHtml = '';
-                for (const note of otherNotes) {
-                    notesHtml += await this.processNodeRecursive(note, this.boundNodeProcessor, this.collectedNoteOverrides.get(note));
-                }
+            if (notesHtml) {
                 bodyContent += `\n<div class="document-notes-section">\n<hr class="page-break">\n${notesHtml}\n</div>\n`;
             }
         }
@@ -203,9 +291,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // (and recorded) during the body walk above, so read it back rather than asking `onNode` a
             // second time about every sheet - the hook is allowed to have side effects.
             const sheets = this.ast.content.filter(node => node.type === 'sheet' && !this.onNodeSkipped.has(node));
-            const tabs = sheets.map((n, i) => {
-                const sheetName = (n.metadata as any)?.sheetName || `Sheet ${i + 1}`;
-                return `<a href="#sheet-${i}" class="spreadsheet-tab">${this.escape(sheetName)}</a>`;
+            // Each tab links to its sheet's own id (its place among all the sheets, as the sheet's div
+            // is numbered), so a sheet `onNode` skipped does not shift the links after it.
+            const tabs = sheets.map(n => {
+                const index = this.sheetIndex(n);
+                const sheetName = (n.metadata as any)?.sheetName || `Sheet ${index + 1}`;
+                return `<a href="#sheet-${index}" class="spreadsheet-tab">${this.escape(sheetName)}</a>`;
             }).join('');
             spreadsheetTabs = `<div class="spreadsheet-tabs">${tabs}</div>`;
             spreadsheetScript = `
@@ -393,7 +484,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const spreadsheetScriptOut = sa.scripts ? spreadsheetScript : '';
 
         const value = sa.document ? `<!DOCTYPE html>
-<html lang="en">
+<html lang="${documentLanguage(this.effectiveMetadata)}">
 <head>
     ${headInjectionsOn ? inj.headStart : ''}
     <meta charset="UTF-8">
@@ -546,6 +637,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     }
 
     private async processNodeArray(nodes: OfficeContentNode[]): Promise<string> {
+        // Whether these siblings form a run of text (a paragraph's children) rather than a list of blocks.
+        const runHasText = nodes.some(n => n.type === 'text');
         let html = '';
         // Stack to track active lists. `liClose` is the currently-open item's deferred closing
         // suffix (`</li>`, or `</div></li>` for a task item): a list item is rendered WITHOUT its
@@ -554,9 +647,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         // same-level sibling arrives, when the level is popped, or at the end.
         const listStack: { indentation: number, type: 'ordered' | 'unordered', isTask: boolean, liClose: string }[] = [];
 
+        // A task list is marked `data-type="taskList"`, an ordered one on its <ol> (its numbers kept):
+        // opened as a <ul> and closed as an </ol>, it was not well-formed, and an EPUB holding it was unreadable.
         const openListTag = (type: 'ordered' | 'unordered', isTask: boolean) => {
-            if (isTask) return '<ul data-type="taskList">';
-            return type === 'ordered' ? '<ol>' : '<ul>';
+            const marker = isTask ? ' data-type="taskList"' : '';
+            return type === 'ordered' ? `<ol${marker}>` : `<ul${marker}>`;
         };
         const closeListTag = (type: 'ordered' | 'unordered') => type === 'ordered' ? '</ol>' : '</ul>';
 
@@ -642,8 +737,12 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // Add a blank line after BLOCK nodes for readable HTML source. Inline nodes (a
                 // paragraph's text/link runs) must concatenate with no separator: adding `\n\n`
                 // around an inline <a> put a blank line inside the <p>, which reparsed as a stray
-                // space before the following punctuation (`[video](url) .`).
-                if (node.type !== 'text' && !result.endsWith('\n\n')) {
+                // space before the following punctuation (`[video](url) .`). A source comment inside a
+                // run is inline too: a blank line after it would part the words around it, and so is
+                // anything in a paragraph's or heading's line (a picture, inline math) but a line
+                // break, after which the line starts afresh.
+                const inlineNode = node.type === 'text' || (isSourceComment(node) && runHasText) || (this.inlineDepth > 0 && node.type !== 'break');
+                if (!inlineNode && !result.endsWith('\n\n')) {
                     if (result.endsWith('\n')) result += '\n';
                     else result += '\n\n';
                 }
@@ -714,6 +813,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      * Overridden to handle children using processNodeArray for list grouping.
      */
     private tableNestingLevel = 0;
+    /** How many paragraphs or headings are being written: a picture in one is written inline. */
+    private inlineDepth = 0;
 
     protected override async processNodeRecursive(
         node: OfficeContentNode,
@@ -762,8 +863,59 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         const isTable = node.type === 'table' || node.type === 'sheet';
         if (isTable) this.tableNestingLevel++;
 
+        // A paragraph holding a block (a code block's <pre>, a display equation's <div>) is written as
+        // its parts, since HTML cannot nest a block in a <p>: a DOM parser closes the paragraph at it,
+        // and XHTML (EPUB's) rejects it. Each run of inline content is a paragraph, each block stands
+        // on its own, and the paragraph's id and anchors go on its first part. A paragraph a styleMap
+        // writes as an element that holds blocks (a quote's <blockquote>) is written whole instead:
+        // split, a quote holding only a code block lost its <blockquote>.
+        const splitsAroundBlocks = node.type === 'paragraph' && processor === this.boundNodeProcessor && !!node.children?.some(isBlockInParagraph)
+            && !this.holdsFlowContent(node);
+        // A paragraph or heading holds phrasing content only: a picture in one is written inline.
+        const holdsInline = node.type === 'paragraph' || node.type === 'heading';
+        let splitResult: string | undefined;
         let childrenOutput = '';
-        if (node.children && node.children.length > 0) {
+        if (holdsInline) this.inlineDepth++;
+        try {
+        if (splitsAroundBlocks) {
+            splitResult = '';
+            let run: OfficeContentNode[] = [];
+            let part: OfficeContentNode = node;
+            // The parts after the first, without the paragraph's anchors: made once, where a copy of the
+            // paragraph's metadata for each part took time in the product of its fields and its parts.
+            const laterPart = { ...node, metadata: { ...(node.metadata as object), anchorIds: undefined } as any } as OfficeContentNode;
+            const flush = async () => {
+                if (run.some(child => child.type !== 'text' || (child.text ?? '').trim() || child.notes?.length)) {
+                    splitResult += await processor({ ...part, children: run }, await this.processNodeArray(run));
+                    part = laterPart;
+                }
+                run = [];
+            };
+            for (const child of node.children!) {
+                if (isBlockInParagraph(child)) {
+                    await flush();
+                    // A block before any of the paragraph's text takes its ids, as named anchors before it:
+                    // with no part of text to carry them, a link to the paragraph (a bookmark on a display
+                    // equation, or on a page break) had nothing to land on.
+                    if (part === node) {
+                        splitResult += this.namedAnchors(node);
+                        part = laterPart;
+                    }
+                    // The block stands on its own, outside the paragraph's line of text.
+                    this.inlineDepth--;
+                    try {
+                        splitResult += await this.processNodeArray([child]);
+                    } finally {
+                        this.inlineDepth++;
+                    }
+                } else {
+                    run.push(child);
+                }
+            }
+            await flush();
+        }
+
+        if (!splitsAroundBlocks && node.children && node.children.length > 0) {
             // A node whose own branch lays its children out throws this output away, so skip producing
             // it: the subtree would otherwise be walked twice, firing `onNode` twice for every node in
             // it. Only when the DEFAULT processor is rendering this node, though - a caller that passes
@@ -775,14 +927,17 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // Fallback for nodes that have text property but no children (e.g. simple paragraphs)
             childrenOutput = this.escape(node.text);
         }
+        } finally {
+            if (holdsInline) this.inlineDepth--;
+        }
 
         if (node.notes && node.notes.length > 0) {
             if (node.type !== 'slide') {
-                this.collectedNotes.push(...node.notes);
+                appendAll(this.collectedNotes, node.notes);
             }
         }
 
-        let result = await processor(node, childrenOutput);
+        let result = splitResult ?? await processor(node, childrenOutput);
 
         if (isTable) this.tableNestingLevel--;
 
@@ -798,12 +953,64 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const meta = note.metadata as any;
                 if (meta?.noteType === 'footnote' || meta?.noteType === 'endnote') {
                     const key = this.escape(this.getFootnoteKey(note));
-                    result += `<sup data-footnote-ref="${key}" id="footnote-ref-${key}"><a href="#footnote-${key}">${key}</a></sup>`;
+                    result += `<sup data-footnote-ref="${key}" id="${this.escape(this.footnoteReferenceId(note))}"><a href="#footnote-${key}">${key}</a></sup>`;
                 }
             }
         }
 
         return result;
+    }
+
+    /** How many references to each note are written, and the number the next one's id tries (see footnoteReferenceId). */
+    private readonly footnoteReferencesWritten = new Map<OfficeContentNode, { count: number; nextSuffix: number }>();
+
+    /**
+     * The id of the next reference written to `note`: `footnote-ref-KEY` for the first (the note's back-link
+     * returns to it), `footnote-ref-KEY-N` for each after it. A note cited twice (one note node every
+     * reference shares) gave both references one id: a page with duplicate ids, which EPUB rejects. The key
+     * `KEY-N` is claimed from the note keys, so no note given it later shares the id; one a note holds is
+     * passed over, each tried once.
+     */
+    private footnoteReferenceId(note: OfficeContentNode): string {
+        const key = this.getFootnoteKey(note);
+        const written = this.footnoteReferencesWritten.get(note) ?? { count: 0, nextSuffix: 2 };
+        this.footnoteReferencesWritten.set(note, written);
+        if (++written.count === 1) return `footnote-ref-${key}`;
+        while (!this.claimFootnoteKey(`${key}-${written.nextSuffix}`)) written.nextSuffix++;
+        return `footnote-ref-${key}-${written.nextSuffix++}`;
+    }
+
+    /** How many times each generated heading id was taken (see uniqueHeadingSlug). */
+    private readonly headingSlugsTaken = new Map<string, number>();
+
+    /**
+     * `slug` made unique among the generated heading ids as GitHub makes it: the first is `slug`, later
+     * ones `slug-1`, `slug-2`..., passing over one taken already (a heading written "Intro 1"). Each
+     * number is tried once per slug.
+     */
+    private uniqueHeadingSlug(slug: string): string {
+        if (!slug) return slug;
+        let unique = slug;
+        while (this.headingSlugsTaken.has(unique)) {
+            const count = this.headingSlugsTaken.get(slug)! + 1;
+            this.headingSlugsTaken.set(slug, count);
+            unique = `${slug}-${count}`;
+        }
+        this.headingSlugsTaken.set(unique, 0);
+        return unique;
+    }
+
+    /** Whether a styleMap writes `node` (a paragraph) as an element that holds blocks (see FLOW_CONTAINER_TAGS). */
+    private holdsFlowContent(node: OfficeContentNode): boolean {
+        const tag = this.getSemanticMapping(node)?.tag;
+        return isSafeStyleMapTag(tag) && FLOW_CONTAINER_TAGS.has(tag.toLowerCase());
+    }
+
+    /** `node`'s ids as empty named anchors, for a node whose own element is not written (none under ignoreInternalLinks). */
+    private namedAnchors(node: OfficeContentNode): string {
+        if (this.config.ignoreInternalLinks) return '';
+        const ids: string[] = ((node.metadata as { anchorIds?: string[] } | undefined)?.anchorIds || []).filter((id: string) => !!id);
+        return ids.map(aid => `<a id="${this.escape(aid)}" name="${this.escape(aid)}"></a>`).join('');
     }
 
     /**
@@ -861,15 +1068,20 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         let idAttr = '';
         let extraAnchors = '';
 
-        const anchorIds = this.config.ignoreInternalLinks ? [] : [...((node.metadata as any)?.anchorIds || [])];
+        // An empty id is none (`id=""` names nothing a link can reach).
+        const anchorIds: string[] = this.config.ignoreInternalLinks ? [] : ((node.metadata as any)?.anchorIds || []).filter((id: string) => !!id);
 
         if (this.config.generateIds) {
             if (node.type === 'heading') {
-                const slug = this.slugify(node.text || '');
-                if (!anchorIds.includes(slug)) anchorIds.push(slug);
+                // From the heading's text, whether the node carries it or only its runs do. A heading
+                // whose text slugifies to nothing (punctuation and symbols alone) gets no generated
+                // id, rather than an empty one. The id is GitHub's, as the other writers' are, so a
+                // link written for a Markdown heading (`#version-20`) reaches it; a second heading of the
+                // same text is `-1` after it, as GitHub numbers it (two headings had one id).
+                const slug = this.uniqueHeadingSlug(this.slugify(node.text || this.getNodeText(node)));
+                if (slug && !anchorIds.includes(slug)) anchorIds.push(slug);
             } else if (node.type === 'sheet') {
-                const sheetIndex = this.ast?.content.filter(n => n.type === 'sheet').indexOf(node) ?? 0;
-                const sheetId = `sheet-${sheetIndex}`;
+                const sheetId = `sheet-${Math.max(0, this.sheetIndex(node))}`;
                 if (!anchorIds.includes(sheetId)) anchorIds.push(sheetId);
             }
         }
@@ -913,7 +1125,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 let src = meta?.url || attachmentName || '';
                 if (!meta?.url && attachmentName && this.ast) {
                     const attachment = this.getAttachment(attachmentName);
-                    if (attachment) {
+                    const packaged = attachment && this.imageSourceFor?.(attachment);
+                    if (packaged) {
+                        src = packaged;
+                    } else if (attachment) {
                         const bytes = base64ByteLength(attachment.data);
                         // A self-contained (standalone) HTML document must embed its images: a name
                         // reference there is a broken image with no packager to resolve it. So the size
@@ -921,7 +1136,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                         // fragment a consumer post-processes) is lifted for a standalone document.
                         const cap = this.emitsStandaloneDocument ? Infinity : this.config.maxInlineImageBytes;
                         if (bytes <= cap) {
-                            src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
+                            if (this.inlineWithinBudget(bytes, attachmentName)) src = `data:${attachment.mimeType || 'image/png'};base64,${attachment.data}`;
                         } else {
                             // Fragment over the cap: keep the name reference the consumer resolves, but
                             // surface it so a large image degrading to a bare src is never silent.
@@ -960,11 +1175,27 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // alt is the descriptive alt text, not the OCR text: OCR text is surfaced visibly under
                 // 'image+ocr-text' rather than hidden in alt (where a broken/referenced image would leak
                 // it into the rendered page).
-                const img = `<img src="${sanitizeImageUrl(src)}" alt="${this.escape(meta?.altText || '')}"${imgTitle}${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
+                const imgWithId = (id: string): string => {
+                    const tag = `<img src="${sanitizeImageUrl(src)}" alt="${this.escape(meta?.altText || '')}"${id}${imgTitle}${className}${mappedAttrs}${imgDataAttrs}${imgStyleAttr}>`;
+                    // A picture that is a link (a badge) is wrapped in it, as a linked run is.
+                    if (!meta?.link || (this.config.ignoreInternalLinks && meta.linkType !== 'external')) return tag;
+                    const linkTitle = meta.linkTitle ? ` title="${this.escape(meta.linkTitle)}"` : '';
+                    return `<a href="${sanitizeUrl(meta.link)}"${linkTitle}${meta.linkType === 'external' ? ' target="_blank"' : ''}>${tag}</a>`;
+                };
+                // In a paragraph or heading (phrasing content only) the picture is written inline, its
+                // id on the <img>: the block markup below inside a <p> is split apart by every browser
+                // and parser.
+                if (this.inlineDepth > 0) {
+                    const ocrText = mode === 'image+ocr-text' && ocr ? `<br><span class="ocr-text">${this.escape(ocr)}</span>` : '';
+                    return `${extraAnchors}${imgWithId(idAttr)}${ocrText}`;
+                }
+                // Among the blocks too its id is on the <img>, after the anchors of its other ids, as they
+                // are read back: on the wrapper it was read after them, and the order flipped each save.
+                const img = imgWithId(idAttr);
                 let content = this.config.includeFormatting ? `<div class="image-container">${img}<div class="caption">${this.escape(attachmentName || '')}</div></div>` : img;
                 // image+ocr-text: the image, then its recognized text (a <pre> keeps the 2-D layout).
                 if (mode === 'image+ocr-text' && ocr) content += `<pre class="ocr-text">${this.escape(ocr)}</pre>`;
-                return `${extraAnchors}<div${idAttr}>${content}</div>`;
+                return `${extraAnchors}<div>${content}</div>`;
             }
 
             case 'chart': {
@@ -977,13 +1208,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
                 if (chartAttachment && (chartAttachment as any).chartData) {
                     const chartData = (chartAttachment as any).chartData;
+                    let dataId = this.chartDataIds.get(chartAttachment);
+                    let data = '';
+                    if (dataId === undefined) {
+                        this.chartDataIds.set(chartAttachment, dataId = `${chartId}-data`);
+                        data = `<script type="application/json" id="${dataId}">${serializeForInlineScript(chartData)}</script>`;
+                    }
                     const canvas = `<div class="chart-container"><canvas id="${chartId}"></canvas></div>`;
                     const script = `
 <script>
     (function() {
         const initChart = () => {
             const ctx = document.getElementById('${chartId}').getContext('2d');
-            const chartData = ${serializeForInlineScript(chartData)};
+            const chartData = JSON.parse(document.getElementById('${dataId}').textContent);
             const getRandomColor = (index, alpha) => {
                 const colors = [
                     'rgba(255, 99, 132, ' + alpha + ')',
@@ -1042,16 +1279,18 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         else window.addEventListener('load', tryInit);
     })();
 </script>`;
-                    return `${extraAnchors}${canvas}${script}`;
+                    // The data after the chart's container, beside its script: placed before it, the container
+                    // laid out with no width in a slide and the chart drew nothing.
+                    return `${extraAnchors}${canvas}${data}${script}`;
                 }
                 return '';
             }
 
             case 'break': {
                 const breakType = (node.metadata as any)?.breakType;
-                if (breakType === 'page') return '<hr class="page-break">';
+                if (breakType === 'page') return `${extraAnchors}<hr class="page-break"${idAttr}>`;
                 // A thematic break is a plain rule; the parser reads a bare <hr> back as one.
-                if (breakType === 'thematic') return '<hr>';
+                if (breakType === 'thematic') return `${extraAnchors}<hr${idAttr}>`;
                 return '<br>';
             }
 
@@ -1083,15 +1322,10 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const lang = meta?.language ? ` class="language-${this.escape(meta.language)}"` : '';
                 const codeHtml = `<code${lang}>${this.escape(node.text || '')}</code>`;
                 // A `code` node is always block-level (inline code is a monospace text run, emitted
-                // as <code> by formatText). Wrap in <pre> whenever it carries a language or spans
-                // multiple lines; only a bare single-line, language-less code node stays a <span>.
-                // Previously a single-line block (e.g. a one-line ```js) emitted <span><code>, which
+                // as <code> by formatText), so it is a <pre>, whatever its length and whether or not
+                // it names a language. A one-line block without one used to be a <span><code>, which
                 // re-imports as inline code and which strict CodeBlock parsers (only <pre><code>) miss.
-                if (meta?.language || (node.text && node.text.includes('\n'))) {
-                    return `${extraAnchors}<pre${idAttr}${className}${mappedAttrs}${styleAttr}>${codeHtml}</pre>`;
-                } else {
-                    return `${extraAnchors}<span${idAttr}${className}${mappedAttrs}${styleAttr}>${codeHtml}</span>`;
-                }
+                return `${extraAnchors}<pre${idAttr}${className}${mappedAttrs}${styleAttr}>${codeHtml}</pre>`;
             }
 
             case 'list': {
@@ -1100,12 +1334,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // this item before it closes. See `listStack`/`liClose` there.
                 const meta = node.metadata as ListMetadata;
                 if (meta?.isTask) {
-                    const checkedAttr = ` data-checked="${meta.checked ? 'true' : 'false'}"`;
+                    // A task item is marked as its list is (`data-type="taskList"`, see the list
+                    // wrapper): Tiptap's TaskItem reads only `li[data-type="taskItem"]`, so without the
+                    // marker an editor took the items for a plain list and lost their checked state.
+                    const checkedAttr = ` data-checked="${meta.checked ? 'true' : 'false'}" data-type="taskItem"`;
                     const checkedBool = meta.checked ? ' checked' : '';
                     return `${extraAnchors}<li${checkedAttr}${idAttr}${className}${mappedAttrs}${styleAttr}><label><input type="checkbox"${checkedBool}><span></span></label><div>${childrenOutput}`;
                 }
                 const value = (meta?.listType === 'ordered' && typeof meta.itemIndex === 'number')
-                    ? ` value="${meta.itemIndex + 1}"`
+                    ? ` value="${clampInt(meta.itemIndex, 0, Number.MAX_SAFE_INTEGER - 1, 0) + 1}"`
                     : '';
                 return `${extraAnchors}<li${value}${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}`;
             }
@@ -1224,26 +1461,40 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             case 'sheet': {
                 const rows = node.children || [];
 
+                // Each cell's place in the grid: the row and column a spreadsheet parser gives it, else
+                // (a sheet built by hand) the next free place in reading order, past the cells a merge
+                // above covers. A cell with no place was left out of the grid, and with it the sheet.
+                const places = new Map<OfficeContentNode, { r: number; c: number }>();
+                const coveredThrough: number[] = [];
+                let nextRow = 0;
+                for (const child of rows) {
+                    if (child.type !== 'row') continue;
+                    const cellsInRow = (child.children || []).filter(c => c.type === 'cell');
+                    const firstRow = (cellsInRow[0]?.metadata as CellMetadata | undefined)?.row;
+                    const rowIndex = typeof firstRow === 'number' ? firstRow : nextRow;
+                    let col = 0;
+                    for (const cell of cellsInRow) {
+                        const meta = cell.metadata as CellMetadata | undefined;
+                        const r = typeof meta?.row === 'number' ? meta.row : rowIndex;
+                        let c = typeof meta?.col === 'number' ? meta.col : col;
+                        if (typeof meta?.col !== 'number') while ((coveredThrough[c] ?? -1) >= r) c++;
+                        places.set(cell, { r, c });
+                        const cSpan = meta?.colSpan || 1;
+                        if ((meta?.rowSpan || 1) > 1) for (let k = c; k < c + cSpan; k++) coveredThrough[k] = Math.max(coveredThrough[k] ?? -1, r + (meta?.rowSpan || 1) - 1);
+                        col = c + cSpan;
+                    }
+                    nextRow = rowIndex + 1;
+                }
+
                 // Find grid bounds
                 let maxRow = -1;
                 let maxCol = -1;
-
-                for (const child of rows) {
-                    if (child.type === 'row') {
-                        for (const cell of child.children || []) {
-                            if (cell.type === 'cell') {
-                                const meta = cell.metadata as CellMetadata;
-                                if (meta) {
-                                    const r = meta.row;
-                                    const c = meta.col;
-                                    const rSpan = meta.rowSpan || 1;
-                                    const cSpan = meta.colSpan || 1;
-                                    if (r + rSpan - 1 > maxRow) maxRow = r + rSpan - 1;
-                                    if (c + cSpan - 1 > maxCol) maxCol = c + cSpan - 1;
-                                }
-                            }
-                        }
-                    }
+                for (const [cell, { r, c }] of places) {
+                    const meta = cell.metadata as CellMetadata | undefined;
+                    const rSpan = meta?.rowSpan || 1;
+                    const cSpan = meta?.colSpan || 1;
+                    if (r + rSpan - 1 > maxRow) maxRow = r + rSpan - 1;
+                    if (c + cSpan - 1 > maxCol) maxCol = c + cSpan - 1;
                 }
 
                 let tableHtml = '';
@@ -1264,27 +1515,24 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                         if (child.type === 'row') {
                             const cellsInRow = child.children?.filter(c => c.type === 'cell') || [];
                             if (cellsInRow.length > 0) {
-                                const r = (cellsInRow[0].metadata as CellMetadata).row;
-                                rowNodeMap.set(r, child);
+                                rowNodeMap.set(places.get(cellsInRow[0])!.r, child);
 
                                 for (const cell of cellsInRow) {
-                                    const meta = cell.metadata as CellMetadata;
-                                    if (meta) {
-                                        const c = meta.col;
-                                        if (r >= 0 && r <= maxRow && c >= 0 && c <= maxCol) {
-                                            grid[r][c] = cell;
+                                    const meta = cell.metadata as CellMetadata | undefined;
+                                    const { r, c } = places.get(cell)!;
+                                    if (r >= 0 && r <= maxRow && c >= 0 && c <= maxCol) {
+                                        grid[r][c] = cell;
 
-                                            const rSpan = meta.rowSpan || 1;
-                                            const cSpan = meta.colSpan || 1;
-                                            if (rSpan > 1 || cSpan > 1) {
-                                                for (let rOffset = 0; rOffset < rSpan; rOffset++) {
-                                                    for (let cOffset = 0; cOffset < cSpan; cOffset++) {
-                                                        if (rOffset === 0 && cOffset === 0) continue;
-                                                        const targetR = r + rOffset;
-                                                        const targetC = c + cOffset;
-                                                        if (targetR <= maxRow && targetC <= maxCol) {
-                                                            mergedCovered[targetR][targetC] = true;
-                                                        }
+                                        const rSpan = meta?.rowSpan || 1;
+                                        const cSpan = meta?.colSpan || 1;
+                                        if (rSpan > 1 || cSpan > 1) {
+                                            for (let rOffset = 0; rOffset < rSpan; rOffset++) {
+                                                for (let cOffset = 0; cOffset < cSpan; cOffset++) {
+                                                    if (rOffset === 0 && cOffset === 0) continue;
+                                                    const targetR = r + rOffset;
+                                                    const targetC = c + cOffset;
+                                                    if (targetR <= maxRow && targetC <= maxCol) {
+                                                        mergedCovered[targetR][targetC] = true;
                                                     }
                                                 }
                                             }
@@ -1316,7 +1564,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                             if (typeof rowOverride === 'string') { tbodyRows += rowOverride; continue; }
                             const mapping = this.getSemanticMapping(rowNode);
                             const rClasses = ['excel-row'];
-                            if (mapping?.classes) rClasses.push(...mapping.classes);
+                            if (mapping?.classes) appendAll(rClasses, mapping.classes);
                             // Escaped like the `className` built for every other node type. This
                             // path rebuilds the class attribute from the raw mapping array rather
                             // than reusing that value, and was the only place it went out unescaped.
@@ -1365,35 +1613,37 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     nonRowHtml = await this.processNodeArray(nonRowNodes);
                 }
 
-                const isFirstSheet = this.ast.content.filter(n => n.type === 'sheet')[0] === node;
-                const isActive = isFirstSheet;
-                const sheetIndex = this.ast.content.filter(n => n.type === 'sheet').indexOf(node);
+                const sheetIndex = this.sheetIndex(node);
+                const isActive = sheetIndex === 0;
                 const sheetId = `sheet-${sheetIndex}`;
 
                 // Merge classes correctly to avoid duplicate class attributes
                 const mergedClasses = ['spreadsheet-sheet'];
                 if (isActive) mergedClasses.push('active');
-                if (classes.length > 0) mergedClasses.push(...classes);
+                if (classes.length > 0) appendAll(mergedClasses, classes);
                 // Escaped for the same reason as the row above; `classes` here also carries the
                 // attribute bag's raw className, so escaping at the join covers both sources.
                 const classAttr = ` class="${this.escape(mergedClasses.join(' '))}"`;
 
-                // Ensure we don't have duplicate IDs
+                // The sheet's element takes the id its tab links to; its own ids are anchors before it
+                // (the first was dropped for that id, which the extra anchors then repeated).
                 const finalIdAttr = ` id="${sheetId}"`;
+                const sheetAnchors = anchorIds.filter(aid => aid !== sheetId).map(aid => `<a id="${this.escape(aid)}" name="${this.escape(aid)}"></a>`).join('');
 
-                return `${extraAnchors}<div${finalIdAttr}${classAttr}${mappedAttrs}${styleAttr}>${tableHtml}${nonRowHtml}</div>`;
+                return `${sheetAnchors}<div${finalIdAttr}${classAttr}${mappedAttrs}${styleAttr}>${tableHtml}${nonRowHtml}</div>`;
             }
 
             case 'paragraph':
             case 'heading': {
                 // The styleMap tag wins over the structural default; that is the whole point of
                 // mapping "Heading 1"/"Intense Quote" onto a semantic element.
-                const tag = mappedTag ?? (node.type === 'heading' ? `h${(node.metadata as HeadingMetadata)?.level || 1}` : 'p');
+                const tag = mappedTag ?? (node.type === 'heading' ? `h${clampInt((node.metadata as HeadingMetadata)?.level, 1, 6, 1)}` : 'p');
 
                 // Normalize empty paragraphs so DOCX and PPTX empty cells render with consistent height
                 // Strip tags to check if it's purely empty or just contains non-breaking spaces (like PPTX)
-                const textOnly = childrenOutput.replace(/<[^>]+>/g, '').trim();
-                if (!textOnly && !node.children?.some(c => c.type === 'image' || c.type === 'chart')) {
+                const textOnly = childrenOutput.replace(/<[^<>]+>/g, '').trim();
+                // A block written inside it (a quote holding only a rule) is its content, not emptiness.
+                if (!textOnly && !node.children?.some(c => c.type === 'image' || c.type === 'chart' || isBlockInParagraph(c))) {
                     const extraClass = className ? ` class="${className.replace('class="', '').replace('"', '')} empty-paragraph"` : ' class="empty-paragraph"';
                     return `${extraAnchors}<${tag}${idAttr}${extraClass}${mappedAttrs}${styleAttr}><br></${tag}>`;
                 }
@@ -1427,7 +1677,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     // An unreferenced (orphan) note has no citation anchor, so the back-link would
                     // dangle - omit it.
                     const backLink = meta?.unreferenced ? '' : ` <a href="#footnote-ref-${key}">↩</a>`;
-                    return `<div id="footnote-${key}" data-footnote-id="${key}">${childrenOutput}${backLink}</div>`;
+                    // The note's own ids (a bookmark in it) start it, where the parser gives them back.
+                    const noteAnchors = anchorIds.map(aid => `<a id="${this.escape(aid)}" name="${this.escape(aid)}"></a>`).join('');
+                    return `<div id="footnote-${key}" data-footnote-id="${key}">${noteAnchors}${childrenOutput}${backLink}</div>`;
                 }
                 const noteClass = meta?.noteType ? ` note-${this.escape(meta.noteType)}` : '';
                 return `${extraAnchors}<div class="slide-note${noteClass}"${idAttr}${className}${mappedAttrs}${styleAttr}>${childrenOutput}</div>`;
@@ -1435,12 +1687,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
 
             case 'embed': {
                 const meta = node.metadata as EmbedMetadata;
-                if (meta?.embedType === 'iframe') {
+                // An embed naming no type (built by hand), or a YouTube one by its URL alone, is what
+                // it carries: its URL was lost in an empty YouTube wrapper.
+                const embed = resolveEmbed(meta);
+                if (embed?.kind === 'iframe') {
                     // Generic preserved iframe. sanitizeUrl scheme-checks the src (only http/https
                     // and the other non-executing schemes survive), so a javascript:/data: src is
                     // dropped even with preservation on. The node only exists via opt-in parsing or
                     // a programmatic AST, so this guard is unconditional.
-                    const src = sanitizeUrl(meta?.url || '');
+                    const src = sanitizeUrl(embed.url);
                     if (!src) return '';
                     const w = meta?.width ? ` width="${this.escape(meta.width)}"` : '';
                     const h = meta?.height ? ` height="${this.escape(meta.height)}"` : '';
@@ -1457,7 +1712,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 }
                 // Match the attribute-driven Youtube wrapper shape so a loaded embed re-hydrates
                 // an editor's Youtube node.
-                const id = meta?.videoId || '';
+                const id = embed?.kind === 'youtube' ? embed.videoId : '';
                 const width = meta?.width || '100%';
                 const align = meta?.align || 'center';
                 const ml = align === 'left' ? '0' : 'auto';
@@ -1492,8 +1747,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // Rendered through their children only. Listed explicitly, with no `default`, so that
             // under `noImplicitReturns` a new OfficeContentNodeType fails to compile until it is
             // classified here rather than silently degrading to its children.
-            case 'drawing':
+            // A source comment (`<!-- ... -->`) stays a hidden note: a real comment, or - under
+            // `sourceAttributes`, for an editor whose DOM parser discards comment nodes - an empty span
+            // carrying the raw text in an escaped attribute, so it is data and can never become markup.
+            // A review comment keeps its existing rendering (its children).
             case 'comment':
+                if (isSourceComment(node)) {
+                    return this.config.htmlConfig.sourceAttributes
+                        ? `<span data-html-comment="${escapeHtml(node.text || '')}"></span>`
+                        : `<!--${sanitizeCommentText(node.text || '')}-->`;
+                }
+                return childrenOutput;
+
+            case 'drawing':
             case 'header':
             case 'footer':
             case 'slideMaster':
@@ -1506,8 +1772,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
         switch (node.type) {
             case 'paragraph': return 'p';
             case 'heading': {
-                const level = (node.metadata as HeadingMetadata)?.level || 1;
-                return `h${Math.min(Math.max(level, 1), 6)}`;
+                return `h${clampInt((node.metadata as HeadingMetadata)?.level, 1, 6, 1)}`;
             }
             case 'list': return 'li';
             // Every other type is a generic block. No `default`, so a new node type must be placed.
@@ -1570,10 +1835,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             // outside the colour/size span above so a run carrying both still rehydrates both. The
             // widened HtmlParser reads this shape back (style wins over data-color). Behaviour
             // change (was a span), noted in the changelog.
+            // A highlight in the colour one has when it names none (Markdown's `==text==`) is a plain
+            // <mark>, which is what that means in HTML: given the colour, an editor kept it as a colour of
+            // the text's own, and the highlight was no longer the plain one when written back.
             if (f.backgroundColor) {
                 const safeBg = sanitizeCssValue(f.backgroundColor);
                 if (safeBg) {
-                    result = `<mark data-color="${this.escape(safeBg)}" style="background-color: ${safeBg}">${result}</mark>`;
+                    result = isDefaultHighlight(f.backgroundColor)
+                        ? `<mark>${result}</mark>`
+                        : `<mark data-color="${this.escape(safeBg)}" style="background-color: ${safeBg}">${result}</mark>`;
                 }
             }
         }
@@ -2250,12 +2520,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     private getScopedPremiumStyles(isSpreadsheet: boolean = false, isPresentation: boolean = false, isPdf: boolean = false): string {
         const css = this.getPremiumStyles(isSpreadsheet, isPresentation, isPdf)
             .replace(/:root(\s*\{)/g, ':scope$1')
-            .replace(/(^|\n)(\s*)body(\s*\{)/g, '$1$2:scope$3');
+            .replace(/(^|\n)([ \t]*)body(\s*\{)/g, '$1$2:scope$3');
         return `@scope (.op-html-scope) {\n${css}\n}`;
-    }
-
-    protected override slugify(text: string): string {
-        return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     }
 
     private getColumnLetter(colIndex: number): string {

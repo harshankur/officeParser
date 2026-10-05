@@ -4,7 +4,7 @@
  * Every string in the parsed AST originates from an untrusted document, so any
  * value interpolated into generated output (HTML, XHTML, CSS, URLs, inline
  * scripts, CSV, RTF, Markdown) must be escaped for its destination context.
- * These are the single source of truth — each generator delegates to them so
+ * These are the single source of truth: each generator delegates to them so
  * escaping stays consistent and a gap fixed here is fixed everywhere.
  */
 
@@ -58,13 +58,31 @@ export function isSafeStyleMapTag(tag: unknown): tag is string {
  * attributes.
  */
 export function escapeHtml(text: string): string {
-    if (typeof text !== 'string') return text as unknown as string;
+    // A value of another type (a number, or an array from a hand-built AST) is escaped as its text:
+    // passed through, an array's text went into the attribute unescaped.
+    if (typeof text !== 'string') text = text === undefined || text === null ? '' : String(text);
     return text
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+/**
+ * Make raw text safe to wrap in `<!-- ... -->` in HTML or Markdown output. A comment closes at the first
+ * `-->` or `--!>`, and a leading `>` or `->` closes an empty one, so AST-derived text containing those
+ * could end the comment early and turn what follows into live markup. Each is broken by escaping its
+ * `>` (entities are not decoded inside a comment, so this stays inert). Text parsed FROM a comment can
+ * never contain `-->`, so real comments still round-trip byte-for-byte; only hand-built or hostile
+ * nodes are altered.
+ */
+export function sanitizeCommentText(text: string): string {
+    if (typeof text !== 'string') return '';
+    let out = text.replace(/--!?>/g, (m) => `${m.slice(0, -1)}&gt;`);
+    if (out.startsWith('>')) out = `&gt;${out.slice(1)}`;
+    else if (out.startsWith('->')) out = `-&gt;${out.slice(2)}`;
+    return out;
 }
 
 /**
@@ -109,7 +127,10 @@ export function sanitizeCssValue(value: string): string {
     const cleaned = value
         .replace(/[\x00-\x1F\x7F]/g, '')          // control chars (incl. newlines/tabs)
         .replace(/\/\*[\s\S]*?\*\//g, '')         // CSS comments used to obfuscate
-        .replace(/\\/g, '');                      // CSS escapes; see above
+        .replace(/\\/g, '')                       // CSS escapes; see above
+        // A character reference, which the browser decodes in the style attribute before CSS reads
+        // it: `red&#59position:fixed` is a second declaration, `&#117rl(` a `url(`.
+        .replace(/&/g, '');
     if (/(?:url|expression|image-set|element|-moz-binding)\s*\(|@import|javascript:|[<>]/i.test(cleaned)) {
         return '';
     }
@@ -118,10 +139,23 @@ export function sanitizeCssValue(value: string): string {
 }
 
 /**
+ * A network-path reference for a web page's `href` or `src` (see sanitizeUrl): `//host/path` as
+ * `https://host/path`, which is what it means on the web; undefined for a backslash form (`\\host\share`,
+ * `\/host`, or `///path`), which has no use on the web and is refused; `url` itself when it is none.
+ * Resolved against a page opened from disk, as an EPUB reader and a saved HTML file are, either form
+ * is `file://host/...`, which Windows fetches over SMB with the user's credentials, for a picture with
+ * no click.
+ */
+function webNetworkPath(url: string): string | undefined {
+    if (!/^[\\/]{2}/.test(url)) return url;
+    return /^\/\/[^\\/]/.test(url) ? `https:${url}` : undefined;
+}
+
+/**
  * Escapes a document-supplied URL for use in an href/src attribute. Beyond the
  * usual attribute escaping, this rejects script-executing schemes (javascript:,
  * vbscript:, data:, etc.) so a hyperlink extracted from an untrusted document
- * can't run code when clicked — only http(s)/mailto/tel and relative/fragment
+ * can't run code when clicked: only http(s)/mailto/tel and relative/fragment
  * URLs are passed through.
  */
 export function sanitizeUrl(url: string): string {
@@ -129,7 +163,8 @@ export function sanitizeUrl(url: string): string {
     const trimmed = url.trim();
     // Browsers ignore control characters when parsing a URL scheme, so strip them
     // first to catch obfuscated payloads like "java\tscript:alert(1)".
-    const stripped = trimmed.replace(/[\x00-\x1F\x7F]+/g, '');
+    const stripped = webNetworkPath(trimmed.replace(/[\x00-\x1F\x7F]+/g, ''));
+    if (stripped === undefined) return '';
     const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(stripped);
     if (schemeMatch && !/^(https?|mailto|tel)$/i.test(schemeMatch[1])) {
         return '';
@@ -169,7 +204,8 @@ export function iframeAllowed(src: string, preserve: boolean | string[] | undefi
 export function sanitizeImageUrl(url: string): string {
     if (typeof url !== 'string') return '';
     const trimmed = url.trim();
-    const stripped = trimmed.replace(/[\x00-\x1F\x7F]+/g, '');
+    const stripped = webNetworkPath(trimmed.replace(/[\x00-\x1F\x7F]+/g, ''));
+    if (stripped === undefined) return '';
     const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(stripped);
     if (schemeMatch) {
         const scheme = schemeMatch[1].toLowerCase();
@@ -212,19 +248,23 @@ export function serializeForInlineScript(data: unknown): string {
  */
 export function csvSafeCell(value: string, delimiter: string): string {
     let v = typeof value === 'string' ? value : String(value ?? '');
-    // A plain signed number (e.g. "-8", "+7", "-5.3") can't be a formula, so exempt it —
+    // A plain signed number (e.g. "-8", "+7", "-5.3") can't be a formula, so exempt it;
     // otherwise numeric columns get quoted as text. Anything else starting with a formula
     // trigger (including "+1+1", "-1+cmd", "=", "@") is prefixed with a quote.
-    const isNumber = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(v.trim());
+    // (`\d+(?:\.\d*)?`: written `\d+\.?\d*`, a long run of digits was split every way before failing.)
+    const isNumber = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(v.trim());
     // Test the trimmed value: the numeric exemption above already trims, so testing the raw
     // string here meant a leading space slipped a trigger past the guard (" =1+1" was emitted
     // unprefixed). Most spreadsheet apps treat a leading-space cell as text and would not
     // evaluate it, so this is defence in depth rather than a demonstrated bypass - but the
     // asymmetry between the two tests was an accident, not a decision.
-    if (!isNumber && /^[=+\-@\t\r]/.test(v.trim())) {
+    // (Full-width `＝`, `＋`, `－` and `＠` too, which some spreadsheet apps take as the ASCII ones.)
+    if (!isNumber && /^[=+\-@\t\r\uFF1D\uFF0B\uFF0D\uFF20]/.test(v.trim())) {
         v = `'${v}`;
     }
-    if (v.includes(delimiter) || v.includes('"') || v.includes('\n') || v.includes('\r')) {
+    // Quoted when it holds any common delimiter, not only the one in use: opened where `;` or a tab
+    // separates cells, `a;=1+1` split into a second cell holding a formula.
+    if (v.includes(delimiter) || /[",;\t\n\r]/.test(v)) {
         return `"${v.replace(/"/g, '""')}"`;
     }
     return v;
@@ -238,12 +278,10 @@ export function csvSafeCell(value: string, delimiter: string): string {
  * `&amp;` into an RTF field. The scheme allowlist is deliberately identical to `sanitizeUrl`'s
  * and `sanitizeMarkdownUrl`'s, so all three text generators agree on what a hyperlink may point at.
  *
- * **Additionally rejects UNC paths (`\\host\share`), which the HTML allowlist does not.** In a
- * browser `\\evil.com\share` is an inert relative path; in Word it is a live UNC reference that
- * triggers an SMB fetch and an NTLM handshake on click, which is a credential-leak vector rather
- * than a rendering quirk. That asymmetry is why this is a separate function and not a flag on
- * `sanitizeUrl` - the HTML helper must NOT gain this behaviour, since there the path is harmless
- * and rejecting it would break legitimate relative links.
+ * **Additionally rejects UNC paths (`\\host\share`) and network paths (`//host`).** In Word such
+ * a target is a live UNC reference that triggers an SMB fetch and an NTLM handshake on click, a
+ * credential-leak vector. (The web helpers refuse the backslash forms too, and write `//host` as
+ * `https://host`: see webNetworkPath.)
  *
  * Returns `''` for a rejected URL; callers emit the link text without the field wrapper, matching
  * how HTML degrades to `href=""` and Markdown to `[text]()`.
@@ -259,7 +297,10 @@ export function sanitizeRtfUrl(url: string): string {
     if (schemeMatch && !/^(https?|mailto|tel)$/i.test(schemeMatch[1])) {
         return '';
     }
-    return escapeRtf(stripped);
+    // A quote is percent-encoded, not RTF-escaped: a reader decodes `\'22` back to `"` before it reads
+    // the field instruction, so a quote in the URL ended the HYPERLINK argument, and a quoted target
+    // after it (`file://host/share`, past the scheme check above) became the link.
+    return escapeRtf(stripped.replace(/"/g, '%22'));
 }
 
 /**
@@ -322,34 +363,172 @@ export function escapeRtf(text: string): string {
 }
 
 /**
- * Escapes document text for a Markdown text position. Markdown passes raw HTML
- * through to the renderer, so a `<` that begins an HTML tag or comment must be
- * neutralized to prevent `<script>`/`<img onerror>` injection when the Markdown
- * is later rendered to HTML.
- *
- * Deliberately narrow — only a `<` immediately followed by a letter, `/`, `!` or
- * `?` (i.e. one that actually opens a tag/comment/PI, matching how browsers
- * detect tags) is encoded. A bare `<` (e.g. `a < b`), `>`, `&`, `[]` and other
- * Markdown metacharacters are left untouched: they can't start a tag, and
- * MarkdownParser round-trips this output without decoding entities, so encoding
- * them would corrupt re-parsed content. URL schemes are handled by
- * sanitizeMarkdownUrl.
+ * Neutralizes a `<` that would open an HTML tag, comment or processing instruction (one
+ * immediately followed by a letter, `/`, `!` or `?`, matching how browsers detect tags), so
+ * document content can't inject `<script>`/`<img onerror>` when the Markdown is rendered to
+ * HTML. Nothing else changes: this is the escaping for a position where nothing decodes
+ * entities (math), where encoding more would change the content.
+ */
+export function markdownEscapeTags(text: string): string {
+    if (typeof text !== 'string') return '';
+    return text.replace(/<(?=[a-zA-Z/!?])/g, '&lt;');
+}
+
+/**
+ * Escapes document text for a Markdown text position, one a Markdown parser decodes character
+ * references in (MarkdownParser does, as CommonMark does). Besides the tag-opening `<` of
+ * {@link markdownEscapeTags}, the `&` of anything that reads as a character reference
+ * (`&quot;`, `&#39;`, `&#x27;`, `&copy;`, any `&name;`) becomes `&amp;`, so literal text such
+ * as `&quot;` survives a round trip instead of losing one level of escaping each time. A bare
+ * `&` (`Tom & Jerry`, `a && b`) and every other Markdown metacharacter are left as they are.
+ * The `&` is escaped first, so the `&lt;` this writes is not escaped again. URL schemes are
+ * handled by sanitizeMarkdownUrl.
  */
 export function markdownEscapeText(text: string): string {
     if (typeof text !== 'string') return '';
-    return text.replace(/<(?=[a-zA-Z/!?])/g, '&lt;');
+    return markdownEscapeTags(text.replace(/&(?=#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/g, '&amp;'));
+}
+
+/** ASCII punctuation: the characters a Markdown backslash escapes. */
+const MARKDOWN_PUNCTUATION = /[!-/:-@[-`{-~]/;
+
+/** A character that is neither whitespace nor ASCII punctuation: part of a word, for `_` emphasis. */
+const isMarkdownWordCharacter = (char: string | undefined): boolean => char !== undefined && !/\s/.test(char) && !MARKDOWN_PUNCTUATION.test(char);
+
+/**
+ * Escapes document text for a Markdown position that decodes backslash escapes and character
+ * references but no inline markup (a link or image title, an abbreviation definition): as
+ * {@link markdownEscapeText}, and a backslash that would escape what follows it (ASCII punctuation,
+ * a line end, or the end of the text, where the writer's own punctuation follows) is doubled, so it
+ * reads back as itself.
+ */
+export function markdownEscapePlain(text: string): string {
+    if (typeof text !== 'string') return '';
+    return markdownEscapeText(text.replace(/\\(?=[!-/:-@[-`{-~\n]|$)/g, '\\\\'));
+}
+
+/**
+ * Escapes document text for a Markdown text position, so that it reads back as the same text in
+ * CommonMark renderers and in MarkdownParser alike: {@link markdownEscapeText}'s references and
+ * tags, and a backslash before each character that would otherwise start or end inline markup.
+ * That is every `` ` ``, `*`, `[`, `]`, `~` and `$`; a `_` run unless it sits inside a word
+ * (snake_case stays as it is, since an underscore there cannot start emphasis); a run of `=`
+ * (highlight); a `{` that could begin an attribute list or heading id; and a backslash that would
+ * escape what follows it. At the start of a line (the text's own start when `atLineStart`, and after
+ * each line break in it), the markers that would begin a block are escaped too: a heading's `#`,
+ * `>`, a list item's `-`, `+` or `1.`, a line of only `-` or `=` (a rule or setext underline), and
+ * the `:` of a definition or fenced div, and the first character of a line shaped like a pipe table's
+ * delimiter row (`--- | ---`, `:-- | --:`), which under paragraph text made the paragraph a table. An
+ * escape is harmless where it was not needed; it always reads back as the character.
+ */
+export function markdownEscapeInline(text: string, atLineStart = false): string {
+    if (typeof text !== 'string') return '';
+    // At a line start, after any indentation: what would begin a block (a heading's `#`s, a quote's
+    // `>`, a list item's `-` or `+`, a line of only `-` or `=` that would be a rule or a setext
+    // underline, a definition's `: ` or a fenced div's `:::`), or the number of an ordered-list item
+    // (whose `.` or `)` is then escaped rather than the number). `-8` or `+7` begins nothing.
+    const blockMarker = /[ \t]*(?:(#{1,6}(?=[ \t\n]|$)|>|[-+](?=[ \t\n]|$)|-(?=[- \t]*(?:\n|$))|=(?=[= \t]*(?:\n|$))|:(?=[ \t:]))|(\d{1,9})(?=[.)](?:[ \t\n]|$)))/y;
+    // A line of only `-`, `:`, `|`, spaces and tabs (a table's delimiter row if it holds a `-`, and a `:`
+    // or `|`, as a line of `-` alone is a rule or underline above): its first character is escaped.
+    const delimiterRow = /[ \t]*[-:|][-:| \t]*(?=\n|$)/y;
+    const reference = /&(?:#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/y;
+    // The characters that may need a backslash or an entity: the text between them is copied as one
+    // slice (it grew a character at a time, which took a second and a gigabyte of memory for 20 MB).
+    const special = /[\\`*[\]~$_={&<\n]/g;
+    const parts: string[] = [];
+    let copied = 0; // where the text not yet in parts starts
+    /** Writes `replacement` for the text from `start` to `end` (an insertion when they are equal). */
+    const replace = (start: number, end: number, replacement: string) => {
+        if (start > copied) parts.push(text.slice(copied, start));
+        parts.push(replacement);
+        copied = end;
+    };
+    let lineStart = atLineStart;
+    for (let i = 0; i < text.length;) {
+        if (lineStart) {
+            lineStart = false;
+            blockMarker.lastIndex = i;
+            const marker = blockMarker.exec(text);
+            if (marker) {
+                // A backslash before the marker, or, for an item's number, before its `.` or `)`.
+                const at = blockMarker.lastIndex - (marker[2] !== undefined ? 0 : marker[1].length);
+                replace(at, at, '\\');
+                i = blockMarker.lastIndex;
+                continue;
+            }
+            delimiterRow.lastIndex = i;
+            const row = delimiterRow.exec(text)?.[0];
+            if (row && row.includes('-') && /[:|]/.test(row)) {
+                let at = i;
+                while (text[at] === ' ' || text[at] === '\t') at++;
+                replace(at, at, '\\');
+                i = at;
+            }
+        }
+        special.lastIndex = i;
+        const found = special.exec(text);
+        if (!found) break;
+        i = found.index;
+        const char = text[i];
+        switch (char) {
+            case '\n':
+                lineStart = true;
+                break;
+            case '\\':
+                if (i + 1 === text.length || MARKDOWN_PUNCTUATION.test(text[i + 1]) || text[i + 1] === '\n') replace(i, i + 1, '\\\\');
+                break;
+            case '`': case '*': case '[': case ']': case '~': case '$':
+                replace(i, i + 1, `\\${char}`);
+                break;
+            case '_': {
+                let end = i;
+                while (text[end] === '_') end++;
+                if (!(isMarkdownWordCharacter(text[i - 1]) && isMarkdownWordCharacter(text[end]))) replace(i, end, '\\_'.repeat(end - i));
+                i = end;
+                continue;
+            }
+            case '=': {
+                let end = i;
+                while (text[end] === '=') end++;
+                if (end - i > 1) replace(i, end, '\\='.repeat(end - i));
+                i = end;
+                continue;
+            }
+            case '{':
+                if (i === 0 || text[i + 1] === '#') replace(i, i + 1, '\\{');
+                break;
+            case '&':
+                // As markdownEscapeText: only an `&` that starts a character reference.
+                reference.lastIndex = i;
+                if (reference.test(text)) replace(i, i + 1, '&amp;');
+                break;
+            case '<':
+                // As markdownEscapeTags: only a `<` that would open a tag, comment or instruction.
+                if (/[a-zA-Z/!?]/.test(text[i + 1] ?? '')) replace(i, i + 1, '&lt;');
+                break;
+        }
+        i++;
+    }
+    if (parts.length === 0) return text;
+    if (copied < text.length) parts.push(text.slice(copied));
+    return parts.join('');
 }
 
 /**
  * Sanitizes a document-supplied URL for a Markdown `[text](url)` / `![alt](url)`
  * target. Rejects script-executing schemes (returning '' → a dead link) and
  * percent-encodes the characters that would break out of the `(...)` or inject
- * markup. `&` is preserved so query strings survive; set `allowDataImage` for
- * image targets so embedded `data:image/*` URIs are permitted.
+ * markup. `&` is preserved so query strings survive, except that a Markdown renderer
+ * decodes character references in a link target: the `&` of one is written `&amp;`, so the
+ * renderer reads exactly this URL (a `javascript&colon;` the scheme check let through as a
+ * path cannot become `javascript:`). Set `allowDataImage` for image targets so embedded
+ * `data:image/*` URIs are permitted.
  */
 export function sanitizeMarkdownUrl(url: string, opts?: { allowDataImage?: boolean }): string {
     if (typeof url !== 'string') return '';
-    const stripped = url.trim().replace(/[\x00-\x1F\x7F]+/g, '');
+    // (A network path as for a web page: see webNetworkPath.)
+    const stripped = webNetworkPath(url.trim().replace(/[\x00-\x1F\x7F]+/g, ''));
+    if (stripped === undefined) return '';
     const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(stripped);
     if (schemeMatch) {
         const scheme = schemeMatch[1].toLowerCase();
@@ -357,5 +536,425 @@ export function sanitizeMarkdownUrl(url: string, opts?: { allowDataImage?: boole
             || (opts?.allowDataImage === true && /^data:image\//i.test(stripped));
         if (!ok) return '';
     }
-    return stripped.replace(/[\s()<>"`\\]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+    return stripped.replace(/[\s()<>"`\\]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'))
+        .replace(/&(?=#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)/g, '&amp;');
+}
+
+// ─── LaTeX ──────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Every character sequence TeX's input reader treats as the end of a line, plus the separators a
+ * source document uses for a soft line break (PPTX's vertical tab, a form feed, the Unicode line and
+ * paragraph separators). They are all normalized to `\n` before anything else, so the one character
+ * a caller has to reason about is `\n`: a raw line end inside a comment would end the comment and
+ * expose the rest of the line as live LaTeX, and a blank line inside a macro argument is a paragraph
+ * break that aborts the whole run.
+ */
+const LATEX_LINE_BREAKS = /\r\n?|[\n\x0B\x0C\u0085\u2028\u2029]/g;
+
+/**
+ * Characters with no visible meaning in LaTeX output: the remaining C0/C1 controls, the byte-order
+ * mark, and the two noncharacters. pdfTeX rejects several controls outright ("Text line contains an
+ * invalid character"), which stops the run.
+ */
+const LATEX_STRIPPED_CHARS = /[\x00-\x08\x0E-\x1F\x7F-\x84\x86-\x9F\uFEFF\uFFFE\uFFFF]/g;
+
+/**
+ * Normalizes untrusted text before it is escaped for LaTeX: Unicode to its composed form, line
+ * breaks to `\n`, invisible control characters and lone surrogates removed (a lone surrogate cannot be encoded as UTF-8, so the file
+ * would not even be valid input).
+ */
+function normalizeLatexInput(text: string): string {
+    return text
+        // Composed form: pdfLaTeX has a glyph for a precomposed letter such as U+00E9 but none for
+        // a combining accent, so a decomposed `e` + U+0301 would be a fatal error there.
+        .normalize('NFC')
+        .replace(LATEX_LINE_BREAKS, '\n')
+        .replace(LATEX_STRIPPED_CHARS, '')
+        .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+        .replace(/(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '$1');
+}
+
+/**
+ * Replacement for every character that is not literal text to LaTeX.
+ *
+ * The ten special characters (`\ { } $ & % # _ ~ ^`) are the injection surface: left alone, `\`
+ * starts a command, `{`/`}` open and close groups, `%` comments out the rest of the line, `$` enters
+ * math, `&`/`#` are alignment and parameter characters. The rest keep the text meaning what it said:
+ * `<`, `>` and `|` print as other glyphs in some font encodings, a backtick is an opening quote, and
+ * `[`/`]` are braced because a `[` right after a command such as `\item` or `\\` is read as that
+ * command's optional argument. Tabs are ordinary spaces in running text.
+ */
+const LATEX_TEXT_ESCAPES: Record<string, string> = {
+    '\\': '\\textbackslash{}',
+    '{': '\\{',
+    '}': '\\}',
+    '$': '\\$',
+    '&': '\\&',
+    '%': '\\%',
+    '#': '\\#',
+    '_': '\\_',
+    '~': '\\textasciitilde{}',
+    '^': '\\textasciicircum{}',
+    '<': '\\textless{}',
+    '>': '\\textgreater{}',
+    '|': '\\textbar{}',
+    '`': '\\textasciigrave{}',
+    '[': '{[}',
+    ']': '{]}',
+    '\t': ' ',
+    '\u00A0': '~',
+    '\u00AD': '\\-',
+    '\u200B': '\\hspace{0pt}',
+};
+
+/**
+ * What {@link escapeLatex} rewrites: a line end, a character of {@link LATEX_TEXT_ESCAPES}, or one of
+ * the characters TeX fonts combine with an identical neighbor into a different glyph (`--` is an en
+ * dash, `''` a closing double quote, `,,` a low double quote in T1) when that neighbor follows it; an
+ * empty group between the pair keeps the two characters the source actually contained. Every
+ * alternative is one character (the neighbor is only looked at), so a match costs constant time.
+ */
+const LATEX_TEXT_SPECIAL = /[\n\\{}$&%#_~^<>|`[\]\t\u00A0\u00AD\u200B]|([-',])(?=\1)/g;
+
+/**
+ * Escapes document text for a LaTeX text position (running text, a macro argument, a table cell).
+ *
+ * Every string in the AST comes from an untrusted document, and LaTeX is a programming language:
+ * unescaped text can run `\input{/etc/passwd}`, `\write18{...}`, or simply break the document's
+ * structure. The result contains no active character and no command other than the fixed
+ * replacements in {@link LATEX_TEXT_ESCAPES}.
+ *
+ * @param text - The literal text
+ * @param newline - What a line break inside the text becomes. It is never passed through raw: a blank
+ *   line is a paragraph break, which is an error inside most macro arguments. Defaults to a space.
+ */
+export function escapeLatex(text: string, newline = ' '): string {
+    if (typeof text !== 'string') return '';
+    // One native pass that copies the text between special characters as it is: built a character at
+    // a time, a 20 MB run took seconds and hundreds of megabytes of string pieces, and 140 MB exhausted the heap.
+    return normalizeLatexInput(text).replace(LATEX_TEXT_SPECIAL, (ch, ligature: string | undefined) =>
+        ligature ? `${ligature}{}` : ch === '\n' ? newline : LATEX_TEXT_ESCAPES[ch]);
+}
+
+/**
+ * Formats text as LaTeX comment lines (each prefixed `% `, the whole terminated by a newline).
+ *
+ * A comment runs to the end of its line and TeX ignores everything in it, so the only character
+ * that matters is the line end: the input is normalized so every line break TeX would honor is a
+ * `\n` that gets its own `% ` prefix, and nothing after the comment can leak onto a live line. The
+ * trailing newline is part of the result, since the comment has to be closed before any code that
+ * follows it.
+ */
+export function latexComment(text: string): string {
+    if (typeof text !== 'string') return '';
+    return normalizeLatexInput(text).split('\n').map(line => `% ${line}`.trimEnd()).join('\n') + '\n';
+}
+
+/**
+ * A source comment (`<!-- ... -->`, `CommentMetadata.sourceSyntax: 'html'`) as LaTeX comment lines:
+ * `% <!--body-->`, one `%` line per line of the body. It stays a hidden note that nothing typesets,
+ * in the shape the LaTeX parser restores verbatim. Unlike `latexComment`, trailing whitespace inside
+ * the body is kept; every line break form still starts a new `%` line, so no text escapes the comment.
+ */
+export function latexSourceComment(body: string): string {
+    const text = `<!--${sanitizeCommentText(typeof body === 'string' ? body : '')}-->`;
+    return normalizeLatexInput(text).split('\n').map(line => (line ? `% ${line}` : '%')).join('\n') + '\n';
+}
+
+/** URL characters `\href` takes verbatim in every context (RFC 3986 unreserved/sub-delims, minus the ones below). */
+const LATEX_URL_LITERAL = /[A-Za-z0-9\-.:/?@!'()*+,;=[\]]/;
+
+/**
+ * URL characters that are special to TeX and have an escaped form hyperref turns back into the plain
+ * character when it writes the link. They must be escaped rather than left raw because `\href` is
+ * often inside another command's argument (bold link text, a table cell), where TeX has already
+ * read `#`, `&` and `_` with their special meanings before hyperref could change them.
+ */
+const LATEX_URL_ESCAPES: Record<string, string> = { '#': '\\#', '&': '\\&', '_': '\\_' };
+
+/**
+ * Sanitizes a document-supplied URL for the first argument of `\href`.
+ *
+ * The scheme policy is the office-package one ({@link sanitizeOfficePackageUrl}): a PDF viewer opens
+ * a link target the same way Word does, so a UNC path is a credential-leak vector and only
+ * `https`/`http`/`mailto`/`tel` (plus relative and fragment URLs) pass. Returns '' for a rejected
+ * URL, and the caller renders the link text alone.
+ *
+ * The URL is then made inert to TeX: `#`, `&`, `_` and `%` take their escaped forms (an existing
+ * `%xx` escape is kept, a stray `%` is encoded as `%25`), and everything else that is not a plain URL
+ * character is percent-encoded as UTF-8, which is equivalent in a URL and leaves no TeX-special or
+ * non-ASCII character in the argument. Every `%` is written `\%`, those of the encoding included:
+ * inside another command's argument (a heading, a footnote, a caption, a table cell) TeX has read a
+ * bare `%` as a comment before hyperref sees the URL, which swallowed the rest of the line.
+ */
+export function sanitizeLatexUrl(url: string): string {
+    const safe = sanitizeOfficePackageUrl(url);
+    if (!safe) return '';
+    const encoder = new TextEncoder();
+    const out: string[] = [];
+    const chars = Array.from(safe);
+    for (let i = 0; i < chars.length; i++) {
+        const ch = chars[i];
+        if (ch === '%') {
+            out.push(/^[0-9A-Fa-f]{2}$/.test((chars[i + 1] ?? '') + (chars[i + 2] ?? '')) ? '\\%' : '\\%25');
+        } else if (LATEX_URL_ESCAPES[ch]) {
+            out.push(LATEX_URL_ESCAPES[ch]);
+        } else if (LATEX_URL_LITERAL.test(ch)) {
+            out.push(ch);
+        } else {
+            for (const byte of encoder.encode(ch)) out.push('\\%' + byte.toString(16).toUpperCase().padStart(2, '0'));
+        }
+    }
+    return out.join('');
+}
+
+/**
+ * One segment of an image path: starts with a letter, digit or `_` (so never `.`, `..`, a hidden
+ * file or an option-like `-`), then letters, digits, `.`, `_`, `-` and single spaces, and does not
+ * end with a space. TeX turns a run of spaces into one, so a double space would name another file.
+ */
+const LATEX_IMAGE_PATH_SEGMENT = '[A-Za-z0-9_](?:[A-Za-z0-9._-]| (?! ))*(?<! )';
+const LATEX_IMAGE_PATH = new RegExp(`^${LATEX_IMAGE_PATH_SEGMENT}(?:/${LATEX_IMAGE_PATH_SEGMENT})*$`);
+
+/**
+ * An image path from document content, for `\includegraphics`, or null when it is not a plain
+ * relative path. TeX reads the named file when the document is compiled, so a document may only
+ * point inside its own folder: no scheme, no absolute, home or drive path, no `.`/`..` segments or
+ * hidden files, and only letters, digits, `.`, `_`, `-`, `/` and single spaces, none of which mean
+ * anything to TeX or to a shell (LaTeX reads file names with spaces since 2019). Such a path needs
+ * no escaping.
+ *
+ * A path from HTML or Markdown is a URL reference, so its percent-escapes (`pic%20one.png`) are
+ * decoded first; the decoded path is what is checked. A LaTeX path cannot contain a raw `%` (it
+ * starts a comment), so decoding never misreads one.
+ */
+export function sanitizeLatexImagePath(path: string): string | null {
+    let p = String(path ?? '').trim();
+    if (p.includes('%')) {
+        try { p = decodeURIComponent(p).trim(); } catch { return null; }
+    }
+    if (!p || p.length > 255) return null;
+    return LATEX_IMAGE_PATH.test(p) ? p : null;
+}
+
+/**
+ * LaTeX commands a math expression may not use, by exact name.
+ *
+ * Math is the one place the LaTeX generator emits document content as live LaTeX rather than
+ * escaped text: `node.text` of a math node *is* LaTeX source (from `$...$` in Markdown, `data-math`
+ * in HTML, or converted equations). A document author controls that source, so everything that
+ * reaches outside the formula is refused: reading files (`\input`, `\openin`, `\includegraphics`,
+ * which TeX Live permits for any readable path by default), writing files or running programs
+ * (`\write`, `\immediate`, `\openout`, `\directlua`), changing how later input is read (`\catcode`,
+ * `\scantokens`, `\verb`), redefining commands for the rest of the document (`\def`, `\let`,
+ * `\newcommand`), changing global layout or counters, ending the run (`\stop`, `\endinput`), and
+ * emitting links that bypass URL sanitization (`\href`, `\url`). `\cr`, `\par` and friends would
+ * end the table row or paragraph the formula sits in.
+ */
+const LATEX_MATH_BLOCKED_COMMANDS = new Set([
+    'input', 'include', 'includeonly', 'InputIfFileExists', 'IfFileExists', 'endinput',
+    'openin', 'openout', 'closein', 'closeout', 'read', 'readline', 'write', 'immediate',
+    'special', 'directlua', 'latelua', 'luaexec', 'luadirect', 'ShellEscape', 'shellescape', 'mdfivesum',
+    'catcode', 'lccode', 'uccode', 'sfcode', 'mathcode', 'delcode',
+    'def', 'edef', 'gdef', 'xdef', 'let', 'futurelet', 'global', 'long', 'outer', 'protected',
+    'csname', 'endcsname', 'scantokens', 'scantextokens', 'ExplSyntaxOn', 'ExplSyntaxOff',
+    // Commands that make a control word out of text, as `\csname` does, so a refused one could be
+    // spelled without its name: the kernel's `\UseName{input}` and `\ExpandArgs{c}`, LuaTeX's
+    // `\tokenized` and `\begincsname`, and etoolbox's `\cs...` family.
+    'UseName', 'ExpandArgs', 'tokenized', 'begincsname', 'lastnamedcs',
+    'csuse', 'csdef', 'csgdef', 'csedef', 'csxdef', 'cslet', 'csletcs', 'letcs', 'csundef', 'csshow',
+    'csappto', 'cspreto', 'csgappto', 'csgpreto', 'cseappto', 'csepreto', 'csxappto', 'csxpreto',
+    // What `\end{document}` runs, which ends the document where the formula stands.
+    'enddocument', 'document',
+    'usepackage', 'RequirePackage', 'documentclass', 'LoadClass', 'makeatletter', 'makeatother',
+    'verb', 'verbatiminput', 'lstinputlisting', 'inputminted', 'includegraphics', 'includepdf',
+    'href', 'url', 'nolinkurl', 'hyperref', 'hyperlink', 'hypertarget', 'hyperimage', 'hyperbaseurl', 'hypersetup',
+    'font', 'fontspec', 'setmainfont', 'setsansfont', 'setmonofont', 'setmathfont', 'addfontfeatures',
+    'chardef', 'mathchardef', 'countdef', 'dimendef', 'skipdef', 'muskipdef', 'toksdef',
+    'stop', 'bye', 'dump', 'batchmode', 'nonstopmode', 'scrollmode', 'errorstopmode', 'errmessage', 'errhelp',
+    'output', 'shipout', 'afterassignment', 'aftergroup',
+    'cr', 'crcr', 'tabularnewline', 'noalign', 'omit', 'span', 'par',
+    'setcounter', 'addtocounter', 'stepcounter', 'refstepcounter', 'setlength', 'addtolength',
+    'settowidth', 'settoheight', 'settodepth', 'pagestyle', 'thispagestyle', 'geometry',
+]);
+
+/**
+ * Command-name prefixes a math expression may not use: engine primitive families (`\pdffiledump`,
+ * `\luatexversion`, `\XeTeXinputencoding`, `\filemoddate`), the `\every...` token-list hooks, every
+ * command/environment definition family (`\newcommand`, `\NewDocumentCommand`, `\providecommand`,
+ * `\DeclareRobustCommand`, ...), `\show...` (which pauses an interactive run), and page-header
+ * commands.
+ */
+const LATEX_MATH_BLOCKED_PREFIXES = ['pdf', 'lua', 'XeTeX', 'file', 'every', 'new', 'New', 'renew', 'Renew', 'provide', 'Provide', 'Declare', 'show', 'fancy'];
+
+/**
+ * mathtools' environments a formula may open inside math (`dcases`, `matrix*`, ...). LaTeX output
+ * loads mathtools for a formula that opens one (see mathCommandsOf in latexUtils).
+ */
+export const MATHTOOLS_ENVIRONMENTS: ReadonlySet<string> = new Set(['dcases', 'dcases*', 'rcases', 'rcases*', 'drcases', 'drcases*', 'cases*',
+    'matrix*', 'pmatrix*', 'bmatrix*', 'Bmatrix*', 'vmatrix*', 'Vmatrix*', 'smallmatrix*', 'psmallmatrix', 'psmallmatrix*', 'bsmallmatrix',
+    'bsmallmatrix*', 'Bsmallmatrix', 'Bsmallmatrix*', 'vsmallmatrix', 'vsmallmatrix*', 'Vsmallmatrix', 'Vsmallmatrix*', 'multlined',
+    'lgathered', 'rgathered']);
+
+/** Environments a formula may open anywhere inside math: amsmath's, the kernel's and mathtools'. */
+const LATEX_INNER_MATH_ENVIRONMENTS = new Set([
+    'matrix', 'pmatrix', 'bmatrix', 'Bmatrix', 'vmatrix', 'Vmatrix', 'smallmatrix',
+    'cases', 'aligned', 'alignedat', 'gathered', 'split', 'array', 'subarray',
+    ...MATHTOOLS_ENVIRONMENTS,
+]);
+
+/**
+ * Display environments, which cannot sit inside `\[...\]`. A block formula that is exactly one of
+ * them (the common `$$\begin{align}...\end{align}$$` in Markdown) is written bare instead.
+ */
+const LATEX_DISPLAY_MATH_ENVIRONMENTS = new Set([
+    'equation', 'equation*', 'align', 'align*', 'alignat', 'alignat*', 'gather', 'gather*',
+    'multline', 'multline*', 'flalign', 'flalign*', 'eqnarray', 'eqnarray*',
+]);
+
+/** Whether a control-word name is refused inside math. */
+function isBlockedLatexMathCommand(name: string): boolean {
+    return LATEX_MATH_BLOCKED_COMMANDS.has(name) || LATEX_MATH_BLOCKED_PREFIXES.some(p => name.startsWith(p));
+}
+
+/**
+ * The outcome of {@link sanitizeLatexMath}. On success `latex` is ready to place between the math
+ * delimiters (or, when `displayEnvironment` is set, to write bare as a display environment). On
+ * failure `commands` names the refused commands; it is empty when the problem is structural.
+ */
+export type LatexMathResult =
+    | { ok: true; latex: string; displayEnvironment: boolean }
+    | { ok: false; commands: string[] };
+
+/**
+ * Makes a LaTeX math expression safe to emit as live math.
+ *
+ * The expression is scanned the way TeX tokenizes it (control words are a backslash plus ASCII
+ * letters; that is exact because every command that could change the letter set is refused), and
+ * it is accepted only if all of the following hold:
+ *
+ * - no refused command ({@link LATEX_MATH_BLOCKED_COMMANDS}, {@link LATEX_MATH_BLOCKED_PREFIXES}),
+ *   and no `^^` notation, which spells any character (including `\`) by its hex code and so would
+ *   let a command past a textual scan;
+ * - braces balance, and every `\begin{env}` closes with a matching `\end{env}` at the same brace
+ *   depth, using only math environments, so the formula cannot close a group or environment it
+ *   did not open;
+ * - no `\(`, `\)`, `\[`, `\]`, and no trailing lone backslash (which would escape the closing `$`).
+ *
+ * Characters that would reach outside the formula are neutralized rather than refused: `%` (a
+ * comment would swallow the closing delimiter) becomes `\%`, `$` becomes `\$`, `#` becomes `\#`,
+ * a top-level `&` in inline math becomes `\&` (it would split a table cell), and blank lines are
+ * collapsed (a paragraph break is an error in math). In inline math a top-level `\\` becomes a
+ * space; in block math a top-level `&` or `\\` has the body wrapped in `aligned`/`gathered`.
+ *
+ * @param source - The formula as found in the AST (no delimiters)
+ * @param mode - `'inline'` for `$...$`, `'block'` for display math
+ */
+export function sanitizeLatexMath(source: string, mode: 'inline' | 'block'): LatexMathResult {
+    const text = normalizeLatexInput(typeof source === 'string' ? source : '');
+    const blocked = new Set<string>();
+    if (text.includes('^^')) blocked.add('^^');
+    let structural = false;
+    let out = '';
+    let braceDepth = 0;
+    const envStack: { name: string; braceDepth: number }[] = [];
+    let displayEnvironment = false;
+    // Whether a top-level display environment has begun: only the first can open the display (before
+    // it nothing but whitespace may be written; after it, either it opened or something was written),
+    // so the written text is tested for being blank once, not at every later `\begin`.
+    let displayTried = false;
+    let displayEnvironmentEnd = -1;
+    let topLevelAmpersand = false;
+    let topLevelRowBreak = false;
+
+    let i = 0;
+    while (i < text.length) {
+        const ch = text[i];
+        if (ch === '\\') {
+            const next = text[i + 1];
+            if (next === undefined) { structural = true; break; }
+            if (/[A-Za-z]/.test(next)) {
+                let j = i + 1;
+                while (j < text.length && /[A-Za-z]/.test(text[j])) j++;
+                const name = text.slice(i + 1, j);
+                if (isBlockedLatexMathCommand(name)) blocked.add('\\' + name);
+                if (name === 'begin' || name === 'end') {
+                    let k = j;
+                    while (k < text.length && /[ \t\n]/.test(text[k])) k++;
+                    const env = /^\{([A-Za-z]+\*?)\}/.exec(text.slice(k));
+                    if (!env) { structural = true; out += text.slice(i, j); i = j; continue; }
+                    const envName = env[1];
+                    if (name === 'begin') {
+                        const topLevelDisplay = LATEX_DISPLAY_MATH_ENVIRONMENTS.has(envName) && mode === 'block'
+                            && envStack.length === 0 && braceDepth === 0 && !displayEnvironment;
+                        const opensDisplay = topLevelDisplay && !displayTried && out.trim() === '';
+                        if (topLevelDisplay) displayTried = true;
+                        if (opensDisplay) displayEnvironment = true;
+                        else if (!LATEX_INNER_MATH_ENVIRONMENTS.has(envName)) structural = true;
+                        envStack.push({ name: envName, braceDepth });
+                    } else {
+                        const open = envStack.pop();
+                        if (!open || open.name !== envName || open.braceDepth !== braceDepth) structural = true;
+                    }
+                    out += text.slice(i, k) + env[0];
+                    i = k + env[0].length;
+                    if (name === 'end' && displayEnvironment && envStack.length === 0 && displayEnvironmentEnd < 0) displayEnvironmentEnd = out.length;
+                    continue;
+                }
+                out += text.slice(i, j);
+                i = j;
+                continue;
+            }
+            if (next === '(' || next === ')' || next === '[' || next === ']') structural = true;
+            if (next === '\\' && envStack.length === 0) {
+                if (mode === 'inline') { out += ' '; i += 2; continue; }
+                topLevelRowBreak = true;
+            }
+            out += '\\' + next;
+            i += 2;
+            continue;
+        }
+        switch (ch) {
+            case '%': out += '\\%'; break;
+            case '$': out += '\\$'; break;
+            case '#': out += '\\#'; break;
+            case '&':
+                if (envStack.length > 0) out += '&';
+                else if (mode === 'inline') out += '\\&';
+                else { topLevelAmpersand = true; out += '&'; }
+                break;
+            case '{': braceDepth++; out += ch; break;
+            case '}':
+                braceDepth--;
+                if (braceDepth < 0) structural = true;
+                out += ch;
+                break;
+            case '\n': {
+                // Collapse the whole whitespace run; a blank line would be a paragraph break.
+                let k = i + 1;
+                while (k < text.length && /[ \t\n]/.test(text[k])) k++;
+                out += mode === 'inline' ? ' ' : '\n';
+                i = k;
+                continue;
+            }
+            default: out += ch;
+        }
+        i++;
+    }
+
+    if (braceDepth !== 0 || envStack.length > 0) structural = true;
+    // A display environment must be the whole formula: `\begin{align}...\end{align} x` cannot be
+    // written bare, and cannot go inside `\[...\]` either.
+    if (displayEnvironment && (displayEnvironmentEnd < 0 || out.slice(displayEnvironmentEnd).trim() !== '')) structural = true;
+
+    if (blocked.size > 0) return { ok: false, commands: [...blocked].sort() };
+    if (structural) return { ok: false, commands: [] };
+
+    let latex = out.trim();
+    if (mode === 'block' && !displayEnvironment && (topLevelAmpersand || topLevelRowBreak)) {
+        const env = topLevelAmpersand ? 'aligned' : 'gathered';
+        latex = `\\begin{${env}}\n${latex}\n\\end{${env}}`;
+    }
+    return { ok: true, latex, displayEnvironment };
 }

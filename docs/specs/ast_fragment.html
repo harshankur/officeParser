@@ -23,7 +23,7 @@
                 <td><code>SupportedFileType</code></td>
                 <td>The type of the parsed file (<code>docx</code>, <code>xlsx</code>, <code>pptx</code>,
                     <code>pdf</code>, <code>rtf</code>, <code>odt</code>, <code>ods</code>, <code>odp</code>, <code>odg</code>,
-                    <code>csv</code>, <code>md</code>, <code>html</code>, <code>epub</code>).</td>
+                    <code>csv</code>, <code>md</code>, <code>html</code>, <code>epub</code>, <code>tex</code>).</td>
             </tr>
             <tr>
                 <td><code>metadata</code></td>
@@ -44,7 +44,7 @@
                 <td><code>auxiliary</code></td>
                 <td><code>OfficeAuxiliaryContent</code> | <code>undefined</code></td>
                 <td>Out-of-band layout / template elements that are <em>not</em> part of the main content flow.
-                    Contains <code>headers</code>, <code>footers</code> (from DOCX), <code>slideMasters</code> (from PPTX),
+                    Contains <code>headers</code>, <code>footers</code> (from DOCX, ODT master pages, RTF, a PDF's running bands, or LaTeX <code>fancyhdr</code>), <code>slideMasters</code> (from PPTX),
                     and <code>outline</code> (a PDF bookmark/TOC tree).
                     Only populated when the respective <code>ignoreHeadersAndFooters</code> / <code>ignoreSlideMasters</code> flags are <code>false</code>.
                 </td>
@@ -57,7 +57,7 @@
             <tr>
                 <td><code>to(destination, config?)</code></td>
                 <td><code>Promise&lt;ConversionResult&gt;</code></td>
-                <td><strong>Recommended</strong>: Universal entry point for generation. Converts the AST to <code>text</code>, <code>md</code>, <code>html</code>, <code>csv</code>, <code>rtf</code>, <code>pdf</code>, <code>docx</code>, <code>odt</code>, <code>epub</code>, or <code>chunks</code>. Returns a <code>ConversionResult</code> with <code>{ value, messages }</code>.</td>
+                <td><strong>Recommended</strong>: Universal entry point for generation. Converts the AST to <code>text</code>, <code>md</code>, <code>html</code>, <code>csv</code>, <code>rtf</code>, <code>pdf</code>, <code>docx</code>, <code>odt</code>, <code>tex</code>, <code>epub</code>, or <code>chunks</code>. Returns a <code>ConversionResult</code> with <code>{ value, messages }</code>.</td>
             </tr>
         </tbody>
     </table>
@@ -69,7 +69,7 @@
         [!NOTE]
         <strong>Discriminated Union</strong>: <code>OfficeContentNode</code> is now a discriminated union type.
         Narrowing on <code>node.type</code> (e.g., <code>if (node.type === 'heading')</code>) gives precise
-        <code>metadata</code> inference — no type-casting needed.
+        <code>metadata</code> inference, with no type-casting needed.
     </blockquote>
 
     <h3>OfficeContentNode</h3>
@@ -160,8 +160,10 @@
     <h3>2. Tables</h3>
     <ul>
         <li><strong><code>table</code></strong>: The container. Carries <code>TableMetadata</code> with optional
-            <code>anchorIds</code> and <code>align</code> (<code>'left' | 'center' | 'right'</code>, round-tripped
-            from HTML <code>data-align</code>).</li>
+            <code>anchorIds</code> and <code>align</code> (<code>'left' | 'center' | 'right'</code>): where the table
+            stands on the page, not how its columns are aligned (that is each cell's own <code>align</code>).
+            Round-tripped from HTML <code>data-align</code> and, in Markdown, from an attribute list under the
+            table (<code>{align=right}</code>).</li>
         <li><strong><code>row</code></strong>: A horizontal group of cells.</li>
         <li><strong><code>cell</code></strong>: A container for other content (paragraphs, images, or even nested
             tables). Use <code>metadata</code> for <code>rowSpan</code>, <code>colSpan</code>, and
@@ -172,8 +174,9 @@
     <h3>3. Structural Containers</h3>
     <p>These nodes represent large-scale document sections:</p>
     <ul>
-        <li><strong><code>slide</code></strong>: Container for PPTX/ODP slides. <code>metadata.slideNumber</code>
-            provides the position. Slide speaker notes are now attached via <code>slideNode.notes[]</code> instead of
+        <li><strong><code>slide</code></strong>: Container for PPTX/ODP slides and LaTeX <code>beamer</code> frames. <code>metadata.slideNumber</code>
+            provides the position: for PPTX, the slide's place in the presentation's slide list, which is also the
+            order slides are read in (a slide part the list no longer names is not read). Slide speaker notes are now attached via <code>slideNode.notes[]</code> instead of
             being inserted as top-level <code>note</code> nodes.</li>
         <li><strong><code>page</code></strong>: Container for PDF pages. <code>metadata.pageNumber</code> provides the
             position.</li>
@@ -181,14 +184,22 @@
             provides the label.</li>
     </ul>
 
+    <p><strong>Title blocks.</strong> A document's typeset title is content, not only metadata: a Word paragraph
+        in the <code>Title</code> style, or a LaTeX <code>\maketitle</code> (beamer <code>\titlepage</code>), is a
+        <code>heading</code> whose <code>metadata.style</code> is <code>'Title'</code>. LaTeX follows it with
+        <code>paragraph</code>s styled <code>'Author'</code> and <code>'Date'</code> (and <code>'Subtitle'</code> in
+        beamer), with any <code>\thanks</code> as footnotes. The LaTeX generator typesets such a block with
+        <code>\maketitle</code>. The same values also stay in <code>ast.metadata</code>.</p>
+
     <h3>4a. Layout &amp; Template Nodes (Auxiliary)</h3>
     <p>These nodes are <em>not</em> part of the main <code>content</code> tree. They live under
         <code>ast.auxiliary</code>:</p>
     <ul>
-        <li><strong><code>header</code></strong>: A header element from a DOCX file. Carries
+        <li><strong><code>header</code></strong>: A running page header: DOCX headers, ODT master-page headers, RTF
+            <code>\header</code> groups, a PDF's top-band running header, or LaTeX <code>fancyhdr</code> fields. Carries
             <code>HeaderFooterMetadata.type</code> (<code>'default'</code>, <code>'first'</code>, <code>'even'</code>).
             Found in <code>ast.auxiliary.headers[]</code>.</li>
-        <li><strong><code>footer</code></strong>: A footer element from a DOCX file. Same metadata. Found in
+        <li><strong><code>footer</code></strong>: A running page footer, from the same sources. Same metadata. Found in
             <code>ast.auxiliary.footers[]</code>.</li>
         <li><strong><code>slideMaster</code></strong>: A PPTX slide master. Carries <code>SlideMetadata</code>. Found
             in <code>ast.auxiliary.slideMasters[]</code>.</li>
@@ -200,7 +211,13 @@
     <ul>
         <li><strong><code>comment</code></strong>: An inline comment or annotation attached to a document node via
             <code>node.comments[]</code>. Carries <code>CommentMetadata</code>: <code>author</code>,
-            <code>initials</code>, <code>date</code>, <code>commentId</code>.</li>
+            <code>initials</code>, <code>date</code>, <code>commentId</code>, and for a reply in a PowerPoint
+            comment thread <code>parentId</code> (the <code>commentId</code> of the comment it replies to).</li>
+        <li><strong><code>comment</code> with <code>sourceSyntax: 'html'</code></strong>: A source comment,
+            <code>&lt;!-- ... --&gt;</code> from Markdown (always) or HTML and EPUB (under <code>htmlParserConfig.preserveComments</code>):
+            the author's hidden note, as a block node or inline in a run. <code>text</code> holds the raw body verbatim; it has no
+            children. The Markdown and HTML generators re-emit it, and the LaTeX generator writes it as <code>% &lt;!-- ... --&gt;</code>
+            lines that the LaTeX parser reads back; every other output format omits it.</li>
     </ul>
 
     <h3>4c. Markdown-Dialect Nodes</h3>
@@ -208,16 +225,17 @@
         embeds, definition lists) and round-trip symmetrically between Markdown, HTML, and EPUB.</p>
     <ul>
         <li><strong><code>admonition</code></strong>: A callout/alert block (GitHub <code>&gt; [!NOTE]</code> or
-            GLFM <code>:::note ... :::</code> on import). Carries <code>AdmonitionMetadata.admonitionType</code>
-            (<code>'note' | 'tip' | 'important' | 'warning' | 'caution'</code>) and an optional <code>title</code>.
-            Has <code>children</code> for its block content.</li>
+            GLFM <code>:::note ... :::</code> on import; LaTeX <code>beamer</code> blocks and the LaTeX generator's
+            coloured admonition boxes read back the same way). Carries <code>AdmonitionMetadata.admonitionType</code>
+            (<code>'note' | 'tip' | 'important' | 'warning' | 'caution'</code>), an optional <code>title</code>
+            and <code>anchorIds</code>. Has <code>children</code> for its block content.</li>
         <li><strong><code>embed</code></strong>: A rich embed such as a YouTube video. Carries
             <code>EmbedMetadata</code>: <code>embedType</code>, <code>videoId</code>, <code>url</code>,
             <code>width</code>, <code>align</code>.</li>
         <li><strong><code>definitionList</code></strong> / <strong><code>definitionTerm</code></strong> /
             <strong><code>definitionDescription</code></strong>: Markdown Extra-style definition lists
             (<code>Term\n: Definition</code>). The list node's <code>children</code> alternate term and
-            description nodes.</li>
+            description nodes. Each may carry <code>DefinitionMetadata.anchorIds</code>.</li>
         <li><strong><code>list</code></strong> task-list items: <code>ListMetadata.isTask</code> and
             <code>.checked</code> mark a GFM task-list item (<code>- [x] Done</code>).</li>
         <li>Text-node metadata additions: <code>TextMetadata.citationKey</code> (Pandoc/MultiMarkdown
@@ -227,8 +245,10 @@
             <code>CodeMetadata.math</code> (<code>'inline' | 'block'</code>), with
             <code>node.text</code> holding bare LaTeX. Every format that can carry an equation
             produces this same node: OOXML <code>&lt;m:oMath&gt;</code> (DOCX, PPTX), MathML
-            <code>&lt;math&gt;</code> (ODT/ODP/ODS embedded objects, HTML, EPUB3), and Markdown
-            <code>$...$</code>/<code>$$...$$</code>.</li>
+            <code>&lt;math&gt;</code> (ODT/ODP/ODS embedded objects, HTML, EPUB3), Markdown
+            <code>$...$</code>/<code>$$...$$</code>, and LaTeX <code>$...$</code>/<code>\(...\)</code>,
+            <code>\[...\]</code> and the <code>equation</code>/<code>align</code>/<code>gather</code> environments
+            (user macros expanded).</li>
     </ul>
 
     <h3>4. Rich Content</h3>
@@ -236,7 +256,10 @@
         <li><strong><code>image</code></strong>: References an item in the root <code>attachments</code> array via
             <code>metadata.attachmentName</code>. Also carries optional <code>width</code> and
             <code>align</code> (<code>'left' | 'center' | 'right'</code>), round-tripped from HTML
-            <code>data-width</code>/<code>data-align</code> or an inline <code>style="width:..."</code>.</li>
+            <code>data-width</code>/<code>data-align</code> or an inline <code>style="width:..."</code>. An image
+            that is a link (a badge, a clickable picture) carries <code>link</code>, <code>linkType</code>
+            (<code>'internal' | 'external'</code>) and an optional <code>linkTitle</code>, as a linked run
+            carries them on <code>TextMetadata</code>.</li>
         <li><strong><code>chart</code></strong>: References a chart attachment. Contains structured
             <code>chartData</code> in metadata if requested.</li>
         <li><strong><code>drawing</code></strong>: A vector drawing or shape. A member of the node-type union;
@@ -244,7 +267,7 @@
     </ul>
 
     <h3>5. Breaks (The <code>break</code> Node)</h3>
-    <p>Breaks are added as <code>break</code> nodes when <code>includeBreakNodes</code> is enabled in the configuration. They represent physical layout changes within the document flow. DOCX writes them inline (<code>w:br</code>/<code>w:cr</code>), so they appear as children of the paragraph; ODF carries page and column breaks on the paragraph style (<code>fo:break-before</code>/<code>fo:break-after</code>), so those are emitted as siblings around the paragraph.</p>
+    <p>Breaks are added as <code>break</code> nodes when <code>includeBreakNodes</code> is enabled in the configuration. They represent physical layout changes within the document flow. DOCX writes them inline (<code>w:br</code>/<code>w:cr</code>), so they appear as children of the paragraph; ODF carries page and column breaks on the paragraph style (<code>fo:break-before</code>/<code>fo:break-after</code>), so those are emitted as siblings around the paragraph. LaTeX <code>\newpage</code>/<code>\clearpage</code> become <code>page</code> breaks between blocks, and <code>\\</code>/<code>\newline</code> stay inside the paragraph as line breaks.</p>
     <ul>
         <li><strong><code>breakType</code></strong>: 
             <ul>
@@ -257,6 +280,7 @@
             </ul>
         </li>
         <li><strong><code>clear</code></strong>: (Only for <code>textWrapping</code>) Specifies where the next available line should start when wrapping around floating objects (<code>all</code>, <code>left</code>, <code>right</code>, <code>none</code>).</li>
+        <li><strong><code>anchorIds</code></strong>: Bookmark ids on a rule or page break (HTML <code>&lt;hr id&gt;</code>, a Markdown <code>&lt;a id&gt;</code> line before <code>---</code>), so a link can target it.</li>
     </ul>
     <blockquote>
         [!NOTE]
@@ -328,6 +352,7 @@
                 <li><strong>XLSX</strong>: <code>docProps/app.xml</code> entries</li>
                 <li><strong>PDF</strong>: Raw <code>pdfjs</code> document info dict and XMP metadata object</li>
                 <li><strong>Markdown</strong>: YAML frontmatter key-value pairs</li>
+                <li><strong>LaTeX</strong>: <code>documentClass</code>, <code>classOptions</code>, <code>packages</code>, plus <code>date</code>/<code>subtitle</code> (the <code>\date</code>/<code>\subtitle</code> text)</li>
             </ul>
         </li>
     </ul>
@@ -337,13 +362,15 @@
         <li><strong>Depth-First Search</strong>: Use recursion to walk the <code>children</code> tree for rendering.
         </li>
         <li><strong>Fallback to <code>.text</code></strong>: If you only need plain text, use the <code>text</code>
-            property of any node—it is pre-calculated to include all text from its children.</li>
+            property of any node: it is pre-calculated to include all text from its children.</li>
         <li><strong>Map Attachments First</strong>: Before rendering, create a <code>Map</code> from the
             <code>attachments</code> array using the <code>name</code> property for O(1) lookups when encountering
             <code>image</code> nodes.</li>
         <li><strong>Traverse <code>node.notes</code> and <code>node.comments</code></strong>: These arrays are
             <em>separate</em> from <code>children</code> and will not appear during a standard DFS of
-            <code>children</code>. Iterate them explicitly if you need footnotes, endnotes, or comments.</li>
+            <code>children</code>. Iterate them explicitly if you need footnotes, endnotes, or comments. A note or
+            comment referred to from several places is one node each reference holds: skip one you have
+            already handled, by identity, and do not mutate it expecting one reference to change.</li>
         <li><strong>Access Auxiliary Content via <code>ast.auxiliary</code></strong>: Headers, footers, and slide
             masters are not in <code>ast.content</code>. Access them via <code>ast.auxiliary?.headers</code>,
             <code>ast.auxiliary?.footers</code>, or <code>ast.auxiliary?.slideMasters</code>.</li>

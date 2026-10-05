@@ -96,9 +96,79 @@ const DETECTION_ASSERTIONS = `
 
 `;
 
+/**
+ * The page that loads every browser bundle under a strict Content Security Policy
+ * (`script-src 'self'`, so no `'unsafe-eval'` and no inline script) and reports what the browser
+ * blocked. The policy forbids inline script, so the page's own code is served as files.
+ */
+const CSP_BUNDLES = [
+    'officeparser.browser.iife.js',
+    'officeparser.browser.slim.iife.js',
+    'officeparser.browser.mjs',
+    'officeparser.browser.slim.mjs',
+    'officeparser.browser.native-pdf.mjs',
+];
+const CSP_LISTENER_SCRIPT = `
+window.__violations = [];
+document.addEventListener('securitypolicyviolation', event => window.__violations.push(
+    event.violatedDirective + ' blocked ' + event.blockedURI + ' in ' + (event.sourceFile || '').split('/').pop() + ': ' + (event.sample || '').replace(/\\s+/g, ' ').slice(0, 60)));
+`;
+const CSP_RUN_SCRIPT = `
+const results = [];
+const status = document.getElementById('status');
+// A violation is reported after the script that caused it has run: give each bundle's a moment to arrive.
+const settle = () => new Promise(resolve => setTimeout(resolve, 100));
+const loadScript = src => new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src; script.onload = resolve; script.onerror = () => reject(new Error('could not load ' + src));
+    document.head.appendChild(script);
+});
+(async () => {
+    try {
+        let parse;
+        for (const bundle of ${JSON.stringify(CSP_BUNDLES)}) {
+            const before = window.__violations.length;
+            if (bundle.endsWith('.mjs')) {
+                const loaded = await import('/dist/' + bundle);
+                if (bundle === 'officeparser.browser.mjs') parse = loaded.parseOffice;
+            } else {
+                await loadScript('/dist/' + bundle);
+            }
+            await settle();
+            const blocked = window.__violations.slice(before);
+            results.push(blocked.length === 0 ? 'CSP_LOAD ' + bundle + ': PASS' : 'CSP_LOAD ' + bundle + ': FAIL (' + blocked.join('; ') + ')');
+        }
+        // The library works under the policy: a document is read and written back with nothing blocked.
+        const before = window.__violations.length;
+        const bytes = new Uint8Array(await (await fetch('/test/files/test.docx')).arrayBuffer());
+        const ast = await parse(bytes);
+        const text = (await ast.to('text')).value;
+        await settle();
+        const blocked = window.__violations.slice(before);
+        results.push(text.includes('Demonstration of DOCX support') && blocked.length === 0 ? 'CSP_PARSE: PASS' : 'CSP_PARSE: FAIL (' + (blocked.join('; ') || 'text missing') + ')');
+        status.textContent = results.join(', ');
+    } catch (error) {
+        status.textContent = 'ERROR: ' + error.message + ' ' + results.join(', ');
+    }
+})();
+`;
+
 // Start static file server
 const server = http.createServer((req, res) => {
     const urlPath = req.url.split('?')[0];
+
+    // The strict-policy page and its two scripts
+    if (urlPath === '/test-csp') {
+        res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Security-Policy': "script-src 'self' 'report-sample'" });
+        res.end('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Strict CSP Test</title><script src="/csp/listener.js"></script></head>'
+            + '<body><div id="status">RUNNING</div><script type="module" src="/csp/run.js"></script></body></html>');
+        return;
+    }
+    if (urlPath === '/csp/listener.js' || urlPath === '/csp/run.js') {
+        res.writeHead(200, { 'Content-Type': 'application/javascript' });
+        res.end(urlPath === '/csp/listener.js' ? CSP_LISTENER_SCRIPT : CSP_RUN_SCRIPT);
+        return;
+    }
 
     // Serve virtual pages for tests
     if (urlPath === '/test-iife') {
@@ -736,6 +806,32 @@ async function main() {
         }
     } catch (err) {
         console.error(`❌ ESM Slim Test execution failed: ${err.message}`);
+        failed = true;
+    }
+
+    // -----------------------------------------------------------------------
+    // PART 2d: Every Browser Bundle Under a Strict Content Security Policy
+    // -----------------------------------------------------------------------
+    try {
+        console.log('\n--- Testing Browser Bundles Under script-src \'self\' ---');
+        await page.goto(`http://localhost:${port}/test-csp`, { waitUntil: 'networkidle2' });
+
+        await page.waitForFunction(
+            () => document.getElementById('status').textContent !== 'RUNNING',
+            { timeout: 30000 }
+        );
+
+        const status = await page.$eval('#status', el => el.textContent);
+        console.log(`Strict CSP Status: ${status}`);
+
+        if (status.includes('FAIL') || status.includes('ERROR')) {
+            console.error('❌ Strict CSP Tests Failed: a bundle evaluated code or was blocked!');
+            failed = true;
+        } else {
+            console.log('✅ Strict CSP Tests Passed!');
+        }
+    } catch (err) {
+        console.error(`❌ Strict CSP Test execution failed: ${err.message}`);
         failed = true;
     }
 

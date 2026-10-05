@@ -8,7 +8,7 @@
  *   officeparser file.docx --ocr --extractAttachments
  *
  * Options (--key=value, --key value, or bare flags):
- *   --to=json|text|md|html|csv|rtf|pdf|docx|odt|epub|chunks  Convert AST to specified format (default: json)
+ *   --to=json|text|md|html|csv|rtf|pdf|docx|odt|tex|epub|chunks  Convert AST to specified format (default: json)
  *   --output=path             Save result to a file
  *   --fileType=docx|xlsx|...  Override file type detection
  *   --ocr                     Enable OCR for images (default: false); also requires --extractAttachments
@@ -22,7 +22,7 @@
  *   --includeRawContent       Include raw content in AST (default: false)
  *   --serializeRawContent     Include stringified XML in metadata (default: true)
  *   --preserveXmlWhitespace   Keep raw formatting space (default: false)
- *   --includeBreakNodes       Include break nodes (DOCX & ODF, default: false)
+ *   --includeBreakNodes       Include layout (page, column) break nodes (DOCX, ODF & LaTeX, default: false)
  *   --ignorePageGeometry      Omit per-node bounding boxes and page dimensions (default: false)
  *   --password=secret         Password for an encrypted document (PDF, OOXML, or ODF); or set
  *                             OFFICEPARSER_PASSWORD to keep the secret out of the process list
@@ -42,6 +42,8 @@ import { OfficeParser } from './OfficeParser.js';
 import { OfficeGenerator } from './OfficeGenerator.js';
 import { OfficeParserAST, OfficeParserConfig, OfficeWarningType, UniversalGeneratorFormat } from './types.js';
 import * as fs from 'fs';
+import { lookupTable } from './utils/lookupUtils.js';
+import { DEFAULT_GENERATOR_CONFIG, DEFAULT_OFFICE_PARSER_CONFIG } from './defaults.js';
 
 const args = process.argv.slice(2);
 let fileArg: string | undefined;
@@ -64,8 +66,9 @@ const knownParserBooleans = new Set([
     // Dotted boolean keys are listed so a bare `--group.flag` does not swallow the following file
     // argument as its value (the isKnownBoolean check keys off the full dotted name).
     'htmlParserConfig.preserveAttributes', 'htmlParserConfig.preserveIframes', 'htmlParserConfig.embedFolkForms',
+    'htmlParserConfig.preserveComments',
     'pdfParserConfig.useTags', 'pdfParserConfig.detectColumns',
-    'pdfParserConfig.mergeHyphenatedWords', 'pdfParserConfig.normalizeText', 'pdfParserConfig.extractTextColor',
+    'pdfParserConfig.mergeHyphenatedWords', 'pdfParserConfig.normalizeText', 'pdfParserConfig.extractTextColor', 'pdfParserConfig.separateProcess',
     'ocrConfig.preserveLayout',
 ]);
 
@@ -74,6 +77,7 @@ const knownGeneratorBooleans = new Set([
     // Dotted generator booleans, same rationale as the parser set above.
     'pdfConfig.tagged', 'pdfConfig.outline', 'pdfConfig.landscape', 'pdfConfig.printBackground', 'pdfConfig.displayHeaderFooter',
     'docxConfig.landscape', 'odtConfig.landscape',
+    'texConfig.standalone', 'texConfig.bundle', 'texConfig.embedImages', 'texConfig.numberSections', 'texConfig.landscape',
     'textConfig.preserveLayout', 'textConfig.renderNotes',
     'htmlConfig.standalone', 'htmlConfig.sourceAttributes', 'htmlConfig.gatedEmbeds',
     'mdConfig.fallbackToHtml', 'mdConfig.fallbackToHtml.inlineFormatting',
@@ -95,17 +99,22 @@ const knownEnumValues: Record<string, Set<string>> = {
  * `--putNotesAtLast` would produce a document whose notes are somewhere else entirely, with no
  * indication either flag did nothing.
  */
-const REMOVED_CLI_FLAGS: Record<string, string> = {
+const REMOVED_CLI_FLAGS: Record<string, string> = lookupTable({
     toText: '--toText was removed in v8. Use --to=text instead.',
     ocrLanguage: '--ocrLanguage was removed in v8. Use --ocrConfig.language instead.',
     putNotesAtLast: '--putNotesAtLast was removed in v8. Notes are attached to the node they belong to (node.notes) and rendered in place.',
     outputErrorToConsole: '--outputErrorToConsole was removed in v8. Use --verbose to print warnings and errors.',
-};
+});
 
 // Prefixes used to identify configurations targeted for the generator instead of the parser.
 const generatorPrefixes = [
-    'generatorConfig.', 'htmlConfig.', 'csvConfig.', 'textConfig.', 'mdConfig.', 'pdfConfig.', 'rtfConfig.', 'docxConfig.', 'odtConfig.', 'chunksConfig.'
+    'generatorConfig.', 'htmlConfig.', 'csvConfig.', 'textConfig.', 'mdConfig.', 'pdfConfig.', 'rtfConfig.', 'docxConfig.', 'odtConfig.', 'texConfig.', 'chunksConfig.'
 ];
+
+// Options only a generator has (`--maxInlineImageBytes`, `--metadataOverrides.title`), read from the
+// defaults so each is routed to the generator: sent to the parser, it was reported as unrecognized and
+// did nothing.
+const generatorOnlyKeys = new Set(Object.keys(DEFAULT_GENERATOR_CONFIG).filter(key => !(key in DEFAULT_OFFICE_PARSER_CONFIG)));
 
 // Trackers to detect if deprecated/legacy options were used to log helpful warnings.
 let usedFormat = false;
@@ -178,7 +187,7 @@ for (let i = 0; i < args.length; i++) {
             verbose = boolValue !== undefined ? boolValue : true;
         } else {
             // Check if the flag belongs to generatorConfig or a specific sub-generator (e.g., htmlConfig)
-            const isGeneratorOption = knownGeneratorBooleans.has(cleanKey) || generatorPrefixes.some(pref => cleanKey.startsWith(pref));
+            const isGeneratorOption = knownGeneratorBooleans.has(cleanKey) || generatorPrefixes.some(pref => cleanKey.startsWith(pref)) || generatorOnlyKeys.has(cleanKey.split('.')[0]);
             const target = isGeneratorOption ? generatorConfig : config;
 
             let path = cleanKey;
@@ -222,7 +231,24 @@ for (let i = 0; i < args.length; i++) {
     }
 }
 
+/**
+ * `target`'s values given on the command line (always text) as numbers where the option's default in
+ * `defaults` is a number: `--pdfParserConfig.maxTextItems=20000` arrived as "20000", and a budget adding
+ * to it joined the text ("20000" + 285947 is "20000285947", and a time limit of 5 seconds read 14 hours).
+ */
+function numbersAsNumbers(target: Record<string, any>, defaults: unknown): void {
+    if (!defaults || typeof defaults !== 'object') return;
+    for (const key of Object.keys(target)) {
+        const value = target[key];
+        const fallback = (defaults as Record<string, unknown>)[key];
+        if (value && typeof value === 'object' && !Array.isArray(value)) numbersAsNumbers(value, fallback);
+        else if (typeof value === 'string' && typeof fallback === 'number' && /^\s*(?:-?\d+(?:\.\d+)?|Infinity)\s*$/.test(value)) target[key] = Number(value);
+    }
+}
+
 if (fileArg && !showHelp) {
+    numbersAsNumbers(config, DEFAULT_OFFICE_PARSER_CONFIG);
+    numbersAsNumbers(generatorConfig, DEFAULT_GENERATOR_CONFIG);
     // Resolve output format prioritizing: --to > --format
     let outputFormat: string | undefined;
     if (toFlagOption) {
@@ -236,12 +262,14 @@ if (fileArg && !showHelp) {
         console.warn('Warning: --format is deprecated. Use --to instead.');
     }
     // Intercept parser warning callbacks to format and print issues when verbose is enabled.
-    // An unrecognized option is the exception: it reports a mistake in the command that was just
-    // typed, not a detail of the document being parsed, so it always prints. Hiding it behind
-    // --verbose is how a misspelled or renamed flag ends up silently doing nothing.
+    // A mistake in the options is the exception (an unrecognized option, or a value an option does
+    // not accept): it reports the command that was just typed, not a detail of the document being
+    // parsed, so it always prints. Hiding it behind --verbose is how a misspelled flag or value ends
+    // up silently doing nothing.
+    const CONFIG_MISTAKES = new Set<string>([OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION, OfficeWarningType.INVALID_CONFIG_VALUE, OfficeWarningType.INVALID_CONTAINER_WIDTH]);
     const originalOnWarning = config.onWarning;
     config.onWarning = (issue) => {
-        if (verbose || issue.code === OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION) {
+        if (verbose || CONFIG_MISTAKES.has(issue.code)) {
             const severity = issue.type === 'error' ? 'Error' : 'Warning';
             console.error(`[OfficeParser ${severity}] [${issue.code}]: ${issue.message}`);
             // The message already names every offending key, so the raw details object is only
@@ -333,7 +361,7 @@ if (fileArg && !showHelp) {
     console.log('Usage: officeparser <file> [options]');
     console.log('');
     console.log('Options:');
-    console.log('  --to=json|text|md|html|pdf|csv|rtf|docx|odt|epub|chunks  Target conversion format (default: json)');
+    console.log('  --to=json|text|md|html|pdf|csv|rtf|docx|odt|tex|epub|chunks  Target conversion format (default: json)');
     console.log('  --output=file.ext                           Save output to file instead of stdout');
     console.log('  --fileType=docx|xlsx|pptx|odt|...           Explicitly override input file type detection');
     console.log('  --ocr                                       Enable OCR for images (default: false; also requires --extractAttachments)');
@@ -347,7 +375,7 @@ if (fileArg && !showHelp) {
     console.log('  --includeRawContent                         Include raw content in AST (default: false)');
     console.log('  --serializeRawContent                       Serialize raw XML content (default: true)');
     console.log('  --preserveXmlWhitespace                     Keep raw formatting space (default: false)');
-    console.log('  --includeBreakNodes                         Include break nodes (DOCX & ODF, default: false)');
+    console.log('  --includeBreakNodes                         Include layout (page, column) break nodes (DOCX, ODF & LaTeX, default: false)');
     console.log('  --ignorePageGeometry                        Omit per-node bounding boxes and page dimensions (default: false)');
     console.log('  --verbose                                   Show full error stack traces and warning logs');
     console.log('  --newlineDelimiter=string                   Delimiter string between blocks/lines (default: \\n)');
@@ -355,6 +383,8 @@ if (fileArg && !showHelp) {
     console.log('  --password=secret                           Password for an encrypted document (PDF, OOXML, or ODF)');
     console.log('                                              (or set OFFICEPARSER_PASSWORD to keep it out of the process list)');
     console.log('  --htmlParserConfig.preserveIframes          Keep non-YouTube <iframe> embeds (dropped by default)');
+    console.log('  --htmlParserConfig.preserveComments         Keep HTML/EPUB <!-- --> comments as comment nodes (default: false)');
+    console.log('  --texParserConfig.today="May 1, 2024"       What \\today prints in LaTeX input (default: the date of the parse)');
     console.log('  --ocrConfig.preserveLayout=false            Flatten OCR text instead of keeping its line layout (default: true)');
     console.log('');
     console.log('PDF Parser Options (pdfParserConfig.*):');
@@ -365,6 +395,12 @@ if (fileArg && !showHelp) {
     console.log('  --pdfParserConfig.mergeHyphenatedWords=false Keep words hyphenated across line breaks (default: true)');
     console.log('  --pdfParserConfig.normalizeText=false       Skip Unicode/ligature normalization of PDF text (default: true)');
     console.log('  --pdfParserConfig.extractTextColor          Record each PDF run\'s fill colour in formatting.color (default: true; set false to skip)');
+    console.log('  --pdfParserConfig.maxTextItems=20000        Base of the text items a PDF may yield, plus one per byte (default: 20000)');
+    console.log('  --pdfParserConfig.maxOperators=250000       Base of the drawing operators kept, plus four per byte (default: 250000)');
+    console.log('  --pdfParserConfig.maxAnnotations=10000      Base of the annotations read, plus one per 32 bytes (default: 10000)');
+    console.log('  --pdfParserConfig.maxTimeMs=5000            Base of the CPU time the pdf.js process may spend, plus 20 ms per KB (default: 5000)');
+    console.log('  --pdfParserConfig.separateProcess=false     Run pdf.js in this process, not a separate one (default: true)');
+    console.log('  --pdfParserConfig.processMemoryMb=1024      Heap of the separate pdf.js process (default: 1024)');
     console.log('');
     console.log('High-Value Generator Options:');
     console.log('  --includeFormatting                         Include font formatting like bold/italic (default: true)');
@@ -382,6 +418,10 @@ if (fileArg && !showHelp) {
     console.log('  --mdConfig.dialect=github                   Markdown dialect (extended | github | gitlab | obsidian | pandoc | commonmark)');
     console.log('  --mdConfig.fallbackToHtml=false             Disable HTML fallback for unsupported Markdown features (default: true)');
     console.log('  --mdConfig.fallbackToHtml.inlineFormatting  Round-trip inline color/highlight/font-size as <span style> (opt-in, default: false)');
+    console.log('  --texConfig.bundle                          LaTeX: write a zip of main.tex plus its images/ (default: false, .tex only)');
+    console.log('  --texConfig.embedImages=false               LaTeX: reference images/ files instead of carrying PNG/JPEG inside the .tex (default: true)');
+    console.log('  --texConfig.documentClass=report            LaTeX class: auto | article | report | book | beamer (default: auto)');
+    console.log('  --texConfig.standalone=false                LaTeX: emit the body only, without the preamble (default: true)');
     console.log('');
     console.log('Format Syntax:');
     console.log('  Flags can be written as --flag (presence implies true), --no-flag (negation),');
@@ -397,5 +437,7 @@ if (fileArg && !showHelp) {
     console.log('  officeparser data.xlsx --to csv --output data.csv --csvDelimiter ";"');
     console.log('  officeparser document.docx --extractAttachments --to epub --output document.epub');
     console.log('  officeparser notes.md --extractAttachments --to odt --output notes.odt');
+    console.log('  officeparser report.docx --extractAttachments --to tex --texConfig.bundle --output report.zip');
+    console.log('  officeparser paper.tex --to docx --output paper.docx         (or an Overleaf project .zip)');
     console.log('  officeparser image_doc --fileType docx --to json');
 }

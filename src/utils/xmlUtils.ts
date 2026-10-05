@@ -11,8 +11,10 @@
  */
 
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
-import { OfficeMetadata } from '../types';
+import { OfficeErrorType, OfficeMetadata, OfficeParserConfig, OfficeWarningType } from '../types';
+import { getOfficeError, logWarning } from './errorUtils.js';
 import { parseOfficeDate } from './dateUtils.js';
+import { setOwn } from './lookupUtils.js';
 
 /**
  * Type guard for Element nodes.
@@ -30,8 +32,53 @@ export const isElement = (node: Node): node is Element => {
  * @param options - Optional parser settings (e.g., enable locators for source mapping)
  * @returns A Document object that can be queried using standard DOM methods
  */
-export const parseXmlString = (xml: string, options: { locator?: boolean } = {}): Document => {
-    const parser = new DOMParser(options);
+/** What each parse (its config object) may still read of `decompressionLimits.maxXmlElements`. */
+const xmlElementBudgets = new WeakMap<object, { left: number }>();
+
+/**
+ * Takes `xml`'s elements from its parse's budget (see DecompressionLimits.maxXmlElements), failing the
+ * parse past it: counted before the XML is read, from each `<` that opens an element, a comment, a CDATA
+ * section, a declaration or a processing instruction. Each of those is a node, and text between them
+ * another: counting elements alone, 40 million `<?x?>` (293 KB of DOCX) ended the process out of memory.
+ * An end tag is not counted: one closing nothing is fatal to the XML reader, and the HTML reader joins
+ * the text around it.
+ */
+export const takeXmlElements = (xml: string, config: OfficeParserConfig): void => {
+    let count = 0;
+    for (let i = xml.indexOf('<'); i !== -1; i = xml.indexOf('<', i + 1)) {
+        const c = xml.charCodeAt(i + 1);
+        if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 58 || c > 127 || c === 33 /* ! */ || c === 63 /* ? */) count++;
+    }
+    takeNodes(count, config);
+};
+
+/**
+ * Takes `count` from the parse's element budget (see takeXmlElements): for content inside a package that
+ * is not XML (a DOCX chunk of plain text, RTF or MHT), whose lines, control words or parts become nodes
+ * as elements do. Counted before the content is read, since it inflates out of a zip: 105 KB of DOCX
+ * held an RTF chunk of 12 million paragraphs.
+ */
+export const takeNodes = (count: number, config: OfficeParserConfig): void => {
+    let budget = xmlElementBudgets.get(config);
+    if (!budget) xmlElementBudgets.set(config, budget = { left: config.decompressionLimits?.maxXmlElements ?? DEFAULT_MAX_XML_ELEMENTS });
+    budget.left -= count;
+    if (budget.left < 0) throw getOfficeError(OfficeErrorType.XML_ELEMENT_LIMIT_EXCEEDED, config, config.decompressionLimits?.maxXmlElements ?? DEFAULT_MAX_XML_ELEMENTS);
+};
+
+/** How many times `byte` occurs in `buffer`. */
+export const countByte = (buffer: Uint8Array, byte: number): number => {
+    let count = 0;
+    for (let i = buffer.indexOf(byte); i !== -1; i = buffer.indexOf(byte, i + 1)) count++;
+    return count;
+};
+const DEFAULT_MAX_XML_ELEMENTS = 2000000;
+
+export const parseXmlString = (xml: string, options: { locator?: boolean; config?: OfficeParserConfig } = {}): Document => {
+    if (options.config) takeXmlElements(xml, options.config);
+    // Recoverable problems (an entity it cannot resolve, which it keeps as written) are not printed:
+    // xmldom writes each to the console by default, so a document could fill a host's logs at will.
+    // A fatal one still throws after this returns.
+    const parser = new DOMParser({ locator: options.locator, onError: () => {} });
     // @xmldom/xmldom 0.9.x is strict: a UTF-8 BOM (U+FEFF) prepended to the
     // XML string causes a fatalError because the XML declaration is no longer
     // at position 0. Strip it before parsing.
@@ -55,12 +102,20 @@ export const parseXmlString = (xml: string, options: { locator?: boolean } = {})
  * ```
  */
 export const getElementsByTagName = (element: Element | Document, tagName: string): Element[] => {
-    const results = Array.from(element.getElementsByTagName(tagName)) as Element[];
+    // The outermost matches only (see getOutermostElements): a match nested in another is reached by
+    // reading that one, and returning it too read nested content again at every level (notes, comments
+    // or equations nested in their own kind grew with the square of the depth, or ran out of memory).
+    // getAllElementsByTagName keeps the nested ones, for a reader that handles each flatly.
+    const results = getOutermostElements(element, tagName);
     // Resilience: If prefixed tag (e.g., 'dc:title') not found, try local name (e.g., 'title')
-    if (results.length === 0 && tagName.includes(':')) {
-        const localName = tagName.split(':').pop()!;
-        return Array.from(element.getElementsByTagName(localName)) as Element[];
-    }
+    if (results.length === 0 && tagName.includes(':')) return getOutermostElements(element, tagName.split(':').pop()!);
+    return results;
+};
+
+/** Every descendant named `tagName`, nested ones included, for a reader that handles each on its own (reading none of the others again). */
+export const getAllElementsByTagName = (element: Element | Document, tagName: string): Element[] => {
+    const results = Array.from(element.getElementsByTagName(tagName)) as Element[];
+    if (results.length === 0 && tagName.includes(':')) return Array.from(element.getElementsByTagName(tagName.split(':').pop()!)) as Element[];
     return results;
 };
 
@@ -83,47 +138,102 @@ export const serializeXml = (node: Node, options: { preserveWhitespace?: boolean
     return serializer.serializeToString(node as any);
 };
 
+/** What getSourceSubstring returns for an element longer than it may read. */
+const SOURCE_TOO_LONG = Symbol('source too long');
+
 /**
  * Attempts to extract the original raw substring from the source XML for a given node.
  * Requires the document to have been parsed with { locator: true }.
  * 
  * @param node - The DOM node to extract source for
  * @param sourceXml - The original XML source string
+ * @param maxLength - The longest substring to read: past it, the scan stops (SOURCE_TOO_LONG)
  * @returns The raw XML substring, or undefined if it cannot be reliably determined
  */
-export const getSourceSubstring = (node: any, sourceXml: string): string | undefined => {
+const getSourceSubstring = (node: any, sourceXml: string, maxLength = Infinity): string | undefined | typeof SOURCE_TOO_LONG => {
     if (!node || typeof node.lineNumber !== 'number' || typeof node.columnNumber !== 'number') {
         return undefined;
     }
+    const starts = lineStartsOf(sourceXml);
+    if (node.lineNumber < 1 || node.lineNumber > starts.length) return undefined;
+    const startIdx = starts[node.lineNumber - 1] + node.columnNumber - 1;
+    if (!isElement(node) || !sourceXml.startsWith('<' + node.tagName, startIdx)) return undefined;
+    const tagName: string = node.tagName;
 
-    // Convert line/column to absolute index
-    const lines = sourceXml.split('\n');
-    let startIdx = 0;
-    for (let i = 0; i < node.lineNumber - 1; i++) {
-        startIdx += lines[i].length + 1; // +1 for newline
-    }
-    startIdx += node.columnNumber - 1;
+    // The start tag's end, past quoted attribute values (which may hold `>`).
+    const startTagEnd = tagEndAt(sourceXml, startIdx + 1 + tagName.length);
+    if (startTagEnd === -1) return undefined;
+    if (sourceXml.charCodeAt(startTagEnd - 1) === 47 /* / */) return sourceXml.substring(startIdx, startTagEnd + 1);
 
-    // To find the end of the node, we look for the closing tag.
-    // This is a heuristic approach that works well for simple structured nodes (p, tbl, etc.)
-    // but might be complex for overlapping namespaces or malformed XML.
-    if (isElement(node)) {
-        const tagName = node.tagName;
-        const closingTag = `</${tagName}>`;
-        const endIdx = sourceXml.indexOf(closingTag, startIdx);
-        if (endIdx !== -1) {
-            return sourceXml.substring(startIdx, endIdx + closingTag.length);
+    // Its matching end tag: elements of the same name inside it open and close their own. Found by a
+    // forward scan over the element alone (what it returns), where searching for the first `</name>`
+    // cut a nested element short, and searched the rest of the part for each element that has none.
+    // Searched only up to where the next node after it starts: an element the reader closed for a
+    // malformed part has no end tag, and each such one searched the rest of the part.
+    // Read no further than `maxLength` past its start either: what is left of the rawContent budget.
+    const following = followingStart(node, starts, sourceXml.length);
+    const truncated = following - startIdx > maxLength;
+    const within = sourceXml.substring(0, truncated ? startIdx + maxLength : following);
+    const open = '<' + tagName;
+    const close = '</' + tagName + '>';
+    let depth = 1;
+    let at = startTagEnd + 1;
+    // The next start tag of the name, kept until the scan passes it: searched again after each end
+    // tag, a run of end tags with no start tag left searched to the end every time (160,000 nested
+    // `w:t`, 3 KB of DOCX, took two minutes).
+    let nextOpen = within.indexOf(open, at);
+    while (true) {
+        const nextClose = within.indexOf(close, at);
+        if (nextClose === -1) return truncated ? SOURCE_TOO_LONG : undefined;
+        while (nextOpen !== -1 && nextOpen < nextClose) {
+            const after = sourceXml.charCodeAt(nextOpen + open.length);
+            const end = tagEndAt(sourceXml, nextOpen + open.length);
+            if (end === -1) return undefined;
+            // The same name (not a longer one it starts), and not self-closing.
+            if ((after === 62 || after === 47 || after === 32 || after === 9 || after === 10 || after === 13) && sourceXml.charCodeAt(end - 1) !== 47) depth++;
+            nextOpen = within.indexOf(open, end + 1);
         }
-
-        // Self-closing tag handling (e.g., <w:p/>)
-        const selfClosingEnd = sourceXml.indexOf('/>', startIdx);
-        const nextOpenTag = sourceXml.indexOf('<', startIdx + 1);
-        if (selfClosingEnd !== -1 && (nextOpenTag === -1 || selfClosingEnd < nextOpenTag)) {
-            return sourceXml.substring(startIdx, selfClosingEnd + 2);
-        }
+        at = nextClose + close.length;
+        if (--depth === 0) return sourceXml.substring(startIdx, at);
     }
+};
 
-    return undefined;
+/** Where the first node after `node` in the document (not inside it) starts, or `fallback`. */
+const followingStart = (node: any, starts: number[], fallback: number): number => {
+    for (let n = node; n; n = n.parentNode) {
+        let sibling = n.nextSibling;
+        while (sibling && typeof sibling.lineNumber !== 'number') sibling = sibling.nextSibling;
+        if (sibling && sibling.lineNumber >= 1 && sibling.lineNumber <= starts.length) return starts[sibling.lineNumber - 1] + sibling.columnNumber - 1;
+    }
+    return fallback;
+};
+
+/** Where the tag whose name ends before `from` ends (its `>`), past quoted attribute values; -1 if it does not. */
+const tagEndAt = (xml: string, from: number): number => {
+    let quote = 0;
+    for (let i = from; i < xml.length; i++) {
+        const c = xml.charCodeAt(i);
+        if (quote) { if (c === quote) quote = 0; }
+        else if (c === 34 || c === 39) quote = c;
+        else if (c === 62) return i;
+        else if (c === 60) return -1;
+    }
+    return -1;
+};
+
+/**
+ * Where each line of `source` starts, for the parse's locator positions: computed once per source,
+ * where splitting the source into lines for every node took time in the square of its size.
+ */
+let lineStartsSource: string | undefined;
+let lineStarts: number[] = [];
+const lineStartsOf = (source: string): number[] => {
+    if (source !== lineStartsSource) {
+        lineStarts = [0];
+        for (let i = source.indexOf('\n'); i !== -1; i = source.indexOf('\n', i + 1)) lineStarts.push(i + 1);
+        lineStartsSource = source;
+    }
+    return lineStarts;
 };
 
 /**
@@ -134,13 +244,56 @@ export const getSourceSubstring = (node: any, sourceXml: string): string | undef
  * @param config - The parser configuration
  * @returns The raw content string (serialized or original)
  */
-export const getRawContent = (node: Node, sourceXml: string, config: { serializeRawContent?: boolean; preserveXmlWhitespace?: boolean }): string => {
+export const getRawContent = (node: Node, sourceXml: string, config: OfficeParserConfig): string | undefined => {
+    // A spent budget is checked before serializing: nested tables re-serialize every level below
+    // them, so skipping the work, not only the result, is what keeps it linear.
+    const budget = rawContentBudget(config);
+    if (budget.spent) return undefined;
+    let raw: string | undefined;
     if (config.serializeRawContent === false) {
-        const original = getSourceSubstring(node, sourceXml);
-        if (original) return original;
+        const found = getSourceSubstring(node, sourceXml, budget.left);
+        // Longer than the budget has left: it is spent, without reading or serializing the rest.
+        if (found === SOURCE_TOO_LONG) { spendRawContent(config); return undefined; }
+        raw = found;
     }
+    if (!raw) raw = serializeXml(node, { preserveWhitespace: config.preserveXmlWhitespace });
+    return chargeRawContent(raw, config);
+};
 
-    return serializeXml(node, { preserveWhitespace: config.preserveXmlWhitespace });
+/** What each parse (its config object) may still attach as rawContent (see DecompressionLimits.maxRawContentLength). */
+const rawContentBudgets = new WeakMap<object, { left: number; spent: boolean }>();
+const DEFAULT_MAX_RAW_CONTENT_LENGTH = 64 * 1024 * 1024;
+const rawContentBudget = (config: OfficeParserConfig): { left: number; spent: boolean } => {
+    let budget = rawContentBudgets.get(config);
+    if (!budget) rawContentBudgets.set(config, budget = { left: config.decompressionLimits?.maxRawContentLength ?? DEFAULT_MAX_RAW_CONTENT_LENGTH, spent: false });
+    return budget;
+};
+
+/**
+ * Charges `raw` to its parse's rawContent budget and returns it, or undefined once the budget is spent
+ * (warning once): a node's rawContent holds the markup of everything nested in it, so nested tables and
+ * repeated ODF cells carry the same bytes many times over. A repeat that shares a string is charged
+ * again, since each node that carries it costs its length to anyone who serializes the AST.
+ */
+export const chargeRawContent = (raw: string | undefined, config: OfficeParserConfig): string | undefined => {
+    if (raw === undefined) return undefined;
+    const budget = rawContentBudget(config);
+    if (!budget.spent && raw.length <= budget.left) {
+        budget.left -= raw.length;
+        return raw;
+    }
+    spendRawContent(config);
+    return undefined;
+};
+
+/** Marks the parse's rawContent budget spent, warning the first time. */
+const spendRawContent = (config: OfficeParserConfig): void => {
+    const budget = rawContentBudget(config);
+    budget.left = 0;
+    if (!budget.spent) {
+        budget.spent = true;
+        logWarning(OfficeWarningType.RAW_CONTENT_LIMIT_EXCEEDED, config, config.decompressionLimits?.maxRawContentLength ?? DEFAULT_MAX_RAW_CONTENT_LENGTH);
+    }
 };
 /**
  * Gets the first element with the specified tag name within a parent element.
@@ -150,9 +303,17 @@ export const getRawContent = (node: Node, sourceXml: string, config: { serialize
  * @returns The first matching element, or undefined if none found
  */
 export const getFirstElementByTagName = (parent: Element | Document, tagName: string): Element | undefined => {
-    const elements = parent.getElementsByTagName(tagName);
-    if (elements && elements.length > 0) {
-        return elements[0] as Element;
+    // Walks the descendants in document order and stops at the first match: xmldom's
+    // getElementsByTagName builds the whole list first, so each call read the whole subtree, and a
+    // lookup at each level of nested content (tables in tables, frames in frames) took time in the
+    // product of the depth and the subtree.
+    let node: Node | null = parent.firstChild;
+    while (node) {
+        if (node.nodeType === 1 && (node as Element).tagName === tagName) return node as Element;
+        if (node.firstChild) { node = node.firstChild; continue; }
+        while (node && node !== parent && !node.nextSibling) node = node.parentNode;
+        if (!node || node === parent) return undefined;
+        node = node.nextSibling;
     }
     return undefined;
 };
@@ -167,6 +328,31 @@ export const getFirstElementByTagName = (parent: Element | Document, tagName: st
 export const getAttribute = (element: Element, attrName: string): string | undefined => {
     const attr = element.getAttribute(attrName);
     return attr !== null ? attr : undefined;
+};
+
+/**
+ * The `tag` elements under `root` not inside another `tag` element under it, in document order, and
+ * not inside any element named in `skip`: a note's own paragraphs, not a nested text box's; a sheet's
+ * rows, not those of a table in one of its cells. Descendant lookups (getElementsByTagName) return the
+ * nested ones as well, and a reader that also reaches them through the outer ones read them once per
+ * level of nesting, which grew with the square of the depth, or doubled per level.
+ */
+export const getOutermostElements = (root: Element | Document, tag: string, skip?: ReadonlySet<string>): Element[] => {
+    const out: Element[] = [];
+    const stack: Element[] = [];
+    const pushChildren = (node: Node) => {
+        for (let i = node.childNodes.length - 1; i >= 0; i--) {
+            const child = node.childNodes[i];
+            if (isElement(child)) stack.push(child);
+        }
+    };
+    pushChildren(root);
+    while (stack.length) {
+        const node = stack.pop()!;
+        if (node.nodeName === tag) out.push(node);
+        else if (!skip?.has(node.nodeName)) pushChildren(node);
+    }
+    return out;
 };
 
 /**
@@ -188,6 +374,19 @@ export const getDirectChildren = (parent: Element, tagName: string): Element[] =
         }
     }
     return result;
+};
+
+/**
+ * The child elements of `parent` named `tagName`, falling back to its local name when none carries the
+ * prefix (as getElementsByTagName does). For content that nests (a table's rows and cells, a text
+ * body's paragraphs, a shared string's runs), reading children rather than descendants reads each
+ * level once: descendant lookups read the nested levels again at each level.
+ */
+export const getChildElements = (parent: Element | Document, tagName: string): Element[] => {
+    const node = (parent as Document).documentElement && parent.nodeType === 9 ? (parent as Document).documentElement : parent as Element;
+    const own = getDirectChildren(node, tagName);
+    if (own.length > 0 || !tagName.includes(':')) return own;
+    return getDirectChildren(node, tagName.split(':').pop()!);
 };
 
 /**
@@ -218,9 +417,9 @@ export const getDirectChildren = (parent: Element, tagName: string): Element[] =
  * 
  * @see https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/6c085e39-c695-4f83-91e8-3f277bb4e111
  */
-export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
+export const parseOfficeMetadata = (xmlContent: string, config?: OfficeParserConfig): OfficeMetadata => {
     // Step 1: Parse the XML content into a DOM document
-    const xml = parseXmlString(xmlContent);
+    const xml = parseXmlString(xmlContent, { config });
     const metadata: OfficeMetadata = {};
 
     // Check for OOXML Core Properties
@@ -230,7 +429,7 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
         for (let i = 0; i < coreProperties.childNodes.length; i++) {
             const child = coreProperties.childNodes[i];
             if (isElement(child)) {
-                metadata.nativeProperties[child.tagName] = child.textContent;
+                setOwn(metadata.nativeProperties, child.tagName, child.textContent);
             }
         }
 
@@ -274,7 +473,7 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
         for (let i = 0; i < officeMeta.childNodes.length; i++) {
             const child = officeMeta.childNodes[i];
             if (isElement(child)) {
-                metadata.nativeProperties[child.tagName] = child.textContent;
+                setOwn(metadata.nativeProperties, child.tagName, child.textContent);
             }
         }
 
@@ -311,16 +510,16 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
                 const valueType = el.getAttribute("meta:value-type") || "string";
                 const raw = el.textContent;
                 if (valueType === "boolean") {
-                    customProperties[name] = raw.toLowerCase() === "true";
+                    setOwn(customProperties, name, raw.toLowerCase() === "true");
                 } else if (valueType === "float") {
                     const num = Number(raw);
-                    if (!isNaN(num)) customProperties[name] = num;
+                    if (!isNaN(num)) setOwn(customProperties, name, num);
                 } else if (valueType === "date" || valueType === "time") {
                     const date = parseOfficeDate(raw);
-                    if (date) customProperties[name] = date;
-                    else customProperties[name] = raw;
+                    if (date) setOwn(customProperties, name, date);
+                    else setOwn(customProperties, name, raw);
                 } else {
-                    customProperties[name] = raw;
+                    setOwn(customProperties, name, raw);
                 }
             }
             if (Object.keys(customProperties).length > 0) {
@@ -355,8 +554,8 @@ export const parseOfficeMetadata = (xmlContent: string): OfficeMetadata => {
  * console.log(props['Reviewed']);   // true (boolean)
  * ```
  */
-export const parseOOXMLCustomProperties = (xmlContent: string): Record<string, string | number | boolean | Date> => {
-    const xml = parseXmlString(xmlContent);
+export const parseOOXMLCustomProperties = (xmlContent: string, config?: OfficeParserConfig): Record<string, string | number | boolean | Date> => {
+    const xml = parseXmlString(xmlContent, { config });
     const result: Record<string, string | number | boolean | Date> = {};
 
     const properties = getElementsByTagName(xml, "property");
@@ -373,19 +572,19 @@ export const parseOOXMLCustomProperties = (xmlContent: string): Record<string, s
             const text = el.textContent || '';
 
             if (/vt:lpwstr|vt:lpstr|vt:bstr/.test(tag)) {
-                result[name] = text;
+                setOwn(result, name, text);
             } else if (/vt:bool/.test(tag)) {
-                result[name] = text.toLowerCase() === 'true';
+                setOwn(result, name, text.toLowerCase() === 'true');
             } else if (/vt:(i[1248]|ui[1248]|int|uint|r4|r8|decimal)/.test(tag)) {
                 const num = Number(text);
-                if (!isNaN(num)) result[name] = num;
+                if (!isNaN(num)) setOwn(result, name, num);
             } else if (/vt:filetime|vt:date/.test(tag)) {
                 const date = parseOfficeDate(text);
-                if (date) result[name] = date;
-                else result[name] = text;
+                if (date) setOwn(result, name, date);
+                else setOwn(result, name, text);
             } else if (text) {
                 // Fallback: store as string for any other vt: type
-                result[name] = text;
+                setOwn(result, name, text);
             }
             break; // only one value element per property
         }
@@ -402,8 +601,8 @@ export const parseOOXMLCustomProperties = (xmlContent: string): Record<string, s
  * @param xmlContent - Raw XML string from `docProps/app.xml`
  * @returns A record of property name -> typed value
  */
-export const parseOOXMLAppProperties = (xmlContent: string): Record<string, string | number | boolean> => {
-    const xml = parseXmlString(xmlContent);
+export const parseOOXMLAppProperties = (xmlContent: string, config?: OfficeParserConfig): Record<string, string | number | boolean> => {
+    const xml = parseXmlString(xmlContent, { config });
     const result: Record<string, string | number | boolean> = {};
 
     const appProperties = getElementsByTagName(xml, "Properties")[0];
@@ -430,7 +629,8 @@ export const parseOOXMLAppProperties = (xmlContent: string): Record<string, stri
  * @returns The decoded string
  */
 export const decodeXmlEntities = (text: string): string => {
-    return text.replace(/&([^;]+);/g, (match, entity) => {
+    // A reference holds no `&`: each `&` without a `;` read on to the end of the text.
+    return text.replace(/&([^;&]+);/g, (match, entity) => {
         if (entity.startsWith('#')) {
             if (entity[1] === 'x' || entity[1] === 'X') {
                 const hex = entity.slice(2);

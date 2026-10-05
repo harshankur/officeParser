@@ -2,6 +2,10 @@
     <h1>Generator Configuration Specification</h1>
     <p>The <code>GeneratorConfig</code> object controls how the AST is transformed into final output formats like HTML,
         Markdown, or PDF. It consists of common options and specialized sub-configurations.</p>
+    <p>A key the generator does not recognize raises <code>UNRECOGNIZED_CONFIG_OPTION</code>, and a value an option does
+        not accept (a document class, paper format or margin, PDF engine, HTML stylesheet mode, Markdown dialect preset, or
+        chunking choice) raises <code>INVALID_CONFIG_VALUE</code> and uses the option's default. Both appear in the result's
+        <code>messages</code> as well as reaching <code>onWarning</code>.</p>
     <p style="font-size: 0.9em; opacity: 0.85;"><strong>Related:</strong>
         <a href="#spec/generator">OfficeGenerator &amp; <code>ast.to()</code></a> &middot;
         <a href="#spec/config">OfficeParserConfig</a> (the parse side) &middot;
@@ -33,7 +37,9 @@
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
                 <td><strong>Navigation</strong>: Automatically generates unique slug-based IDs for heading nodes,
-                    enabling internal anchor links.</td>
+                    enabling internal anchor links. The slugs are GitHub's in every format: lowercase, the letters and
+                    digits of every script kept, punctuation left out and spaces made hyphens (<code>version-20</code>
+                    for "Version 2.0").</td>
             </tr>
             <tr>
                 <td><code>renderMetadata</code></td>
@@ -58,7 +64,9 @@
                     (embed the image, no OCR text); <code>'image+ocr-text'</code> (image then its recognized/OCR text);
                     <code>'ocr-text-only'</code> (OCR text, no image); <code>false</code>=<code>'none'</code> (omit). In
                     plain-text output an image becomes an <code>[Image: name]</code> placeholder (plus OCR text for
-                    <code>'image+ocr-text'</code>), or just the OCR text for <code>'ocr-text-only'</code>.</td>
+                    <code>'image+ocr-text'</code>), or just the OCR text for <code>'ocr-text-only'</code>. In chunks a
+                    picture is <code>[Image: alt]</code> for its alt text, with its OCR text, except under
+                    <code>'none'</code> and <code>'ocr-text-only'</code> (OCR text only).</td>
             </tr>
             <tr>
                 <td><code>maxInlineImageBytes</code></td>
@@ -70,8 +78,11 @@
                     an image over the cap renders its recognized/OCR text when it has any (multi-line OCR as a fenced
                     block in Markdown), otherwise a compact name reference; Markdown still emits the
                     <code>IMAGE_NOT_INLINED</code> warning. Plain text follows the same rule. <strong>Standalone HTML
-                    always inlines</strong>, whatever the cap: a self-contained document has nowhere else to resolve the
-                    image from. <code>0</code> never inlines; <code>Infinity</code> always inlines.</td>
+                    inlines whatever the cap</strong>: a self-contained document has nowhere else to resolve the
+                    image from. <code>0</code> never inlines; <code>Infinity</code> inlines every picture within the
+                    budget below. In every mode, standalone HTML and <code>Infinity</code> included, the pictures one
+                    document writes inline stop at 128 MB in all (a picture is inlined at every place showing it); the
+                    rest are name references, with <code>IMAGE_NOT_INLINED</code>.</td>
             </tr>
             <tr>
                 <td><code>includeCharts</code></td>
@@ -145,8 +156,8 @@
                 <td><code>true</code></td>
                 <td>Controls the HTML "document envelope". <code>true</code>/omitted turns every part on (a full
                     <code>&lt;html&gt;</code> shell with CSS/scripts/metadata); <code>false</code> turns every part
-                    off (a bare content fragment). Pass a <code>StandaloneConfig</code> object for granular control —
-                    see the table below.</td>
+                    off (a bare content fragment). Pass a <code>StandaloneConfig</code> object for granular control
+                    (see the table below).</td>
             </tr>
             <tr>
                 <td><code>chartJsSrc</code></td>
@@ -194,7 +205,7 @@
                 <td>Carry each rich node's raw source in a <code>data-*</code> attribute (undelimited text content),
                     so attribute-driven consumers can rehydrate the node: <code>data-wikilink</code>/<code>data-target</code>/<code>data-alias</code>
                     on wikilinks, a <code>&lt;span class="citation" data-key&gt;</code> for citations, the LaTeX in
-                    <code>data-math</code>, and a <code>&lt;div class="mermaid" data-mermaid&gt;</code> for mermaid. Off by default the
+                    <code>data-math</code>, and a <code>&lt;div class="mermaid" data-mermaid&gt;</code> for mermaid, and an empty <code>&lt;span data-html-comment="…"&gt;</code> for a source comment (an editor's DOM parser discards real comments). Off by default the
                     output is byte-identical to before, and the parser reads every shape it emits. Forced off for PDF and EPUB.</td>
             </tr>
             <tr>
@@ -221,7 +232,7 @@
 
     <h4><code>StandaloneConfig</code> (the object form of <code>standalone</code>)</h4>
     <p>Any field left unspecified defaults to its "on" (standalone) value, so <code>{ document: false }</code> still
-        yields a fully styled fragment — only the <code>&lt;html&gt;</code> shell is dropped.</p>
+        yields a fully styled fragment: only the <code>&lt;html&gt;</code> shell is dropped.</p>
     <table>
         <thead>
             <tr>
@@ -252,13 +263,13 @@
                 <td><code>'full'</code></td>
                 <td>How the built-in stylesheet is delivered:
                     <ul>
-                        <li><code>'full'</code> — the complete stylesheet using global selectors
-                            (<code>body</code>, <code>h1</code>, <code>table</code>, …) — what
+                        <li><code>'full'</code>: the complete stylesheet using global selectors
+                            (<code>body</code>, <code>h1</code>, <code>table</code>, …), which is what
                             <code>standalone: true</code> has always emitted.</li>
-                        <li><code>'scoped'</code> — the same styling, scoped under the fragment's own wrapper via CSS
+                        <li><code>'scoped'</code>: the same styling, scoped under the fragment's own wrapper via CSS
                             <code>@scope</code> so it cannot leak onto a host page's elements. Requires a modern
                             engine (Chrome 118+, Safari 17.4+, Firefox 128+).</li>
-                        <li><code>'none'</code> — no stylesheet; the host page/editor/EPUB reader supplies its own.
+                        <li><code>'none'</code>: no stylesheet; the host page/editor/EPUB reader supplies its own.
                         </li>
                     </ul>
                     The boolean shorthand for <code>standalone</code> maps <code>true</code>&nbsp;→&nbsp;<code>'full'</code>,
@@ -284,7 +295,7 @@
                 <td><code>bodyInjections</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
-                <td>Applies <code>injections.bodyStart</code>/<code>bodyEnd</code> — applies even when generating a
+                <td>Applies <code>injections.bodyStart</code>/<code>bodyEnd</code>, even when generating a
                     bare fragment, since these wrap body content, not the document shell.</td>
             </tr>
         </tbody>
@@ -355,7 +366,7 @@
             <tr><td><code>'github'</code></td><td>GFM: <code>&gt; [!NOTE]</code> admonitions, footnotes, strikethrough, native tables. No definition lists, citations, wikilinks or attribute lists.</td></tr>
             <tr><td><code>'gitlab'</code></td><td>GLFM: <code>:::note</code> fenced-div admonitions, otherwise as GitHub.</td></tr>
             <tr><td><code>'obsidian'</code></td><td>As GitHub, plus <code>[[wikilinks]]</code>.</td></tr>
-            <tr><td><code>'pandoc'</code></td><td><code>::: {.note}</code> admonitions, definition lists, citations and attribute lists on.</td></tr>
+            <tr><td><code>'pandoc'</code></td><td><code>::: {.note}</code> admonitions, definition lists and citations on, and attribute lists after images (<code>'brace-inline'</code>).</td></tr>
             <tr><td><code>'commonmark'</code></td><td>Strict CommonMark: no admonition syntax (plain blockquote), no footnote references (inlined as parentheticals), no strikethrough, and tables forced to HTML, since CommonMark has no table syntax.</td></tr>
         </tbody>
     </table>
@@ -370,19 +381,19 @@
             </tr>
         </thead>
         <tbody>
-            <tr><td><code>extends</code></td><td><code><a href="#markdowndialectconfig">MarkdownDialectPreset</a></code></td><td>Base preset for every field left unset. Defaults to <code>'extended'</code>. Note this is the base for <em>this object</em>, not "whatever preset was configured before" &mdash; config merging replaces the whole <code>dialect</code> field rather than layering onto a prior string.</td></tr>
+            <tr><td><code>extends</code></td><td><code><a href="#markdowndialectconfig">MarkdownDialectPreset</a></code></td><td>Base preset for every field left unset. Defaults to <code>'extended'</code>. Note this is the base for <em>this object</em>, not "whatever preset was configured before": config merging replaces the whole <code>dialect</code> field rather than layering onto a prior string.</td></tr>
             <tr><td><code>admonitions</code></td><td><code>'blockquote' | 'fence' | 'fence-attribute' | 'none'</code></td><td>Which admonition syntax to emit: <code>'blockquote'</code> = GitHub <code>&gt; [!NOTE]</code>, <code>'fence'</code> = GitLab <code>:::note</code>, <code>'fence-attribute'</code> = Pandoc <code>::: {.note}</code>, <code>'none'</code> degrades to a bold-labelled blockquote. The flavour names <code>'github'</code>/<code>'gitlab'</code>/<code>'pandoc'</code> are accepted as <strong>deprecated</strong> aliases and will be removed in the next major.</td></tr>
             <tr><td><code>highlight</code></td><td><code>'equals' | 'none'</code></td><td><code>==text==</code> highlight (Obsidian/extended flavours). <code>'none'</code> falls back to an HTML <code>&lt;mark&gt;</code>/<code>&lt;span&gt;</code> per <code>fallbackToHtml.inlineFormatting</code>, and <code>==</code> stays literal on parse.</td></tr>
             <tr><td><code>math</code></td><td><code>'dollar' | 'none'</code></td><td><code>$inline$</code> / <code>$$block$$</code> delimiters, or none (content emitted bare).</td></tr>
             <tr><td><code>tables</code></td><td><code>'native' | 'html'</code></td><td>Pipe tables, or an HTML <code>&lt;table&gt;</code>. Forced to <code>'html'</code> under <code>commonmark</code>.</td></tr>
             <tr><td><code>bulletListMarker</code></td><td><code>'-' | '*' | '+'</code></td><td>Marker for unordered list items.</td></tr>
             <tr><td><code>orderedListMarker</code></td><td><code>'.' | ')'</code></td><td><code>1.</code> or <code>1)</code> for ordered list items.</td></tr>
-            <tr><td><code>emphasisMarker</code></td><td><code>'asterisk' | 'underscore'</code></td><td><code>*em*</code>/<code>**strong**</code> or <code>_em_</code>/<code>__strong__</code>.</td></tr>
+            <tr><td><code>emphasisMarker</code></td><td><code>'asterisk' | 'underscore'</code></td><td><code>*em*</code>/<code>**strong**</code> or <code>_em_</code>/<code>__strong__</code>. An underscore marks emphasis only at a word's edge, so with <code>'underscore'</code>, emphasis inside a word or right next to other emphasis is written with asterisks.</td></tr>
             <tr><td><code>definitionLists</code></td><td><code>'colon' | 'none'</code></td><td>Markdown&nbsp;Extra <code>Term\n: Definition</code> syntax. <code>'none'</code> degrades to plain paragraphs.</td></tr>
             <tr><td><code>footnotes</code></td><td><code>'caret' | 'none'</code></td><td><code>[^id]</code> references with a definition block. <code>'none'</code> inlines note content as a parenthetical at the reference point rather than dropping it.</td></tr>
             <tr><td><code>citations</code></td><td><code>'at' | 'none'</code></td><td>Pandoc <code>[@citekey]</code> syntax. <code>'none'</code> emits the key as plain <code>[key]</code>.</td></tr>
             <tr><td><code>wikilinks</code></td><td><code>'double-bracket' | 'none'</code></td><td>Obsidian <code>[[Page]]</code> / <code>[[Page|Alias]]</code> syntax. <code>'none'</code> makes wikilinks ordinary links.</td></tr>
-            <tr><td><code>attributeLists</code></td><td><code>'brace' | 'none'</code></td><td>Pandoc-style <code>{width=50% align=center}</code> after an image or table.</td></tr>
+            <tr><td><code>attributeLists</code></td><td><code>'brace' | 'brace-inline' | 'none'</code></td><td><code>{width=50% align=center}</code> attribute lists. <code>'brace'</code> writes one after an image and one on the line under a pipe table (<code>{align=right}</code>, where the table stands on the page). <code>'brace-inline'</code> writes one after an image only, which is what Pandoc reads: it shows a list under a table as text.</td></tr>
             <tr><td><code>strikethrough</code></td><td><code>'tilde' | 'none'</code></td><td><code>~~struck~~</code>. <code>'none'</code> drops the formatting.</td></tr>
             <tr><td><code>embeds</code></td><td><code>'html' | 'directive' | 'link' | 'thumbnail'</code></td><td>How an <code>embed</code> node is written: <code>'html'</code> (default; the <code>&lt;div data-youtube-video&gt;</code> / <code>&lt;iframe&gt;</code> block), <code>'directive'</code> (a <code>::youtube[…]{…}</code> / <code>::embed[…]{…}</code> leaf directive; an editor round-trip form, rendered verbatim on GitHub), <code>'link'</code> (a plain link), <code>'thumbnail'</code> (YouTube-only clickable preview). Authority for embed form; supersedes the deprecated <code>fallbackToHtml.embeds</code> boolean.</td></tr>
         </tbody>
@@ -415,7 +426,7 @@ await ast.to('md', {
             <tr><td><code>tables</code></td><td><code>boolean</code></td><td><code>&lt;table&gt;</code> for nested or merged-cell tables a pipe table cannot express. When off, nested tables are hoisted out and rendered sequentially.</td></tr>
             <tr><td><code>embeds</code></td><td><code>boolean</code></td><td><strong>Deprecated</strong> (removed next major): use <code>dialect.embeds</code> instead. When <code>dialect.embeds</code> is unset this is still honored: <code>true</code> maps to <code>'html'</code>, <code>false</code> to <code>'link'</code>.</td></tr>
             <tr><td><code>cellLineBreaks</code></td><td><code>boolean</code></td><td><code>&lt;br&gt;</code> inside a table cell, which a pipe table cannot otherwise contain.</td></tr>
-            <tr><td><code>itemLineBreaks</code></td><td><code>boolean</code></td><td><code>&lt;br&gt;</code> joining the paragraphs of a multi-paragraph list item, which stays on the item's single Markdown line. When off, they are joined with a space.</td></tr>
+            <tr><td><code>itemLineBreaks</code></td><td><code>boolean</code></td><td><code>&lt;br&gt;</code> joining the paragraphs of a multi-paragraph list item, which stays on the item's single Markdown line, and the line breaks of a heading or a definition list's term or description, each one Markdown line too. When off, they are joined with a space.</td></tr>
             <tr><td><code>inlineFormatting</code></td><td><code>boolean</code></td><td>Inline text color, highlight, and font size via a <code>&lt;span style="color:…;background-color:…;font-size:…"&gt;</code> run, which the Markdown parser reads back. These have no Markdown syntax and are otherwise lost silently. <strong>Off by default even when <code>fallbackToHtml</code> is <code>true</code></strong> (it changes default output). Enable it explicitly with <code>fallbackToHtml: { inlineFormatting: true }</code>.</td></tr>
         </tbody>
     </table>
@@ -614,6 +625,128 @@ await ast.to('md', {
         </tbody>
     </table>
 
+    <h3 id="texgeneratorconfig">TexGeneratorConfig (<code>texConfig</code>)</h3>
+    <p>Writes LaTeX source from any parsed source. The output compiles unmodified with <strong>pdfLaTeX, XeLaTeX,
+        LuaLaTeX, upLaTeX, pLaTeX and <code>latex</code></strong> (the last three through <code>dvipdfmx</code>), TeX Live
+        2021 and later: the preamble selects fonts per engine and loads only the packages the document uses. The
+        value is a <code>string</code>, or a <code>Uint8Array</code> zip when <code>bundle</code> is set. Adds no
+        dependencies and runs identically in Node and the browser. Destination <code>'tex'</code> (alias
+        <code>'latex'</code>). It is the round-trip partner of the LaTeX parser: the <code>.tex</code> (or the
+        <code>bundle</code> zip, images included) parses back, and a generate, parse, generate cycle reaches a fixed
+        point after one round.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Type</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>documentClass</code></td>
+                <td><code>'auto' | 'article' | 'report' | 'book' | 'beamer'</code></td>
+                <td><code>'auto'</code></td>
+                <td><code>auto</code> writes a <code>beamer</code> presentation for slide content (PPTX/ODP) and an
+                    <code>article</code> otherwise. <code>report</code>/<code>book</code> map level-1 headings to
+                    <code>\chapter</code>; <code>beamer</code> for a non-presentation source starts a frame at each
+                    level-1/2 heading.</td>
+            </tr>
+            <tr>
+                <td><code>standalone</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td><code>false</code> emits only the body, headed by a comment listing the packages (and, for Greek,
+                    Cyrillic or CJK text, the font setup) the including document needs.</td>
+            </tr>
+            <tr>
+                <td><code>bundle</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><code>true</code> returns a zip of <code>main.tex</code> plus every image as a file under
+                    <code>images/</code>, ready to compile or upload to Overleaf. With <code>false</code> the result is
+                    the <code>.tex</code> alone, carrying its PNG and JPEG images inside it (see <code>embedImages</code>).
+                    An image the source referred to only by a plain relative path, with no image data (a <code>.tex</code>
+                    parsed without its project), keeps that path in <code>\includegraphics</code>; the
+                    <code>IMAGES_NOT_BUNDLED</code> warning names it in either mode, since there is nothing to carry or
+                    bundle.</td>
+            </tr>
+            <tr>
+                <td><code>embedImages</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>Carry each PNG and JPEG image inside the <code>.tex</code>, so the one file compiles with its
+                    pictures. LaTeX reads images only from files, so each becomes a <code>filecontents*</code> block
+                    holding it as a small all-ASCII PDF (about a quarter larger than the image), named after a hash of
+                    its content; compiling writes that file beside the <code>.tex</code> (keeping a file of that name
+                    already there, so a picture can be replaced) and <code>\includegraphics</code> reads it with every
+                    engine, with no shell escape or Ghostscript. Compile in the <code>.tex</code>'s folder: with
+                    <code>--output-directory</code>, pdfLaTeX and LuaLaTeX still find the files, but XeLaTeX and dvipdfmx
+                    look beside the <code>.tex</code>, so use <code>bundle</code> there. A PNG that must be decoded to
+                    be carried (transparency, interlacing) is carried up to 16 megapixels, and a document's decoded
+                    images up to 256 megapixels in all; past that it is referenced as a file. Other image formats
+                    cannot be drawn by LaTeX and appear as a labelled box. <code>false</code> refers to
+                    <code>images/&lt;name&gt;</code> files instead, and the <code>IMAGES_NOT_BUNDLED</code> warning names
+                    the files to place there. Ignored with <code>bundle</code>.</td>
+            </tr>
+            <tr>
+                <td><code>numberSections</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Number sections. Off by default, matching office documents.</td>
+            </tr>
+            <tr>
+                <td><code>format</code></td>
+                <td><code>PaperFormat</code></td>
+                <td><code>'A4'</code></td>
+                <td>Paper size, written as a <code>geometry</code> option. The same names <code>pdfConfig.format</code>
+                    accepts. Ignored by <code>beamer</code>.</td>
+            </tr>
+            <tr>
+                <td><code>landscape</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Landscape orientation. Ignored by <code>beamer</code>.</td>
+            </tr>
+            <tr>
+                <td><code>margin</code></td>
+                <td><code>object</code></td>
+                <td><code>{72,72,72,72}</code></td>
+                <td>Page margins (<code>top</code>, <code>right</code>, <code>bottom</code>, <code>left</code>), each a
+                    number of points or a unit string (<code>'1in'</code>, <code>'2cm'</code>, <code>'36pt'</code>).
+                    Ignored by <code>beamer</code>.</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>Headings become sectioning commands with <code>\label</code>s, lists nested <code>itemize</code>/<code>enumerate</code>,
+        tables <code>longtable</code> (or <code>tabular</code> where a <code>longtable</code> cannot go) with
+        <code>\multicolumn</code>/<code>\multirow</code> merges (a table wider than 16 columns continues below itself in
+        bands), footnotes/endnotes <code>\footnote</code>/<code>\endnote</code>, review comments LaTeX <code>%</code> comments,
+        code <code>lstlisting</code>/<code>verbatim</code>, page headers <code>fancyhdr</code>, and slides
+        <code>beamer</code> frames with speaker notes as <code>\note</code>. A bibliography is written as
+        <code>thebibliography</code>, so its citations resolve; a citation with no entry is reported
+        (<code>CITATIONS_NOT_RESOLVED</code>). Math loads the packages its commands come from (<code>bm</code>,
+        <code>mathtools</code>, <code>siunitx</code>, ...), and a command nothing loaded defines prints its own name.</p>
+    <p><strong>Safety.</strong> All document text is escaped, URLs are scheme-checked and percent-encoded, and image
+        paths are reduced to safe names under <code>images/</code>. Math is the one place content is emitted as live
+        LaTeX; an expression that uses a command able to read or write files, run programs or redefine commands, or
+        that is structurally unbalanced, is written as literal text with a <code>MATH_WRITTEN_AS_TEXT</code> warning.
+        A character the default fonts lack gets a fallback under every engine; a script pdfLaTeX cannot typeset is
+        shown there as <code>[U+XXXX]</code> (Greek as math letters).</p>
+    <p><strong>Engines and fonts.</strong> The preamble tells the engines apart with <code>iftex</code>. XeLaTeX and
+        LuaLaTeX load <code>fontspec</code>, and for text in scripts Latin Modern lacks, fonts TeX Live ships: Computer
+        Modern Unicode for Greek and Cyrillic, and Fandol, Harano Aji or UnFonts for Chinese, Japanese and Korean
+        (whichever language the text is mostly in, the others as fallbacks) through <code>xeCJK</code> or
+        <code>luatexja</code>, which also break lines between CJK characters. Each font is used only where it is
+        installed, so a smaller TeX installation still compiles the document, those characters left blank. pdfLaTeX,
+        upLaTeX and pLaTeX load 8-bit fonts; upLaTeX and pLaTeX set CJK text in their own Japanese fonts (which lack
+        Hangul; pLaTeX before TeX Live 2023 cannot read Hangul at all). In DVI mode (<code>latex</code>,
+        <code>uplatex</code> or <code>platex</code>, then <code>dvipdfmx</code>) a class option gives every package the
+        <code>dvipdfmx</code> driver, so images, links and colours work there too.</p>
+    <pre><code>const { value: tex } = await ast.to('tex');                                   // string
+const { value: zip } = await ast.to('tex', { texConfig: { bundle: true } });  // Uint8Array (main.tex + images/)</code></pre>
+
     <h3 id="csvgeneratorconfig">CsvGeneratorConfig (<code>csvConfig</code>)</h3>
     <table>
         <thead>
@@ -700,16 +833,16 @@ await ast.to('md', {
             </tr>
         </thead>
         <tbody>
-            <tr><td><code>title</code></td><td><code>string</code></td><td>HTML <code>&lt;title&gt;</code>; EPUB <code>dc:title</code>; Markdown <code>title:</code>; RTF <code>\title</code>; the <code>renderMetadata</code> header in text/CSV</td></tr>
-            <tr><td><code>author</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="author"&gt;</code>; EPUB <code>dc:creator</code>; Markdown <code>author:</code>; RTF <code>\author</code></td></tr>
-            <tr><td><code>description</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="description"&gt;</code>; EPUB <code>dc:description</code>; Markdown <code>description:</code>; RTF <code>\comm</code></td></tr>
-            <tr><td><code>subject</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="DC.subject"&gt;</code>; EPUB <code>dc:subject</code>; Markdown <code>subject:</code>; RTF <code>\subject</code></td></tr>
-            <tr><td><code>keywords</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="keywords"&gt;</code>; EPUB <code>dc:subject</code>; Markdown <code>keywords:</code>; RTF <code>\keywords</code></td></tr>
-            <tr><td><code>lastModifiedBy</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="lastModifiedBy"&gt;</code></td></tr>
-            <tr><td><code>created</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.created"&gt;</code>; Markdown <code>created:</code>; the <code>renderMetadata</code> header in text/CSV</td></tr>
-            <tr><td><code>modified</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.modified"&gt;</code>; EPUB <code>dcterms:modified</code> <em>and every zip entry's mtime</em>; Markdown <code>modified:</code></td></tr>
-            <tr><td><code>language</code></td><td><code>string</code></td><td>EPUB <code>dc:language</code>. Stored on <code>nativeProperties.language</code>, where parsers already surface it.</td></tr>
-            <tr><td><code>custom</code></td><td><code>Record&lt;string, string | number | boolean | Date&gt;</code></td><td>Any caller-defined key/value pairs. HTML <code>&lt;meta name="custom:KEY"&gt;</code>; Markdown frontmatter. <strong>Not representable in EPUB or RTF</strong> &mdash; see below.</td></tr>
+            <tr><td><code>title</code></td><td><code>string</code></td><td>HTML <code>&lt;title&gt;</code>; EPUB <code>dc:title</code>; Markdown <code>title:</code>; RTF <code>\title</code>; LaTeX <code>\title</code> and <code>pdftitle</code>; the <code>renderMetadata</code> header in text/CSV</td></tr>
+            <tr><td><code>author</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="author"&gt;</code>; EPUB <code>dc:creator</code>; Markdown <code>author:</code>; RTF <code>\author</code>; LaTeX <code>\author</code> and <code>pdfauthor</code></td></tr>
+            <tr><td><code>description</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="description"&gt;</code>; EPUB <code>dc:description</code>; Markdown <code>description:</code>; RTF <code>\comm</code>; LaTeX PDF info <code>Description</code></td></tr>
+            <tr><td><code>subject</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="DC.subject"&gt;</code>; EPUB <code>dc:subject</code>; Markdown <code>subject:</code>; RTF <code>\subject</code>; LaTeX <code>pdfsubject</code></td></tr>
+            <tr><td><code>keywords</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="keywords"&gt;</code>; EPUB <code>dc:subject</code>; Markdown <code>keywords:</code>; RTF <code>\keywords</code>; LaTeX <code>pdfkeywords</code></td></tr>
+            <tr><td><code>lastModifiedBy</code></td><td><code>string</code></td><td>HTML <code>&lt;meta name="lastModifiedBy"&gt;</code>; LaTeX PDF info <code>LastModifiedBy</code></td></tr>
+            <tr><td><code>created</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.created"&gt;</code>; Markdown <code>created:</code>; LaTeX <code>pdfcreationdate</code>; the <code>renderMetadata</code> header in text/CSV</td></tr>
+            <tr><td><code>modified</code></td><td><code>Date</code></td><td>HTML <code>&lt;meta name="dcterms.modified"&gt;</code>; EPUB <code>dcterms:modified</code> <em>and every zip entry's mtime</em>; Markdown <code>modified:</code>; LaTeX <code>\date</code> and <code>pdfmoddate</code> (and the bundle's zip mtimes)</td></tr>
+            <tr><td><code>language</code></td><td><code>string</code></td><td>HTML <code>lang</code>; EPUB, DOCX and ODT <code>dc:language</code>; PDF <code>/Lang</code>; LaTeX <code>pdflang</code>. Parsers put a document's language in <code>metadata.language</code> (EPUB also keeps it in <code>nativeProperties.language</code>).</td></tr>
+            <tr><td><code>custom</code></td><td><code>Record&lt;string, string | number | boolean | Date&gt;</code></td><td>Any caller-defined key/value pairs. HTML <code>&lt;meta name="custom:KEY"&gt;</code>; Markdown frontmatter; LaTeX PDF info entries (the key reduced to letters and digits). <strong>Not representable in EPUB or RTF</strong> (see below).</td></tr>
         </tbody>
     </table>
     <p><code>custom</code> is kept in its own bucket rather than mixed in beside the named fields on purpose: with a bare

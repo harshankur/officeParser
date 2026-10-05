@@ -1,0 +1,35 @@
+        <div class="article-wrapper">
+            <div class="article-meta-header">
+                <p class="article-category">{{categoryLabel}}</p>
+                <h1 class="article-headline">{{title}}</h1>
+                <p class="article-deck">{{deck}}</p>
+                <div class="byline-row">
+                    <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-avatar"
+                        aria-label="Harsh Ankur's homepage">HA</a>
+                    <div>
+                        <a href="https://harshankur.com" target="_blank" rel="noopener" class="author-name">Harsh
+                            Ankur</a>
+                        <div>Published <time datetime="{{published}}">{{dateLong}}</time>{{#updatedLong}}, updated <time datetime="{{updated}}">{{updatedLong}}</time>{{/updatedLong}} · {{minutes}} min read</div>
+                    </div>
+                </div>
+            </div>
+
+            <article class="article-content">
+{{{body}}}
+
+                <div class="article-nav-footer">
+{{#previous}}
+                    <a href="{{link}}" class="back-to-blog">&larr; Previous: {{shortTitle}}</a>
+{{/previous}}
+{{^previous}}
+                    <a href="./" class="back-to-blog">&larr; Back to all articles</a>
+{{/previous}}
+{{#next}}
+                    <a href="{{link}}" class="back-to-blog">Next: {{shortTitle}} &rarr;</a>
+{{/next}}
+{{^next}}
+                    <a href="./" class="back-to-blog">Back to all articles &rarr;</a>
+{{/next}}
+                </div>
+            </article>
+        </div>

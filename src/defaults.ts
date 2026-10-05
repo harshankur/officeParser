@@ -1,4 +1,4 @@
-import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, DocxGeneratorConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OdtGeneratorConfig, OfficeParserConfig, PdfGeneratorConfig, PdfParserConfig, SemanticChunkingConfig, TextGeneratorConfig } from './types.js';
+import { ChunkingConfig, CsvGeneratorConfig, DeepRequired, DocumentStructureChunkingConfig, DocxGeneratorConfig, FixedSizeChunkingConfig, FullGeneratorConfig, HtmlGeneratorConfig, HtmlParserConfig, MdGeneratorConfig, OcrConfig, OcrTimeoutConfig, OdtGeneratorConfig, OfficeParserConfig, PdfGeneratorConfig, PdfParserConfig, SemanticChunkingConfig, TexGeneratorConfig, TexParserConfig, TextGeneratorConfig } from './types.js';
 
 const PDFJS_VERSION = '6.2.108';
 const DEFAULT_PDF_WORKER_SRC = typeof __SLIM__ !== 'undefined' && __SLIM__ ? '' : `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
@@ -42,6 +42,7 @@ const DEFAULT_OCR_CONFIG: DeepRequired<OcrConfig> = {
 const DEFAULT_HTML_PARSER_CONFIG: DeepRequired<HtmlParserConfig> = {
     preserveAttributes: false,
     preserveIframes: false,
+    preserveComments: false,
     embedFolkForms: false,
 };
 
@@ -60,6 +61,20 @@ const DEFAULT_PDF_PARSER_CONFIG: DeepRequired<PdfParserConfig> = {
     pageRange: '',
     normalizeText: true,
     extractTextColor: true,
+    maxTextItems: 20_000,
+    maxOperators: 250_000,
+    maxAnnotations: 10_000,
+    maxTimeMs: 5_000,
+    separateProcess: true,
+    processMemoryMb: 1024,
+};
+
+/**
+ * Default configuration for LaTeX parsing. `today` is empty, so `\today` prints the date of the
+ * parse, as LaTeX prints the date of the compile - see `TexParserConfig`.
+ */
+const DEFAULT_TEX_PARSER_CONFIG: DeepRequired<TexParserConfig> = {
+    today: '',
 };
 
 /**
@@ -93,9 +108,13 @@ export const DEFAULT_OFFICE_PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
         maxUncompressedBytes: 512 * 1024 * 1024,
         maxZipEntries: 10000,
         maxTableCells: 1000000,
+        maxXmlElements: 2000000,
+        maxRawContentLength: 64 * 1024 * 1024,
+        maxRepeatedContent: 16 * 1024 * 1024,
     },
     htmlParserConfig: DEFAULT_HTML_PARSER_CONFIG,
     pdfParserConfig: DEFAULT_PDF_PARSER_CONFIG,
+    texParserConfig: DEFAULT_TEX_PARSER_CONFIG,
 };
 
 /**
@@ -252,6 +271,17 @@ const DEFAULT_ODT_GENERATOR_CONFIG: DeepRequired<OdtGeneratorConfig> = {
     margin: { top: 72, right: 72, bottom: 72, left: 72 },
 };
 
+const DEFAULT_TEX_GENERATOR_CONFIG: DeepRequired<TexGeneratorConfig> = {
+    documentClass: 'auto',
+    standalone: true,
+    bundle: false,
+    embedImages: true,
+    numberSections: false,
+    format: 'A4',
+    landscape: false,
+    margin: { top: 72, right: 72, bottom: 72, left: 72 },
+};
+
 export const DEFAULT_GENERATOR_CONFIG: FullGeneratorConfig = {
     onNode: () => { },
     onWarning: () => { },
@@ -274,6 +304,7 @@ export const DEFAULT_GENERATOR_CONFIG: FullGeneratorConfig = {
     rtfConfig: {},
     docxConfig: DEFAULT_DOCX_GENERATOR_CONFIG,
     odtConfig: DEFAULT_ODT_GENERATOR_CONFIG,
+    texConfig: DEFAULT_TEX_GENERATOR_CONFIG,
     chunksConfig: DEFAULT_CHUNKING_CONFIG,
 };
 

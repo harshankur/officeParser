@@ -75,23 +75,23 @@ Links
 Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the calibre download page. Then we have a link that points back to the section on paragraph level formatting in this document.
 Table of Contents
  You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook. 
-Demonstration of DOCX support in calibre1
-Text Formatting1
-Inline formatting2
-Fun with fonts2
-Paragraph level formatting2
-Tables2
-Structural Elements4
-Footnotes & Endnotes5
-Dropcaps5
-Links5
-Table of Contents5
-Images6
-Lists7
-Bulleted List8
-Numbered List8
-Multi-level Lists8
-Continued Lists8
+Demonstration of DOCX support in calibre	1
+Text Formatting	1
+Inline formatting	2
+Fun with fonts	2
+Paragraph level formatting	2
+Tables	2
+Structural Elements	4
+Footnotes & Endnotes	5
+Dropcaps	5
+Links	5
+Table of Contents	5
+Images	6
+Lists	7
+Bulleted List	8
+Numbered List	8
+Multi-level Lists	8
+Continued Lists	8
 Images
 Centered images like this are useful for large pictures that should be a focus of attention. 
 [Image: 165 Inspirational Quotes To Keep You Motivated In Life]

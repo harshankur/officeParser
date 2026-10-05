@@ -39,15 +39,15 @@ import { isHeaderRow } from '../../src/utils/officeGenUtils.js';
 // ============================================================================
 
 /** Output formats tested (PDF excluded — slow/brittle in CI) */
-const GENERATOR_FORMATS = ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub', 'docx', 'odt'] as const;
+const GENERATOR_FORMATS = ['html', 'md', 'text', 'rtf', 'csv', 'chunks', 'epub', 'docx', 'odt', 'tex'] as const;
 type GeneratorFormat = typeof GENERATOR_FORMATS[number];
 
 /** Formats that support roundtrip testing (parse → generate → re-parse) */
-const ROUNDTRIP_FORMATS: GeneratorFormat[] = ['html', 'md', 'rtf', 'docx', 'odt'];
+const ROUNDTRIP_FORMATS: GeneratorFormat[] = ['html', 'md', 'rtf', 'docx', 'odt', 'tex'];
 
 /** Source baseline formats used to drive generation tests */
 const SOURCE_FORMATS = {
-    documents: ['docx', 'odt', 'pptx', 'odp', 'odg', 'pdf', 'rtf', 'html', 'md', 'epub'] as const,
+    documents: ['docx', 'odt', 'pptx', 'odp', 'odg', 'pdf', 'rtf', 'html', 'md', 'epub', 'tex'] as const,
     spreadsheets: ['xlsx', 'ods', 'csv'] as const,
 };
 
@@ -89,9 +89,12 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
     decompressionLimits: {
         maxUncompressedBytes: 512 * 1024 * 1024,
         maxZipEntries: 10000,
-        maxTableCells: 1000000
+        maxTableCells: 1000000,
+        maxXmlElements: 2000000,
+        maxRawContentLength: 64 * 1024 * 1024,
+        maxRepeatedContent: 16 * 1024 * 1024,
     },
-    htmlParserConfig: { preserveAttributes: false, preserveIframes: false, embedFolkForms: false },
+    htmlParserConfig: { preserveAttributes: false, preserveIframes: false, preserveComments: true, embedFolkForms: false },
     ignorePageGeometry: false,
     password: '',
     onPassword: () => undefined,
@@ -104,8 +107,16 @@ const PARSER_CONFIG: DeepRequired<OfficeParserConfig> = {
         headingDetection: 'auto',
         pageRange: '',
         normalizeText: true,
-        extractTextColor: true
-    }
+        extractTextColor: true,
+        maxTextItems: 20_000,
+        maxOperators: 250_000,
+        maxAnnotations: 10_000,
+        maxTimeMs: 5_000,
+        // pdf.js in a process of its own, as it runs by default in Node.
+        separateProcess: true,
+        processMemoryMb: 1024,
+    },
+    texParserConfig: { today: '' },
 };
 
 /**
@@ -252,7 +263,36 @@ const GENERATOR_CONFIG_TESTS = [
         config: { odtConfig: { format: 'Letter', landscape: true, margin: { top: 36, right: 18, bottom: 36, left: 18 } } } as GeneratorConfig,
         formats: ['odt'] as GeneratorFormat[],
     },
+    {
+        id: 'G-tex',
+        name: 'LaTeX report class, numbered sections, Letter landscape margins',
+        config: { texConfig: { documentClass: 'report', numberSections: true, format: 'Letter', landscape: true, margin: { top: 36, right: 18, bottom: 36, left: 18 } } } as GeneratorConfig,
+        formats: ['tex'] as GeneratorFormat[],
+    },
+    {
+        id: 'G-tex-fragment',
+        name: 'LaTeX body-only fragment',
+        config: { texConfig: { standalone: false } } as GeneratorConfig,
+        formats: ['tex'] as GeneratorFormat[],
+    },
+    {
+        id: 'G-tex-bundle',
+        name: 'LaTeX zip bundle (main.tex + images)',
+        config: { texConfig: { bundle: true }, metadataOverrides: { modified: new Date('2024-01-01T00:00:00Z') } } as GeneratorConfig,
+        formats: ['tex'] as GeneratorFormat[],
+    },
 ];
+
+/**
+ * The LaTeX body with the parts TeX does not interpret as commands removed: verbatim/lstlisting
+ * environments (their content is literal) and `%` comments (an unescaped `%` to the end of the
+ * line). What remains is what a structural check must hold for.
+ */
+function liveLatex(tex: string): string {
+    return tex
+        .replace(/\\begin\{(verbatim|lstlisting)\}[\s\S]*?\\end\{\1\}/g, '')
+        .replace(/(^|[^\\])((?:\\\\)*)%.*$/gm, '$1$2');
+}
 
 // ============================================================================
 // TYPES
@@ -439,6 +479,16 @@ function extractGeneratedMetrics(output: string, fmt: GeneratorFormat): Generate
         metrics.rowCount = lines.length;
     }
 
+    if (fmt === 'tex') {
+        const live = liveLatex(output);
+        const count = (re: RegExp) => (live.match(re) || []).length;
+        metrics.headingCount = count(/\\(?:chapter|section|subsection|subsubsection|paragraph|subparagraph)(?:\[|\{)/g) + count(/\\frametitle\{/g);
+        metrics.tableCount = count(/\\begin\{(?:longtable|tabular)\}/g);
+        metrics.listCount = count(/\\begin\{(?:itemize|enumerate|description)\}/g);
+        metrics.imageCount = count(/\\includegraphics\[/g);
+        metrics.linkCount = count(/\\(?:href|hyperref)[\[{]/g);
+    }
+
     return metrics;
 }
 
@@ -489,7 +539,7 @@ function compareGeneratedMetrics(
     results.push(mk('Word Count', `${expected.wordCount} (±15%)`, actual.wordCount, wOk,
         `${(wRatio * 100).toFixed(1)}% of baseline word count`, !wOk));
 
-    if (destFmt === 'html' || destFmt === 'md' || destFmt === 'docx' || destFmt === 'odt') {
+    if (destFmt === 'html' || destFmt === 'md' || destFmt === 'docx' || destFmt === 'odt' || destFmt === 'tex') {
         if (expected.headingCount !== undefined && expected.headingCount > 0) {
             const hOk = actual.headingCount === expected.headingCount;
             results.push(mk('Headings', expected.headingCount, actual.headingCount, hOk,
@@ -789,6 +839,26 @@ async function testGeneration(
             });
         }
 
+        if (destFmt === 'tex' && typeof result.value === 'string') {
+            const live = liveLatex(result.value);
+            const begins = (live.match(/\\begin\{[^}]+\}/g) || []).length;
+            const ends = (live.match(/\\end\{[^}]+\}/g) || []).length;
+            const shell = /\\documentclass\[[^\]]*\]\{\w+\}/.test(live) && (live.match(/\\begin\{document\}/g) || []).length === 1
+                && (live.match(/\\end\{document\}/g) || []).length === 1;
+            // Every brace the body writes is balanced once escaped braces are discounted.
+            const braces = live.replace(/\\[{}]/g, '');
+            const balanced = (braces.match(/\{/g) || []).length === (braces.match(/\}/g) || []).length;
+            results.push({
+                category, feature: 'LaTeX Valid Structure', sourceFormat: srcFmt, destFormat: destFmt,
+                result: {
+                    status: shell && begins === ends && balanced ? 'PASS' : 'FAIL',
+                    expected: 'One document environment, matched \\begin/\\end, balanced braces',
+                    actual: `shell=${shell}, begin=${begins}, end=${ends}, balanced=${balanced}`,
+                    details: 'Checked outside verbatim environments and comments'
+                }
+            });
+        }
+
         if (destFmt === 'md' && result.value) {
             const md = result.value as string;
             const hasMarkdownSyntax = /#{1,6} |^\*\*|\[.*?\]\(|^---/m.test(md);
@@ -1035,6 +1105,49 @@ async function testGeneratorConfigs(
                 results.push({
                     category, feature: `${ct.id}: page size/orient/margins applied`, sourceFormat: srcFmt, destFormat: destFmt,
                     result: { status: ok ? 'PASS' : 'FAIL', expected: 'Letter landscape, 36/18pt margins', actual: styles.match(/<style:page-layout-properties[^>]*>/)?.[0]?.slice(0, 120) ?? 'no page-layout', details: 'odtConfig must reach the page layout' }
+                });
+            }
+
+            // G-tex: class, numbering and page geometry reach the preamble.
+            if (ct.id === 'G-tex' && destFmt === 'tex' && typeof result.value === 'string') {
+                const tex = result.value;
+                const ok = /\\documentclass\[[^\]]*\]\{report\}/.test(tex) && !tex.includes('secnumdepth')
+                    && /\\usepackage\[paperwidth=612pt,paperheight=792pt,landscape,top=36pt,bottom=36pt,left=18pt,right=18pt\]\{geometry\}/.test(tex);
+                results.push({
+                    category, feature: `${ct.id}: class/numbering/geometry applied`, sourceFormat: srcFmt, destFormat: destFmt,
+                    result: { status: ok ? 'PASS' : 'FAIL', expected: 'report class, numbered, Letter landscape 36/18pt', actual: tex.slice(0, 160), details: 'texConfig must reach the preamble' }
+                });
+            }
+
+            // G-tex-fragment: body only, headed by the package list, no document shell.
+            if (ct.id === 'G-tex-fragment' && destFmt === 'tex' && typeof result.value === 'string') {
+                const tex = result.value;
+                const ok = !tex.includes('\\documentclass') && !tex.includes('\\begin{document}') && tex.startsWith('% Required preamble packages for this fragment:');
+                results.push({
+                    category, feature: `${ct.id}: fragment has no document shell`, sourceFormat: srcFmt, destFormat: destFmt,
+                    result: { status: ok ? 'PASS' : 'FAIL', expected: 'package comment header, no \\documentclass', actual: tex.slice(0, 120), details: 'standalone:false emits the body only' }
+                });
+            }
+
+            // G-tex-bundle: a zip whose main.tex references exactly the images packaged beside it.
+            if (ct.id === 'G-tex-bundle' && destFmt === 'tex') {
+                let ok = false, detail = '';
+                if (result.value instanceof Uint8Array) {
+                    const files = unzipSync(result.value);
+                    const main = files['main.tex'] ? strFromU8(files['main.tex']) : '';
+                    const packaged = Object.keys(files).filter(n => n !== 'main.tex').sort();
+                    const referenced = [...new Set([...main.matchAll(/\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}/g)].map(m => m[1]))];
+                    // An image the source only named by path cannot be packaged; the bundle guards it with
+                    // \IfFileExists so it still compiles. Every other reference must be in the zip.
+                    const guarded = new Set([...main.matchAll(/\\IfFileExists\{([^}]+)\}\{\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}/g)].map(m => m[2]));
+                    ok = !!main && packaged.every(n => /^images\/[A-Za-z0-9-]+\.[a-z]+$/.test(n)) && referenced.every(r => packaged.includes(r) || guarded.has(r));
+                    detail = `${packaged.length} packaged, ${referenced.length} referenced, ${guarded.size} guarded`;
+                } else {
+                    detail = 'bundle:true did not return a Uint8Array';
+                }
+                results.push({
+                    category, feature: `${ct.id}: zip holds main.tex and every referenced image`, sourceFormat: srcFmt, destFormat: destFmt,
+                    result: { status: ok ? 'PASS' : 'FAIL', expected: 'main.tex + images/*', actual: detail, details: 'bundle must be self-contained' }
                 });
             }
 
@@ -1480,7 +1593,7 @@ async function runMetadataOverrideTests(): Promise<GenFeatureTest[]> {
     const content: OfficeContentNode[] = [
         { type: 'paragraph', children: [{ type: 'text', text: 'Body' }] } as OfficeContentNode,
     ];
-    const makeAst = () => createAST('docx', { ...sourceMeta }, content, [], parserConfig, undefined, () => 'Body');
+    const makeAst = () => createAST('docx', { ...sourceMeta }, content, [], parserConfig, undefined);
 
     // --- Per-field merge: overriding one field must not blank the others ---
     const astMerge = makeAst();
@@ -1612,15 +1725,17 @@ async function runEpubDeterminismTests(): Promise<GenFeatureTest[]> {
     const p1 = (await OfficeGenerator.generate(ast as any, 'epub', pinned)).value as Uint8Array;
     const dx1 = (await OfficeGenerator.generate(ast as any, 'docx', pinned)).value as Uint8Array;
     const ot1 = (await OfficeGenerator.generate(ast as any, 'odt', pinned)).value as Uint8Array;
+    const tx1 = (await OfficeGenerator.generate(ast as any, 'tex', { ...pinned, texConfig: { bundle: true } } as any)).value as Uint8Array;
     await overOneZipTick();
     const p2 = (await OfficeGenerator.generate(ast as any, 'epub', pinned)).value as Uint8Array;
     const dx2 = (await OfficeGenerator.generate(ast as any, 'docx', pinned)).value as Uint8Array;
     const ot2 = (await OfficeGenerator.generate(ast as any, 'odt', pinned)).value as Uint8Array;
+    const tx2 = (await OfficeGenerator.generate(ast as any, 'tex', { ...pinned, texConfig: { bundle: true } } as any)).value as Uint8Array;
     results.push(mk('pinned metadataOverrides.modified is byte-identical across runs',
         'identical bytes', bytesEqual(p1, p2) ? 'identical' : `differ (${p1.length} vs ${p2.length} bytes)`,
         bytesEqual(p1, p2),
         'an explicit modified timestamp must fully determine the archive, including zip entry mtimes'));
-    for (const [dest, a, b] of [['docx', dx1, dx2], ['odt', ot1, ot2]] as [string, Uint8Array, Uint8Array][]) {
+    for (const [dest, a, b] of [['docx', dx1, dx2], ['odt', ot1, ot2], ['tex', tx1, tx2]] as [string, Uint8Array, Uint8Array][]) {
         results.push({
             category, feature: `${dest} pinned modified is byte-identical across runs`, sourceFormat: 'docx', destFormat: dest,
             result: { status: bytesEqual(a, b) ? 'PASS' : 'FAIL', expected: 'identical bytes', actual: bytesEqual(a, b) ? 'identical' : `differ (${a.length} vs ${b.length})`, details: 'pinned mtimes + deterministic ids must fully determine the package', duration: 0 }
@@ -1684,7 +1799,7 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
     const content: OfficeContentNode[] = [
         { type: 'paragraph', children: [{ type: 'text', text: leadingWhitespaceText }] } as OfficeContentNode,
     ];
-    const parserConfig: OfficeParserConfig = { newlineDelimiter: '\n' };
+    const parserConfig: OfficeParserConfig = { ...PARSER_CONFIG };
     const ast = createAST('docx', {}, content, [], parserConfig, undefined);
 
     // --- .to('text') emits the paragraph's text verbatim, leading whitespace and all ---
@@ -1692,12 +1807,12 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
     results.push(mk('text', '.to(text) emits the block text verbatim', JSON.stringify(leadingWhitespaceText), JSON.stringify(newText), newText === leadingWhitespaceText, 'a single-paragraph document should render to exactly its text with no added or stripped characters'));
     results.push(mk('text', '.to(text) preserves leading whitespace', 'starts with "   "', newText.startsWith('   '), newText.startsWith('   '), 'a full trim() would silently strip this as if it were a generation artifact'));
 
-    // --- .to('md') must not strip genuine leading whitespace either (defense in depth - see the
-    // comment at MarkdownGenerator.ts's return statement for why this is currently also masked by
-    // frontmatter in the default case; render without metadata truthiness assumptions by directly
-    // checking the body content survives the trailing '\n\n' + hoistedContent join unharmed) ---
+    // --- .to('md') writes the paragraph's text byte-for-byte, without the spaces before it: a Markdown
+    // reader drops a paragraph's leading spaces (and four or more would make it a code block), so
+    // writing them only made the next save differ. Plain text, above, keeps them. ---
     const { value: mdValue } = await ast.to('md', { renderMetadata: false } as any);
-    results.push(mk('md', '.to(md) preserves leading whitespace in body text', 'contains the untrimmed opening text', typeof mdValue === 'string' && mdValue.includes(leadingWhitespaceText), typeof mdValue === 'string' && mdValue.includes(leadingWhitespaceText), 'the paragraph text node itself must survive byte-for-byte, whether or not frontmatter happens to precede it'));
+    const mdText = leadingWhitespaceText.replace(/^ +/, '');
+    results.push(mk('md', '.to(md) writes the paragraph text without its leading spaces', JSON.stringify(mdText), JSON.stringify(mdValue), mdValue === mdText, 'the text itself survives byte-for-byte; the spaces before it are not written, as a Markdown reader drops them'));
 
     // --- Trailing-newline cleanup must still work (the actual original purpose of the trim) ---
     const noTrailingJunkContent: OfficeContentNode[] = [
@@ -1796,7 +1911,7 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
             } as OfficeContentNode],
         } as OfficeContentNode,
     ];
-    const cellAst = createAST('docx', undefined as any, cellRowContent, [], parserConfig, undefined, () => '');
+    const cellAst = createAST('docx', undefined as any, cellRowContent, [], parserConfig, undefined);
     const { value: flatCells } = await cellAst.to('text', { textConfig: { preserveLayout: false } } as any);
     results.push(mk('text', 'cells are separated when not rendering a grid',
         'ITEM and NEEDED separated', JSON.stringify(flatCells),
@@ -1824,7 +1939,7 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
             children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'text', text: 'Cell' }] }] } as OfficeContentNode],
         } as OfficeContentNode,
     ];
-    const tableOnlyAst = createAST('docx', undefined as any, tableOnlyContent, [], parserConfig, undefined, () => '');
+    const tableOnlyAst = createAST('docx', undefined as any, tableOnlyContent, [], parserConfig, undefined);
     const { value: tableOnlyText } = await tableOnlyAst.to('text', { textConfig: { preserveLayout: true } } as any);
     results.push(mk('text', '.to(text) strips renderTable\'s leading separator artifact too', 'does not start with "\\n"', !tableOnlyText.startsWith('\n'), !tableOnlyText.startsWith('\n'), 'renderTable seeds a leading newline as a separator from a preceding sibling - with none, it must not leak through'));
 
@@ -1867,7 +1982,7 @@ const GIF_1PX = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 const synthAst = (type: string, content: OfficeContentNode[], attachments: any[] = []) =>
-    createAST(type as any, {}, content, attachments, { newlineDelimiter: '\n' }, undefined, () => '');
+    createAST(type as any, {}, content, attachments, { ...PARSER_CONFIG }, undefined);
 
 /**
  * Regressions for the native PDF engine (`pdfConfig.engine: 'native'`), which lays a PDF out itself

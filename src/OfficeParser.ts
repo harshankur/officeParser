@@ -41,6 +41,7 @@ import { parseCsv } from './parsers/CsvParser.js';
 import { parseEpub } from './parsers/EpubParser.js';
 import { parseExcel } from './parsers/ExcelParser.js';
 import { parseHtml } from './parsers/HtmlParser.js';
+import { parseLatex } from './parsers/LatexParser.js';
 import { parseMarkdown } from './parsers/MarkdownParser.js';
 import { parseOpenOffice } from './parsers/OpenOfficeParser.js';
 import { parsePdf } from './parsers/PdfParser.js';
@@ -49,8 +50,9 @@ import { parseRtf } from './parsers/RtfParser.js';
 import { parseWord } from './parsers/WordParser.js';
 import { BlobLike, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeParserConfig, OfficeWarningType, SupportedFileType } from './types.js';
 import { resolveParserConfig } from './utils/configUtils.js';
+import { noteDocumentBytes } from './utils/budgetUtils.js';
 import { assertNode } from './utils/envUtils.js';
-import { getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
+import { checkAbortSignal, getOfficeError, getWrappedError, logWarning } from './utils/errorUtils.js';
 import { decryptIfNeeded } from './crypto/decryptContainer.js';
 import { loadFileType } from './utils/moduleLoader.js';
 import { terminateOcr } from './utils/ocrUtils.js';
@@ -60,7 +62,7 @@ import { detectOfficeTypeFromZip } from './utils/zipUtils.js';
 const GENERIC_ZIP_EXTENSION = 'zip';
 
 /** The formats that are ZIP archives, and so cannot be contradicted by a bare `zip` result. */
-const ZIP_BACKED_FILE_TYPES: ReadonlySet<string> = new Set(['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub']);
+const ZIP_BACKED_FILE_TYPES: ReadonlySet<string> = new Set(['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex']);
 
 /**
  * Upgrades a magic-byte result of `zip` (or none at all) into the specific office format the
@@ -188,7 +190,7 @@ export class OfficeParser {
                 buffer = file;
             } else if (typeof file === 'string') {
                 filePath = file;
-                assertNode('path-parsing');
+                assertNode('path-parsing', internalConfig);
 
                 // Safe to use dynamic import here as we've asserted we are in Node.
                 // Modern bundlers will still see this, but our browser builds 
@@ -222,6 +224,9 @@ export class OfficeParser {
             if (buffer.length > 0) {
                 buffer = await decryptIfNeeded(buffer, internalConfig, ext);
             }
+
+            /** What a `.zip` archive declares, once the type check below has read it. */
+            let archiveType: string | undefined;
 
             // Attempt to detect file type from buffer only if extension is unknown.
             // This matches v6 behavior and prevents crashes in older Node environments
@@ -259,10 +264,15 @@ export class OfficeParser {
                     const detected = worthResolving
                         ? await resolveZipBackedType(type?.ext, buffer, internalConfig)
                         : type?.ext;
+                    // The archive was opened to resolve a bare `zip`: keep what it declared, so routing
+                    // a file named `.zip` below does not read the archive a second time.
+                    if (worthResolving && type?.ext === GENERIC_ZIP_EXTENSION) archiveType = detected ?? GENERIC_ZIP_EXTENSION;
                     // A bare `zip` says only that the bytes are an archive, which every format
                     // on this path already is. Reporting it as a mismatch against the caller's
                     // own extension is noise, so only a resolved format is worth comparing.
-                    if (detected && detected !== GENERIC_ZIP_EXTENSION && detected.toLowerCase() !== ext.toLowerCase()) {
+                    // Nor is an archive named `.zip`: that extension names no format, and routing below
+                    // reads the archive for what it actually holds.
+                    if (detected && detected !== GENERIC_ZIP_EXTENSION && ext.toLowerCase() !== GENERIC_ZIP_EXTENSION && detected.toLowerCase() !== ext.toLowerCase()) {
                         // Mismatch found between authoritative extension and detected content
                         logWarning(OfficeWarningType.BUFFER_TYPE_MISMATCH, internalConfig, { detected, expected: ext });
                     }
@@ -279,8 +289,14 @@ export class OfficeParser {
             // ODF template packages (.ott/.ots/.otp/.otg) are the same format as their document
             // counterparts and share one parser; normalize them so a file routed by its filename
             // extension dispatches correctly, matching how buffer detection resolves the mimetype.
-            const ODF_TEMPLATE_EXT: Record<string, string> = { ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg' };
-            const routedExt = ODF_TEMPLATE_EXT[ext.toLowerCase()] || ext.toLowerCase();
+            // `.latex`/`.ltx` are the other LaTeX source extensions.
+            const ODF_TEMPLATE_EXT: Record<string, string> = { ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg', latex: 'tex', ltx: 'tex' };
+            let routedExt = ODF_TEMPLATE_EXT[ext.toLowerCase()] || ext.toLowerCase();
+            // A file named `.zip` is routed by what the archive holds (a LaTeX project, a renamed
+            // office package), since `zip` itself is not a format.
+            if (routedExt === GENERIC_ZIP_EXTENSION) {
+                routedExt = archiveType ?? (await detectOfficeTypeFromZip(buffer, internalConfig.decompressionLimits ?? {})) ?? routedExt;
+            }
 
             // OCR runs over extracted images in EVERY format (not just PDF), so `ocr: true` without
             // `extractAttachments: true` performs no OCR anywhere. Warn once, centrally, so the no-op is
@@ -289,6 +305,8 @@ export class OfficeParser {
                 logWarning(OfficeWarningType.OCR_REQUIRES_ATTACHMENTS, internalConfig);
             }
 
+            // The budgets that grow with the document's size (see budgetUtils) read it from the config.
+            noteDocumentBytes(internalConfig, buffer.length);
             let result: OfficeParserAST;
             switch (routedExt) {
                 case 'docx':
@@ -303,7 +321,7 @@ export class OfficeParser {
                 case 'odt':
                 case 'odp':
                 case 'ods':
-                case 'odg':
+                case 'odg': {
                     // The ODF types share one parser, which needs to know which of them
                     // it is looking at. It normally reads that from the archive's mimetype
                     // entry; passing the resolved type along gives it something accurate to
@@ -313,9 +331,11 @@ export class OfficeParser {
                     // returns an already-complete config by reference, so writing to it would
                     // pin the caller's own object to this file's type and misroute every later
                     // parse that reused it.
-                    result = await parseOpenOffice(buffer,
-                        { ...internalConfig, fileType: routedExt as SupportedFileType });
+                    const odfConfig = { ...internalConfig, fileType: routedExt as SupportedFileType };
+                    noteDocumentBytes(odfConfig, buffer.length);
+                    result = await parseOpenOffice(buffer, odfConfig);
                     break;
+                }
                 case 'pdf':
                     result = await parsePdf(buffer, internalConfig);
                     break;
@@ -331,6 +351,9 @@ export class OfficeParser {
                 case 'md':
                     result = await parseMarkdown(buffer, internalConfig);
                     break;
+                case 'tex':
+                    result = await parseLatex(buffer, internalConfig);
+                    break;
                 case 'epub':
                     result = await parseEpub(buffer, internalConfig);
                     break;
@@ -338,7 +361,15 @@ export class OfficeParser {
                     throw getOfficeError(OfficeErrorType.EXTENSION_UNSUPPORTED, internalConfig, ext);
             }
 
+            // A parse whose signal fired while it ran is cancelled, whatever the parser was doing
+            // then: it rejects, never resolving with a document that stopped short of the request.
+            // The OCR-only signal is the same cancellation, delivered to OCR.
+            checkAbortSignal(internalConfig.abortSignal);
+            checkAbortSignal(internalConfig.ocrConfig?.abortSignal);
+
             result.warnings = parsingWarnings;
+            // And writers read it from the AST (the grid positions they fill, the content they repeat).
+            noteDocumentBytes(result, buffer.length);
 
             if (callback) callback(result);
             return result;

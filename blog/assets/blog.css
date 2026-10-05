@@ -1,0 +1,904 @@
+/* ==========================================================================
+   officeParser Blog - Clean, Editorial Styling (Anthropic-inspired)
+
+   The look of the list and of every post. A post (blog/posts/<slug>.html) is
+   content only and carries no style of its own: what its elements look like is
+   decided here, under `.article-content`. This file is copied to docs/blog/ by
+   the build (scripts/build-blog.js).
+   ========================================================================== */
+
+:root {
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-heading: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+    /* Light Theme */
+    --bg-page: #fafafa;
+    --bg-surface: #ffffff;
+    --bg-subtle: #f4f4f5;
+    --bg-code: #f1f1f4;
+    --text-primary: #18181b;
+    --text-secondary: #52525b;
+    --text-muted: #71717a;
+    --border-color: #e4e4e7;
+    --border-subtle: #f4f4f5;
+    --accent: #6366f1;
+    --accent-hover: #4f46e5;
+    --accent-subtle: rgba(99, 102, 241, 0.08);
+    --callout-bg: #f5f5fc;
+    --callout-border: #6366f1;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.05);
+    --shadow-hover: 0 12px 28px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="dark"] {
+    --bg-page: #09090b;
+    --bg-surface: #121215;
+    --bg-subtle: #18181b;
+    --bg-code: #1c1c20;
+    --text-primary: #f4f4f5;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+    --border-color: #27272a;
+    --border-subtle: #1f1f23;
+    --accent: #818cf8;
+    --accent-hover: #a5b4fc;
+    --accent-subtle: rgba(129, 140, 248, 0.12);
+    --callout-bg: #141422;
+    --callout-border: #818cf8;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+    --shadow-hover: 0 12px 28px rgba(0, 0, 0, 0.5);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    scroll-behavior: smooth;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+    font-family: var(--font-sans);
+    background-color: var(--bg-page);
+    color: var(--text-primary);
+    line-height: 1.7;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+a {
+    color: inherit;
+    text-decoration: none;
+    transition: color 0.15s ease;
+}
+
+/* A view, a slot or a card that is not shown, whatever its own display is. */
+[hidden] {
+    display: none !important;
+}
+
+/* Read out, not shown: a field's label where its placeholder says the same. */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+a:focus-visible,
+button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 6px;
+}
+
+/* ==========================================================================
+   Header & Navigation
+   ========================================================================== */
+
+.blog-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background-color: rgba(250, 250, 250, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-color);
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+[data-theme="dark"] .blog-header {
+    background-color: rgba(9, 9, 11, 0.85);
+}
+
+.header-container {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 0.9rem 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo-group {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+}
+
+.brand-logo {
+    font-family: var(--font-heading);
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.brand-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background-color: var(--accent-subtle);
+    color: var(--accent);
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid var(--accent-subtle);
+}
+
+.nav-actions {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+}
+
+.nav-link {
+    font-size: 0.925rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+/* A link's short label, shown in place of the long one on a narrow header. */
+.nav-link .nav-short {
+    display: none;
+}
+
+.nav-link:hover {
+    color: var(--text-primary);
+}
+
+.theme-toggle-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 0.45rem 0.65rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+}
+
+.theme-toggle-btn:hover {
+    background-color: var(--bg-subtle);
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+}
+
+/* ==========================================================================
+   Blog Hero (Index Page)
+   ========================================================================== */
+
+.hero-section {
+    max-width: 1140px;
+    margin: 3.5rem auto 2.5rem;
+    padding: 0 1.5rem;
+}
+
+.hero-subtitle {
+    font-family: var(--font-heading);
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+}
+
+.hero-title {
+    font-family: var(--font-heading);
+    font-size: 3rem;
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    line-height: 1.15;
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+}
+
+.hero-description {
+    font-size: 1.18rem;
+    color: var(--text-secondary);
+    max-width: 680px;
+    line-height: 1.6;
+}
+
+/* Search over the articles' titles, summaries and text */
+.post-search {
+    margin-top: 2rem;
+    max-width: 440px;
+}
+
+.post-search-input {
+    width: 100%;
+    min-height: 44px;
+    padding: 0.6rem 1.1rem;
+    font-family: inherit;
+    /* 1rem and no smaller: a phone zooms the page into a field whose text is smaller. */
+    font-size: 1rem;
+    color: var(--text-primary);
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.post-search-input::placeholder {
+    color: var(--text-muted);
+}
+
+.post-search-input:hover {
+    border-color: var(--text-muted);
+}
+
+.post-search-input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-color: var(--accent);
+}
+
+.post-search:not([hidden]) + .filter-tabs {
+    margin-top: 1.25rem;
+}
+
+.search-status {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    margin-bottom: 1.25rem;
+}
+
+/* Where in an article the words searched for were found, when its card does not show them. */
+.card-match {
+    margin-top: 0.85rem;
+    padding-top: 0.85rem;
+    border-top: 1px dashed var(--border-color);
+    font-size: 0.85rem;
+    line-height: 1.55;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+.card-match mark {
+    background-color: var(--accent-subtle);
+    color: var(--text-primary);
+    font-weight: 600;
+    border-radius: 3px;
+    padding: 0 0.15em;
+}
+
+.no-results {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--text-secondary);
+}
+
+.no-results p {
+    margin-bottom: 1rem;
+}
+
+.clear-search {
+    min-height: 44px;
+    padding: 0.5rem 1.25rem;
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.clear-search:hover {
+    border-color: var(--accent);
+    background-color: var(--bg-subtle);
+}
+
+/* Category Filter Tabs */
+.filter-tabs {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 2rem;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 1rem;
+}
+
+.filter-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-weight: 500;
+    padding: 0.4rem 0.85rem;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.filter-btn:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-subtle);
+}
+
+.filter-btn.active {
+    background-color: var(--text-primary);
+    color: var(--bg-page);
+    font-weight: 600;
+}
+
+/* ==========================================================================
+   Article Grid (Index Page)
+   ========================================================================== */
+
+.articles-container {
+    max-width: 1140px;
+    margin: 0 auto 5rem;
+    padding: 0 1.5rem;
+}
+
+.article-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 1.75rem;
+}
+
+.article-card {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    padding: 1.75rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    cursor: pointer;
+}
+
+.article-card:hover,
+.article-card:focus-visible {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-hover);
+    border-color: var(--accent);
+}
+
+.article-card:focus-visible {
+    border-radius: 14px;
+}
+
+.card-top {
+    margin-bottom: 1.5rem;
+}
+
+.card-tag {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+}
+
+.card-title {
+    font-family: var(--font-heading);
+    font-size: 1.35rem;
+    font-weight: 700;
+    line-height: 1.3;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    margin-bottom: 0.75rem;
+}
+
+.card-excerpt {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 1rem;
+    font-size: 0.825rem;
+    color: var(--text-muted);
+}
+
+.read-more {
+    color: var(--accent);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+/* ==========================================================================
+   Article Detail Page
+   ========================================================================== */
+
+.article-wrapper {
+    max-width: 760px;
+    margin: 3.5rem auto 6rem;
+    padding: 0 1.5rem;
+}
+
+.article-meta-header {
+    margin-bottom: 2.5rem;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 2rem;
+}
+
+.article-category {
+    font-family: var(--font-heading);
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+}
+
+.article-headline {
+    font-family: var(--font-heading);
+    font-size: 2.75rem;
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    line-height: 1.18;
+    color: var(--text-primary);
+    margin-bottom: 1rem;
+}
+
+.article-deck {
+    font-size: 1.25rem;
+    color: var(--text-secondary);
+    line-height: 1.55;
+    margin-bottom: 1.5rem;
+}
+
+.byline-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.author-avatar {
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), #a855f7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 0.85rem;
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+a.author-avatar:hover,
+a.author-avatar:focus-visible {
+    color: #ffffff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px var(--accent-subtle), 0 0 0 4px var(--accent);
+    transform: scale(1.04);
+}
+
+.author-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    text-decoration: none;
+    transition: color 0.15s ease;
+}
+
+a.author-name:hover,
+.author-name:hover {
+    color: var(--accent);
+}
+
+.article-content {
+    font-size: 1.08rem;
+    color: var(--text-secondary);
+    line-height: 1.8;
+    overflow-wrap: break-word;
+}
+
+.article-content a:not(.back-to-blog) {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.article-content a:not(.back-to-blog):hover {
+    color: var(--accent-hover);
+}
+
+.article-content p {
+    margin-bottom: 1.6rem;
+}
+
+.article-content h2 {
+    font-family: var(--font-heading);
+    font-size: 1.85rem;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    color: var(--text-primary);
+    margin: 2.75rem 0 1rem;
+    line-height: 1.25;
+}
+
+.article-content h3 {
+    font-family: var(--font-heading);
+    font-size: 1.4rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    margin: 2rem 0 0.85rem;
+    line-height: 1.35;
+}
+
+.article-content ul,
+.article-content ol {
+    margin: 0 0 1.6rem 1.5rem;
+}
+
+.article-content li {
+    margin-bottom: 0.5rem;
+}
+
+.article-content strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.article-content hr {
+    border: none;
+    border-top: 1px solid var(--border-color);
+    margin: 3rem 0;
+}
+
+/* Callout Box */
+.callout {
+    background-color: var(--callout-bg);
+    border-left: 3px solid var(--callout-border);
+    padding: 1.25rem 1.5rem;
+    border-radius: 0 10px 10px 0;
+    margin: 2rem 0;
+}
+
+.callout p:last-child {
+    margin-bottom: 0;
+}
+
+.callout-title {
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 0.4rem;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* Code Blocks */
+.article-content pre {
+    background-color: var(--bg-code);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 1.25rem;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    margin: 1.8rem 0;
+    color: var(--text-primary);
+}
+
+.article-content code {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+    background-color: var(--bg-code);
+    padding: 0.2em 0.4em;
+    border-radius: 5px;
+    color: var(--accent);
+    /* A long URL or identifier breaks rather than widening the page. */
+    overflow-wrap: anywhere;
+}
+
+.article-content pre code {
+    background-color: transparent;
+    padding: 0;
+    color: inherit;
+    font-size: 1em;
+}
+
+/* Tables */
+.article-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 2rem 0;
+    font-size: 0.95rem;
+}
+
+.article-content th,
+.article-content td {
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border-color);
+    text-align: left;
+}
+
+.article-content th {
+    background-color: var(--bg-subtle);
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.article-content td,
+.article-content th {
+    vertical-align: top;
+}
+
+/* A row's first cell names the row. */
+.article-content td:first-child {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+/* Blockquote */
+.article-content blockquote {
+    border-left: 3px solid var(--accent);
+    padding-left: 1.25rem;
+    font-style: italic;
+    color: var(--text-secondary);
+    margin: 2rem 0;
+}
+
+/* A picture is never wider than the column it is in, at any width. */
+.article-content img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 2rem auto;
+    border-radius: 10px;
+}
+
+.article-content figure {
+    margin: 2rem 0;
+}
+
+.article-content figure img {
+    margin: 0 auto;
+}
+
+.article-content figcaption {
+    margin-top: 0.6rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+/* Article Footer */
+.article-nav-footer {
+    margin-top: 4rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.back-to-blog {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.back-to-blog:hover {
+    color: var(--accent-hover);
+}
+
+/* ==========================================================================
+   Footer
+   ========================================================================== */
+
+.blog-footer {
+    border-top: 1px solid var(--border-color);
+    background-color: var(--bg-surface);
+    padding: 3rem 1.5rem;
+    margin-top: 5rem;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.footer-inner {
+    max-width: 1140px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+}
+
+.footer-links a:hover {
+    color: var(--text-primary);
+}
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+
+@media (max-width: 768px) {
+    .hero-title {
+        font-size: 2.25rem;
+    }
+
+    .article-headline {
+        font-size: 2.15rem;
+    }
+
+    .article-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .article-wrapper {
+        margin-top: 2rem;
+    }
+}
+
+/*
+ * Phone widths. Nothing here may scroll sideways: the header drops to short labels, a code block
+ * wraps its lines, and a table is laid out as one card per row with each cell under its column name
+ * (the `data-label` its markup carries).
+ */
+@media (max-width: 640px) {
+    .header-container {
+        padding: 0.75rem 1rem;
+    }
+
+    .brand-logo {
+        font-size: 1.15rem;
+    }
+
+    .nav-actions {
+        gap: 0.9rem;
+    }
+
+    .nav-link {
+        font-size: 0.875rem;
+    }
+
+    .nav-link .nav-long,
+    .nav-link.nav-secondary {
+        display: none;
+    }
+
+    .nav-link .nav-short {
+        display: inline;
+    }
+
+    .hero-section,
+    .articles-container,
+    .article-wrapper {
+        padding: 0 1.1rem;
+    }
+
+    .article-card {
+        padding: 1.35rem;
+    }
+
+    .article-deck {
+        font-size: 1.12rem;
+    }
+
+    .article-content pre {
+        padding: 0.9rem;
+        font-size: 0.75rem;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+
+    .article-content table,
+    .article-content tbody,
+    .article-content tr,
+    .article-content td {
+        display: block;
+        width: 100%;
+    }
+
+    .article-content thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+    }
+
+    .article-content tr {
+        background-color: var(--bg-surface);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        padding: 0.5rem 0;
+        margin-bottom: 0.9rem;
+    }
+
+    .article-content td {
+        border: none;
+        padding: 0.45rem 1rem;
+    }
+
+    .article-content td[data-label]::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-muted);
+        margin-bottom: 0.1rem;
+    }
+
+    /* The row's first cell reads as the card's title, with no label over it. */
+    .article-content td:first-child::before {
+        display: none;
+    }
+
+    .article-nav-footer {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+
+    .footer-inner {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

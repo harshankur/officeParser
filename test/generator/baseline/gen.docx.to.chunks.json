@@ -164,6 +164,14 @@
     }
   },
   {
+    "text": "| OneThree Two Four | To the left is a table inside a table, with some cells merged. |",
+    "metadata": {
+      "sourceType": "docx",
+      "closestHeading": "Tables",
+      "isTableChunk": true
+    }
+  },
+  {
     "text": "We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.",
     "metadata": {
       "sourceType": "docx",
@@ -256,119 +264,119 @@
     }
   },
   {
-    "text": "Demonstration of DOCX support in calibre1",
+    "text": "Demonstration of DOCX support in calibre\t1",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Text Formatting1",
+    "text": "Text Formatting\t1",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Inline formatting2",
+    "text": "Inline formatting\t2",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Fun with fonts2",
+    "text": "Fun with fonts\t2",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Paragraph level formatting2",
+    "text": "Paragraph level formatting\t2",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Tables2",
+    "text": "Tables\t2",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Structural Elements4",
+    "text": "Structural Elements\t4",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Footnotes & Endnotes5",
+    "text": "Footnotes & Endnotes\t5",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Dropcaps5",
+    "text": "Dropcaps\t5",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Links5",
+    "text": "Links\t5",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Table of Contents5",
+    "text": "Table of Contents\t5",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Images6",
+    "text": "Images\t6",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Lists7",
+    "text": "Lists\t7",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Bulleted List8",
+    "text": "Bulleted List\t8",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Numbered List8",
+    "text": "Numbered List\t8",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Multi-level Lists8",
+    "text": "Multi-level Lists\t8",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
     }
   },
   {
-    "text": "Continued Lists8",
+    "text": "Continued Lists\t8",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Table of Contents"
@@ -383,6 +391,13 @@
   },
   {
     "text": "Centered images like this are useful for large pictures that should be a focus of attention.",
+    "metadata": {
+      "sourceType": "docx",
+      "closestHeading": "Images"
+    }
+  },
+  {
+    "text": "[Image: 165 Inspirational Quotes To Keep You Motivated In Life]",
     "metadata": {
       "sourceType": "docx",
       "closestHeading": "Images"

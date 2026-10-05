@@ -32,11 +32,15 @@
     "decompressionLimits": {
       "maxUncompressedBytes": 536870912,
       "maxZipEntries": 10000,
-      "maxTableCells": 1000000
+      "maxTableCells": 1000000,
+      "maxXmlElements": 2000000,
+      "maxRawContentLength": 67108864,
+      "maxRepeatedContent": 16777216
     },
     "htmlParserConfig": {
       "preserveAttributes": false,
       "preserveIframes": false,
+      "preserveComments": true,
       "embedFolkForms": false
     },
     "ignorePageGeometry": false,
@@ -50,7 +54,16 @@
       "headingDetection": "auto",
       "pageRange": "",
       "normalizeText": true,
-      "extractTextColor": true
+      "extractTextColor": true,
+      "maxTextItems": 20000,
+      "maxOperators": 250000,
+      "maxAnnotations": 10000,
+      "maxTimeMs": 5000,
+      "separateProcess": true,
+      "processMemoryMb": 1024
+    },
+    "texParserConfig": {
+      "today": ""
     }
   },
   "type": "ods",
@@ -841,8 +854,13 @@
           "children": [
             {
               "type": "cell",
-              "text": "calibre",
+              "text": "This document demonstrates the ability of the calibre DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action. ",
               "children": [
+                {
+                  "type": "text",
+                  "text": "This document demonstrates the ability of the ",
+                  "formatting": {}
+                },
                 {
                   "type": "text",
                   "text": "calibre",
@@ -851,6 +869,11 @@
                     "color": "#000000",
                     "font": "Ubuntu"
                   }
+                },
+                {
+                  "type": "text",
+                  "text": " DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern ebook format, such as AZW3 for Kindles or EPUB for other ebook readers, to see it in action. ",
+                  "formatting": {}
                 }
               ],
               "metadata": {
@@ -889,8 +912,13 @@
           "children": [
             {
               "type": "cell",
-              "text": "“Add Books” Convert”. “OK”",
+              "text": "To see the DOCX conversion in action, simply add this file to calibre using the “Add Books” button and then click “Convert”.  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click “OK”. ",
               "children": [
+                {
+                  "type": "text",
+                  "text": "To see the DOCX conversion in action, simply add this file to calibre using the ",
+                  "formatting": {}
+                },
                 {
                   "type": "text",
                   "text": "“Add Books” ",
@@ -900,6 +928,11 @@
                     "color": "#000000",
                     "font": "Ubuntu"
                   }
+                },
+                {
+                  "type": "text",
+                  "text": "button and then click “",
+                  "formatting": {}
                 },
                 {
                   "type": "text",
@@ -913,6 +946,11 @@
                 },
                 {
                   "type": "text",
+                  "text": " Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click ",
+                  "formatting": {}
+                },
+                {
+                  "type": "text",
                   "text": "“OK”",
                   "formatting": {
                     "bold": true,
@@ -920,6 +958,11 @@
                     "color": "#000000",
                     "font": "Ubuntu"
                   }
+                },
+                {
+                  "type": "text",
+                  "text": ". ",
+                  "formatting": {}
                 }
               ],
               "metadata": {
@@ -1504,8 +1547,13 @@
           "children": [
             {
               "type": "cell",
-              "text": "subtle emphasis  strong text intense emphasis",
+              "text": "A paragraph with styled text: subtle emphasis  followed by strong text and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease. ",
               "children": [
+                {
+                  "type": "text",
+                  "text": "A paragraph with styled text: ",
+                  "formatting": {}
+                },
                 {
                   "type": "text",
                   "text": "subtle emphasis  ",
@@ -1515,6 +1563,11 @@
                     "color": "#808080",
                     "font": "Ubuntu"
                   }
+                },
+                {
+                  "type": "text",
+                  "text": "followed by ",
+                  "formatting": {}
                 },
                 {
                   "type": "text",
@@ -1528,6 +1581,11 @@
                 },
                 {
                   "type": "text",
+                  "text": "and ",
+                  "formatting": {}
+                },
+                {
+                  "type": "text",
                   "text": "intense emphasis",
                   "formatting": {
                     "bold": true,
@@ -1536,6 +1594,11 @@
                     "color": "#4F81BD",
                     "font": "Ubuntu"
                   }
+                },
+                {
+                  "type": "text",
+                  "text": ". This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease. ",
+                  "formatting": {}
                 }
               ],
               "metadata": {
@@ -1574,8 +1637,13 @@
           "children": [
             {
               "type": "cell",
-              "text": "some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m",
+              "text": "This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion.  ",
               "children": [
+                {
+                  "type": "text",
+                  "text": "This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is ",
+                  "formatting": {}
+                },
                 {
                   "type": "text",
                   "text": "some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m",
@@ -1584,6 +1652,11 @@
                     "color": "#000000",
                     "font": "Ubuntu Mono"
                   }
+                },
+                {
+                  "type": "text",
+                  "text": ". Every embedded font will automatically be embedded in the output ebook during conversion.  ",
+                  "formatting": {}
                 }
               ],
               "metadata": {
@@ -1650,6 +1723,12 @@
                   "type": "text",
                   "text": "For the lovers of poetry amongst you, paragraphs with hanging indents, like this often",
                   "formatting": {}
+                },
+                {
+                  "type": "break",
+                  "metadata": {
+                    "breakType": "textWrapping"
+                  }
                 },
                 {
                   "type": "text",
@@ -2637,8 +2716,13 @@
             },
             {
               "type": "cell",
-              "text": " ",
+              "text": "Undergraduate ",
               "children": [
+                {
+                  "type": "text",
+                  "text": "Undergraduate",
+                  "formatting": {}
+                },
                 {
                   "type": "text",
                   "text": " ",
@@ -2833,8 +2917,13 @@
             },
             {
               "type": "cell",
-              "text": " ",
+              "text": "Graduate ",
               "children": [
+                {
+                  "type": "text",
+                  "text": "Graduate",
+                  "formatting": {}
+                },
                 {
                   "type": "text",
                   "text": " ",
@@ -3089,8 +3178,13 @@
           "children": [
             {
               "type": "cell",
-              "text": " Fictitious data, for illustration purposes only ",
+              "text": "Source: Fictitious data, for illustration purposes only ",
               "children": [
+                {
+                  "type": "text",
+                  "text": "Source:",
+                  "formatting": {}
+                },
                 {
                   "type": "text",
                   "text": " Fictitious data, for illustration purposes only ",
@@ -3292,7 +3386,8 @@
               ],
               "metadata": {
                 "row": 2,
-                "col": 0
+                "col": 0,
+                "colSpan": 13
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"13\" table:number-rows-spanned=\"1\" table:style-name=\"ce67\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">December 2007 </text:p></table:table-cell>"
             }
@@ -3470,7 +3565,8 @@
               ],
               "metadata": {
                 "row": 3,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">Sat </text:p></table:table-cell>"
             }
@@ -3612,7 +3708,8 @@
               ],
               "metadata": {
                 "row": 4,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce70\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">1 </text:p></table:table-cell>"
             }
@@ -3748,7 +3845,8 @@
               "children": [],
               "metadata": {
                 "row": 5,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }
@@ -3926,7 +4024,8 @@
               ],
               "metadata": {
                 "row": 6,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce70\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">8 </text:p></table:table-cell>"
             }
@@ -4062,7 +4161,8 @@
               "children": [],
               "metadata": {
                 "row": 7,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }
@@ -4240,7 +4340,8 @@
               ],
               "metadata": {
                 "row": 8,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce70\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">15 </text:p></table:table-cell>"
             }
@@ -4376,7 +4477,8 @@
               "children": [],
               "metadata": {
                 "row": 9,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }
@@ -4554,7 +4656,8 @@
               ],
               "metadata": {
                 "row": 10,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce70\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">22 </text:p></table:table-cell>"
             }
@@ -4690,7 +4793,8 @@
               "children": [],
               "metadata": {
                 "row": 11,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }
@@ -4868,7 +4972,8 @@
               ],
               "metadata": {
                 "row": 12,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce70\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">29 </text:p></table:table-cell>"
             }
@@ -5004,7 +5109,8 @@
               "children": [],
               "metadata": {
                 "row": 13,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce66\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }
@@ -5152,7 +5258,8 @@
               "children": [],
               "metadata": {
                 "row": 14,
-                "col": 12
+                "col": 12,
+                "colSpan": 2
               },
               "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:number-columns-spanned=\"2\" table:number-rows-spanned=\"1\" table:style-name=\"ce72\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"> </text:p></table:table-cell>"
             }
@@ -5239,8 +5346,13 @@
           "children": [
             {
               "type": "cell",
-              "text": "1i",
+              "text": "Footnotes1 and endnotesi are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices. ",
               "children": [
+                {
+                  "type": "text",
+                  "text": "Footnotes",
+                  "formatting": {}
+                },
                 {
                   "type": "text",
                   "text": "1",
@@ -5252,12 +5364,22 @@
                 },
                 {
                   "type": "text",
+                  "text": " and endnotes",
+                  "formatting": {}
+                },
+                {
+                  "type": "text",
                   "text": "i",
                   "formatting": {
                     "size": "9pt",
                     "color": "#000000",
                     "font": "Ubuntu"
                   }
+                },
+                {
+                  "type": "text",
+                  "text": " are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in ebook devices. ",
+                  "formatting": {}
                 }
               ],
               "metadata": {
@@ -5362,8 +5484,13 @@
           "children": [
             {
               "type": "cell",
-              "text": "calibre download pageparagraph level formatting",
+              "text": "Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the calibre download page. Then we have a link that points back to the section on paragraph level formatting in this document. ",
               "children": [
+                {
+                  "type": "text",
+                  "text": "Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the ",
+                  "formatting": {}
+                },
                 {
                   "type": "text",
                   "text": "calibre download page",
@@ -5376,6 +5503,11 @@
                 },
                 {
                   "type": "text",
+                  "text": ". Then we have a link that points back to the section on ",
+                  "formatting": {}
+                },
+                {
+                  "type": "text",
                   "text": "paragraph level formatting",
                   "formatting": {
                     "underline": true,
@@ -5383,6 +5515,11 @@
                     "color": "#0000FF",
                     "font": "Ubuntu"
                   }
+                },
+                {
+                  "type": "text",
+                  "text": " in this document. ",
+                  "formatting": {}
                 }
               ],
               "metadata": {
@@ -5479,8 +5616,13 @@
           "children": [
             {
               "type": "cell",
-              "text": "inserted",
+              "text": "There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was inserted, not necessarily where it appears on the page in Word. ",
               "children": [
+                {
+                  "type": "text",
+                  "text": "There is no analogous technology in ebooks, so the conversion will usually end up placing the image either centered or floating close to the point in the text where it was ",
+                  "formatting": {}
+                },
                 {
                   "type": "text",
                   "text": "inserted",
@@ -5490,6 +5632,11 @@
                     "color": "#808080",
                     "font": "Ubuntu"
                   }
+                },
+                {
+                  "type": "text",
+                  "text": ", not necessarily where it appears on the page in Word. ",
+                  "formatting": {}
                 }
               ],
               "metadata": {
@@ -6332,6 +6479,16 @@
           "children": [
             {
               "type": "cell",
+              "text": " ",
+              "children": [],
+              "metadata": {
+                "row": 1,
+                "col": 2
+              },
+              "rawContent": "<table:table-cell xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" office:value-type=\"string\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" table:style-name=\"ce64\"><text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"><text:s/></text:p></table:table-cell>"
+            },
+            {
+              "type": "cell",
               "text": "Series 1",
               "children": [
                 {
@@ -6460,7 +6617,7 @@
               "children": [
                 {
                   "type": "chart",
-                  "text": "Chart Title\nSeries D2\nCategory 1\nCategory 2\nCategory 3\nCategory 4\n4.3\n2.5\n3.5\n4.5\nSeries E2\nCategory 1\nCategory 2\nCategory 3\nCategory 4\n2.4\n4.4\n1.8\n2.8\nSeries F2\nCategory 1\nCategory 2\nCategory 3\nCategory 4\n2\n2\n3\n5",
+                  "text": "Chart Title\nCategory 1\nCategory 2\nCategory 3\nCategory 4\nSeries D2\n4.3\n2.5\n3.5\n4.5\nSeries E2\n2.4\n4.4\n1.8\n2.8\nSeries F2\n2\n2\n3\n5",
                   "children": [],
                   "metadata": {
                     "attachmentName": "Object 1"
@@ -6737,29 +6894,21 @@
         ],
         "rawTexts": [
           "Chart Title",
-          "Series D2",
           "Category 1",
           "Category 2",
           "Category 3",
           "Category 4",
+          "Series D2",
           "4.3",
           "2.5",
           "3.5",
           "4.5",
           "Series E2",
-          "Category 1",
-          "Category 2",
-          "Category 3",
-          "Category 4",
           "2.4",
           "4.4",
           "1.8",
           "2.8",
           "Series F2",
-          "Category 1",
-          "Category 2",
-          "Category 3",
-          "Category 4",
           "2",
           "2",
           "3",

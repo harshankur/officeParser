@@ -7,6 +7,7 @@ Please include a summary of the changes and the related issue (if any).
 - [ ] ExcelParser (XLSX)
 - [ ] OpenOfficeParser (ODT/ODS/ODP/ODG)
 - [ ] EpubParser / EpubGenerator
+- [ ] LatexParser / LatexGenerator
 - [ ] PDFParser
 - [ ] OCR / Worker Pool
 - [ ] Infrastructure / Build / CLI

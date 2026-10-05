@@ -1,8 +1,17 @@
-import { OfficeAttachment, OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
+import { ChartData, OfficeAttachment, OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
 import { resolveGeneratorConfig } from '../utils/configUtils.js';
 import { checkAbortSignal, getWarningMessage } from '../utils/errorUtils.js';
 import { resolveImageMode } from '../utils/officeGenUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
+import { isSourceComment } from '../utils/commentUtils.js';
+import { gridPositionsFor } from '../utils/sheetGridUtils.js';
+import { MAX_LAYOUT_COLUMNS } from '../utils/tableLayout.js';
+
+/** The most cells one chart's data table holds in DOCX, ODT and LaTeX output (see BaseGenerator.chartTable). */
+const MAX_CHART_TABLE_CELLS = 100_000;
+
+/** The most picture bytes one document writes inline in all (see BaseGenerator.inlineWithinBudget). */
+export const MAX_INLINED_IMAGE_BYTES = 128 * 1024 * 1024;
 
 /**
  * Base class for all document generators.
@@ -14,13 +23,138 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     protected messages: OfficeIssue[] = [];
     protected styleMapper: StyleMapper;
     protected collectedNotes: OfficeContentNode[] = [];
+    private readonly collectedNoteSet = new Set<OfficeContentNode>();
+    private readonly writtenComments = new Set<OfficeContentNode>();
+    private inlinedImageBytes = 0;
+    private paddingCellsLeft: number;
+    private paddingLimit: number;
+    private gridLimitWarned = false;
+
+    /**
+     * A chart's data as DOCX, ODT and LaTeX write it: a header of series names, then a row per label.
+     * The table is labels x series, which a 9.6 KB PPTX made nine million cells (the process ran out of
+     * memory), and it is written at every chart showing the data; so it is built within the grid budget
+     * (see padWithinBudget) and at most MAX_CHART_TABLE_CELLS cells: at most MAX_LAYOUT_COLUMNS - 1 series,
+     * and the rows those hold. What is left out is reported (CONTENT_NOT_REPRESENTABLE).
+     */
+    protected chartTable(data: ChartData, cellOf: (text: string) => OfficeContentNode): OfficeContentNode {
+        const dataSets = Array.isArray(data.dataSets) ? data.dataSets : [];
+        const labels = Array.isArray(data.labels) ? data.labels : [];
+        const series = dataSets.slice(0, MAX_LAYOUT_COLUMNS - 1);
+        const width = series.length + 1;
+        const allowed = Math.min(labels.length + 1, Math.floor(Math.min(this.paddingCellsLeft, MAX_CHART_TABLE_CELLS) / width));
+        this.paddingCellsLeft -= allowed * width;
+        if (series.length < dataSets.length || allowed < labels.length + 1) {
+            this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'chart data past the table limit', format: this.destination });
+        }
+        const rows: OfficeContentNode[] = [];
+        if (allowed > 0) rows.push({ type: 'row', children: [cellOf(''), ...series.map(d => cellOf(d?.name || ''))] } as OfficeContentNode);
+        for (let i = 0; i < allowed - 1; i++) {
+            rows.push({ type: 'row', children: [cellOf(String(labels[i] ?? '')), ...series.map(d => cellOf(String(d?.values?.[i] ?? '')))] } as OfficeContentNode);
+        }
+        return { type: 'table', children: rows } as OfficeContentNode;
+    }
+
+    /** Whether `positions` more grid positions (rows a sparse sheet fills back in) fit the same budget, all or none. */
+    protected takeGridPositions(positions: number): boolean {
+        if (!(positions >= 0)) return false;
+        if (positions > this.paddingCellsLeft) { this.warnGridLimit({ rowsNotFilled: true }); return false; }
+        this.paddingCellsLeft -= positions;
+        return true;
+    }
+
+    /**
+     * How many of `missing` empty cells a row may be padded with to reach its table's width, taken from
+     * the document's budget (the grid budget's size, see gridPositionsFor). Rows are padded to the widest:
+     * one row of 10,000 cells over 10,000 rows of one made 100 million positions from 4 KB, in a table
+     * the grid budget had already laid out as tightly as it could. Past the budget a row keeps the cells
+     * it has, which is reported once (TABLE_GRID_LIMIT_EXCEEDED); Markdown, CSV and LaTeX read a short
+     * row as ending in empty cells.
+     */
+    protected padWithinBudget(missing: number): number {
+        if (!(missing > 0)) return 0;
+        const allowed = Math.min(missing, this.paddingCellsLeft);
+        this.paddingCellsLeft -= allowed;
+        if (allowed < missing) this.warnGridLimit({ unpadded: true });
+        return allowed;
+    }
+
+    /**
+     * Whether a picture of `bytes` may still be written inline (a `data:` URI, RTF picture data), taking
+     * it from the document's budget of MAX_INLINED_IMAGE_BYTES; when not, an IMAGE_NOT_INLINED warning.
+     * A format that cannot point one picture at another's data writes it at every place showing it, so
+     * a small document showing one large picture many times made output past what a string can hold.
+     */
+    protected inlineWithinBudget(bytes: number, name: string | undefined): boolean {
+        if (this.inlinedImageBytes + bytes > MAX_INLINED_IMAGE_BYTES) {
+            this.warn(OfficeWarningType.IMAGE_NOT_INLINED, { name, bytes, limit: MAX_INLINED_IMAGE_BYTES, inDocument: true });
+            return false;
+        }
+        this.inlinedImageBytes += bytes;
+        return true;
+    }
+
+    /**
+     * Whether `comment` is being written for the first time (and marks it written). A comment the AST
+     * shares among several references is written once, at the first: written at each, one comment a
+     * small document referred to thousands of times (or comments referring to each other twice each)
+     * made output of gigabytes. Marked before its body is written, so a comment inside itself cannot
+     * recurse.
+     */
+    protected firstWriteOfComment(comment: OfficeContentNode): boolean {
+        if (this.writtenComments.has(comment)) return false;
+        this.writtenComments.add(comment);
+        return true;
+    }
+    private noteReferenceCounts: Map<OfficeContentNode, number> | undefined;
+
+    /**
+     * How many references the AST makes to `note` (a parser shares one note node among all the
+     * references to it). A writer that writes a note at its reference writes it in full once and
+     * refers back to it from the others, so a note referred to thousands of times is not written
+     * thousands of times.
+     */
+    protected noteReferences(note: OfficeContentNode): number {
+        if (!this.noteReferenceCounts) {
+            const counts = new Map<OfficeContentNode, number>();
+            const seen = new Set<OfficeContentNode>();
+            const stack: OfficeContentNode[] = [...(this.ast?.content ?? [])];
+            while (stack.length) {
+                const node = stack.pop()!;
+                if (!node || typeof node !== 'object') continue;
+                for (const n of node.notes ?? []) counts.set(n, (counts.get(n) ?? 0) + 1);
+                if (seen.has(node)) continue;
+                seen.add(node);
+                for (const list of [node.children, node.notes, node.comments]) if (list) for (const child of list) stack.push(child);
+            }
+            this.noteReferenceCounts = counts;
+        }
+        return this.noteReferenceCounts.get(note) ?? 0;
+    }
     /** Lazily-built `name -> attachment` index for {@link getAttachment}. */
     private attachmentIndex?: Map<string, OfficeAttachment>;
 
     constructor(protected destination: D, ast: OfficeParserAST, config?: GeneratorConfig<D> | FullGeneratorConfig) {
-        this.config = resolveGeneratorConfig(destination, ast.config, config);
+        // Problems with the configuration itself are among the result's messages too.
+        this.config = resolveGeneratorConfig(destination, ast.config, config, issue => this.messages.push(issue));
         this.ast = ast;
-        this.styleMapper = new StyleMapper(this.config.styleMap, this.config.ignoreDefaultStyleMap);
+        this.styleMapper = new StyleMapper(this.config.styleMap, this.config.ignoreDefaultStyleMap, this.config);
+        this.paddingCellsLeft = this.paddingLimit = gridPositionsFor(ast);
+    }
+
+    /**
+     * Reports that `tables` of the document's tables were laid out closer before writing, to fit the grid
+     * budget (see withBoundedSheetGrids): their cells no longer stand where the document put them.
+     */
+    public reportTablesLaidOut(tables: number): void {
+        this.warn(OfficeWarningType.TABLE_GRID_LIMIT_EXCEEDED, { laidOut: tables, limit: this.paddingLimit });
+    }
+
+    /** Reports, once per output, that the grid budget left rows unpadded or a sparse sheet's empty rows unwritten. */
+    private warnGridLimit(info: { unpadded?: boolean; rowsNotFilled?: boolean }): void {
+        if (this.gridLimitWarned) return;
+        this.gridLimitWarned = true;
+        this.warn(OfficeWarningType.TABLE_GRID_LIMIT_EXCEEDED, { ...info, limit: this.paddingLimit });
     }
 
     /**
@@ -167,15 +301,26 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         if (typeof override === 'string') return override;
 
         let childrenOutput = '';
-        if (node.children) {
+        if (node.children && !this.walkedByProcessor(node)) {
+            // The output of the child before, for what goes between it and the next (see childSeparator).
+            let previous = '';
             for (const child of node.children) {
-                childrenOutput += await this.processNodeRecursive(child, processor);
+                const piece = await this.processNodeRecursive(child, processor);
+                if (!piece) continue;
+                childrenOutput += this.childSeparator(previous, child, piece) + piece;
+                previous = piece;
             }
         }
 
         if (node.notes && node.notes.length > 0) {
             if (node.type !== 'slide') {
-                this.collectedNotes.push(...node.notes);
+                // Each note once, however many references share it: listed per reference, one note a
+                // small document refers to thousands of times was written out that many times.
+                for (const note of node.notes) {
+                    if (this.collectedNoteSet.has(note)) continue;
+                    this.collectedNoteSet.add(note);
+                    this.collectedNotes.push(note);
+                }
             }
         }
 
@@ -191,12 +336,31 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     }
 
     /**
-     * Helper to generate a unique ID (slug) from text.
+     * Whether the processor renders `node`'s children itself, so they are not rendered first for it
+     * (it is given '' as their output). Rendered twice, a table nested in a table nested in a table
+     * doubles the work at each level: 22 levels took seconds and 30 would take half an hour.
+     */
+    protected walkedByProcessor(_node: OfficeContentNode): boolean {
+        return false;
+    }
+
+    /**
+     * What goes between `previous`, the output of a node's child (empty for none), and `piece`, the
+     * output of the child after it, `child`. Given that output alone, not all the node's output so
+     * far: reading the end of a string built up piece by piece copies all of it each time.
+     */
+    protected childSeparator(_previous: string, _child: OfficeContentNode, _piece: string): string {
+        return '';
+    }
+
+    /**
+     * Helper to generate a unique ID (slug) from text. Letters and digits of every script are kept, as
+     * GitHub's heading ids keep them (`#überblick`, `#введение`): only punctuation and symbols go.
      */
     protected slugify(text: string): string {
         return text
             .toLowerCase()
-            .replace(/[^\w\s-]/g, '')
+            .replace(/[^\p{L}\p{M}\p{N}\s_-]/gu, '')
             .replace(/[\s_-]+/g, '-')
             .replace(/^-+|-+$/g, '');
     }
@@ -240,6 +404,17 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     }
 
     /**
+     * Takes `key` from the keys getFootnoteKey gives notes, for an id a writer derives from a note's key
+     * (a second reference's `KEY-2`), so no note is given it later. False when a note or an earlier claim
+     * holds it.
+     */
+    protected claimFootnoteKey(key: string): boolean {
+        if (this.usedFootnoteKeys.has(key)) return false;
+        this.usedFootnoteKeys.add(key);
+        return true;
+    }
+
+    /**
      * True when every content-bearing text descendant satisfies `test` - i.e. the property is
      * uniform across the whole node and therefore says nothing the node type does not already say.
      *
@@ -274,9 +449,11 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     }
 
     /**
-     * Recursively extracts plain text from a node and its children.
+     * Recursively extracts plain text from a node and its children. A source comment (the author's
+     * hidden note, `<!-- ... -->`) is not text, so it contributes nothing.
      */
     protected getNodeText(node: OfficeContentNode): string {
+        if (isSourceComment(node)) return '';
         if (node.text) return node.text;
         if (node.children) {
             return node.children.map(c => this.getNodeText(c)).join('');

@@ -2,59 +2,110 @@ import { Zippable, zipSync } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeParserAST } from '../types.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { HtmlGenerator } from './HtmlGenerator.js';
-import { escapeXml } from '../utils/sanitize.js';
-import { decodeBase64, MIME_EXT, resolveZipInstant } from '../utils/officeGenUtils.js';
+import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
+import { decodeBase64, documentLanguage, MIME_EXT, resolveZipInstant } from '../utils/officeGenUtils.js';
 
 const VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
 
-/** Block-level tags whose HTML5 content model does not permit them inside a <p>. */
-const BLOCK_TAGS_INVALID_IN_P = ['div', 'table', 'ul', 'ol', 'dl', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'section', 'figure'];
+/** Block-level tags whose HTML5 content model does not permit them inside a <p> (a <p> among them). */
+const BLOCK_TAGS_INVALID_IN_P = new Set(['address', 'article', 'aside', 'blockquote', 'details', 'dialog', 'div', 'dl', 'fieldset',
+    'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'main', 'menu', 'nav', 'ol',
+    'p', 'pre', 'section', 'table', 'ul']);
 
 /**
  * HTML5's content model forbids block elements inside <p> (a <p> can only hold "phrasing
  * content"), but browsers silently fix this via the HTML5 parsing algorithm's
  * auto-closing rule: seeing a block start tag implicitly closes the open <p> first.
- * XML parsers have no such rule - they just build the tree exactly as written. Since
- * HtmlGenerator always wraps images in `<div class="image-container">`, a paragraph
- * whose only child is an image becomes `<p><div>...</div></p>`: well-formed XML, but
- * many EPUB rendering engines refuse to lay out a block box found inside a paragraph and
- * simply drop it - silently, with no parse error, which is why the image vanishes.
+ * XML parsers have no such rule - they just build the tree exactly as written, and many EPUB
+ * rendering engines refuse to lay out a block box found inside a paragraph and simply drop it.
+ * HtmlGenerator writes a paragraph holding a block as its parts, so this is for markup it is
+ * handed whole (an `onNode` replacement, a heading's content).
  *
  * Fixes this by promoting any `<p ...>` that contains a nested block tag to a `<div ...>`
- * instead, matching what a browser's auto-correction effectively produces. Paragraphs
- * don't nest, so the first `</p>` after each `<p>` is always its match.
+ * instead, matching what a browser's auto-correction effectively produces. The tags are read
+ * once, in order, each `</p>` matched to the `<p>` it closes: paired with the first `</p>` after
+ * it, a paragraph holding a table with a <p> in a cell was closed at the cell's `</p>` and the
+ * document was no longer well-formed. Comments are passed over (their text is not markup).
  */
 const promoteParagraphsWithBlockContent = (html: string): string => {
-    const blockTagPattern = new RegExp(`<(?:${BLOCK_TAGS_INVALID_IN_P.join('|')})\\b`, 'i');
-    let result = '';
-    let cursor = 0;
-    const pOpenRegex = /<p(\s[^>]*)?>/gi;
-    let match: RegExpExecArray | null;
-
-    while ((match = pOpenRegex.exec(html)) !== null) {
-        if (match.index < cursor) continue; // inside content already emitted by a prior promotion
-
-        result += html.slice(cursor, match.index);
-        const contentStart = match.index + match[0].length;
-        const closeMatch = /<\/p>/i.exec(html.slice(contentStart));
-        if (!closeMatch) {
-            // No closing tag found (shouldn't happen with well-formed generator output) -
-            // leave as-is rather than risk corrupting the rest of the document.
-            result += match[0];
-            cursor = contentStart;
-            pOpenRegex.lastIndex = cursor;
+    const open: { at: number; hasBlock: boolean }[] = [];
+    const edits: { at: number; length: number; text: string }[] = [];
+    for (let i = html.indexOf('<'); i !== -1; i = html.indexOf('<', i + 1)) {
+        if (html.startsWith('<!--', i)) {
+            const end = html.indexOf('-->', i + 4);
+            if (end === -1) break;
+            i = end + 2;
             continue;
         }
-
-        const inner = html.slice(contentStart, contentStart + closeMatch.index);
-        const attrs = match[1] || '';
-        result += blockTagPattern.test(inner) ? `<div${attrs}>${inner}</div>` : `<p${attrs}>${inner}</p>`;
-
-        cursor = contentStart + closeMatch.index + closeMatch[0].length;
-        pOpenRegex.lastIndex = cursor;
+        const closing = html[i + 1] === '/';
+        let nameEnd = i + (closing ? 2 : 1);
+        while (nameEnd < html.length && /[A-Za-z0-9]/.test(html[nameEnd])) nameEnd++;
+        const name = html.slice(i + (closing ? 2 : 1), nameEnd).toLowerCase();
+        if (closing) {
+            if (name !== 'p') continue;
+            const paragraph = open.pop();
+            if (paragraph?.hasBlock) edits.push({ at: paragraph.at, length: 2, text: '<div' }, { at: i, length: 3, text: '</div' });
+            continue;
+        }
+        // The innermost open paragraph holds this block; a paragraph holding it holds a block too.
+        if (BLOCK_TAGS_INVALID_IN_P.has(name) && open.length) open[open.length - 1].hasBlock = true;
+        if (name === 'p') open.push({ at: i, hasBlock: false });
     }
-    result += html.slice(cursor);
-    return result;
+    if (!edits.length) return html;
+    edits.sort((a, b) => a.at - b.at);
+    const parts: string[] = [];
+    let cursor = 0;
+    for (const edit of edits) {
+        parts.push(html.slice(cursor, edit.at), edit.text);
+        cursor = edit.at + edit.length;
+    }
+    parts.push(html.slice(cursor));
+    return parts.join('');
+};
+
+/**
+ * A value as the text of an XML element or attribute (the package document, the navigation document,
+ * a chapter's head): escaped, and without the characters XML does not allow at all (see toXhtml).
+ */
+const xmlText = (value: string | undefined): string => escapeXml(stripInvalidXmlChars(value as string));
+
+/** XML's name characters (XML 1.0, fifth edition): what an id may start with, and what it may hold. */
+const XML_NAME_START = 'A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\u{10000}-\u{EFFFF}';
+const XML_NAME = new RegExp(`^[${XML_NAME_START}][${XML_NAME_START}.0-9\u00B7\u0300-\u036F\u203F\u2040-]*$`, 'u');
+const NOT_XML_NAME_CHARACTER = new RegExp(`[^${XML_NAME_START}.0-9\u00B7\u0300-\u036F\u203F\u2040-]`, 'gu');
+
+/**
+ * `xhtml` with each id an EPUB checker accepts: an XML name without a colon (`2024-results`, a heading
+ * starting with a digit, and `page=3` are not). Each other id is renamed (its other characters made
+ * `_`, `_` put first when it does not start as a name may, numbered when taken), and every link to it
+ * with it. Kept as they were, the book failed validation (RSC-005). Also leaves out the `name` that
+ * HtmlGenerator writes beside an anchor's id, which EPUB's XHTML does not allow.
+ */
+const withXmlNameIds = (xhtml: string): string => {
+    const out = xhtml.replace(/<a id="([^"]*)" name="\1">/g, '<a id="$1">');
+    const ids = new Set<string>();
+    for (const match of out.matchAll(/\sid="([^"]*)"/g)) ids.add(match[1]);
+    const renamed = new Map<string, string>();
+    const taken = new Set(ids);
+    // The number each renamed base tries next, so ids renamed alike are numbered in one pass.
+    const nextNumber = new Map<string, number>();
+    for (const id of ids) {
+        if (XML_NAME.test(id) || !id) continue;
+        let base = id.replace(NOT_XML_NAME_CHARACTER, '_');
+        if (!XML_NAME.test(base)) base = `_${base}`;
+        let candidate = base;
+        let n = nextNumber.get(base) ?? 2;
+        while (taken.has(candidate)) candidate = `${base}-${n++}`;
+        nextNumber.set(base, n);
+        taken.add(candidate);
+        renamed.set(id, candidate);
+    }
+    if (!renamed.size) return out;
+    return out.replace(/(\s(?:id|href)=")(#?)([^"]*)"/g, (whole: string, attribute: string, hash: string, value: string) => {
+        const isId = attribute.includes('id=');
+        const name = renamed.get(isId ? hash + value : value);
+        return name === undefined || (!isId && !hash) ? whole : `${attribute}${isId ? '' : '#'}${name}"`;
+    });
 };
 
 /**
@@ -63,7 +114,7 @@ const promoteParagraphsWithBlockContent = (html: string): string => {
  *
  * This is more than cosmetic: a single raw `&` or unclosed tag makes the whole content
  * document fail to open. The conversion:
- *  - strips `<script>` blocks — EpubGenerator renders through HtmlGenerator with
+ *  - strips `<script>` blocks. EpubGenerator renders through HtmlGenerator with
  *    `standalone: false`, which already omits the envelope-level stylesheet and Chart.js/
  *    spreadsheet scripts entirely, but a chart *node* still emits its own inline
  *    `<script>` (chart-init JS) regardless of that flag, since it's content, not envelope.
@@ -77,10 +128,14 @@ const promoteParagraphsWithBlockContent = (html: string): string => {
  *  - escapes stray ampersands (e.g. in `href` query strings) not already part of a valid
  *    reference;
  *  - gives HTML boolean attributes an explicit value (`checked` -> `checked="checked"`);
- *  - self-closes void elements (`<br>` -> `<br/>`).
+ *  - self-closes void elements (`<br>` -> `<br/>`);
+ *  - removes the characters XML does not allow at all, even escaped (C0 controls but tab, line
+ *    feed and carriage return; U+FFFE and U+FFFF; lone surrogates), which a document's text can hold
+ *    (a control character in a CSV cell, `&#1;` in an HTML page): one made the chapter unreadable.
+ *    DOCX and ODT output leave them out in the same way.
  */
 const toXhtml = (html: string): string => {
-    let out = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+    let out = stripInvalidXmlChars(html).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
 
     out = promoteParagraphsWithBlockContent(out);
 
@@ -95,13 +150,16 @@ const toXhtml = (html: string): string => {
     // option" is never rewritten.
     out = out.replace(/<input\b([^>]*?)\schecked(\s*\/?>)/gi, '<input$1 checked="checked"$2');
     out = out.replace(/<(iframe|video|audio)\b([^>]*?)\s(allowfullscreen|autoplay|controls|loop|muted)(\s*\/?>|\s)/gi, '<$1$2 $3="$3"$4');
+    // A gated embed's marker attribute (`htmlConfig.gatedEmbeds`), written bare; the reader checks only that it is there.
+    out = out.replace(/<div data-embed-gated /g, '<div data-embed-gated="" ');
 
     // Self-close void elements (non-greedy attr capture so an already-present trailing `/`
     // isn't duplicated, e.g. `<meta .../>` must not become `<meta ...//>`).
     const voidTagPattern = new RegExp(`<(${VOID_TAGS.join('|')})((?:\\s[^>]*?)?)\\s*/?>`, 'gi');
     out = out.replace(voidTagPattern, (_m, tag, attrs) => `<${tag}${attrs}/>`);
 
-    return out;
+    // Ids an EPUB accepts, and the links to them (see withXmlNameIds).
+    return withXmlNameIds(out);
 };
 
 /**
@@ -166,17 +224,36 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
             // which belongs in a packaged EPUB.
             htmlConfig: { ...this.config.htmlConfig, standalone: false, sourceAttributes: false },
         } as GeneratorConfig<'html'>);
-        const htmlResult = await htmlGenerator.generate();
-        let bodyHtml = typeof htmlResult.value === 'string' ? htmlResult.value : '';
-
-        // Extract base64 data-URI images into packaged files (EPUB readers don't render
-        // `data:` URIs). Each distinct image becomes one OEBPS/images/imageN.ext resource,
-        // a manifest <item>, and a rewritten relative `src`. Deduped so a repeated image
-        // is packaged once.
+        // Each attachment's picture is a file in the package, which every <img> showing it points at: its
+        // data was inlined at every <img> and extracted again, so a small book showing one large
+        // picture many times was built as an HTML string past what memory holds.
         const imageResources: Record<string, Uint8Array> = {};
         const imageManifestItems: string[] = [];
         const dataUriToHref = new Map<string, string>();
+        const attachmentHref = new Map<string, string>();
         let imageCounter = 0;
+        htmlGenerator.imageSourceFor = (attachment) => {
+            const mime = (attachment.mimeType || 'image/png').toLowerCase();
+            if (!/^image\/[a-z0-9.+-]+$/.test(mime) || !attachment.name) return undefined;
+            let href = attachmentHref.get(attachment.name);
+            if (!href) {
+                let data: Uint8Array;
+                try { data = decodeBase64(attachment.data); } catch { return undefined; }
+                imageCounter++;
+                href = `images/image${imageCounter}.${MIME_EXT[mime] || 'img'}`;
+                imageResources[`OEBPS/${href}`] = data;
+                imageManifestItems.push(`<item id="img${imageCounter}" href="${href}" media-type="${mime}"/>`);
+                attachmentHref.set(attachment.name, href);
+            }
+            return href;
+        };
+        const htmlResult = await htmlGenerator.generate();
+        let bodyHtml = typeof htmlResult.value === 'string' ? htmlResult.value : '';
+
+        // Extract any other base64 data-URI images (a picture given by a data: URL) into packaged
+        // files (EPUB readers don't render `data:` URIs). Each distinct image becomes one
+        // OEBPS/images/imageN.ext resource, a manifest <item>, and a rewritten relative `src`.
+        // Deduped so a repeated image is packaged once.
         bodyHtml = bodyHtml.replace(/(<img\b[^>]*\bsrc=")(data:(image\/[a-zA-Z0-9.+-]+);base64,([^"]+))(")/gi,
             (_full, pre, dataUri, mime, b64, post) => {
                 let href = dataUriToHref.get(dataUri);
@@ -209,7 +286,7 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
         const subject = meta.subject;
         const keywords = meta.keywords;
         const nativeProps = (meta.nativeProperties || {}) as Record<string, any>;
-        const language = nativeProps.language || 'en';
+        const language = documentLanguage(meta);
         // OPF metadata is a closed Dublin Core vocabulary: a caller-defined key has no valid
         // element to live in, and inventing one risks failing EPUB validation outright.
         this.warnUnrepresentableCustomMetadata('EPUB');
@@ -218,10 +295,10 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
 
         const chapterXhtml = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="${escapeXml(language)}">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="${xmlText(language)}">
 <head>
 <meta charset="utf-8"/>
-<title>${escapeXml(title)}</title>
+<title>${xmlText(title)}</title>
 <style type="text/css">
 ${EPUB_STYLESHEET}
 </style>
@@ -235,20 +312,20 @@ ${xhtmlBody}
         // all. Inline `${x ? ... : ''}` leaves the surrounding indentation and newline behind, so
         // every optional field the document lacks used to emit a stray blank line into the OPF.
         const optionalDcElements = [
-            author ? `<dc:creator>${escapeXml(author)}</dc:creator>` : '',
-            description ? `<dc:description>${escapeXml(description)}</dc:description>` : '',
+            author ? `<dc:creator>${xmlText(author)}</dc:creator>` : '',
+            description ? `<dc:description>${xmlText(description)}</dc:description>` : '',
             // dc:subject is repeatable and is the OPF's only slot for either of these.
-            subject ? `<dc:subject>${escapeXml(subject)}</dc:subject>` : '',
-            keywords ? `<dc:subject>${escapeXml(keywords)}</dc:subject>` : '',
+            subject ? `<dc:subject>${xmlText(subject)}</dc:subject>` : '',
+            keywords ? `<dc:subject>${xmlText(keywords)}</dc:subject>` : '',
         ].filter(Boolean).map(el => `    ${el}`).join('\n');
 
         const opf = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="pub-id">${escapeXml(identifier)}</dc:identifier>
-    <dc:title>${escapeXml(title)}</dc:title>
+    <dc:identifier id="pub-id">${xmlText(identifier)}</dc:identifier>
+    <dc:title>${xmlText(title)}</dc:title>
 ${optionalDcElements}
-    <dc:language>${escapeXml(language)}</dc:language>
+    <dc:language>${xmlText(language)}</dc:language>
     <meta property="dcterms:modified">${modified}</meta>
   </metadata>
   <manifest>
@@ -266,9 +343,9 @@ ${optionalDcElements}
 <head><meta charset="utf-8"/><title>Navigation</title></head>
 <body>
 <nav epub:type="toc" id="toc">
-<h1>${escapeXml(title)}</h1>
+<h1>${xmlText(title)}</h1>
 <ol>
-<li><a href="chapter1.xhtml">${escapeXml(title)}</a></li>
+<li><a href="chapter1.xhtml">${xmlText(title)}</a></li>
 </ol>
 </nav>
 </body>

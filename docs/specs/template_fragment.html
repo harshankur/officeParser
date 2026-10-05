@@ -6,7 +6,7 @@
     <h1>OfficeTemplate Specification</h1>
     <p><code>OfficeTemplate.render()</code> (alias <code>renderTemplate</code>) fills a <strong>DOCX template</strong>'s
         <code>{{placeholder}}</code> tags from your data and returns a new <code>.docx</code>. It is a lightweight
-        mail-merge / document-generation entry point &mdash; a zero-dependency take on Adobe's Document Generation API,
+        mail-merge / document-generation entry point: a zero-dependency take on Adobe's Document Generation API,
         built on the bundled <code>fflate</code>.</p>
     <p>It is <strong>not</strong> parsing or conversion: the template is copied and only its placeholders are substituted,
         so <strong>every bit of the original formatting, layout and structure is preserved</strong>. Give it one data
@@ -122,7 +122,10 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
                 <td><code>DecompressionLimits</code></td>
                 <td><code>(none)</code></td>
                 <td>Bounds unzipping of an untrusted template exactly as parsing does; a zip-bomb template rejects with a
-                    typed <code>ZIP_*</code> error rather than being mistaken for a non-DOCX file.</td>
+                    typed <code>ZIP_*</code> error rather than being mistaken for a non-DOCX file. Its
+                    <code>maxRepeatedContent</code> (16 MiB) bounds what values add by repetition: each use of a value
+                    after its first adds what the value outgrows its placeholder by, and past it the render rejects with
+                    <code>OUTPUT_TOO_LARGE</code>.</td>
             </tr>
         </tbody>
     </table>

@@ -1,0 +1,646 @@
+\RequirePackage{iftex}
+% DVI output (latex, uplatex or platex, then dvipdfmx): a global class option gives every package the dvipdfmx driver.
+\def\officeparserdriver{}\ifpdf\else\ifXeTeX\else\def\officeparserdriver{dvipdfmx,}\fi\fi
+\documentclass[\officeparserdriver aspectratio=169,12pt,xcolor=table]{beamer}
+\iftutex
+  \usepackage{fontspec}
+\else
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{lmodern}
+\fi
+\usepackage{array}
+\usepackage[normalem]{ulem}
+\hypersetup{colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue,
+  pdfcreator={officeParser},
+  pdfcreationdate={D:20251125163603Z},
+  pdfmoddate={D:20251207101557Z},
+  pdfinfo={TestString={Hello from custom props},TestNumber={42},TestBool={true}}}
+\setbeamertemplate{frametitle continuation}{}
+\definecolor{hex000000}{HTML}{000000}
+\definecolor{hex0070C0}{HTML}{0070C0}
+\definecolor{hex17365D}{HTML}{17365D}
+\definecolor{hex365F91}{HTML}{365F91}
+\definecolor{hex4BACC6}{HTML}{4BACC6}
+\definecolor{hex4F81BD}{HTML}{4F81BD}
+\definecolor{hex7F7F7F}{HTML}{7F7F7F}
+\definecolor{hex808080}{HTML}{808080}
+\definecolor{hex92D050}{HTML}{92D050}
+\definecolor{hex9BBB59}{HTML}{9BBB59}
+\definecolor{hexD3DFEE}{HTML}{D3DFEE}
+\definecolor{hexFF0000}{HTML}{FF0000}
+\definecolor{hexFFFF00}{HTML}{FFFF00}
+\definecolor{hexFFFFFF}{HTML}{FFFFFF}
+
+% The images, carried in this file: each block writes one, as a small PDF, beside the .tex when it
+% compiles. A file of that name already there is kept, so an image can be replaced.
+\begin{filecontents*}{image1-1087d9ea.pdf}
+%PDF-1.5
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 810 810] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 30 >>
+stream
+q 810 0 0 810 0 0 cm /Im0 Do Q
+endstream
+endobj
+5 0 obj
+<< /Type /XObject /Subtype /Image /Width 1080 /Height 1080 /ColorSpace [/Indexed /DeviceRGB 9 <011629023C6FFFFFFF024F940E2B466B757E929CA4E1E4E6BAC0C541515F>] /BitsPerComponent 4 /Filter [/ASCII85Decode /FlateDecode] /DecodeParms [null << /Predictor 15 /Colors 1 /BitsPerComponent 4 /Columns 1080 >>] /Length 21284 >>
+stream
+GhVMS?Z4Xh(Pe\>"R\PG#H1JpPAakR[X[^AZq:#*6d^Y5hF2+eh7\`n[NTiCC:`/<q^*c31ZL2Jn
+W;bjkIF5!-GV`-kB@-.Q-'bS8$jbVW%(G?5QF/a46jB*%/'aF7g!Cmq7NsFBKOtrW]SI505qaABI
+\V'9$SFtP"+Q1;;[pV1_nFeBp:GH)D-BrE7^^QUXBK>c5l"_PVJIY[Z#nbE2FLePVG'N]21I8*#&
+kia4>rs0im!F)siJp5iD\M#>dB.*#&ki#DIfI6/eJU!/1N`Ko]a&Gmd-#2jV<HiK+KBE<([pEp[P
+u9Jbg5Bn_1Dc='cV"p\Ofk?.`,"aGd=5o_22&k@eR`)-k3bF)sa(#gW]ZnudPGGc<aKs!aD.8(Xt
+mu:pE=+TALd?ZT5kULZh\k6\rW:*J;\dD_sY#:^kP4*Fpo!sY9Y0qKk)3I9i=35ZsHUJ?PGj[3Y+
+d#-4=35Zs[tu)V]1Tf\h'6r2SlP>emStHdjK?pOVAYL`>Z]$i\U-^Sa^$4Mj^'6R802=5aY>&]8F
+@tA43`jS>$&hr$``8bd9S&;-3nfqg)uk\N])/^Eob<l$U!J]*BA05Jgu%FFQCLha,iD53ca<H"`<
+<3*BE]3iNNO&*_)/p6(s/UU*E/\3JIqmU*GF/'YMifm2h:Z;M,B<<bqLp6VL?%LEac0lOb#CF@-N
+.[,3Xu>q]aLn.Tt+M]UCo3P;&r(jZm!NnAMef[1s)7[CGQWs-_BI^0ol`?V'Bg"56][!6l'ASimL
+G-l+OA!jV=dnJ0[BPX@^)t!-rEX\/`,'XePE]hFJac0#<<,HXa2m#O9.%D7rh:Rf7X-OhI[\%4Ol
+sCgIhl`4B9X\FJs1)me>'r50Ucd@KV=%u*1Pe]bV67d*>G++4*jsH'1=[L3X[*O\MC(h/r/>Z,>+
+=/AQopgs<gEsOHT=cP4j9Z=a\mch@1LbZ\8qA))AEiXObT.&"HFB7V*gmq^-ap%Uk4=9qhBE68dE
+7+6KtF4>n0bf0KEU=,EEh/%UjCb>W!p%LTF(u[\:7m+Hd'M<\1'lNuK(&8s@/:-jP/hQlJRKa<q4
+T<7!?iCdYloV#r`@rc0cl*(3[jPH;<geM_gZ3>+5,Y8kb:_W:2,b!BBsF9Z?1Na\EkJfG(u4)uH6
+ieHT]K4.g/)42I+g;ngb8K4+*%f2&:3<J8,Nq<e*0*`jF_W:2,b!G6Q.Ym1P%Z\C!$?u*>$TSJ5_
+W1uaK=6rOTe>CKOUA-/0'+4<$Br@t%chjM3>bh.AWAZh:cY+9%`T5lEWjI7*6:G.Gj:#EOb88r@?
+gpTW#WlEjnQ*$E!dqnEqm^AjZj;*#BBfb_"5ZF5n;s@%cl8k6]hI2G$?s.[Y2dhjX:,#]?2ir%cf
+kbj?O495Rp?'SK(Yj5`VXEqiF/bqt2=Th!BY5aFP>P;>MNcQFlpD*6>tRXd%t@UZJXG+U<&WTknE
+Q3WaLG$9=oA.tP;V`#0D4+@g.c'o*fe8JX<'<_>0N3:'J_+`(ER*>TfQ'k)s+[?Dd;a?^l4SO`j,
+*K%o]/Wg6!.7,.$OZG$[Ck]+?iB&SWCk]+?d;i<AkUP"I8'>0Miflf6k\sXWfEc2b_d*l6PXAX<B
+XoW[6k3pZ-#i#bgE<W%\-ocf'kr*8G?9I].an/cbFN9^K!`8Oma-Wi,-A'DmYVQ'@++mDbFN9^J[
+Ekac84JD*ojfcd343r8=GbV4:2=i,B:L9;E-'FJMYW>A#5G#hjnE(Z-l67i63taLU>Lg]CUuu+g#
+hhc9.k@81P]4GFn?M(P/Tu*T`6T`/Q'^<eY3:7D[g1?DXWc1j8Z^WXtAO[+O??$5#7n`=@)l#WJR
+4OgPjIK[J6$OZb"8\5>"C[RlQ%DNr8'/N;0h:+=LW4)u[:NuNe\A*C!)N$oVkcsu^tV++DnH&Nq3
+L8/#Nks^'rrePb6zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz!!!!sn4)<Lh4:
+(+:8d../A't+/h49SR]aP>)ptspGa"%X4kdlH_ds@QAIj'MMb4(3+N#hCPiE$0O<]Tdj:K,SDWEc
+HNp#Roa.WHPEPDCUkcGrte&>(ZQ.OX/n`/_UjAW;-)L!"LSUU3ek5-/uNr*C;6]SjAUGLQ"GapoZ
+6@HXs(NNKf)05(t*1]BW6]Rq4a:[PEjS7,CFT0S"`nZg=`GXbH7?0NnUGL3.`ls\-?oN*G+ij36S
+R*\bdEO75(HDguEu"?8pXacdbA9>jAka:PLWUd,UU;*9eE3GF='=WO%`'u$3MOjTZYi)M3D(O:qP
+:^3e\dM:-?WUSY]TLn55[[?*+'M??SNd33@ZiFlV,>0ZDNoe*e)L$W"H'Mlb8PPUgl$\En%Oef?.
+&Q_WbX;`NUOZNjJ-8[5(aBK<8b=L-.K]grc-h3>u,DE@+JAj3DO/PD%'jIXS3pd(@bb`TQh8ot`@
+CmOf95o.QD:S$ZYG:Xb*fIn>a^mbsX.l_9=%cPp3XSc&f+]BT:/T.Ha,WQF]*h>^>4f))RKNpof5
+rpOH@$V-]XP=LqY[,S2/paHtYP#`"A#X@qVYdDL!>b0p3(lO-XU&Cg@l-Zu(e*5lgj.N,/T+?ZX?
+c.NT&*)k3fX2]+BCTP+?9'2i?EZS5l27MdVn\T@f3R[,_`P1g/pTm&Q8EJAMWAHRchMDk(@?dQ'O
+LE-Jbjb?C<6gJH*m7rqk*+eRH&_fbt6S=8&LitlH5U!D9#d,7?6SKeRtMm(#s1"2]bD.S6>;3Gcf
+d044].cea*+aHGbUVHQ?1/jm%)o0"WZ[jY17[cB<);8<]gODR!CEB:Ef[H#(+`BJ%8/l^\2:IF4X
+4A?gGD2>];HO54@fgdZ4t>MHH[XW6:/5R@ei2T]s8ae=-4P5)On;NT;n$0CZ`DhlZmS(jNllK;:J
+",BY7&+edWNN97rX'(c@D<8:X\#b^>O'#$9d,4N6R#O\6j4O;/TdE8SrYt<O@m6h-PG;hnEc-4=o
+<9s;:M*Gkb&O:sk3BW!/?WKpS0H!n_RmBf7;Y9di=GQ<3Tdb3elLmCE;o6HY.bsrUl"'V;LeM7^9
+$r!6g">2GcdU^?]3T<#KK^mLL*2Hmp.kS-bb%!3<mLtJkGlslDceZqVJ!(,)<F>?ThWhUaDPN(XS
+-/K:EcSGG>&I^QgRJI&_3,%6qUmnWj3NEn"s8GC4nPDN/GplZ>0nrUf:;,@gEE4e[.;>#B#)s!Z@
+9V':]:1>:`jee\jVpj6KaGs0G(eM#M"Vl;3^(8iohNao1r2q@P$M]\L9aX<mFn)WYiR1\Q/<n&?i
+4aJl@*.qt4lm-lqqLm9Q:<u*f./A-Lf9;/BIt@F)0lPQCGIuD-$kb'\:#F(qor;A)45J,$r#$n1<
+\Le]37BM:gZWB8dUq8,89:UilTfknrHJ>1W<Zj;<JO67aURkXf@/<].W+8Q[rS/9!%geQZH=oK%L
+N\%X]X&%s#g/B,<^\YX*08QB%5UbjL[HJX(gV:9^?s]rT,lDO(U%UXu)F(kFhD6eB$^BIaiJ@T7E
+`Z1"!T/@AXdsBI5U%1RFks[D]aXIcW(3@ua8DY4QEW(-/+U1XY'J8N_NfX`E(n)R?MgKQ&H.g#UM
+`rfn"./"YF;8!B^GpRf@Aj=i;p?oWhp.W))$[%Os1*H#_8>d'*O6Q$DQN.&Fg_r<YF*3XGbHC7g(
+C$Qd]ibddThoA+_iuI.s?5[d*ocrD/o&9n/*%terXe]u>NfUplA,]Tfb"4KOY&*]"b)/(T8q,0E#
+?#sqr[p^s<]Mdl(\gV;)Z$lFH>I;H"'s\J\LU0lkJH##ZCXpRV*7NFZE2^*Y>2K2*#XNGlHHBTa/
+0h6j7G\*<Ta;eTZL%e52=o\D`5OGNpt>JR@Y45A&I(K3K1.g=]RBI"fuoWLL:5ETj8tEN3s[TBtQ
+\eTPfjdqg\=bVPe8X#f'JO48-ES<_:NMLnXt4(0M*2)mW(.Doc[-H]+s,km^dKO+7$>-hbj0IQE<
+l&_hX?`"RLlna,W/bRUH4!,IUDdl#/q+MnqULD_([&KEigA6bIMOQH34;!cp<G4$GF$-.YuNhK'd
+F@`'EK/L^<g"l!9mom;l^_)I^cq-of0-Li6qTHdlI6P<TqeiClTFQ:13^Rdr=ABOg5TWi'$]J?[`
+*I"fF7_kDKMGuCnafP7E*s#C7iEUIi,BBLFG)9oQ*MO@Mr.peYo;NJ0AVh0Tksdb:823)S>IVM_a
+/\g&.WFs+jCa[cV&'Ah?o'e)Tba.)QaO*7\]p4_]_ScSjH>D$jW,FnluCI%CZh&7\Z[!dku`pStF
+<r'6?.g5ia(q4\d36f3XXu#M>He<$;sqE59d<M&X;d^OkLV-[)R73,Iq(o?^QC3!;fgC!fA4TcC/
+;3A_B):#IuTdt!;;Yja8%nsrnBHTc&LjsWah+VMCPXS(Q!8DF=X0#Pg;NXX2`5$fdsiV:c9bu'kt
+(Qm8mgC>4^(>sEDeq1enM03GZVo9FhESYHUi=S'G=/^O+K4A6hLJ6_(E!S?&9Pb3I,RMM4EqXtPC
+c?R:NLHt0b&#a%]6IQ/jp3j=;L'_7Eglj28QnE$Lis:uf]gg4<M@q_jWP&c<oE1BLLXL&%M+j-M5
+nA-]=RtQO5+&oiD=3J9^=B=;fg#*3pXWp_sI57E0/:L:ba/.:\^&fNbO8U]5@n07\ZZ&=]KG!@Ot
+@kS&<+R[q1$&Kk&A2bs?<:G."5CY.M16TGD`J&IrWu<mr&7=Dn1d1Mp`9]ioKA93G&[+'NfpU6DP
+F6E8tZT$9lHjGMu0V*4[RJm$U=D-3q&.!5L1e_9=h22=q9.N]09*$%n,Yo+P;4>,I8cO)bSZX'G.
+S.51R%fAT'o==!u740gQ4$$>[A>0'6F$GGuWi1+)Aj\CF>kVdHV4CiA\Hn4XU#s]nbimG(M]3XLi
+J:HP-oHd`csrZ_!qJk+ef9D>*jQM)G]u?FENKY)7\[r8kl'R476'96E-M`?i!2BdnNjK=#=np=3!
+7Q"cs&(/h,;+`Om);T.n(sd%,g=m_o2nA9Jp`6S0!#pFI#',^MDbP/4p1!'!4M%*7q',kThM)'m3
+OcScKfSdUksf6n1u%9M_#P'N?QP=[+lnYf5Oa4I0OkrfhoCQJLm,e/>&cM<225l?q#5e@DS78=.X
+f1Ye46jQ#-a*):kicYduC:RnsppI>*Z&Y/Ptr64Qoaa@)1n:tE=3QMH:c`\j5We*\aMa.cu+(&*)
+2MM'd"@o3tU&L)S@:g2iI6N2$pTIT/LW<N'XkrR<n[7#WD:6'`<qBtf/4NLt(4(+4G#$4C?.p?As
+($pLCF&bN&;hq3-(9;t6DPC2mir_s6L"6;&M8ko&&6RbY,ROkLIDI'Sj/gNZhTDmOh0CXA"=;=nJ
+)+,\bbE*qHqE6U0t?KqkHiQpf]4X^h7TfiJ_(:eN3U8Nq3!;Ic6?H<HbB_V@Kf4GEWg`/d@7Fcc8
+O<P=1WH`q\D<?Mjkgn2mgpTTSFE(!$5%5[s[jp+s%u!RWjmJ,:VOIWCG;PesstOpkN]b6!ir;eVp
+N6_bVT:O97'Yl"8RW]]9e<[TU:KR:<fj>82lSbOD;QPLnnH)a6k'7J!_%qL!&eA>(K*T4qpSdga-
+s&KYc:86s&@h+N`^k)&b^tHhX*?:6@f"si;U(;`W/KFcn(-D4cE6GqB=F:31F:r(iY@ocu;IC:`6
+phDR?Z=FS[X07lX3j0l:l1\uopb!:5T(4pZk=$iPdHk]r_<uOdVB=lVM3@&ne5/pE'rU"Fc9-WP2
+8Il.9aqa7W@Q:_VkhD//-8/#-e]:Ttbn5lr]\1NASgCX3#>QJ'GLOBqUR8NQ=1`r4E!Z14qqEOjU
+G6e"kS8ll$^1qTmU-nP-)JpB7FD\(\j0VgIDC_JSQ"]GYQ^U;'r`ikR+9_^60;IV-a%Dc1WR3RD>
+#Y&:,j"#d-LN5ssK\[uCTqX6HXF-3X@7D;*Fo<D.M7i/e``Vp;C:%J+QV4_76jh<>Fp\$^`@PWAd
+7'4W9Sp;n-D1aH)\<Ua:E3p'8BmMlp/KBagSfm!sKqiM3cZ:[gj.Pe1L:9hV8"2]u2@.>Eplj0=1
+:8]P&O1sh2_K!CD+`%R;Bq(TrdNT^9lEC:-iUVqd=?(404e8pcV`&X*,WUEB@+CuCtZL.$.CQ]f$
+"?94auoEUhsm!;K8R-gD\]Ae(Nf5T3$WaL5NF!d?(RXmR;J'a54972>cG"l[1fYSP2LqI(Yj!S"f
+E3gXk'IGW_D$+epgi]q.lFQSUVgDplS,TX?o#]iWZWlU^M]Vf9c+^J0A]LY?@6AAgOGOU@AjHnrm
+_Mt=h5><&F\>AH37I6P"YZu@i8%S+99oijDOD:fCZV?Rf]$cc/3QJHM)[IJ"nj"?_R;U&X&dp=(F
+F^6TRr9>>ob&t.Dk3u/ZaZJA,FGtU?:PgM?V!DdJ@bM>3`*[l[]<m]O6+UaMVJsJ]T7"-r*3KfBp
+RTpL.]3\""k1>n<#"g.48":P1:!g*;`N4Z_ia.t@T6Y"]ONo`UHgKe'TSuoE3-BLakhA)`RH/>UP
+/gE`0N5Mo\SP/DV:)PXh\AshAbHm'9;kD(Lm%b0\C"o3;hLJiGK<hZkcYf:#U&,%u7Vg30HbIiRK
+!0mM=dNK1<])XZ[Y,YeASEgFP=ig;B%j;0-iK"\2a?3;d0BE(#\;_ls$Y^:-Nj<[m<.J]"NO*:Xg
+'n:F-G&_A$5=''<f;<7\=5AKuSFA_u71[`_6,<-/\=0oM3dAb.ZJ:-5KZ&uitjR%0K3l%?3mW^_h
+dhs\DW:%6+_T@/fI)jngCB@b$oCbFM.n*LZ/U@+8?L7Cl$sA\nZG2W(oSl"'m9t#,FP4h&k=&eR*
+UE'UfCA*9G5nUF3.9"8s$G[4LRe!7rb(eUo9FhbJ`+$RBD'/d"/e,b"iBe]:?^;P*U]J;Qgm'26I
+U1^Z0#Hi@&PO^XEdY_4qER^iG$Eqnk`7in6g5nW52B%BCAYo$"),2X-Rf-^=XZ;J2P"CcOq96Ig9
+r*OSTETY+r[O]CY`N*0)g`DXe==D_XTPL)u@(3r!(h#>%P#T\&kpOC:+X^<3Ar^n[CO(W(]X"-um
+Mo5M4F"@,Q1=j*hqFX[-`K>T"38bi9q%*7Dskdt[:'TOtIojpOol[b<GJKs86LPmpS;AC0p.a!8m
+iB[Da)8U;lQ_`tM>i)rC,8M:m_"Hki"%S],h5>4>&me2hE.i0Ur69?2E$d%oNeQ#q8iVj-olMKc8
+'?AKn?IWbc/B#1di=8hOM`fKn$YUAi&_X60jj,R^`b[?@u,@Ff/6!W)(?OS.1i?-*0ITIC'I2HQ+
+UT)).'W6eIQCSnEDrOlPhf:/^iIIq9`FE=N:OS4.t$<!*s)'a(l0g3"W/R%1L)C,1cjYY&il,_HI
+C=-p3TabH13mNM!60YX'3)m3>ffgcU2?2gi"1Dr@I9=F/BCk$[KuTK,7Qek/!01-WKBo'^WAeDH!
+RS\0.1$Q-teN`<;*O`t)1Ph-o-AbO<-*bFjuR7mtV_Ba%EJWYK?J/CCe"st>QmHPnSALZr./c8PI
+@[C?e_g,u7f87D_T?)..J\]P(M685i9^"8EjdcC(-%qqM"R8NgFGRQSL\'3Hc=^/2EXum@EHgdBS
+[._YO=-bmHk*fEoFoii0sbjuB^h>]`rJ`u&b?\96Ag1<5,Z"j(2r&`E&\,sUq@'@a5,f_@Qb".%L
+5'`]7-WV)NLEln?VE^*X;,n^(q3Ne$)\ppl^8rar0JARR.[GINcSl\_Qa;AM_(/iUG31&IIC::Tl
+qA<qEW"Mp]Deg%C;G,oe*.g3`&R;gbha%R.cc/jCB:K:!W8dTmMG\epG[[pVoI^^,rDK#8>=0nS,
+\YNn6A5a:^33U03r0$nB`!<2]nNR^Q-7n12C8LYo/*nUVhE7\X[+uT656]O&uD'6ZG2j,=DCbg2i
+g`g/:-/WhdR666dmcmWb&`OU7?TP5oB]80<DXuIl#s!bi&hK-pE;93W(Z.6-2s,Vs%D`Y:Z&C\&0
+(@[]BY#f@2MN_ak0sQp%sUKgr2UgrhN5W@9AI&=D`Vu(7iWD_@::h>)p=pFS[Wrd3(!D7,<5Nf2<
+j$iM%]H5h(B#2Jn'[F#j@,^Rc@QZLJ<$ZP_7sm;q2>%mth5YjGdB:dW=?+FhtBii$\iZ/$?+5rTk
+B<_>PP1D2V?s`rhnoiU5<YMJs9ici`1\LVaQ]-1eqmNX2&6$Y_ehRXt9."@mqVZfI0CY:`3k4$q\
+QlT0g-5NCS.86'VjcTUd1,N2`Ri5fjr-$1qpGDP^W_pO%X`m$ri=$Hm9N<g"Hm(t*Ldl2osj]9%A
+DP)*QJ>4cN,O^1J<`M,`2Y(!PVju"t<//;ccMqU@9j\/7/J/sF%d70I.2V'O#*(;@8%./9;?\&6&
+.\$qlL)8a)%LJF]'OQ33%n_JIbkJC1_U>i;2cCME$[#e,7&0No:7Y:"p]W%;J3JjZF2C$=>3(3g,
++>t6IY^kM;qmcEFh,V9GHUD780>cd%kZ+-Q#(WE%mZqO`;=Wh;'^2n\;mP_k)e/nZquYK3"K[*68
+/Mk*HS2E-cKSEd7==;]Z$DVjP:4EH$.S*(FliM_ll*Ku8+A<#pu).%B>M]/]NI63mgU^=_<ONqbj
+4cK@3)A;T>EO>5O`j?FbU`Q#WcJj2LCP.]Qu.bQ(+(DV:\Ru?"eAoB-MAiG'X\Mc)os6[]Hc#i]%
+lN^fN&i6F&KJ_uib]eAZH6sgUTD&a(n(UWFs-i,+!sXpWqM?sISH<bhoM:o+;6"CJFimB:437.rj
+nFbm\2HZ[p$0H2m"#!,*niI^*0>c,SdX(C3,XYl!Q_=F^-9mrc4$k5?oW&W/3sZa-Hbk;Ue'Tu,O
+)%+ECW7M-61qrEB(>)-%:kPk7J[=Hp5kgE#e=(*6*H!>]>3*H)>)Q1)r`1%M6#d`JliQIb7'UL#F
+_krDk?oCVhg8E&dm`X9HX84,n;U_fjr<Z8@OgYUTu\#B=\bNe9@$_8*pM$-+b28%l5M*"<WTDM![
+"A%m*DR&NsA3r\4lJY7S^:>di"+J%<r*;_LVeZ&Q(YF!iEi6]TT%1muRiA`Cja%3U2EqO;??>([$
+^k$[;-;WIAk;_-F3"FWd94,P&E=O,i,N.!+q(U8Ti)!EQ*latN=f,lkbCB\2LJV>o*KGOST?lH`q
+Ef-Ll(7tn%R`;/Kt!K>KR,BfeWXn^'1KK%9BHIQ`nu9La^fQN3)9;-c5sc`lp*UQ$H&RgV<0UA&@
+m`Jd$PW0j>Ps?>e*WGmn_Bj5hiHe2i`uC3Bq:4i4qZ^#`ci$0;&>/1Qu^BP3aF0Oc3F%b/9#a3,@
+NCZZ%IqnR`/JR!Hc.Ptgs\B.FG`\qT'5HM8B.Qd*2a0Z0YOP^4rF+j'MKP5VQ(FZa7BE9PPhT@\k
+9bhdSDfebuq3?E/H`qeOHcYVPFl8eA'.3'Am#ta-cp+YJ8hhQG+K]'@fs4=I>S*q<6@4oof9"eH;
+n8.3P9/+Wta-7WW_.p6qCeZl89kup9Y2a#?nVXpG/T+Mj`uI:P\M5'5l/`tQ*0*Tcjd9oca+u?e5
+qS[ik3G(j.&P4,5,#,T#/GAn`aaf*a#VPOic*85"'M.ZHaE'NE6MEDUhq#mmMlq9]/@*s$6eZ=kg
+8P%\M^h>)K8r6D4&GgS?EHYBC#nqQ[G8c'>quo`sHc'*oj\mL=iAc<TDH>Yn#H+8^@1&Mf8ZOjth
+#^8UV",:'_i'gi/XXUO-L?-/U6=0K\uK^i>7C$@tQdcEFcg;!+R#UFhck]&)XmZF4N6`bI3a0=Nf
+iKIOdTE*S5eA>@rZW+qf%a)-:Ll&`(7<[ZH?_0'\ZFXVR3kN4$HZ"P+gMsl3l1%;>Ei0[DlVTtdS
+A&@atZ:#L$>Qu1&ko)qnDbGOCLQ]Nd`b8\&\_0!uW\=KeH-q7!P`d]Srj?I)_[[>7,R5aUhPR_<s
+1PAeN'1[+hRdP3@cr^-'<:nQDrC<P:s2FfA&aq^6WkQ^RTs$_6Zq1FiUZK>F2uq(V??q._;.t^c`
+"mNoUOBeoAXCP:@$[a-r&i+.G`aC/(+<TaTQ58YNk7VLHB[Y!?X4R2g_\rO=mCOn7`c;l"2=[ofj
+`e]*17go=.SrPF(;#<L'$Q!QDYIorDu3GL"Z]NfiVSQ)7#`XGrPO8:O-XcUcSINpHDT(pXV[E99h
+Oe5==8TmlaJo8Ad=T31a$7ClC^Dp`Zack#u5,p$(Ml#<OSFnfhj(d-:Fe&>#p?TpuNR3&_Y/rX52
+q**]dkAQoZ%A4o<n[0%eZe"R-b_XK\GO&SjW%ml8imgiIeH(F@/hU>cnEjk-7,#fue%p*"5@)"l&
+C*pN8<.PRAn+WYc46@Kr#H"UAf5P]e&H9-$R=r((ja35RIDh1e3uMYj")oAO,O;cds&<r^C"Q$L#
+>L%?%-cc>];%>QRk,C(;^^tf,>7eo.nj]g]b9=":)E%L7X9A9IZ)K3jm'1a12LH6\L)ZmLP(7')=
+@81E>VglB>fq*2pK>"(U+'9fWepUaM=(bSbMW"_Asr0qqI?B@*#b(^I483(9'aQju0N.I('9!ZSL
+.ab0bFE!$#BN<Jb9^SP?:';Go1^J+i6q$"c$Y6=g_-RLAaL1F#K6HXjR\,,I!Uk,A/Nd"5V*4dHb
+lqrP4MOO@9(f`:P'Aao%:6:_S`6&h`4Iu$d%2"WPA7-g[*8#?fs!T2dUJplL][#>_Od$<1cI[ebU
+kqc-9/k%r&/71P:?h")5us:Mh7<lI7ie.t7#QYlIeW4K,'='R".P=Ej,6k8nn)V9?RIieJ%D.hT"
+`^:"(7VKQe`2M:IcGc+Q1nJnH?/p`Gjbpo^G)3?Q=I,]Y&L^p;]DX/\H:U8c,O-SPLoJA\.YkSNg
+IB<@H_5=0MTPE;^;lq6sFDl'H>;ij$ome;HaAIdl5GmW]g.k[sab">9+Lkk-`+f3E^u2KWaa4E%s
+fU&*CGgp)[i`7i$CVDLmd::B7*bAFd+.;cVNo(;M47YNjo=F8\pbHiH<hCO.=fp459PNU$p8%lk<
+7W#]&nm#a>=I6o@;J%EJIU2[>#$\NAe>eIeEnE^954nBU['4#_^6X).'tR(<5-kHu`IR!j.S7dC.
+^jkjr-)r"KH<4TfY[D'TB7.U=0[IF3B]OZ(0cqWXiMOn>OKf^[2t)T9UV%0I9ZEPGjY3eiK@MO2J
+d@Q\%a>B6-PhUIf"4qS^BUPNW-3l2SN$J?BjEQ]ot^X<mL=)^-+7EF72c/Jtp'aq,s!>Y4=7<!FL
+=lKp%\=0Wf3.1"a$<"I0?G*:"GZZSnqN":hIPCUIo](N9M_FBUZl$]\neI?&Di!?<]7K@$XQJn)%
+.E*25s(R2gSmk>`QT2rM2Kk("!N8$PoOVdC9)upNC/Vb+%D8Y>]Z,kg&T*&&1OQs)ST4;)(=i4*n
+G#p\'-fDUeB9a^<NS!DPV1`??C'4p"0[F\rL8.dQjfi\p^=o$miCS"TVU+5`;%Do5YeGGAC^glT*
+0ns4p,\,^DRn\EXj?Oqf!`_0MeHtI[C&2R/Wj$C>:K]0of4)!oW</dOrb[LE=Q3kSnOD,(:3dalZ
+;EqX:O(QjXuL#)fN_500VU0hU5VUhB&llPd,%?)%NVald^V@j/cGoFa/sI%eY.5K#<MqQ\*T#n!)
+n8[-8*Ko`Od(GeC8BY?ZeCet7,%`1cZF^!JuMQ&tb\alA?$.pig*N(O@?UDKjN,oKqgHq=/n"9#=
+r8Xsh.eIAP>F+Cp4&Ab&)a4;=>8[L<gha\Q*OcTk0J]p/o;lq%NIY83)*\P02cZ.$@0t>"UJSK08
+V2BStntpGX3uh6l3II]<kiW!(-J/AV0,r_Gh!X.q1Z4A'Jk5R50lZpWZ5SE!itOH]69_uOTcB["(
+6sCplLSuQcNceW%._7YROnmW\'JP1eg"Y^5duaZ*$0D)^kAJ;+(Qcie?:,;?D!"j'jd/3hdbX/i@
+A-B3tI4aiU[8?lbUBqV8D2t'gQ`"0<'!%$l`493?nHn%%SA/f<_q):cNhoDR/2>o-",!iL=erlkg
+E9W+K!OTQ%F%IT/?*IO17(DS`*p)^76SMm_<L6'Ys2p5KQF!f&;\/HZKT+5Ki[JU\9=@/CI.jm[p
+u&"!ZO;?`d7XDh,=%TgEA#<Sie?80b<"O3'P#_?'S)J\s(:sD@ROfZ(WE!1bVUt!9aSn]7Q+^6;Q
+='A=&CO.HeL)X%'TrQdjFg\Ee,Kc]e_64Om&U4i<E5u1;CC^Bh`&3<<rfc.c_AK]Yam^^0kbu2ip
+M^u?@ZMRr=q?[#maD1GCm0E<HFRCI5GJrT)@ihg*h6sq^ae8`QmMoTJH2,sT[4tOa3?c'i!-4oaq
+qLoG]JIZ20?2/G?Lq9e<da)\,]5q!rUOh*@M#LOeEaP>dpX]b2Ja_$)W1(6j>IhZZ$gSUN$i#NKs
+s4,@e<I=V$i]a3a[O\lFFOMdp%c&g=8$<Xtb7<)qjqECVA4IES<I'/r'!"-F:0%&)L7^bOcYF@JD
+UhM]r:(==$tbm?,Z""Y6j3Ts/:U2]nt4%@;#/e)mqA2m*uL=bU23ZF*8+9$Vk7WLZ9#\Y1ImZRX<
+&[?"X3*M[TQ]%0WLR6l\W8WbAMr3/W+7#dHUUtHe5YY(8&F2W2jhU-mo8m)c'J<a!IRKGKi*b[jK
+L74(&LLad($-Q@2K&H`C^^!%I;ktRF21($.f`(to5leS@DWWIE(%("UC+V,Gbdip_q<LD0fWQF%L
+gn=dRtK559/0=%<KE!Em@?j4YU'_5m72DA)]KYj'B5m7r%Ar_i,cSK0q5FO,%oc/OXA[!_8=]#Be
+=j&!A"E7tr80L-lOaTWuO;?Q&NF(\^3,,S3:,-60.f^qic+>#[M\pQf/H>3j$;E,]@>"1o%^!>!L
+ebpOaT_Eo%ViEQ;HWhpaqPD6m3P1=X--t,"R@1!57i.*c3Xp5lj<eC[JJOQs=1Z4)(C\QR8LK;4'
+7CB"uEBB*_@k1L-elIebeSnhZo1%s4*;,ujX$&;Wn]A9QQkjDXr\GnQbR1Bp*(E1jJqH)ub_RMKK
+XM1W>!78]Hn?&b9?Hqgi!9Il%8u.5^!B!qX+QL%S+15rPeJ!#U)_HZiQ+lWLa6ei&.Xa*?3A#JOl
+4k&je*"D!CMg#_qu@P\Kdn$*;Sp*Cn]B%io)R[%mHg<*3MluTRq,N9G3Qi7o*f_i5(['7m5eoi58
+"6,ZgnO#olbn.L_*UAD1i#%ac;A-og-))QgLSE$iaJ-sB_5HjPh]q])J_&P-&C1_Fi=PljG3P&R@
+[Jjns->>PgE]#qi\7mT*=pYp6j$-J!Th%%o_*_(f@TeO=R/Ls<pi,HmsErh<JObT?\<fS0m!3SRB
+M!3AMRcJ(G6_)C>',FY\Sti#SM*GqW><YP\4[AljiD?q$k/g2",iHH+5)2^bY]T0k3ir<(I?%X*i
+DP">mf1s%QefZ@/.>H2-/1KfncK;VfQ-F38.Rtn39+."N-'U,)8](/AOGZIZ8@6F,Win7GL17i][
+XWP'P0p,MtoOZBj2j@V)gj@3`R`ZB"*'W,'!NpS0N'G3h6`?3pD]XbCcREkm9<8nNM#SH(4%]23Q
+Jt&Pg!X^b9\fAToN<!p9"sEP//ibhEQDd`@j2Ru8._D^%&X2eWHZkcQlrH/*3La)npQ?Cl5FQm&$
+/8[O8XpWUn7IRM"9F0CQ_=ujVWl4+2mp!7CLoOVfX]ZRpQBq)Zj@F&*L2-'TKjKCL`DT(rs6TXP;
+F'+()=cI8OC[PTFp,kj'HKYFCl-RMMh_W4`\1?=Qoc0aSf`0+SjpS'NCVPaJS@!!Zq/)Gk9!6hup
+/aKt?,0$>%;D<DZFVf^q+FFTX's$-@]d6tHaBhaaB+emBMf;2Iu`?qnjQs>i_B3\D4JMm=59(2@q
+dgEdLh91om2b8QFq$ko_"cM76U:BZoChQ#=E.%\_D8`ZuupT?iDlZQDMVONk+bPDnJS7b9e&Eo@C
+p*?-[Y^kL`SUd@q]5I0'@"?YSm-C`I[>ZI(\f7ru=lVAokJ*2,>eXI)Ou`.$`JJ+[sN?"cCA"^^7
+0BhRW&;3/e'WoC`B_5P\c;8$h:,FX=YU2_6b)BPk;LA#g4lL-fWEg,T9Ye5(l\"$s\Eh9$p4Y1U.
+\Dim%3OY-)9V^1aTu8X,c8'2gj%.,I4<'G%N]]8_5j!eUMoDQu([5MC7ha<YH;Fc"^=hckgZr;@,
+")5af%Z"N:Mb$[EfLf;EQc-"rPppC3=.g/)OZYm9X?-OW+@a([<IbQfk@gp32/l^<!hE+]%&gLf>
+A4kl=M1uhPoU#j3Vl)c/PrK`V1Z=52*hGcSs8*<M[M\]Zb!A0T"MaH/`ZXc5lM`XZ*[pGWZEO]X8
+fH;0_(;qOLE$m!;PcVRJ%M)p<KnT)1""/`Z8;=<,2Ka8/GfCYHL(,9#11ATke0>^I?[HsM'AG2/Z
+N[aVm+oruEoSL1J<EU54\)#I)2>*ZXs<N?(ha3fcS2B-5\3:Io\]?i$F]O2OclhS*DpjHnl9WdLg
+!`Q;f=Q=hn`<u^kP0-!_&@X>'s!:SkZhh_7XB1H_&hm\8DUd;9]R3>uWP*WRH24;s%Z&#:j1)8ZQ
+OOb4ZY_[>?CP,*NN'PMfTYQ?]5dU(FjfmnK=;c,jok5*eb[iIaGs@BESX72PBK[LpsS^+ic"rRg+
+JD1]5ae<i6>P&CF76kR^EodpR6>BZE6LRR&8ghS(@33TbfhGS`?S=*7ghThKElqeK_*+Wtks#<;6
++\p>Un!RZ'Vn(`pFOL1.Q^VDT1D0T,SNX]Y7`VJX9!:lj>@[BMW\<KccSaBFD;qW;k^&'^&o=ra=
+,ZQHlLldAs7GgSA1fYKSl@oKl8_r@Vu8,[OG9q7M8O5*#@c@)4Zfl!o-T7!+B?_A3a/nbjf%6H$U
+9`rgLSAT$s1l>Hs7t!PU18F>E[BOl!UZ[FX2QLb<H)^f^U>llA)OsOXiV]XOl/e/o?>"p-C>dhFO
+M013Iaq<lZKbLkl&A.K(Km'$qO0F]>:[ZjK1u96L,TA;?t*C4q-N?l92P@aO6i]3eML^.iTVbMzz
+zzzzzzzzzzzzzzzzzzz!!&%LcgTAErV-0KpE.nGkO0M3Y+b7QHV+$)?QU*-j.&IonWt?tWV6/c5p
+#a5J*NQ=IW/%fT(Hf5eEM=s\R3ohlGpM)lQj#A5G'85%GUc:V#9:jU;ApP`t`77+)C_Biiq=YDju
+Rp6uo:#GY5\+CA2Dl3#8FjO-E.N*!lER8"poGSJZt*d6(.kWukAW=(AiiNfQ6,%pDV\:m<Q5X5j1
+28lt"sUNTcdVK>%&5D[Y2ja#r?kD3XJicn:$H=B9/7l03GH@,\DS7If_n%Y,I<.m/A&Os]u19Q-)
+.7kkIFj?,=_o14+g(Hn\T(INC3^2LB#8>,sFf"E^Dm"4>PrMh'm8d>\P"FrN`Da(Vp,\Haq,d+43
+dKmJa//3kISS`;>.V2TQ#aY2NBAHF3.Nt8l:P-oc`LL9,-"kX;r*>=]ssG0=Ph137^n+32HT`W/X
+WPk_,Y?tELZm!H`:6iQaUs7^ZOhVKK'Gf%WQJ(ICT4E/:#Ui$oj$Mh$V>0eUag/3-$T"Kc)6RVNB
+Bk*-W'kjBN[)Stg=d93IZ5EfL6Y@j4AFVhn/>o.c#\VNGqqU$[k]L^rK.R4*(9>3['e%aeimfcL?
+e,Bp'1[2-f_Z3\'Hd5a)0EIaaaLurHH'@-M**[jB77Ou=B:<mi\3PnqiWtNJ-jB]EAZuBb"?^#OF
+JpL=iVRto-<D&^iicqIQLc>keNbSV=Dd"HIU7$.&qp&VgGF[\dFa`-nIokVXikCkk.EDBFkK"+1r
+(kRYCs$6ME<r*YNWY*tXDHWHNDPr@d>4ZlF4f6<SE'@d,DpL`j93V:koS,8p9Dn'o^M*"dbRbQc.
+heOCH'3L,_%!#306,"d,pHei[?mO-Q11XjQ?k-?Y45#SE$j_H`eG:N\\C_:,cX@Mre><S445ojr:
+<^b/J@,VPKf)oIDr\*![$FIa+bO^IfJWs.NnKWocRagRXkpZ.tE[`BY5YDbkbL7\T7BXOLB*c2L.
++b8)HWB1Y7+S0O'3M5(>_5At]kNq-pbd58e(L:4_>;$JnmlHeg%ATJl8%[ld'e61WFSQB-j1!;=#
+;URG^fH\/BgtUg:D#$!X,c!DQ:!6,Qe)\!A-*-NY-g,_*SEN*(8X+9q4$#rfEeH4\rRI])b@as[Q
+)1EV;(8ao-2",m7"*-:SjVN.@#LeiW)qUIhMJc'AMfC"1_";GSKes)I:3B/3Q-W"C>XA:7k<bA7k
+8.hVgg;;;5C!o[iuG_SDt1+O[o%2&O7e*VaTU<p\$^>c#u&/.'DXCM8!PNQ;"=7X_G#K;CgH]SC,
+Kj3fTZd0?$eaUk,6+"6):>cB3nPQQeaOpo=)g0'jS'G0`0h-Ro>(dQ*oSHg=!3Djm4aY6B/`A1i.
+"lA7l%]-32eLnhKWQ7?mm8[9r\;/gI,]A(#hUQEBGG)hjCh7E@3Q]Buca/(c_UdXp.PrJui`6C<f
+`GJauNl-\5Y&%/Or./)q+g,C#Z&cNQGE+sL+)rX`r^q(>\*#Ui)P'5B,pM00o<Xq)FcJ])%lhU<`
+)4KNLdM>C9QRbiiGSC1Ni9OO,+N-cHQQl=lrL4Y\ZNt6Pk;nm8;Q<W'o,sOJiF5bNju_o7IZ:&k/
+U<DiGSC\,J*cJ#;n:3Y3kD_j`S<+QZ^q@o\SST66,0s33jXWEeP@i3/fhkb]&<E?9<NP)QgO(rL>
+*i,OHIs`4NJH^&=)VRe[di/e`>I%]qkP<:[KTS\'W`7XVEnE>ZO\l^?'k#**bLgB5_5)<+b*HW(m
++&k`-8Kq(MC-tcPp,fMK/m+(96q)Zf@G]=Ra<E1lHSAX+Lk8^?YqLQVa17CEBCY%Ub-B:&d`gXgr
+;]O3)'#uZj@26`./^D-1:*T`=zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz!5PbUEL^TSRdQlJ1sN<WN
+bQs;O=`qj/:35l18CY'/>[3EgbMQ7#^ng:A6qhDaJ2tfGcj07?qJH"BF.>l3AHNZ8fD7tF,+S,,2
+Ilg#bfYo8#VDE,O%B3#^(5e)nW%YZ)&_qd5>dJ=3"cc8Z8D"g1[OI7>m=*a"];`7@THdX\'M[jMs
+K>h,tb<bE>]BZ-XHW/Ym5V)U[gj8iYP$*K/JpO`kiI;qW5?*FuV=Zl4>PS]^YdAXASD=Lp:dBbSp
+cA4B>JX\NG#8E8)'lhE7T7oQS;gT`#EdS=?nN?R-.33\Fg)+VA_lmsroUMIkHRs"(8*"6IAB,l'-
+_)#WAJ>I&$;&@[.rcA?7CE2;p5"fKia#?]i4E7/MT.V95mFh\F6V*gu1K)Z(odZYsp7>D"rCX!9d
+Jp[sIQ`NDD&=@XJ]F?Ji[8C\`VgS$UapIThC.TU0n=L@`565@;U7=a7DA.NpIraP[9AlY#D_WjL8
+F:]kjJB2]!$HapioEE^E!Zf@$tuHcRZY-6=,3`rHQ$U[0@eXfToOo:T7ue1W3(l<BePUIm4S:MJZ
+MXm<[Z#.-),dZHCqp^<'4(#I>t^]Nsut3>"UUlpCFEH7tOk3aas3?LO?m"k-nJj]GgWgn4orI_=c
+E?10dp,)#aeQ=G'NHR5$h=H8X=DGYut[_YfB*:T_;ahV;=6<N/9Qe/i@&OKUX8!hi>8J+8h%_uM\
++'hJC\Iol2r+O6!c^!EZ!CmJ:*oK;gP*QNh'$:s)!B<oWXIBX2'$:s)!B:)"]#h`<TpEYU7g^4^^
+]?Ef*.VO9VdRlc+92Z)Y^D(FOUMY1-j8H.*.S-1loc=.Du^@r#N/^r`o%%/+,"3E0Yd]KTH)SeK5
+s4;%,P5Dk\Uo.%Od,*E'QD`#N,S%J-5<NE-QoNXoKFI^k)9!iQ)$0]>=XiLi'rD!JasC"!!,6^k#
+9=@A<pD!"OD;%=sSn,JLQj0kXme*4E\'BJ)e@3G^3I!!aKXL6"P$%QMm93'=tW37;&BcBP_*fO?n
+!k&M05_d5;>i.*%HKu4!40HFj[dPGHO&XMJm@8)CULNRl2(m?,Y@9m2B*m6A$?4a^\-=(-lE56Rk
+Q5G,SGpUuhGc'7(_M5^DB[5H9%bp96U,a+.<7mL<MWPleB#6H!.ZDI\[Q1G4/&I[+!?BZ^LUjZda
+]^&4jr=ffYcX?W1e/H6=kfb4cs6)C3,Fe=U,gX[q>Hk?ii,@s]rLho.lq%1[u[O\5)RAFfB^M466
+/S(7:4Sp50c,*pbhIkj3K.;2_.VYUoBeH6TWdU$JtL8aH'T8*4Wh;SFt(.lNZ0cR:`TekBj4#`H?
+t$T1Z$$W_9#C.!0$AlJeCkA=S*88*H7K76?dZK(A<UO\OW(8c?g7'J.GUT-Y<Cm8pUkGLo!L2:VP
+Fq:G56WsIX]Y'^)@RS7#]?G3=]FgG$@>TFX9#O6Rnkt2HH3%&e^:HOn[2(+QDhFmOm]r)t6h?h3&
+h8-g9_Mf.qBt8TF030&!LWIXTNBo@/6(U-c/T0A)?)ZX@>s7Q[&sBb_d,W36=>+3/H%Fu!/\dBpr
+6(I>:c>HC$QM9unn6,Lrt-6@1.)JjJL3Y-mP"P-$USu5_kHWn%*(U'[-Vfb-"O*tTb]Kpc:O`h2f
+tY]n/$)=KV`Xn58Mtr<)7&J"W9imbS`!5*$lNW+]J`-_Aj&f(J_`=OO.s.*$i[(3FWm:.0VFG2[L
+Ih?4</6s#iMCmhLHW`^%QW#s@6gs-g<=9pdXpP]GhjQ"&mu;)k!k1EH`QSP7t/hT'T>E!_P?FfdA
+,Q"#gd.6Caq7pNA62R1r?WY/HUJbPuHR>$8D37Q/e3!p"CKlU.A-1f<s-aiR[31O.Ra$_K:Lde1a
+U[:Ptp)_MC2Dmka"Cl8%Xiqj4S.!&):nH(hDFuqMbCD0,a)G0A)T-q]Y!Kp;jXCg%\4GQ9D!j<jT
+5XiDlV/UdSJP;`8E.pTpM8B@J%:-PZS2'V`q#)F=](B/k+8(jX*j3(N0fgik1WD`L-ntA-?-nGme
+($/q4b@-npM*C`bbcIgo)bBpXhrBeHin/ErTT"Z^^,g'&01F4/$<`GnQG3fTL8o8OB-ViK/4I6lI
+$mZV1$9Y&]Ro-15n!]RYWVU`%`#kZF7bgcEX7qm:#oq\U1%gS0b65Np.Xb`tP1J=L"QY(T/GqVr+
+FOQ2S#maFgVHB8OH-8$S#oPboKK'cigl[1-dnScD[ll4lU'n:5V%3G195D5Jh\T/Z0M`Cgs;!hbh
+.7^r/p@[8k],e2%mpoEYjJ_/b[YNhVT2%UfQi/RjkYQYoFc)[+EU6bF>UgoX9]*Op_>1BW<.=XlE
+d'sh+d`1*Woob'j^,T*G4,7$d[O5rGaMGoH^@o"W?ZHL/pBM`NOR]1J4&N=;cP@Dq"@7Q*0$/*qc
+6e-":#7O/Cfh/q8__`[G+u@`W))*F43urHQ)lRe+l1)A1Bfln&)E?fnVT[50&4@JdRH](NZ`!@6]
+W=H=)WhTREnBMWZsZ)3Z@^&4M_q:"NL4MT1MWffT#f5)&d]7:]]lrWcrpN*;6dL\*iGKA,M8fcX-
+%hS#@O-8@1e%e_B#M4:4Z0k4`nA>e#^\9fXEk@&8=kKH,8rXOt@,fIhKM\Rs"3=$,#Pc8W?pLX!Q
+'7Fh]gsbqi*807X`o&6`KB(k./c2@bdK?nJg!C!9*+UKsiCJ";c&a6\g#uEnD[Rs`QKhtTjmJObI
+T44YM,9\1Q'H\HdpFg2pG!Z[4r'+Q&Ke1L\[Zs%LeJ0CWh&hePTpPU`SJn67?pa#7O,J6Ftt#cbu
+oYY<dBLY5#?24hSRZFWd5osca2\`O&0+,PB,b\DBIgt1?ARG%$$<!#QH#O\EKkCd]/hkhM[n82ek
+C?o)'5lFH=c0`&H\.hH8s+":dVh/m%R&jX[psG1*?r](DZc6oL8Mkg@eV1Xb#fFRBahnQ@Ks&IhX
+m)5A;[qE^bI]eAX;1V9I'J.$JuOiu?hBftV;M0FP88Ok"mhfEuclLL=$'92U(nfLUs6!qc%8"L$U
+o^Fk(=KFFB3M#Ip_*^7'LZ[OIgiCp1m8giJ62*boX`h=)c@0u3QH7\4mFE;]f3?ZWr0HO#(VELEe
+PYmIj`Pk1/fpqH'"f8KS`ebp]#<bu?E2UJ?97Uh*uLbRFl\f`Ekt5g4_OQ5(ORBRU!$+^hfCf7eX
+:gT3V.[="mrU7cKG>m>V1GN\C=aH6_?E\M_g3Xi7*ZS;gU@63dVJ1p=pJBiL?.FB@LrEFq'HPd3-
+@;(+VgpE8Z5s2F"cM<oM+L<r:9Md3-Bq_6M[6pP]ln#ZqST:P$Dgfn6A8RiadMLDdCTD3gr1$o;E
+/l`uC%L=s$OZ@&`;^uu%fPJQH_YU[>jWmIATFQgD!:IiqQmD6R$dqfd1JQN/;c"<2Y/ZUiu`ZG@G
+W&^CsM?J>rfU0B0m#J@&F*U>8Go\Y`)>0aC*E>1`Cp(Ckh_UG1>TS)r\!g<;>K\MAJ2ooT<GHn>I
+@RQp7oG/_eRUM6#=LS#>?GM\'k5U\NToZtEH^)I>^#q@7Q9hu94<XUhr\tRN+Wmao65]JI%K8@VO
+?QO;?78^9`F/`_(+&Qg/g9'*dtGhKSWI`%t`niZHGMLEE4/6_3+FI&14^j1S7Z"/m@qWItUi4hMX
+cjcEr>DpD"\=@!XgY3:auOGRd5mTQ1?]+ZLCH_#b,GdE_e.n!ACKS-GDWjXs^Qmm=t80pjj43!p2
+`em(3^&&*_Wm$]QFE$u98,okA\_=8eHW\!*'i+E%JpWMB_#(?(Q(b*KJhjZ-OL?!#<Sn$P8QZ+cf
+81rc7Tt<8dd29cBXL[,1/ute&;@[m)R&:Z[fn`+\L$AAS+Q40FlFd?@oZ;eX:mYljlHFs(Vgr9jX
+<MfkZY[e#cFU&qbl0"MpumMo&+0']]J64%Qg%G\Et:6Hbpou=n-"cgZRTMiD.#mV3^$A>5HQ5NYf
+9tVd7h,nKMiK:#Lf;j\JKGnZ`M;8e$##]#Qgt2JkeirS0"`pSW!]3r.r'N?$B.MA0"MQK)PQ&^jX
+<SLi$di%;.MQ)mU7JJGl.BK%P6IfbsC5Yg&2S&.XW)b(`(\Fqf*6G'"h4b(__;5r`7B@7O`r@7O`
+rNQil)_dY]2g_n<I4-rqi*/HGD:tur4&@Mn##N;mg3"F2A-L`*mR;dsf_$gA'5X7:?&.SsNKEK'l
+iIGl435/m`"2Y)tpb'c%[L!21%^[f[&.ZWZKqjJ(=NcA-_\pF7*4Ei\491*kei)L>E(3^EU5[@V>
+p(,q\PWV;igXNoDA6t&ALtu+#R?M"gaE5A'X9r%_,i63^<%_[;tW$rPmq@?T;mYcKcAjgUpAs<iX
+m7X'dOM>'dOM>'dOO4cUfVd#FWaY?N~>
+endstream
+endobj
+6 0 obj
+<< /Type /XRef /Size 7 /W [1 4 2] /Root 1 0 R /Filter /ASCIIHexDecode /Length 105 >>
+stream
+0000000000FFFF
+01000000090000
+010000003A0000
+01000000730000
+01000000F50000
+01000001450000
+01000055C70000>
+endstream
+endobj
+startxref
+21959
+%%EOF
+\end{filecontents*}
+
+\begin{document}
+
+\begin{frame}[allowframebreaks]
+\frametitle{\protect\textcolor{hex17365D}{Demonstration of DOCX support in~calibre}}
+\phantomsection\label{demonstration-of-docx-support-in-calibre}
+This document~demonstrates~the ability of the~calibre~DOCX Input plugin to convert the various typographic features in a Microsoft Word (2007 and newer) document. Convert this document to a modern~ebook~format, such as AZW3 for Kindles or EPUB for other~ebook~readers, to see it in action.
+
+There is support for images, tables, lists, footnotes, endnotes,~links,~dropcaps~and~various~types~of text and paragraph level formatting.
+
+To see the DOCX conversion in action, simply add this file to~calibre~using the~\textbf{“Add Books”~}button and then click “\textbf{Convert”.~}~Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click~\textbf{“OK”}.
+\end{frame}
+\note{Slide Note 1.
+
+1}
+
+\begin{frame}[allowframebreaks]
+\frametitle{\protect\textcolor{hex365F91}{Text Formatting}}
+\phantomsection\label{text-formatting}
+\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Inline formatting}}}
+
+Here, we~demonstrate~various types~of inline text formatting and the use of embedded fonts.
+
+Here~is~some~\textbf{bold,~}\textit{italic,~}\textit{\textbf{bold-italic,~}}\uline{underlined~}and~\sout{struck~out~}~text. Then, we have a super\textsuperscript{script}~and a sub\textsubscript{script}. Now we see some~\textcolor{hexFF0000}{red},~\textcolor{hex92D050}{green}~and~\textcolor{hex0070C0}{blue}~text. Some text with a~{\setlength{\fboxsep}{1pt}\colorbox{hexFFFF00}{\strut yellow} \colorbox{hexFFFF00}{\strut highlight.}} Some text in a~box. Some text~in~\textcolor{hexFFFFFF}{{\setlength{\fboxsep}{1pt}\colorbox{hex000000}{\strut inverse} \colorbox{hex000000}{\strut video}}}.
+
+A paragraph with styled text:~\textcolor{hex808080}{\textit{subtle~emphasis~~}}followed~by~\textbf{strong text~}and~\textcolor{hex4F81BD}{\textit{\textbf{intense emphasis}}}.~This paragraph uses document wide styles for styling rather than inline text properties as~demonstrated~in the~previous~paragraph~—~calibre~can handle both with equal ease.
+
+\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Fun with fonts}}}
+
+This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is~\texttt{some text in the Ubuntu Mono typeface, notice how every letter has the same width, even~i~and m}. Every embedded font will automatically be embedded in the output~ebook~during conversion.~
+
+\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Paragraph level formatting}}}
+
+{\raggedleft You can do crazy things with~paragraphs, if~the urge strikes you. For~instance~this paragraph is~right aligned~and has a right border. It has also been given a light gray background.\par}
+
+For~the lovers~of poetry amongst you, paragraphs with hanging indents, like this often come in handy. You can use hanging indents to ensure that a line of poetry~retains~its individual identity as a line even when the screen~is~ too~narrow to display it as a single line. Not only does this paragraph have a hanging indent,~it~is also has an extra top margin, setting it apart from the preceding paragraph.
+\end{frame}
+\note{Slide Note 2. This is a \textbf{bold} text, but no \textit{italic}. Let's strike \sout{that} out.
+
+2}
+
+\begin{frame}[allowframebreaks]
+\frametitle{\protect\textcolor{hex365F91}{Tables}}
+\phantomsection\label{tables}
+\begin{tabular}{|*{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-4\tabcolsep-3\arrayrulewidth)/2\relax}|}}
+\hline
+\cellcolor{hex9BBB59}\textcolor{hexFFFFFF}{\textbf{ITEM~}} & \cellcolor{hex9BBB59}\textcolor{hexFFFFFF}{\textbf{NEEDED~}} \\
+\hline
+Books~ & 1~ \\
+\hline
+Pens~ & 3~ \\
+\hline
+Pencils~ & 2~ \\
+\hline
+Highlighter~ & 2 colors~ \\
+\hline
+Scissors~ & 1 pair~ \\
+\hline
+\end{tabular}
+
+Tables in Word can vary from the extremely simple to the extremely complex.~calibre~tries to do~its~best when converting tables. While you may run into trouble with the occasional table,~the vast majority of~common cases should be converted very well, as~demonstrated~in this section.~Note that for~optimum~results, when creating tables in Word, you should set their widths using percentages, rather than absolute units.~~To the left of this paragraph is a floating two column table with a nice green border and header row.~
+
+Now~let’s~look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100\% of the available width.
+
+{\small\setlength{\tabcolsep}{4pt}
+\begin{tabular}{|*{6}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-12\tabcolsep-7\arrayrulewidth)/6\relax}|}}
+\hline
+\cellcolor{hexFFFFFF}{\fontsize{11pt}{13.2pt}\selectfont City or Town~} & \cellcolor{hexFFFFFF}{\fontsize{11pt}{13.2pt}\selectfont Point A~} & \cellcolor{hexFFFFFF}{\fontsize{11pt}{13.2pt}\selectfont Point B~} & \cellcolor{hexFFFFFF}{\fontsize{11pt}{13.2pt}\selectfont Point C~} & \cellcolor{hexFFFFFF}{\fontsize{11pt}{13.2pt}\selectfont Point D~} & \cellcolor{hexFFFFFF}{\fontsize{11pt}{13.2pt}\selectfont Point E~} \\
+\hline
+\cellcolor{hexFFFFFF}Point A~ & \cellcolor{hexD3DFEE}—~ & \cellcolor{hexD3DFEE}~ & \cellcolor{hexD3DFEE}~ & \cellcolor{hexD3DFEE}~ & \cellcolor{hexD3DFEE}~ \\
+\hline
+\cellcolor{hexFFFFFF}Point B~ & 87~ & —~ & ~ & ~ & ~ \\
+\hline
+\cellcolor{hexFFFFFF}Point C~ & \cellcolor{hexD3DFEE}64~ & \cellcolor{hexD3DFEE}56~ & \cellcolor{hexD3DFEE}—~ & \cellcolor{hexD3DFEE}~ & \cellcolor{hexD3DFEE}~ \\
+\hline
+\cellcolor{hexFFFFFF}Point D~ & 37~ & 32~ & 91~ & —~ & ~ \\
+\hline
+\cellcolor{hexFFFFFF}Point E~ & \cellcolor{hexD3DFEE}93~ & \cellcolor{hexD3DFEE}35~ & \cellcolor{hexD3DFEE}54~ & \cellcolor{hexD3DFEE}43~ & \cellcolor{hexD3DFEE}—~ \\
+\hline
+\end{tabular}
+}
+\end{frame}
+\note{And then about tables
+
+3}
+
+\begin{frame}[allowframebreaks]
+\relax
+Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.
+
+\begin{tabular}{|*{4}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-8\tabcolsep-5\arrayrulewidth)/4\relax}|}}
+\hline
+\cellcolor{hex4BACC6}\textcolor{hexFFFFFF}{\textbf{College~}} & \cellcolor{hex4BACC6}\textcolor{hexFFFFFF}{\textbf{New students~}} & \cellcolor{hex4BACC6}\textcolor{hexFFFFFF}{\textbf{Graduating students~}} & \cellcolor{hex4BACC6}\textcolor{hexFFFFFF}{\textbf{Change~}} \\
+\hline
+~ & \textcolor{hex808080}{\textit{Undergraduate}}~ & ~ & ~ \\
+\hline
+Cedar University~ & {\fontsize{11pt}{13.2pt}\selectfont 110~} & {\fontsize{11pt}{13.2pt}\selectfont 103~} & {\fontsize{11pt}{13.2pt}\selectfont +7~} \\
+\hline
+Oak Institute~ & {\fontsize{11pt}{13.2pt}\selectfont 202~} & {\fontsize{11pt}{13.2pt}\selectfont 210~} & {\fontsize{11pt}{13.2pt}\selectfont -8~} \\
+\hline
+~ & \textcolor{hex808080}{\textit{Graduate}}~ & ~ & ~ \\
+\hline
+Cedar University~ & {\fontsize{11pt}{13.2pt}\selectfont 24~} & {\fontsize{11pt}{13.2pt}\selectfont 20~} & {\fontsize{11pt}{13.2pt}\selectfont +4~} \\
+\hline
+Elm College~ & {\fontsize{11pt}{13.2pt}\selectfont 43~} & {\fontsize{11pt}{13.2pt}\selectfont 53~} & {\fontsize{11pt}{13.2pt}\selectfont -10~} \\
+\hline
+\cellcolor{hexFFFFFF}Total~ & \cellcolor{hexFFFFFF}{\fontsize{11pt}{13.2pt}\selectfont 998~} & \cellcolor{hexFFFFFF}{\fontsize{11pt}{13.2pt}\selectfont 908~} & \cellcolor{hexFFFFFF}{\fontsize{11pt}{13.2pt}\selectfont 90~} \\
+\hline
+\end{tabular}
+
+\textcolor{hex808080}{\textit{{\fontsize{10pt}{12pt}\selectfont Source:}}}{\fontsize{10pt}{12pt}\selectfont ~Fictitious data, for illustration purposes only~}
+
+Next, we have something a little more complex, a nested table,~i.e.~a table inside another table. Additionally, the inner table has some of its cells merged.~The table is displayed horizontally centered.~
+
+\begin{tabular}{|*{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-4\tabcolsep-3\arrayrulewidth)/2\relax}|}}
+\hline
+One~
+
+Three~ & Two~ \\
+\hline
+ & Four~ \\
+\hline
+\end{tabular}
+
+\begin{tabular}{|*{2}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-4\tabcolsep-3\arrayrulewidth)/2\relax}|}}
+\hline
+~ & To the left is a table inside a table, with some cells merged.~ \\
+\hline
+\end{tabular}
+\end{frame}
+
+\begin{frame}[allowframebreaks]
+\relax
+We~end~with a~fancy~calendar, note how~much of the original formatting is preserved.~Note that this table will only display correctly on~relatively wide~screens. In general, very wide tables or tables whose cells have fixed width requirements~don’t~fare well in~ebooks.
+
+{\scriptsize\setlength{\tabcolsep}{2pt}
+\begin{tabular}{|*{14}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-28\tabcolsep-15\arrayrulewidth)/14\relax}|}}
+\hline
+\textcolor{hex365F91}{December 2007~} &  &  &  &  &  &  &  &  &  &  &  &  &  \\
+\hline
+\textcolor{hex365F91}{Sun~} & ~ & \textcolor{hex7F7F7F}{Mon~} & ~ & \textcolor{hex7F7F7F}{Tue~} & ~ & \textcolor{hex7F7F7F}{Wed~} & ~ & \textcolor{hex7F7F7F}{Thu~} & ~ & \textcolor{hex7F7F7F}{Fri~} & ~ & \textcolor{hex7F7F7F}{Sat~} &  \\
+\hline
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & \textcolor{hex7F7F7F}{1~} &  \\
+\hline
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+\hline
+\textcolor{hex365F91}{2~} & ~ & \textcolor{hex7F7F7F}{3~} & ~ & \textcolor{hex7F7F7F}{4~} & ~ & \textcolor{hex7F7F7F}{5~} & ~ & \textcolor{hex7F7F7F}{6~} & ~ & \textcolor{hex7F7F7F}{7~} & ~ & \textcolor{hex7F7F7F}{8~} &  \\
+\hline
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+\hline
+\textcolor{hex365F91}{9~} & ~ & \textcolor{hex7F7F7F}{10~} & ~ & \textcolor{hex7F7F7F}{11~} & ~ & \textcolor{hex7F7F7F}{12~} & ~ & \textcolor{hex7F7F7F}{13~} & ~ & \textcolor{hex7F7F7F}{14~} & ~ & \textcolor{hex7F7F7F}{15~} &  \\
+\hline
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+\hline
+\textcolor{hex365F91}{16~} & ~ & \textcolor{hex7F7F7F}{17~} & ~ & \textcolor{hex7F7F7F}{18~} & ~ & \textcolor{hex7F7F7F}{19~} & ~ & \textcolor{hex7F7F7F}{20~} & ~ & \textcolor{hex7F7F7F}{21~} & ~ & \textcolor{hex7F7F7F}{22~} &  \\
+\hline
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+\hline
+\textcolor{hex365F91}{23~} & ~ & \textcolor{hex7F7F7F}{24~} & ~ & \textcolor{hex7F7F7F}{25~} & ~ & \textcolor{hex7F7F7F}{26~} & ~ & \textcolor{hex7F7F7F}{27~} & ~ & \textcolor{hex7F7F7F}{28~} & ~ & \textcolor{hex7F7F7F}{29~} &  \\
+\hline
+~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+\hline
+\textcolor{hex365F91}{30~} & ~ & \textcolor{hex7F7F7F}{31~} & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ & ~ &  \\
+\hline
+\end{tabular}
+}
+\end{frame}
+\note{Now calendars
+
+\begin{enumerate}
+\item Sun
+\item Mon
+\end{enumerate}
+
+7. Sat
+
+5}
+
+\begin{frame}[allowframebreaks]
+\frametitle{\protect\textcolor{hex365F91}{Structural Elements}}
+\phantomsection\label{structural-elements}
+Miscellaneous structural elements you can add to your document, like footnotes, endnotes,~dropcaps~and the like.~
+
+\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Footnotes \& Endnotes}}}
+
+Footnotes\textsuperscript{1}~and endnotes\textsuperscript{i}~are automatically recognized and both are converted to endnotes, with backlinks for maximum ease of use in~ebook~devices.
+
+\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Dropcaps}}}
+
+{\fontsize{59pt}{70.8pt}\selectfont D}
+
+rop~caps are used to emphasize the leading paragraph at the start of a section. In~Word~it is possible to specify how many lines of text a drop-cap should use.
+
+\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Links}}}
+
+Two kinds of links are possible, those that refer to an external~website~and those that refer to~locations~inside the document itself. Both are supported by~calibre. For example, here is a link pointing to the~\href{http://calibre-ebook.com/download}{\uline{calibre download page}}.~Then we have a link that points back to the section on~\uline{paragraph level formatting}~in this document.
+\end{frame}
+
+\begin{frame}[allowframebreaks]
+\frametitle{\protect\textcolor{hex365F91}{Images}}
+\phantomsection\label{images}
+Centered images like this are useful for large pictures that should be a focus of attention.~
+
+\includegraphics[bb=0 0 810 810,width={\ifdim 810pt>\linewidth\linewidth\else 810pt\fi},height={\ifdim 810pt>0.75\textheight0.75\textheight\else 810pt\fi},keepaspectratio,alt={165 Inspirational Quotes To Keep You Motivated In Life}]{image1-1087d9ea.pdf}
+
+There is no analogous technology in~ebooks, so~theconversion~will usually end up placingthe image either centered or floating close to the point in the text where itwas~\textcolor{hex808080}{\textit{inserted}},~notnecessarily~where it appears on the page in Word.
+\end{frame}
+
+\begin{frame}[allowframebreaks]
+\relax
+{\centering \textcolor{hex365F91}{\textbf{{\fontsize{14pt}{16.8pt}\selectfont Lists}}}\par}
+
+\textcolor{hex365F91}{All types of lists are supported by the conversion,~with the exception of~lists that use fancy~bullets,~these get converted to regular bullets.}
+
+\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Bulleted List}}}
+
+\begin{itemize}
+\item \textcolor{hex000000}{One}
+\item \textcolor{hex000000}{Two}
+\end{itemize}
+
+\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Numbered List}}}
+
+\begin{enumerate}
+\item One, with~a very long~line to~demonstrate~that the hanging indent for the list is working correctly
+\item Two
+\end{enumerate}
+
+\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Multi-level Lists}}}
+
+\begin{enumerate}
+\item One
+\begin{enumerate}
+\item Two
+\begin{enumerate}
+\item Three
+\item Four with~a very long~line to~demonstrate~that the hanging indent for the list is working correctly.
+\item Five
+\end{enumerate}
+\end{enumerate}
+\item Six
+\end{enumerate}
+
+A~Multi-level~list with bullets:
+
+\begin{itemize}
+\item One
+\begin{itemize}
+\item Two
+\begin{itemize}
+\item This bullet uses an image as the bullet item
+\item Four
+\end{itemize}
+\end{itemize}
+\item Five
+\end{itemize}
+
+\textcolor{hex4F81BD}{\textbf{{\fontsize{13pt}{15.6pt}\selectfont Continued Lists}}}
+
+\begin{enumerate}
+\item One
+\item Two
+\end{enumerate}
+
+An interruption in our regularly scheduled listing, for this essential and~very relevant~public service announcement.
+
+\begin{enumerate}
+\setcounter{enumi}{2}
+\item We now resume our normal programming
+\item Four
+\end{enumerate}
+\end{frame}
+
+\begin{frame}[allowframebreaks]
+\frametitle{Charts}
+\phantomsection\label{charts}
+\begin{tabular}{|*{4}{>{\raggedright\arraybackslash}p{\dimexpr(\linewidth-8\tabcolsep-5\arrayrulewidth)/4\relax}|}}
+\hline
+ & Series 1 & Series 2 & Series 3 \\
+\hline
+Category 1 & 4.3 & 2.4 & 2 \\
+\hline
+Category 2 & 2.5 & 4.4000000000000004 & 2 \\
+\hline
+Category 3 & 3.5 & 1.8 & 3 \\
+\hline
+Category 4 & 4.5 & 2.8 & 5 \\
+\hline
+\end{tabular}
+\end{frame}
+
+\end{document}

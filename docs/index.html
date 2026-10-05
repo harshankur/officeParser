@@ -7,11 +7,41 @@
     <title>officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser</title>
     <link rel="icon" type="image/png" href="./favicon.png">
 
+    <!-- Page views, counted by the self-hosted viewcounter (views.harshankur.com). Fire-and-forget:
+         it never blocks rendering, sends no cookies or personal data, and runs only on the production
+         site, so dev servers and preview deploys never count. -->
+    <script>
+        (() => {
+            if (location.hostname !== 'officeparser.harshankur.com') return;
+            /** One view of the current page; a spec document (#spec/<name>) counts as its own page. */
+            window.registerPageView = () => {
+                let sessionId;
+                try {
+                    sessionId = sessionStorage.getItem('vc-session') || crypto.randomUUID();
+                    sessionStorage.setItem('vc-session', sessionId);
+                } catch { sessionId = crypto.randomUUID(); }
+                const route = location.hash.startsWith('#spec/') ? location.hash : '';
+                fetch('https://views.harshankur.com/registerView?' + new URLSearchParams({
+                    appId: 'officeparser',
+                    deviceSize: innerWidth < 768 ? 'small' : innerWidth < 1200 ? 'medium' : 'large',
+                    page: location.pathname + route,
+                    title: document.title.slice(0, 200),
+                    referrer: document.referrer,
+                    sessionId,
+                }), { keepalive: true }).catch(() => {});
+            };
+            try { window.registerPageView(); } catch { /* never break the page */ }
+        })();
+    </script>
+
+    <meta name="description"
+        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
+
     <!-- OpenGraph Metadata -->
     <meta property="og:title"
         content="officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser">
     <meta property="og:description"
-        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 13 formats (including EPUB) and generate DOCX, ODT, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
+        content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
     <meta property="og:image"
         content="https://raw.githubusercontent.com/harshankur/officeParser/master/docs/favicon.png">
     <meta property="og:url" content="https://officeparser.harshankur.com">
@@ -79,6 +109,7 @@
     <link id="hljs-theme" rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/latex.min.js"></script>
     <script>
         // Pre-load theme to avoid flash
         (function () {
@@ -1010,6 +1041,81 @@
 
         .visual-panel-window.full-width {
             grid-column: 1 / -1;
+        }
+
+        .warning-list {
+            max-height: 40vh;
+            overflow-y: auto;
+        }
+
+        .warning-group + .warning-group {
+            margin-top: 0.6rem;
+        }
+
+        .warning-group-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            opacity: 0.8;
+        }
+
+        .warning-group ul {
+            margin: 0.2rem 0 0;
+            padding-left: 1.1rem;
+        }
+
+        .warning-group li + li {
+            margin-top: 0.25rem;
+        }
+
+        .export-intro {
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            margin: 0 0 1.25rem;
+        }
+
+        .export-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 0.6rem;
+        }
+
+        .export-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.15rem;
+            padding: 0.6rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-main);
+            font-family: 'Outfit', sans-serif;
+            text-align: left;
+            cursor: pointer;
+            transition: border-color 0.2s ease, background 0.2s ease;
+        }
+
+        .export-btn:hover:not(:disabled) {
+            border-color: var(--primary);
+            background: rgba(0, 113, 227, 0.06);
+        }
+
+        .export-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .export-btn .export-name {
+            font-size: 0.85rem;
+            font-weight: 700;
+        }
+
+        .export-btn .export-ext {
+            font-family: 'Ubuntu Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--text-dim);
         }
 
         .panel-header {
@@ -2304,6 +2410,14 @@
             border-bottom: none;
         }
 
+        .config-group-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            gap: 1rem;
+        }
+
         .config-group-title {
             font-size: 0.75rem;
             text-transform: uppercase;
@@ -2314,7 +2428,7 @@
 
         .config-items-container {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
             gap: 1rem 1.5rem;
             align-items: center;
         }
@@ -2323,12 +2437,20 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 1rem;
+            gap: 0.75rem;
             padding: 0.5rem 0.75rem;
             background: rgba(255, 255, 255, 0.02);
             border: 1px solid var(--border);
             border-radius: 8px;
             transition: all 0.2s ease;
+            min-width: 0;
+        }
+
+        .config-item > input:not([type="checkbox"]),
+        .config-item > select {
+            min-width: 0;
+            flex-shrink: 1;
+            max-width: 100%;
         }
 
         .config-item:hover {
@@ -2348,6 +2470,7 @@
             font-weight: 600;
             color: var(--text-dim);
             white-space: nowrap;
+            flex-shrink: 0;
         }
 
         .config-item.full-width .config-label {
@@ -2355,6 +2478,241 @@
             text-transform: uppercase;
             letter-spacing: 0.05em;
             font-size: 0.7rem;
+        }
+
+        /* Parser Config Progressive Disclosure */
+        #parser-config-container .config-item.collapsed-hidden {
+            display: none !important;
+        }
+
+        #parser-config-container:not(.is-collapsed) .config-item:not(.hidden):not(.collapsed-hidden) {
+            animation: configItemFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes configItemFadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-4px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .btn-config-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.45rem;
+            padding: 0.3rem 0.85rem;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            color: var(--text-dim);
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            user-select: none;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .btn-config-toggle:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--primary);
+            color: var(--text-main);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+
+        .btn-config-toggle:active {
+            transform: scale(0.98);
+        }
+
+        .btn-config-toggle .toggle-count {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.1rem 0.45rem;
+            border-radius: 10px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            background: rgba(99, 102, 241, 0.15);
+            color: var(--primary);
+            line-height: 1;
+        }
+
+        .btn-config-toggle .toggle-icon {
+            width: 12px;
+            height: 12px;
+            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .btn-config-toggle[aria-expanded="true"] .toggle-icon {
+            transform: rotate(180deg);
+        }
+
+        /* Format-Specific Parser Configuration Sections */
+        .parser-format-sections {
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+            margin-top: 1.25rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .parser-format-sections.hidden {
+            display: none !important;
+        }
+
+        .parser-format-sections:not(.hidden) .parser-format-group {
+            animation: configItemFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .parser-format-group {
+            background: rgba(255, 255, 255, 0.015);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+            transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .parser-format-group:hover {
+            border-color: rgba(99, 102, 241, 0.25);
+        }
+
+        .parser-format-group.is-active-format {
+            border-color: rgba(99, 102, 241, 0.45);
+            background: rgba(99, 102, 241, 0.035);
+            box-shadow: 0 0 16px rgba(99, 102, 241, 0.08);
+        }
+
+        .parser-format-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+        }
+
+        .parser-format-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-dim);
+        }
+
+        .parser-format-group.is-active-format .parser-format-title {
+            color: var(--primary);
+        }
+
+        .parser-format-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.15rem 0.55rem;
+            border-radius: 10px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            background: rgba(99, 102, 241, 0.15);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .parser-format-badge.hidden {
+            display: none !important;
+        }
+
+        /* Collapsible Overrides Card */
+        .overrides-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 15px;
+            padding: 1.25rem;
+            margin-bottom: 2rem;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .overrides-card:hover {
+            border-color: rgba(99, 102, 241, 0.3);
+        }
+
+        .overrides-card-header {
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+            width: 100%;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .overrides-title-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            gap: 1rem;
+        }
+
+        .overrides-badges {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .overrides-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.15rem 0.55rem;
+            border-radius: 12px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            background: rgba(99, 102, 241, 0.08);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            color: var(--primary);
+            white-space: nowrap;
+        }
+
+        .overrides-subtitle {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            line-height: 1.4;
+        }
+
+        .overrides-content {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            margin-top: 1.25rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .overrides-card.is-collapsed .overrides-content {
+            display: none !important;
+        }
+
+        .overrides-card:not(.is-collapsed) .overrides-content {
+            animation: configItemFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            #parser-config-container:not(.is-collapsed) .config-item[data-cfg-advanced="true"] {
+                animation: none;
+            }
+            .btn-config-toggle .toggle-icon {
+                transition: none;
+            }
         }
 
         /* Style Map Builder UI */
@@ -2516,6 +2874,13 @@
             border-radius: 8px;
             font-size: 0.75rem;
             white-space: nowrap;
+        }
+
+        @media (max-width: 600px) {
+            .panel-header {
+                flex-wrap: wrap;
+                gap: 0.5rem;
+            }
         }
 
         .panel-sub-header {
@@ -2804,12 +3169,22 @@
     </style>
     <script>
         // Global schemas for dynamic control generation
+        /** Hides every popover, marking the buttons that opened them as collapsed. */
+        window.closeConfigPopovers = function() {
+            document.querySelectorAll('.config-popover').forEach(p => {
+                p.style.display = 'none';
+                if (p.__opener) p.__opener.setAttribute('aria-expanded', 'false');
+            });
+        };
+
         window.toggleConfigPopover = function(id, btnElement) {
             const popover = document.getElementById(id);
             if (!popover) return;
             const isVisible = popover.style.display === 'block';
-            document.querySelectorAll('.config-popover').forEach(p => p.style.display = 'none');
+            window.closeConfigPopovers();
             if (!isVisible) {
+                popover.__opener = btnElement || null;
+                if (btnElement && btnElement.hasAttribute('aria-expanded')) btnElement.setAttribute('aria-expanded', 'true');
                 if (popover.parentElement !== document.body) {
                     document.body.appendChild(popover);
                 }
@@ -2825,54 +3200,109 @@
                     }
                     popover.style.left = leftPos + 'px';
                 }
+                // A menu (the Download dropdowns) takes the keyboard: the popover lives at the end of
+                // <body>, so focus moves into it, arrows move between items, and Escape or Tab closes it
+                // and returns focus to its button.
+                if (popover.getAttribute('role') === 'menu') {
+                    const items = [...popover.querySelectorAll('[role="menuitem"]')];
+                    if (items[0]) items[0].focus();
+                    if (!popover.__keyboard) {
+                        popover.__keyboard = true;
+                        popover.addEventListener('keydown', (e) => {
+                            const list = [...popover.querySelectorAll('[role="menuitem"]')];
+                            const at = list.indexOf(document.activeElement);
+                            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                                e.preventDefault();
+                                const next = (at + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length;
+                                list[next].focus();
+                            } else if (e.key === 'Escape' || e.key === 'Tab') {
+                                if (e.key === 'Escape') e.preventDefault();
+                                const opener = popover.__opener;
+                                window.closeConfigPopovers();
+                                if (opener) opener.focus();
+                            }
+                        });
+                    }
+                }
             }
         };
 
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.window-config-item') && !e.target.closest('.config-popover')
                 && !e.target.closest('.download-dropdown')) {
-                document.querySelectorAll('.config-popover').forEach(p => p.style.display = 'none');
+                window.closeConfigPopovers();
             }
         });
 
+        /**
+         * Every output window, in page order. The one list the render, toggle, copy/download and
+         * re-render code iterates, so adding a window means adding it here and nowhere else.
+         */
+        window.FORMAT_WINDOWS = ['html', 'md', 'chunks', 'csv', 'rtf', 'tex', 'text', 'ast'];
+
         window.CONFIG_SCHEMAS = {
             parser: [
-                // `formats` scopes an item to specific INPUT file types (matched against the
-                // resolved parser format: the file-type hint if set, else the loaded file's
-                // extension). An item with no `formats` is GENERAL and always shown. All items
-                // are still rendered into the DOM so their values persist and the parse-config
-                // read sites can read them; only visibility is toggled. See applyParserFormatFilter.
-                { id: 'cfg_fileType', label: 'File Type Hint', type: 'select', options: ['', 'docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub'], names: ['Auto', 'DOCX', 'XLSX', 'PPTX', 'PDF', 'RTF', 'CSV', 'Markdown', 'HTML', 'ODT', 'ODS', 'ODP', 'ODG', 'EPUB'], width: '100px' },
+                // General Parser Settings - Everyday / Primary (First 2 rows when collapsed)
+                { id: 'cfg_fileType', label: 'File Type Hint', type: 'select', options: ['', 'docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'], names: ['Auto', 'DOCX', 'XLSX', 'PPTX', 'PDF', 'RTF', 'CSV', 'Markdown', 'HTML', 'ODT', 'ODS', 'ODP', 'ODG', 'EPUB', 'LaTeX'], width: '100px' },
                 { id: 'cfg_extractAttachments', label: 'Extract Attachments', type: 'switch', default: true },
-                { id: 'cfg_ocr', label: 'Enable OCR', type: 'switch', default: false, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_ocrPreserveLayout', label: 'OCR Preserve Layout', type: 'switch', default: true, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_ignoreInternalLinks_parser', label: 'Ignore Internal Links', type: 'switch', default: false, formats: ['pdf', 'docx', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formats: ['pdf'] },
-                { id: 'cfg_pdfUseTags', label: 'PDF Use Tags', type: 'switch', default: true, formats: ['pdf'] },
-                { id: 'cfg_pdfDetectColumns', label: 'PDF Detect Columns', type: 'switch', default: true, formats: ['pdf'] },
-                { id: 'cfg_password', label: 'Password (PDF/OOXML/ODF)', type: 'text', default: '', width: '160px', formats: ['pdf', 'docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_pdfPageRange', label: 'PDF Page Range', type: 'text', default: '', width: '80px', formats: ['pdf'] },
-                { id: 'cfg_pdfExtractTextColor', label: 'PDF Extract Text Color', type: 'switch', default: true, formats: ['pdf'] },
-                { id: 'cfg_includeRawContent', label: 'Include Raw Source', type: 'switch', default: false, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'html', 'rtf', 'csv'] },
-                { id: 'cfg_serializeRawContent', label: 'Serialize Raw XML', type: 'switch', default: true, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'html'] },
-                { id: 'cfg_preserveXmlWhitespace', label: 'Preserve XML Space', type: 'switch', default: false, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub', 'html'] },
-                { id: 'cfg_ignoreNotes', label: 'Ignore Notes', type: 'switch', default: false, formats: ['pdf', 'docx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_includeBreakNodes', label: 'Include Break Nodes', type: 'switch', default: true, formats: ['docx', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_preserveAttributes', label: 'Preserve HTML Attributes', type: 'switch', default: false, formats: ['html', 'md'] },
-                { id: 'cfg_preserveIframes', label: 'Preserve Iframes', type: 'switch', default: false, formats: ['html', 'md'] },
-                { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: ',', width: '60px', formats: ['csv'] },
-                { id: 'cfg_ocrAutoTerminate', label: 'OCR Auto Terminate (s)', type: 'number', default: 10, width: '70px', min: 0, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_ocrWorkerLoad', label: 'OCR Worker Load (s)', type: 'number', default: 60, width: '70px', min: 0, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_ocrRecognition', label: 'OCR Recog (s)', type: 'number', default: 30, width: '70px', min: 0, formats: ['pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'odt', 'ods', 'odp', 'odg'] },
-                { id: 'cfg_maxUncompressedBytes', label: 'Max Uncompressed Size (MB)', type: 'number', default: 512, width: '80px', min: 0, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub'] },
-                { id: 'cfg_maxZipEntries', label: 'Max ZIP Entries', type: 'number', default: 10000, width: '80px', min: 0, formats: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub'] },
-                { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs', fullWidth: true, formats: ['pdf'] }
+                { id: 'cfg_password', label: 'Password', type: 'text', default: '', width: '160px', placeholder: 'PDF, OOXML, ODF' },
+                { id: 'cfg_ocr', label: 'Enable OCR', type: 'switch', default: false },
+                { id: 'cfg_ocrLanguage', label: 'OCR Language', type: 'text', default: 'eng', width: '60px' },
+                { id: 'cfg_ignoreHeadersAndFooters', label: 'Ignore Headers/Footers', type: 'switch', default: false },
+                { id: 'cfg_ignoreNotes', label: 'Ignore Notes', type: 'switch', default: false },
+                { id: 'cfg_ignoreComments', label: 'Ignore Comments', type: 'switch', default: false },
+                { id: 'cfg_includeBreakNodes', label: 'Include Break Nodes', type: 'switch', default: true },
+                { id: 'cfg_ignoreInternalLinks_parser', label: 'Ignore Internal Links', type: 'switch', default: false },
+
+                // General Parser Settings - Advanced (Visible when expanded)
+                { id: 'cfg_includeRawContent', label: 'Include Raw Source', type: 'switch', default: false, advanced: true },
+                { id: 'cfg_serializeRawContent', label: 'Serialize Raw XML', type: 'switch', default: true, advanced: true },
+                { id: 'cfg_preserveXmlWhitespace', label: 'Preserve XML Space', type: 'switch', default: false, advanced: true },
+
+                { id: 'cfg_ocrPreserveLayout', label: 'OCR Preserve Layout', type: 'switch', default: true, advanced: true },
+                { id: 'cfg_ocrAutoTerminate', label: 'OCR Auto Terminate (s)', type: 'number', default: 10, width: '70px', min: 0, advanced: true },
+                { id: 'cfg_ocrWorkerLoad', label: 'OCR Worker Load (s)', type: 'number', default: 60, width: '70px', min: 0, advanced: true },
+                { id: 'cfg_ocrRecognition', label: 'OCR Recog (s)', type: 'number', default: 30, width: '70px', min: 0, advanced: true },
+
+                { id: 'cfg_maxUncompressedBytes', label: 'Max Uncompressed (MB)', type: 'number', default: 512, width: '80px', min: 0, advanced: true },
+                { id: 'cfg_maxZipEntries', label: 'Max ZIP Entries', type: 'number', default: 10000, width: '80px', min: 0, advanced: true },
+                { id: 'cfg_maxTableCells', label: 'Max Table Cells', type: 'number', default: 1000000, width: '85px', min: 0, advanced: true },
+                { id: 'cfg_maxXmlElements', label: 'Max XML Elements', type: 'number', default: 2000000, width: '85px', min: 0, advanced: true },
+                { id: 'cfg_maxRepeatedContent', label: 'Max Repeated Content', type: 'number', default: 16777216, width: '95px', min: 0, advanced: true },
+
+                // Format-Specific Parser Settings (Separated in dedicated format sections when expanded)
+                // PDF Options
+                { id: 'cfg_pdfPageRange', label: 'PDF Page Range', type: 'text', default: '', width: '80px', formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfHeadingDetection', label: 'PDF Heading Detection', type: 'select', options: ['auto', 'font-size', 'off'], names: ['Auto', 'Font Size', 'Off'], default: 'auto', width: '100px', formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfDetectColumns', label: 'PDF Detect Columns', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfUseTags', label: 'PDF Use Tags', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfMergeHyphenatedWords', label: 'PDF Merge Hyphens', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfNormalizeText', label: 'PDF Normalize Text', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfExtractTextColor', label: 'PDF Extract Text Color', type: 'switch', default: true, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_ignorePageGeometry', label: 'Ignore Page Geometry', type: 'switch', default: false, formatGroup: 'pdf', formats: ['pdf'] },
+                { id: 'cfg_pdfWorkerSrc', label: 'PDF Worker URL', type: 'text', default: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs', fullWidth: true, formatGroup: 'pdf', formats: ['pdf'] },
+
+                // HTML / EPUB Options
+                { id: 'cfg_preserveAttributes', label: 'Preserve HTML Attributes', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'epub', 'md'] },
+                { id: 'cfg_preserveIframes', label: 'Preserve Iframes', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'epub', 'md'] },
+                { id: 'cfg_preserveComments', label: 'Preserve HTML Comments', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'epub'] },
+                { id: 'cfg_embedFolkForms', label: 'Embed Folk Forms', type: 'switch', default: false, formatGroup: 'html', formats: ['html', 'md'] },
+
+                // CSV Options
+                { id: 'cfg_csvDelimiter', label: 'CSV Delimiter', type: 'text', default: ',', width: '60px', formatGroup: 'csv', formats: ['csv'] },
+
+                // LaTeX Options
+                { id: 'cfg_texToday', label: 'LaTeX \\today Text', type: 'text', default: '', width: '140px', placeholder: 'date of the parse', formatGroup: 'tex', formats: ['tex'] },
+
+                // Presentation Options
+                { id: 'cfg_ignoreSlideMasters', label: 'Ignore Slide Masters', type: 'switch', default: false, formatGroup: 'pptx', formats: ['pptx', 'odp'] }
             ],
             generator: [
                 { id: 'cfg_includeFormatting', label: 'Include Formatting', type: 'switch', default: true },
                 { id: 'cfg_generateIds', label: 'Generate IDs', type: 'switch', default: true },
                 { id: 'cfg_renderMetadata', label: 'Render Metadata', type: 'switch', default: false },
                 { id: 'cfg_includeImages', label: 'Images', type: 'select', options: ['image-only', 'image+ocr-text', 'ocr-text-only', 'none'], names: ['Image only', 'Image + OCR text', 'OCR text only', 'None'], default: 'image-only', width: '130px' },
+                { id: 'cfg_maxInlineImageBytes', label: 'Max Inline Image (bytes)', type: 'number', default: 1500000, width: '90px', min: 0 },
                 { id: 'cfg_includeCharts', label: 'Include Charts', type: 'switch', default: true },
                 { id: 'cfg_ignoreInternalLinks_generator', label: 'Ignore Internal Links', type: 'switch', default: false },
                 { id: 'cfg_ignoreDefaultStyleMap', label: 'Ignore Default Style Map', type: 'switch', default: false }
@@ -2905,94 +3335,136 @@
                 { id: 'cfg_csv_mergeSheets', label: 'Merge', type: 'inline-switch', default: true },
                 { id: 'cfg_csv_columnDelimiter', label: 'Delim', type: 'inline-text', default: ',', width: '60px' }
             ],
+            tex: [
+                { id: 'cfg_tex_documentClass', label: 'Class', type: 'inline-select', options: ['auto', 'article', 'report', 'book', 'beamer'], names: ['Auto', 'Article', 'Report', 'Book', 'Beamer'], default: 'auto' },
+                { id: 'cfg_tex_standalone', label: 'Standalone', type: 'inline-switch', default: true },
+                { id: 'cfg_tex_embedImages', label: 'Images inside', type: 'inline-switch', default: true },
+                { id: 'cfg_tex_numberSections', label: 'Numbered', type: 'inline-switch', default: false }
+            ],
             text: [
                 { id: 'cfg_text_preserveLayout', label: 'Layout', type: 'inline-switch', default: true },
                 { id: 'cfg_text_renderNotes', label: 'Notes', type: 'inline-switch', default: true },
-                { id: 'cfg_text_newlineDelimiter', label: 'Newline', type: 'inline-text', default: '\\n', width: '60px' }
+                { id: 'cfg_text_newlineDelimiter', label: 'Newline', type: 'inline-text', default: '\\n', width: '60px' },
+                { id: 'cfg_text_pageSeparator', label: 'Page Sep', type: 'inline-text', default: '\\n', width: '60px' }
             ]
         };
 
-        function renderConfigItems(sectionKey, containerId) {
-            const schema = window.CONFIG_SCHEMAS[sectionKey];
-            let html = '';
+        window.PARSER_FORMAT_GROUPS = [
+            { id: 'pdf', title: 'PDF Options', icon: '📄', formats: 'pdf' },
+            { id: 'html', title: 'HTML / EPUB Options', icon: '🌐', formats: 'html,epub,md' },
+            { id: 'csv', title: 'CSV Options', icon: '📊', formats: 'csv' },
+            { id: 'tex', title: 'LaTeX Options', icon: '📐', formats: 'tex' },
+            { id: 'pptx', title: 'Presentation Options', icon: '📽️', formats: 'pptx,odp' }
+        ];
 
-            schema.forEach(item => {
-                const saved = localStorage.getItem(item.id);
-                const value = saved !== null ? (item.type.includes('switch') ? saved === 'true' : saved) : item.default;
-                const isInline = item.type.startsWith('inline-');
-                // Tag every wrapper so applyParserFormatFilter can show/hide it by input format.
-                // Items without `formats` carry no data-cfg-formats and are treated as general.
-                const cfgAttr = `data-cfg-id="${item.id}"${item.formats ? ` data-cfg-formats="${item.formats.join(',')}"` : ''}`;
+        function renderSingleConfigItem(item) {
+            const saved = localStorage.getItem(item.id);
+            const value = saved !== null ? (item.type.includes('switch') ? saved === 'true' : saved) : item.default;
+            const isInline = item.type.startsWith('inline-');
+            const cfgAttr = `data-cfg-id="${item.id}"` +
+                (item.formats ? ` data-cfg-formats="${item.formats.join(',')}"` : '') +
+                (item.formatGroup ? ` data-cfg-group="${item.formatGroup}"` : '') +
+                (item.advanced ? ` data-cfg-advanced="true"` : '');
 
-                if (item.type.includes('switch')) {
-                    html += `
-                        <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
-                            <span class="config-label">${item.label}</span>
-                            <label class="switch">
-                                <input type="checkbox" id="${item.id}" ${value ? 'checked' : ''}>
-                                <span class="slider"></span>
-                            </label>
-                        </div>
-                    `;
-                } else if (item.type.includes('select')) {
-                    html += `
-                        <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
-                            <span class="config-label">${item.label}</span>
-                            <select id="${item.id}" class="btn btn-outline" style="padding: ${isInline ? '0.2rem' : '0.4rem'}; font-size: 0.8rem; width: ${item.width || 'auto'};">
-                                ${item.options.map((opt, i) => `<option value="${opt}" ${opt === value ? 'selected' : ''} ${item.disabledOptions && item.disabledOptions.includes(opt) ? 'disabled' : ''}>${item.names[i]}</option>`).join('')}
-                            </select>
-                        </div>
-                    `;
-                } else if (item.type === 'popover-panel') {
-                    // A trigger for a hand-written panel elsewhere in the markup. Used where a
-                    // config field is an OBJECT with many members (metadataOverrides, the
-                    // MarkdownDialectConfig / FallbackToHtmlConfig object forms) and a single
-                    // control cannot represent it. Mirrors the existing `standalone` popover.
-                    html += `
-                        <div ${cfgAttr} class="${item.inline ? 'window-config-item' : 'config-item'}">
-                            <button class="btn btn-outline" style="padding: ${item.inline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; font-size: ${item.inline ? '0.75rem' : '0.8rem'}; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);" onclick="window.toggleConfigPopover('${item.panelId}', this)">
+            if (item.type.includes('switch')) {
+                return `
+                    <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
+                        <span class="config-label">${item.label}</span>
+                        <label class="switch">
+                            <input type="checkbox" id="${item.id}" ${value ? 'checked' : ''}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                `;
+            } else if (item.type.includes('select')) {
+                return `
+                    <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
+                        <span class="config-label">${item.label}</span>
+                        <select id="${item.id}" class="btn btn-outline" style="padding: ${isInline ? '0.2rem' : '0.4rem'}; font-size: 0.8rem; width: ${item.width || 'auto'};">
+                            ${item.options.map((opt, i) => `<option value="${opt}" ${opt === value ? 'selected' : ''} ${item.disabledOptions && item.disabledOptions.includes(opt) ? 'disabled' : ''}>${item.names[i]}</option>`).join('')}
+                        </select>
+                    </div>
+                `;
+            } else if (item.type === 'popover-panel') {
+                return `
+                    <div ${cfgAttr} class="${item.inline ? 'window-config-item' : 'config-item'}">
+                        <button class="btn btn-outline" style="padding: ${item.inline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; font-size: ${item.inline ? '0.75rem' : '0.8rem'}; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);" onclick="window.toggleConfigPopover('${item.panelId}', this)">
+                            ${item.label}
+                            <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                    </div>
+                `;
+            } else if (item.type.includes('popover-textarea')) {
+                return `
+                    <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
+                        <button class="btn btn-outline" style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; font-size: ${isInline ? '0.75rem' : '0.8rem'}; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);" onclick="window.toggleConfigPopover('${item.id}_popover', this)">
+                            ${item.label}
+                            <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </button>
+                        <div id="${item.id}_popover" class="config-popover" style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 350px;">
+                            <div style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
                                 ${item.label}
-                                <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-                            </button>
-                        </div>
-                    `;
-                } else if (item.type.includes('popover-textarea')) {
-                    html += `
-                        <div ${cfgAttr} class="${isInline ? 'window-config-item' : 'config-item'}">
-                            <button class="btn btn-outline" style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; font-size: ${isInline ? '0.75rem' : '0.8rem'}; display: flex; align-items: center; gap: 0.25rem; border-color: var(--border);" onclick="window.toggleConfigPopover('${item.id}_popover', this)">
-                                ${item.label}
-                                <svg style="width:10px;height:10px;opacity:0.7;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-                            </button>
-                            <div id="${item.id}_popover" class="config-popover" style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 350px;">
-                                <div style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
-                                    ${item.label}
-                                    <button class="modal-close-btn" style="font-size: 0.8rem;" onclick="window.toggleConfigPopover('${item.id}_popover')">✕</button>
-                                </div>
-                                <textarea id="${item.id}" class="btn btn-outline" 
-                                    style="padding: 0.5rem; width: 100%; min-height: ${item.height || '100px'}; font-size: 0.75rem; font-family: monospace; resize: vertical; background: var(--bg-card); color: var(--text-main); cursor: text;" 
-                                    ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>${value}</textarea>
+                                <button class="modal-close-btn" style="font-size: 0.8rem;" onclick="window.toggleConfigPopover('${item.id}_popover')">✕</button>
                             </div>
-                        </div>
-                    `;
-                } else if (item.type.includes('textarea')) {
-                    html += `
-                        <div ${cfgAttr} class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}" style="align-items: flex-start;">
-                            <span class="config-label">${item.label}</span>
                             <textarea id="${item.id}" class="btn btn-outline" 
-                                style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; min-height: ${item.height || '60px'}; font-size: ${isInline ? '0.75rem' : '0.8rem'}; font-family: monospace; resize: vertical;" 
+                                style="padding: 0.5rem; width: 100%; min-height: ${item.height || '100px'}; font-size: 0.75rem; font-family: monospace; resize: vertical; background: var(--bg-card); color: var(--text-main); cursor: text;" 
                                 ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>${value}</textarea>
                         </div>
-                    `;
-                } else {
-                    html += `
-                        <div ${cfgAttr} class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}">
-                            <span class="config-label">${item.label}</span>
-                            <input type="${item.type.replace('inline-', '')}" id="${item.id}" class="btn btn-outline" 
-                                style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; font-size: ${isInline ? '0.75rem' : '0.8rem'};" 
-                                value="${value}" ${item.min !== undefined ? `min="${item.min}"` : ''} ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>
+                    </div>
+                `;
+            } else if (item.type.includes('textarea')) {
+                return `
+                    <div ${cfgAttr} class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}" style="align-items: flex-start;">
+                        <span class="config-label">${item.label}</span>
+                        <textarea id="${item.id}" class="btn btn-outline" 
+                            style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; min-height: ${item.height || '60px'}; font-size: ${isInline ? '0.75rem' : '0.8rem'}; font-family: monospace; resize: vertical;" 
+                            ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>${value}</textarea>
+                    </div>
+                `;
+            } else {
+                return `
+                    <div ${cfgAttr} class="${isInline ? 'window-config-item' : (item.fullWidth ? 'config-item full-width' : 'config-item')}">
+                        <span class="config-label">${item.label}</span>
+                        <input type="${item.type.replace('inline-', '')}" id="${item.id}" class="btn btn-outline" 
+                            style="padding: ${isInline ? '0.2rem 0.5rem' : '0.4rem 0.8rem'}; width: ${item.width || '100%'}; font-size: ${isInline ? '0.75rem' : '0.8rem'};" 
+                            value="${value}" ${item.min !== undefined ? `min="${item.min}"` : ''} ${item.placeholder ? `placeholder="${item.placeholder}"` : ''}>
+                    </div>
+                `;
+            }
+        }
+
+        function renderConfigItems(sectionKey) {
+            const schema = window.CONFIG_SCHEMAS[sectionKey];
+            if (!schema) return;
+            let html = '';
+            const items = sectionKey === 'parser' ? schema.filter(it => !it.formatGroup) : schema;
+            items.forEach(item => {
+                html += renderSingleConfigItem(item);
+            });
+            document.write(html);
+        }
+
+        function renderParserFormatSections() {
+            const schema = window.CONFIG_SCHEMAS.parser;
+            if (!schema) return;
+            let html = '';
+            window.PARSER_FORMAT_GROUPS.forEach(grp => {
+                const groupItems = schema.filter(it => it.formatGroup === grp.id);
+                if (groupItems.length === 0) return;
+                html += `
+                    <div class="parser-format-group" data-format-group="${grp.id}" data-formats="${grp.formats}">
+                        <div class="parser-format-header">
+                            <div class="parser-format-title">
+                                <span class="format-icon">${grp.icon}</span>
+                                <span>${grp.title}</span>
+                            </div>
+                            <span class="parser-format-badge hidden">Active Format</span>
                         </div>
-                    `;
-                }
+                        <div class="config-items-container">
+                            ${groupItems.map(it => renderSingleConfigItem(it)).join('')}
+                        </div>
+                    </div>
+                `;
             });
             document.write(html);
         }
@@ -3011,6 +3483,7 @@
                     <a href="#specs">Specifications</a>
                     <a href="#visualizer">Visualizer</a>
                     <a href="#template-studio">Template Studio</a>
+                    <a href="./blog/">Blog</a>
                 </nav>
                 <div class="action-buttons">
                     <div class="theme-switcher">
@@ -3059,6 +3532,7 @@
             <a href="#specs">Specifications</a>
             <a href="#visualizer">Visualizer</a>
             <a href="#template-studio">Template Studio</a>
+            <a href="./blog/">Blog</a>
             <div class="theme-switcher-mobile"
                 style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid var(--border);">
                 <p
@@ -3090,9 +3564,9 @@
                     <div class="badge shimmer" id="weekly-badge">--- Weekly Downloads</div>
                 </a>
                 <h1>The Industry's First <span class="gradient-text">Parser & Generator</span></h1>
-                <p>One library, every transformation. Parse complex documents into a structured AST and generate
-                    high-fidelity Markdown, HTML, or RAG-ready chunks optimized for LLM integration and modern AI
-                    workflows.
+                <p>One library, every transformation. Parse complex documents, LaTeX included, into a structured AST
+                    and generate high-fidelity Word, OpenDocument, LaTeX, PDF, EPUB, Markdown, HTML, or RAG-ready
+                    chunks optimized for LLM integration and modern AI workflows.
                 </p>
                 <div class="cta-group">
                     <a href="#visualizer" class="btn btn-primary">Try Visualizer</a>
@@ -3121,7 +3595,7 @@
                     </a>
                 </div>
                 <div class="stat-item">
-                    <h3>13</h3>
+                    <h3>14</h3>
                     <p>Formats Supported</p>
                 </div>
             </div>
@@ -3291,6 +3765,18 @@
                     <h3>EPUB</h3>
                     <p>eBooks</p>
                 </div>
+                <div class="support-card">
+                    <span class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            style="width:3.5rem;height:3.5rem;">
+                            <path d="M4 4V20H20V8L16 4H4Z" fill="#008080" />
+                            <path d="M16 4V8H20" stroke="white" stroke-width="1.5" /><text x="5" y="15.5" fill="white"
+                                font-family="Outfit" font-weight="800" font-size="4.5">TeX</text>
+                        </svg>
+                    </span>
+                    <h3>TEX</h3>
+                    <p>LaTeX &amp; Overleaf Projects</p>
+                </div>
             </div>
         </section>
 
@@ -3317,8 +3803,9 @@
                 <div class="feature-card">
                     <span class="feature-icon">🏗️</span>
                     <h3>Native Generation</h3>
-                    <p>Write real <strong>DOCX and ODT</strong> packages, and PDFs via a native <code>pdf-lib</code>
-                        engine that needs <em>no headless browser</em>, running identically in Node and the browser.</p>
+                    <p>Write real <strong>DOCX and ODT</strong> packages, <strong>LaTeX</strong> that compiles with
+                        pdfLaTeX, XeLaTeX, LuaLaTeX and upLaTeX (CJK included), and PDFs via a native <code>pdf-lib</code> engine that needs
+                        <em>no headless browser</em>, running identically in Node and the browser.</p>
                 </div>
                 <div class="feature-card">
                     <span class="feature-icon">🔄</span>
@@ -3341,13 +3828,16 @@
                 <div class="feature-card">
                     <span class="feature-icon">🌍</span>
                     <h3>Universal Parser</h3>
-                    <p>Now supports **CSV, HTML, and Markdown** as input formats, enabling true any-to-any document
+                    <p>Parses <strong>CSV, HTML, Markdown and LaTeX</strong> (a <code>.tex</code> file or a whole
+                        Overleaf project <code>.zip</code>) as input formats, enabling true any-to-any document
                         pipelines.</p>
                 </div>
                 <div class="feature-card">
                     <span class="feature-icon">📎</span>
                     <h3>High Fidelity</h3>
                     <p>Unmatched support for merged table cells, anchors, bookmarks, and complex document hierarchies.
+                        Content kept apart from the text is read where it stands: SmartArt, text boxes, content controls,
+                        embedded HTML and RTF chunks, comments with their replies, and RTF headers and footers.
                     </p>
                 </div>
                 <div class="feature-card">
@@ -3419,7 +3909,7 @@
                 </div>
                 <div class="spec-card" id="card-generator_config" onclick="location.hash='#spec/generator_config'">
                     <h3>Generator Config</h3>
-                    <p>Complete guide to common and format-specific settings for HTML, Markdown, PDF, and more.</p>
+                    <p>Complete guide to common and format-specific settings for HTML, Markdown, PDF, DOCX, ODT, LaTeX and more.</p>
                     <div class="spec-link-hint">Read Config Spec →</div>
                 </div>
                 <div class="spec-card" id="card-generator" onclick="location.hash='#spec/generator'">
@@ -3496,7 +3986,7 @@
                         <p>Drag & Drop your file here or <span>Click to Browse</span></p>
                         <p style="font-size: 0.8rem; margin-top: 1rem; opacity: 0.6;">DOCX, PPTX, XLSX, PDF, RTF, CSV,
                             MD,
-                            HTML, ODT, ODP, ODS, ODG, EPUB</p>
+                            HTML, ODT, ODP, ODS, ODG, EPUB, LaTeX (.tex, or an Overleaf project .zip)</p>
                     </div>
                     <div id="file-selected-info" class="file-info hidden">
                         <span class="file-icon">📄</span>
@@ -3505,7 +3995,7 @@
                         </div>
                     </div>
                     <input type="file" id="file-input" class="hidden-input"
-                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.odg,.ott,.ots,.otp,.otg,.pdf,.rtf,.csv,.md,.html,.epub">
+                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.odg,.ott,.ots,.otp,.otg,.pdf,.rtf,.csv,.md,.html,.epub,.tex,.latex,.ltx,.zip">
                 </div>
 
                 <!-- Sample Document Picker -->
@@ -3516,10 +4006,22 @@
 
                 <div class="config-bar" style="flex-direction: column; align-items: stretch; gap: 0;">
                     <!-- Parser Section -->
-                    <div class="config-group">
-                        <div class="config-group-title">Parser Configuration</div>
-                        <div class="config-items-container" id="parser-config-container">
+                    <div class="config-group" id="parser-config-group">
+                        <div class="config-group-header">
+                            <div class="config-group-title">Parser Configuration</div>
+                            <button type="button" class="btn-config-toggle" id="parser-advanced-toggle" aria-expanded="false" aria-controls="parser-config-container">
+                                <span class="toggle-text">More Settings</span>
+                                <span class="toggle-count">28</span>
+                                <svg class="toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="config-items-container is-collapsed" id="parser-config-container">
                             <script>renderConfigItems('parser');</script>
+                        </div>
+                        <div class="parser-format-sections hidden" id="parser-format-sections">
+                            <script>renderParserFormatSections();</script>
                         </div>
                     </div>
 
@@ -3531,119 +4033,160 @@
                         </div>
                     </div>
                 </div>
-                <div class="config-item full-width" style="gap: 1rem;">
-                    <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
-                        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-                            <span class="config-label">Custom Style Map</span>
-                            <div
-                                style="display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.45rem; border: 1px dashed var(--accent); border-radius: 4px; background: rgba(56, 189, 248, 0.04); color: var(--accent); font-size: 0.65rem; font-weight: 500;">
-                                <span
-                                    style="display: inline-flex; align-items: center; justify-content: center; width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--accent); font-size: 0.55rem; font-family: serif; font-weight: bold; font-style: italic; text-align: center; line-height: 1;">i</span>
-                                Mammoth.js legacy DSL is directly supported in Code mode
+                <!-- Custom Style Map & Metadata Overrides (Collapsible Card) -->
+                <div class="overrides-card is-collapsed" id="overrides-card">
+                    <div class="overrides-card-header" id="overrides-card-header">
+                        <div class="overrides-title-row">
+                            <div class="config-group-title">Custom Style Map &amp; Metadata Overrides</div>
+                            <button type="button" class="btn-config-toggle" id="overrides-toggle-btn" aria-expanded="false" aria-controls="overrides-content">
+                                <span class="toggle-text">Show Overrides</span>
+                                <svg class="toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="overrides-badges">
+                            <span class="overrides-badge">🎨 Custom Style Map</span>
+                            <span class="overrides-badge">📋 9 Metadata Fields</span>
+                            <span class="overrides-badge">🏷️ Custom Tags</span>
+                        </div>
+                        <div class="overrides-subtitle">
+                            Configure custom AST element mapping (Mammoth.js DSL &amp; visual rules), override document metadata (Title, Author, Subject...), and define custom &lt;meta&gt; properties.
+                        </div>
+                    </div>
+
+                    <div class="overrides-content" id="overrides-content">
+                        <!-- Custom Style Map -->
+                        <div class="config-item full-width" style="gap: 1rem; border: none; background: transparent; padding: 0;">
+                            <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                                <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                                    <span class="config-label">Custom Style Map</span>
+                                    <div
+                                        style="display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.45rem; border: 1px dashed var(--accent); border-radius: 4px; background: rgba(56, 189, 248, 0.04); color: var(--accent); font-size: 0.65rem; font-weight: 500;">
+                                        <span
+                                            style="display: inline-flex; align-items: center; justify-content: center; width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--accent); font-size: 0.55rem; font-family: serif; font-weight: bold; font-style: italic; text-align: center; line-height: 1;">i</span>
+                                        Mammoth.js legacy DSL is directly supported in Code mode
+                                    </div>
+                                </div>
+                                <div class="mode-toggle">
+                                    <button class="btn-toggle active" id="btn_styleMap_visual">Visual</button>
+                                    <button class="btn-toggle" id="btn_styleMap_raw">Code</button>
+                                </div>
                             </div>
-                        </div>
-                        <div class="mode-toggle">
-                            <button class="btn-toggle active" id="btn_styleMap_visual">Visual</button>
-                            <button class="btn-toggle" id="btn_styleMap_raw">Code</button>
-                        </div>
-                    </div>
-                    <div id="styleMap_visual_container" class="style-map-builder">
-                        <div id="mapping_list">
-                            <!-- Dynamic mapping rows will be injected here -->
-                        </div>
-                        <button id="add_style_mapping" class="btn-add-mapping">
-                            <span>+</span> Add Style Mapping Rule
-                        </button>
-                    </div>
-                    <div id="styleMap_code_container" class="hidden"
-                        style="display: flex; flex-direction: column; gap: 0.5rem; width: 100%;">
-                        <div
-                            style="display: flex; gap: 1rem; align-items: center; font-size: 0.85rem; padding: 0.25rem 0;">
-                            <span style="color: var(--text-dim); font-weight: 500;">Syntax:</span>
-                            <label
-                                style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer; color: var(--text-dim);">
-                                <input type="radio" name="styleMap_format" value="json" checked
-                                    style="cursor: pointer;"> JSON
-                            </label>
-                            <label
-                                style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer; color: var(--text-dim);">
-                                <input type="radio" name="styleMap_format" value="mammoth" style="cursor: pointer;">
-                                Mammoth.js DSL (Legacy)
-                            </label>
-                        </div>
-                        <textarea id="cfg_styleMap" class="btn btn-outline"
-                            style="padding: 0.6rem; width: 100%; min-height: 120px; font-size: 0.75rem; font-family: 'Ubuntu Mono', monospace; resize: vertical;"
-                            placeholder='[
+                            <div id="styleMap_visual_container" class="style-map-builder">
+                                <div id="mapping_list">
+                                    <!-- Dynamic mapping rows will be injected here -->
+                                </div>
+                                <button id="add_style_mapping" class="btn-add-mapping">
+                                    <span>+</span> Add Style Mapping Rule
+                                </button>
+                            </div>
+                            <div id="styleMap_code_container" class="hidden"
+                                style="display: flex; flex-direction: column; gap: 0.5rem; width: 100%;">
+                                <div
+                                    style="display: flex; gap: 1rem; align-items: center; font-size: 0.85rem; padding: 0.25rem 0;">
+                                    <span style="color: var(--text-dim); font-weight: 500;">Syntax:</span>
+                                    <label
+                                        style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer; color: var(--text-dim);">
+                                        <input type="radio" name="styleMap_format" value="json" checked
+                                            style="cursor: pointer;"> JSON
+                                    </label>
+                                    <label
+                                        style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer; color: var(--text-dim);">
+                                        <input type="radio" name="styleMap_format" value="mammoth" style="cursor: pointer;">
+                                        Mammoth.js DSL (Legacy)
+                                    </label>
+                                </div>
+                                <textarea id="cfg_styleMap" class="btn btn-outline"
+                                    style="padding: 0.6rem; width: 100%; min-height: 120px; font-size: 0.75rem; font-family: 'Ubuntu Mono', monospace; resize: vertical;"
+                                    placeholder='[
   {
     "selector": { "nodeType": "paragraph", "attributes": { "style": "Heading 1" } },
     "output": { "tag": "h1", "classes": ["main-title"] }
   }
 ]'></textarea>
-                    </div>
-                </div>
-                <div class="config-group">
-                    <div class="config-group-title">Metadata Overrides</div>
-                    <div class="config-items-container">
-                            <div class="config-item">
-                                <span class="config-label">Title</span>
-                                <input type="text" id="cfg_meta_title" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
                             </div>
-                            <div class="config-item">
-                                <span class="config-label">Author</span>
-                                <input type="text" id="cfg_meta_author" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Description</span>
-                                <input type="text" id="cfg_meta_description" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Subject</span>
-                                <input type="text" id="cfg_meta_subject" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Keywords</span>
-                                <input type="text" id="cfg_meta_keywords" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="comma, separated">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Last Modified By</span>
-                                <input type="text" id="cfg_meta_lastModifiedBy" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Language</span>
-                                <input type="text" id="cfg_meta_language" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="en, de-DE">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Created</span>
-                                <input type="text" id="cfg_meta_created" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="2024-01-01T00:00:00Z">
-                            </div>
-                            <div class="config-item">
-                                <span class="config-label">Modified</span>
-                                <input type="text" id="cfg_meta_modified" class="btn btn-outline"
-                                    style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="2024-01-01T00:00:00Z">
-                            </div>
-                    </div>
-                    <div class="config-item full-width" style="flex-direction: column; align-items: stretch; gap: 0.5rem; margin-top: 0.75rem;">
-                        <div style="font-size: 0.75rem; color: var(--text-dim); line-height: 1.5;">
-                            Applied <strong>per field</strong> on top of <code>ast.metadata</code> without mutating it.
-                            A blank field keeps the parsed value rather than blanking it.
                         </div>
-                        <div style="border-top: 1px solid var(--border); padding-top: 0.6rem;">
-                            <div style="font-size: 0.75rem; color: var(--text-dim); margin-bottom: 0.5rem; line-height: 1.5;">
-                                <code>custom</code> &mdash; any key/value pairs. Written where the format allows it
-                                (HTML <code>&lt;meta name="custom:KEY"&gt;</code>, Markdown frontmatter); EPUB and RTF
-                                have fixed metadata vocabularies and report a warning instead.
+
+                        <!-- Divider between style map and metadata overrides -->
+                        <div style="border-top: 1px solid var(--border); margin: 0.25rem 0;"></div>
+
+                        <!-- Metadata Overrides Section -->
+                        <div class="config-group" style="padding: 0; border-bottom: none;">
+                            <div class="config-group-title" style="margin-bottom: 0.5rem;">Metadata Overrides</div>
+                            <div class="config-items-container">
+                                    <div class="config-item">
+                                        <span class="config-label">Title</span>
+                                        <input type="text" id="cfg_meta_title" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Author</span>
+                                        <input type="text" id="cfg_meta_author" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Description</span>
+                                        <input type="text" id="cfg_meta_description" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Subject</span>
+                                        <input type="text" id="cfg_meta_subject" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Keywords</span>
+                                        <input type="text" id="cfg_meta_keywords" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="comma, separated">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Last Modified By</span>
+                                        <input type="text" id="cfg_meta_lastModifiedBy" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="keep parsed">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Language</span>
+                                        <input type="text" id="cfg_meta_language" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="en, de-DE">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Created</span>
+                                        <input type="text" id="cfg_meta_created" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="2024-01-01T00:00:00Z">
+                                    </div>
+                                    <div class="config-item">
+                                        <span class="config-label">Modified</span>
+                                        <input type="text" id="cfg_meta_modified" class="btn btn-outline"
+                                            style="padding: 0.4rem 0.6rem; font-size: 0.8rem; width: 160px;" placeholder="2024-01-01T00:00:00Z">
+                                    </div>
                             </div>
-                            <div id="cfg_meta_custom_rows" style="display: flex; flex-direction: column; gap: 0.4rem;"></div>
-                            <button id="cfg_meta_custom_add" class="btn btn-outline"
-                                style="margin-top: 0.5rem; padding: 0.35rem 0.7rem; font-size: 0.75rem;">+ Add custom entry</button>
+                            <div class="config-item full-width" style="flex-direction: column; align-items: stretch; gap: 0.5rem; margin-top: 0.75rem; border: none; background: transparent; padding: 0;">
+                                <div style="font-size: 0.75rem; color: var(--text-dim); line-height: 1.5;">
+                                    Applied <strong>per field</strong> on top of <code>ast.metadata</code> without mutating it.
+                                    A blank field keeps the parsed value rather than blanking it.
+                                </div>
+                                <div style="border-top: 1px solid var(--border); padding-top: 0.6rem;">
+                                    <div style="font-size: 0.75rem; color: var(--text-dim); margin-bottom: 0.5rem; line-height: 1.5;">
+                                        <code>custom</code>: any key/value pairs. Written where the format allows it
+                                        (HTML <code>&lt;meta name="custom:KEY"&gt;</code>, Markdown frontmatter, LaTeX PDF info); EPUB and RTF
+                                        have fixed metadata vocabularies and report a warning instead.
+                                    </div>
+                                    <div id="cfg_meta_custom_rows" style="display: flex; flex-direction: column; gap: 0.4rem;"></div>
+                                    <button id="cfg_meta_custom_add" class="btn btn-outline"
+                                        style="margin-top: 0.5rem; padding: 0.35rem 0.7rem; font-size: 0.75rem;">+ Add custom entry</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Bottom Collapse Button -->
+                        <div style="display: flex; justify-content: flex-end; width: 100%; margin-top: 0.5rem; padding-top: 0.75rem; border-top: 1px solid var(--border);">
+                            <button type="button" class="btn-config-toggle" id="overrides-bottom-toggle-btn" aria-expanded="true" aria-controls="overrides-content">
+                                <span class="toggle-text">Hide Overrides</span>
+                                <svg class="toggle-icon" style="transform: rotate(180deg);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -3671,14 +4214,14 @@
         </section>
 
         <div id="warning-banner"
-            style="display: none; max-width: 1000px; margin: 0 auto 2rem; padding: 1rem 1.5rem; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 12px; color: #fbbf24; font-size: 0.9rem; align-items: center; gap: 1rem; backdrop-filter: blur(8px); animation: slideUp 0.3s ease-out;">
+            style="display: none; max-width: 1000px; margin: 0 auto 2rem; padding: 1rem 1.5rem; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 12px; color: #fbbf24; font-size: 0.9rem; align-items: flex-start; gap: 1rem; backdrop-filter: blur(8px); animation: slideUp 0.3s ease-out;">
             <span style="font-size: 1.25rem;">⚠️</span>
-            <div style="flex: 1;">
-                <strong style="display: block; margin-bottom: 0.25rem;">Parser Warning</strong>
-                <span id="warning-text"></span>
+            <div style="flex: 1; min-width: 0;">
+                <strong id="warning-title" style="display: block; margin-bottom: 0.25rem;">Warnings</strong>
+                <div id="warning-list" class="warning-list"></div>
             </div>
-            <button onclick="document.getElementById('warning-banner').style.display='none'"
-                style="background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.1rem;">✕</button>
+            <button onclick="window.dismissWarnings()" aria-label="Dismiss warnings"
+                style="background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.1rem; align-self: flex-start;">✕</button>
         </div>
 
         <div id="status-msg" style="text-align: center; margin-bottom: 2rem; color: var(--accent); font-weight: 600;">
@@ -3708,6 +4251,7 @@
                         <div class="download-dropdown" style="position: relative; display: inline-block;">
                             <button id="download-html-btn" class="btn-outline"
                                 style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.3rem;"
+                                aria-haspopup="menu" aria-expanded="false" aria-controls="download-html-popover"
                                 onclick="window.toggleConfigPopover('download-html-popover', this)">
                                 Download
                                 <svg style="width:9px;height:9px;opacity:0.7;" viewBox="0 0 24 24" fill="none"
@@ -3715,17 +4259,17 @@
                                     <path d="M6 9l6 6 6-6" />
                                 </svg>
                             </button>
-                            <div id="download-html-popover" class="config-popover"
+                            <div id="download-html-popover" class="config-popover" role="menu" aria-label="Download formats"
                                 style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 200px; padding: 0.35rem;">
                                 <div
                                     style="font-size: 0.65rem; color: var(--text-dim); padding: 0.35rem 0.5rem 0.25rem; text-transform: uppercase; letter-spacing: 0.03em;">
                                     Generated from this HTML</div>
-                                <button class="dropdown-menu-item" data-export-fmt="html">HTML (.html)</button>
-                                <div class="dropdown-menu-divider"></div>
-                                <button class="dropdown-menu-item" data-export-fmt="pdf">PDF (print)</button>
-                                <button class="dropdown-menu-item" data-export-fmt="docx">DOCX (.docx)</button>
-                                <button class="dropdown-menu-item" data-export-fmt="odt">ODT (.odt)</button>
-                                <button class="dropdown-menu-item" data-export-fmt="epub">EPUB (.epub)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="html">HTML (.html)</button>
+                                <div class="dropdown-menu-divider" role="separator"></div>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="pdf">PDF (print)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="docx">DOCX (.docx)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="odt">ODT (.odt)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="epub">EPUB (.epub)</button>
                             </div>
                         </div>
                     </div>
@@ -3843,7 +4387,7 @@
                                 <div style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">Dialect Detail<button class="modal-close-btn" style="font-size: 0.8rem;" onclick="window.toggleConfigPopover('cfg_md_dialect_popover')">✕</button></div>
                                 <div style="font-size: 0.65rem; color: var(--text-dim); margin-bottom: 0.5rem; line-height: 1.4;">Per-feature overrides on top of the selected preset, which acts as <code>extends</code>. Anything left on "from preset" is omitted, so the preset decides it.</div>
                                 <button id="cfg_md_d_reset" class="btn btn-outline" style="width: 100%; padding: 0.3rem; font-size: 0.7rem; margin-bottom: 0.6rem;">Reset all to preset</button>
-                                <div style="display: flex; flex-direction: column; gap: 0.4rem;"><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Admonitions</span><select id="cfg_md_d_admonitions" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="blockquote">GitHub &gt; [!NOTE]</option><option value="fence">GitLab :::note</option><option value="fence-attribute">Pandoc ::: {.note}</option><option value="none">None</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Math</span><select id="cfg_md_d_math" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="dollar">Dollar $</option><option value="none">None</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Tables</span><select id="cfg_md_d_tables" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="native">Native |</option><option value="html">HTML &lt;table&gt;</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Bullet Marker</span><select id="cfg_md_d_bulletListMarker" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="-">-</option><option value="*">*</option><option value="+">+</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Ordered Marker</span><select id="cfg_md_d_orderedListMarker" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value=".">1.</option><option value=")">1)</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Emphasis</span><select id="cfg_md_d_emphasisMarker" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="asterisk">*asterisk*</option><option value="underscore">_underscore_</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Definition Lists</span><select id="cfg_md_d_definitionLists" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Footnotes</span><select id="cfg_md_d_footnotes" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Citations</span><select id="cfg_md_d_citations" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Wikilinks</span><select id="cfg_md_d_wikilinks" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Attribute Lists</span><select id="cfg_md_d_attributeLists" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Strikethrough</span><select id="cfg_md_d_strikethrough" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Highlight</span><select id="cfg_md_d_highlight" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Embeds</span><select id="cfg_md_d_embeds" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="html">HTML block</option><option value="directive">::directive</option><option value="link">Link</option><option value="thumbnail">Thumbnail</option></select></div></div>
+                                <div style="display: flex; flex-direction: column; gap: 0.4rem;"><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Admonitions</span><select id="cfg_md_d_admonitions" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="blockquote">GitHub &gt; [!NOTE]</option><option value="fence">GitLab :::note</option><option value="fence-attribute">Pandoc ::: {.note}</option><option value="none">None</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Math</span><select id="cfg_md_d_math" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="dollar">Dollar $</option><option value="none">None</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Tables</span><select id="cfg_md_d_tables" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="native">Native |</option><option value="html">HTML &lt;table&gt;</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Bullet Marker</span><select id="cfg_md_d_bulletListMarker" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="-">-</option><option value="*">*</option><option value="+">+</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Ordered Marker</span><select id="cfg_md_d_orderedListMarker" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value=".">1.</option><option value=")">1)</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Emphasis</span><select id="cfg_md_d_emphasisMarker" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="asterisk">*asterisk*</option><option value="underscore">_underscore_</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Definition Lists</span><select id="cfg_md_d_definitionLists" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Footnotes</span><select id="cfg_md_d_footnotes" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Citations</span><select id="cfg_md_d_citations" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Wikilinks</span><select id="cfg_md_d_wikilinks" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Attribute Lists</span><select id="cfg_md_d_attributeLists" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="brace">Images and tables {…}</option><option value="brace-inline">Images only {…}</option><option value="none">None</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Strikethrough</span><select id="cfg_md_d_strikethrough" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Highlight</span><select id="cfg_md_d_highlight" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="true">On</option><option value="false">Off</option></select></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;"><span class="config-label" style="font-size: 0.7rem;">Embeds</span><select id="cfg_md_d_embeds" class="btn btn-outline" style="padding: 0.2rem; font-size: 0.7rem;"><option value="" selected>from preset</option><option value="html">HTML block</option><option value="directive">::directive</option><option value="link">Link</option><option value="thumbnail">Thumbnail</option></select></div></div>
                             </div>
                             <div id="cfg_md_fallback_popover" class="config-popover" style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); padding: 0.75rem; border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 260px;">
                                 <div style="font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">HTML Fallback Detail<button class="modal-close-btn" style="font-size: 0.8rem;" onclick="window.toggleConfigPopover('cfg_md_fallback_popover')">✕</button></div>
@@ -3930,8 +4474,8 @@
                             i</div>
                         <div class="viewer-toggle" id="toggle-rtf">
                             <div class="toggle-slider"></div>
-                            <button class="toggle-btn active" data-state="preview">Preview</button>
-                            <button class="toggle-btn" data-state="raw">Raw</button>
+                            <button class="toggle-btn" data-state="preview">Preview</button>
+                            <button class="toggle-btn active" data-state="raw">Raw</button>
                         </div>
                     </div>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -3957,6 +4501,58 @@
                     </div>
                 </div>
                 <div class="panel-body" id="visual-rtf" style="position: relative;"></div>
+            </div>
+
+            <!-- LaTeX Window -->
+            <div class="visual-panel-window" id="window-tex">
+                <div class="panel-header" style="justify-content: space-between;">
+                    <h4 style="margin:0;">LATEX</h4>
+                    <div style="display: flex; gap: 0.75rem; align-items: center;">
+                        <div id="tex-info-icon" class="info-icon"
+                            style="cursor: help; background: rgba(99, 102, 241, 0.05); color: var(--primary); font-family: serif; font-weight: 800; font-style: italic; border: 1.5px solid var(--primary); border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; opacity: 0.8; transition: all 0.2s;">
+                            i</div>
+                        <div class="viewer-toggle" id="toggle-tex">
+                            <div class="toggle-slider"></div>
+                            <button class="toggle-btn" data-state="preview">Preview</button>
+                            <button class="toggle-btn active" data-state="raw">Raw</button>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn-outline btn-maximize" onclick="openFullscreenPreview('tex')"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.25rem;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                style="width: 0.75rem; height: 0.75rem;">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                            </svg>
+                            Enlarge
+                        </button>
+                        <button id="copy-tex-btn" class="btn-outline"
+                            style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer;">Copy</button>
+                        <div class="download-dropdown" style="position: relative; display: inline-block;">
+                            <button id="download-tex-btn" class="btn-outline"
+                                style="padding: 0.2rem 0.6rem; font-size: 0.75rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.3rem;"
+                                aria-haspopup="menu" aria-expanded="false" aria-controls="download-tex-popover"
+                                onclick="window.toggleConfigPopover('download-tex-popover', this)">
+                                Download
+                                <svg style="width:9px;height:9px;opacity:0.7;" viewBox="0 0 24 24" fill="none"
+                                    stroke="currentColor" stroke-width="2.5">
+                                    <path d="M6 9l6 6 6-6" />
+                                </svg>
+                            </button>
+                            <div id="download-tex-popover" class="config-popover" role="menu" aria-label="Download formats"
+                                style="display: none; position: fixed; z-index: 9999; background: var(--bg-deep); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 220px; padding: 0.35rem;">
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="tex">LaTeX (.tex)</button>
+                                <button class="dropdown-menu-item" role="menuitem" data-export-fmt="texbundle">LaTeX + images (.zip)</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="panel-sub-header">
+                    <div class="window-config-group">
+                        <script>renderConfigItems('tex');</script>
+                    </div>
+                </div>
+                <div class="panel-body" id="visual-tex" style="position: relative; padding: 0;"></div>
             </div>
 
             <!-- Text Window -->
@@ -3989,6 +4585,19 @@
                     </div>
                 </div>
                 <div class="panel-body" id="visual-text" style="position: relative; padding: 0;"></div>
+            </div>
+
+            <!-- Export Window: every generator as a download, including formats with no preview window -->
+            <div class="visual-panel-window" id="window-export">
+                <div class="panel-header" style="justify-content: space-between;">
+                    <h4 style="margin:0;">EXPORT</h4>
+                </div>
+                <div class="panel-body" id="visual-export">
+                    <p class="export-intro">Convert the loaded document to any format officeParser generates. Each
+                        download uses the options set in the matching window above (the HTML window's for PDF, EPUB,
+                        DOCX and ODT).</p>
+                    <div class="export-grid" id="export-grid"></div>
+                </div>
             </div>
 
             <!-- AST Window -->
@@ -4068,12 +4677,12 @@
                 <div class="section-title">
                     <h2>Template Studio</h2>
                     <p>Fill a DOCX template's <code>{{placeholders}}</code> from your own data, right here in the browser,
-                        and see it happen &mdash; the template with its tags, and the finished document, side by side.</p>
+                        and see it happen: the template with its tags, and the finished document, side by side.</p>
                 </div>
 
                 <div class="ts-intro">
                     Powered by <code>OfficeTemplate.render()</code>. The template's formatting, tables, headers and layout
-                    are preserved &mdash; only the placeholders change.
+                    are preserved; only the placeholders change.
                     <div class="privacy-note" style="justify-content:center; margin-top: 0.75rem;">
                         <span>🔒</span> <span><strong>Private:</strong> the template, your data, and the result never leave
                             your browser.</span>
@@ -4172,6 +4781,7 @@
                 <a href="#support">Supported Formats</a>
                 <a href="#visualizer">Interactive Visualizer</a>
                 <a href="#template-studio">Template Studio</a>
+                <a href="./blog/">Engineering Blog</a>
             </div>
 
             <div class="footer-column">
@@ -4367,6 +4977,7 @@
                 md: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#0ea5e9"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5" y="16" fill="white" font-family="Outfit" font-weight="800" font-size="5">MD</text></svg>`,
                 html: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#f43f5e"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5" y="15.5" fill="white" font-family="Outfit" font-weight="800" font-size="4.5">&lt;/&gt;</text></svg>`,
                 epub: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#8b5cf6"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="4.5" y="15.5" fill="white" font-family="Outfit" font-weight="800" font-size="4.5">EPUB</text></svg>`,
+                tex: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#008080"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/><text x="5" y="15.5" fill="white" font-family="Outfit" font-weight="800" font-size="4.5">TeX</text></svg>`,
                 default: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:2rem;height:2rem;"><path d="M4 4V20H20V8L16 4H4Z" fill="#94a3b8"/><path d="M16 4V8H20" stroke="white" stroke-width="1.5"/></svg>`
             };
 
@@ -4439,7 +5050,7 @@
 
                 // Re-render active format windows if window.currentAst exists
                 if (window.currentAst) {
-                    const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                    const formats = window.FORMAT_WINDOWS;
                     formats.forEach(f => {
                         const win = document.getElementById(`window-${f}`);
                         if (win && win.style.display !== 'none') {
@@ -4455,7 +5066,8 @@
                 md: 'preview',
                 chunks: 'preview',
                 csv: 'preview',
-                rtf: 'preview',
+                rtf: 'raw',
+                tex: 'raw',
                 text: 'preview',
                 ast: 'preview'
             };
@@ -4479,7 +5091,7 @@
             }
 
             // Initialize toggles
-            ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].forEach(fmt => {
+            window.FORMAT_WINDOWS.forEach(fmt => {
                 const toggle = document.getElementById(`toggle-${fmt}`);
                 if (toggle) {
                     toggle.querySelectorAll('.toggle-btn').forEach(btn => {
@@ -4496,7 +5108,7 @@
 
             // Adjust toggle sliders on window resize
             window.addEventListener('resize', () => {
-                ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].forEach(fmt => updateToggleUI(fmt));
+                window.FORMAT_WINDOWS.forEach(fmt => updateToggleUI(fmt));
             });
 
             // --- Custom Tooltip Logic ---
@@ -4543,7 +5155,7 @@
             }
 
             document.addEventListener('mouseover', (e) => {
-                const target = e.target.closest('[data-tooltip]') || e.target.closest('#rtf-info-icon');
+                const target = e.target.closest('[data-tooltip]') || e.target.closest('#rtf-info-icon') || e.target.closest('#tex-info-icon');
                 if (target) {
                     let content = target.getAttribute('data-tooltip');
 
@@ -4581,6 +5193,40 @@
                                     </div>
                                 </div>
                             </div>`;
+                    } else if (target.id === 'tex-info-icon') {
+                        const sourceFormat = window.currentAst ? window.currentAst.type.toUpperCase() : 'FILE';
+
+                        content = `
+                            <div class="tooltip-header"><span>⚙️</span> LaTeX Preview Engine</div>
+                            <div style="margin-bottom: 1.25rem; opacity: 0.8; font-size: 0.75rem; line-height: 1.6;">Due to the lack of native browser-side LaTeX renderers, OfficeParser performs a dual-pass conversion to verify round-trip fidelity and enable visual previewing.</div>
+                            
+                            <div class="pipeline-container">
+                                <div class="pipeline-phase">
+                                    <div class="phase-label">Phase 1: LaTeX Generation</div>
+                                    <div class="pipeline-row">
+                                        <div class="pipeline-node active"><div class="node-icon-box">📄</div><div class="node-text">${sourceFormat}</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">🌳</div><div class="node-text">AST</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">📐</div><div class="node-text">LATEX</div></div>
+                                    </div>
+                                </div>
+                                
+                                <div class="phase-connector">▼</div>
+                                
+                                <div class="pipeline-phase">
+                                    <div class="phase-label">Phase 2: HTML Preview</div>
+                                    <div class="pipeline-row">
+                                        <div class="pipeline-node active"><div class="node-icon-box">📐</div><div class="node-text">LATEX</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">🌳</div><div class="node-text">AST</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">🌐</div><div class="node-text">HTML</div></div>
+                                        <div class="pipeline-arrow">➜</div>
+                                        <div class="pipeline-node active"><div class="node-icon-box">👁️</div><div class="node-text">UI</div></div>
+                                    </div>
+                                </div>
+                            </div>`;
                     }
 
                     if (content) {
@@ -4590,7 +5236,7 @@
             });
 
             document.addEventListener('mouseout', (e) => {
-                const target = e.target.closest('[data-tooltip]') || e.target.closest('#rtf-info-icon');
+                const target = e.target.closest('[data-tooltip]') || e.target.closest('#rtf-info-icon') || e.target.closest('#tex-info-icon');
                 if (target) {
                     hideTooltip();
                 }
@@ -4703,7 +5349,14 @@
                 document.getElementById('specs').scrollIntoView({ behavior: 'smooth' });
             };
 
-            window.addEventListener('hashchange', handleHash);
+            window.addEventListener('hashchange', () => {
+                handleHash();
+                // Opening a spec document is a client-side route change: count it as a page view.
+                // (The initial load is counted by the page-view script in <head>.)
+                if (location.hash.startsWith('#spec/') && window.registerPageView) {
+                    try { window.registerPageView(); } catch { /* never break the page */ }
+                }
+            });
             window.addEventListener('load', handleHash);
 
             // --- Visualizer Handlers ---
@@ -4724,30 +5377,31 @@
             // --- Sample Document Picker ---
             const samplePickerGrid = document.getElementById('sample-picker-grid');
             if (samplePickerGrid) {
-                const sampleFormats = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub'];
+                const sampleFormats = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'];
                 sampleFormats.forEach(fmt => {
+                    const sampleName = `test.${fmt}`;
                     const btn = document.createElement('button');
                     btn.className = 'sample-btn';
                     btn.type = 'button';
                     btn.innerHTML = `
                         ${BRAND_ICONS[fmt] || BRAND_ICONS.default}
-                        <span>test.${fmt}</span>
+                        <span>${sampleName}</span>
                     `;
                     btn.addEventListener('click', async (e) => {
                         e.stopPropagation();
                         try {
-                            statusMsg.textContent = `Loading test.${fmt}...`;
-                            const fileUrl = `./test/files/test.${fmt}`;
+                            statusMsg.textContent = `Loading ${sampleName}...`;
+                            const fileUrl = `./test/files/${sampleName}`;
                             const response = await fetch(fileUrl);
                             if (!response.ok) {
                                 throw new Error(`Failed to load sample document: ${response.statusText}`);
                             }
                             const blob = await response.blob();
-                            const file = new File([blob], `test.${fmt}`, { type: blob.type || 'application/octet-stream' });
+                            const file = new File([blob], sampleName, { type: blob.type || 'application/octet-stream' });
                             handleFile(file);
                         } catch (err) {
                             console.error(err);
-                            statusMsg.textContent = `Error loading test.${fmt}: ${err.message}`;
+                            statusMsg.textContent = `Error loading ${sampleName}: ${err.message}`;
                         }
                     });
                     samplePickerGrid.appendChild(btn);
@@ -4834,7 +5488,7 @@
 
             /** Metadata reaches every format that embeds it, so refresh each open output window. */
             function refreshMetadataDependentWindows() {
-                ['html', 'md', 'text', 'csv', 'rtf'].forEach(f => {
+                ['html', 'md', 'text', 'csv', 'rtf', 'tex'].forEach(f => {
                     if (document.getElementById('visual-' + f)) window.renderFormatWindow(f);
                 });
             }
@@ -4871,8 +5525,8 @@
              */
             // Capability toggles emit the syntax-named value when on, 'none' when off - the current
             // typed form (the former boolean is deprecated). Each entry maps the field to its on-value.
-            const MD_DIALECT_CAP_FIELDS = { definitionLists: 'colon', footnotes: 'caret', citations: 'at', wikilinks: 'double-bracket', attributeLists: 'brace', strikethrough: 'tilde', highlight: 'equals' };
-            const MD_DIALECT_ENUM_FIELDS = ['admonitions', 'math', 'tables', 'bulletListMarker', 'orderedListMarker', 'emphasisMarker', 'embeds'];
+            const MD_DIALECT_CAP_FIELDS = { definitionLists: 'colon', footnotes: 'caret', citations: 'at', wikilinks: 'double-bracket', strikethrough: 'tilde', highlight: 'equals' };
+            const MD_DIALECT_ENUM_FIELDS = ['admonitions', 'math', 'tables', 'attributeLists', 'bulletListMarker', 'orderedListMarker', 'emphasisMarker', 'embeds'];
             function getMdDialect() {
                 const preset = document.getElementById('cfg_md_dialect').value;
                 const overrides = {};
@@ -4927,7 +5581,9 @@
                     generateIds: document.getElementById('cfg_generateIds').checked,
                     renderMetadata: document.getElementById('cfg_renderMetadata').checked,
                     includeImages: document.getElementById('cfg_includeImages').value,
+                    maxInlineImageBytes: parseInt(document.getElementById('cfg_maxInlineImageBytes').value, 10),
                     includeCharts: document.getElementById('cfg_includeCharts').checked,
+                    ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
                     ignoreDefaultStyleMap: document.getElementById('cfg_ignoreDefaultStyleMap').checked,
                     metadataOverrides: getMetadataOverrides(),
                     styleMap: styleMap
@@ -4940,9 +5596,9 @@
             function normalizeParserFormat(ext) {
                 if (!ext) return null;
                 ext = String(ext).toLowerCase();
-                const map = { ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg', htm: 'html', markdown: 'md' };
+                const map = { ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg', htm: 'html', markdown: 'md', latex: 'tex', ltx: 'tex' };
                 if (map[ext]) return map[ext];
-                const known = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub'];
+                const known = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'];
                 return known.includes(ext) ? ext : null;
             }
 
@@ -4953,59 +5609,156 @@
                 const hintEl = document.getElementById('cfg_fileType');
                 const hint = hintEl ? hintEl.value : '';
                 if (hint) return normalizeParserFormat(hint);
-                if (lastFileName) return normalizeParserFormat(lastFileName.split('.').pop());
+                if (lastFileName) {
+                    const ext = lastFileName.split('.').pop().toLowerCase();
+                    // A `.zip` names no format: once parsed, scope to what the archive held.
+                    if (ext === 'zip') return window.currentAst ? normalizeParserFormat(window.currentAst.type) : null;
+                    return normalizeParserFormat(ext);
+                }
                 return null;
             }
 
-            // Show only the parser items relevant to `fmt` (defaults to the resolved active format).
-            // General items (no data-cfg-formats) always show; when fmt is null everything shows.
-            // Nodes are only hidden, never removed, so every input stays in the DOM and the
-            // parse-config read sites keep working and values persist across switches.
+            // Dynamically show the first 2 rows of general parser items when collapsed,
+            // regardless of viewport width or how many items that corresponds to.
+            // Format-specific sections are shown separated only when expanded.
+            function updateParserAdvancedToggle() {
+                const container = document.getElementById('parser-config-container');
+                const toggleBtn = document.getElementById('parser-advanced-toggle');
+                const formatSections = document.getElementById('parser-format-sections');
+                if (!container || !toggleBtn) return;
+
+                const isCollapsed = container.classList.contains('is-collapsed');
+                
+                // Determine resolved number of columns in the CSS grid
+                const comp = window.getComputedStyle(container);
+                const cols = comp.gridTemplateColumns.split(' ').filter(Boolean).length || 1;
+                const maxVisible = cols * 2;
+
+                const generalItems = Array.from(container.querySelectorAll('.config-item[data-cfg-id]'));
+                const formatItemsCount = formatSections ? formatSections.querySelectorAll('.config-item[data-cfg-id]').length : 0;
+
+                if (isCollapsed) {
+                    generalItems.forEach((el, idx) => {
+                        if (idx < maxVisible) {
+                            el.classList.remove('collapsed-hidden');
+                        } else {
+                            el.classList.add('collapsed-hidden');
+                        }
+                    });
+
+                    if (formatSections) formatSections.classList.add('hidden');
+
+                    const hiddenGeneral = Math.max(0, generalItems.length - maxVisible);
+                    const totalHidden = hiddenGeneral + formatItemsCount;
+
+                    toggleBtn.classList.remove('hidden');
+                    const countBadge = toggleBtn.querySelector('.toggle-count');
+                    const labelText = toggleBtn.querySelector('.toggle-text');
+
+                    toggleBtn.setAttribute('aria-expanded', 'false');
+                    labelText.textContent = 'More Settings';
+                    if (countBadge) {
+                        countBadge.textContent = totalHidden;
+                        countBadge.style.display = 'inline-flex';
+                    }
+                } else {
+                    generalItems.forEach(el => {
+                        el.classList.remove('collapsed-hidden');
+                    });
+
+                    if (formatSections) formatSections.classList.remove('hidden');
+
+                    toggleBtn.classList.remove('hidden');
+                    const countBadge = toggleBtn.querySelector('.toggle-count');
+                    const labelText = toggleBtn.querySelector('.toggle-text');
+
+                    toggleBtn.setAttribute('aria-expanded', 'true');
+                    labelText.textContent = 'Fewer Settings';
+                    if (countBadge) countBadge.style.display = 'none';
+                }
+            }
+
             function applyParserFormatFilter(fmt) {
                 if (fmt === undefined) fmt = getActiveParserFormat();
-                const container = document.getElementById('parser-config-container');
-                if (!container) return;
-                container.querySelectorAll('[data-cfg-id]').forEach(el => {
-                    const scoped = el.getAttribute('data-cfg-formats');
-                    const show = !fmt || !scoped || scoped.split(',').includes(fmt);
-                    el.classList.toggle('hidden', !show);
-                });
+                const formatSections = document.getElementById('parser-format-sections');
+                if (formatSections) {
+                    formatSections.querySelectorAll('.parser-format-group').forEach(group => {
+                        const formatsAttr = group.getAttribute('data-formats');
+                        const formats = formatsAttr ? formatsAttr.split(',') : [];
+                        const isActive = fmt ? formats.includes(fmt) : false;
+                        group.classList.toggle('is-active-format', isActive);
+                        const badge = group.querySelector('.parser-format-badge');
+                        if (badge) {
+                            badge.classList.toggle('hidden', !isActive);
+                        }
+                    });
+                }
             }
             window.applyParserFormatFilter = applyParserFormatFilter;
+
+            /**
+             * The parse config the controls describe (without callbacks). processFileBuffer parses with it and
+             * the Reparse button compares it with the last parse, so the two can never disagree in shape.
+             */
+            function readParserConfigInputs() {
+                return {
+                    fileType: document.getElementById('cfg_fileType').value || null,
+                    extractAttachments: document.getElementById('cfg_extractAttachments').checked,
+                    ocr: document.getElementById('cfg_ocr').checked,
+                    ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_parser').checked,
+                    ignorePageGeometry: document.getElementById('cfg_ignorePageGeometry').checked,
+                    password: document.getElementById('cfg_password').value,
+                    ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
+                    ignoreComments: document.getElementById('cfg_ignoreComments').checked,
+                    ignoreHeadersAndFooters: document.getElementById('cfg_ignoreHeadersAndFooters').checked,
+                    ignoreSlideMasters: document.getElementById('cfg_ignoreSlideMasters').checked,
+                    includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
+                    includeRawContent: document.getElementById('cfg_includeRawContent').checked,
+                    serializeRawContent: document.getElementById('cfg_serializeRawContent').checked,
+                    preserveXmlWhitespace: document.getElementById('cfg_preserveXmlWhitespace').checked,
+                    pdfParserConfig: {
+                        useTags: document.getElementById('cfg_pdfUseTags').checked,
+                        detectColumns: document.getElementById('cfg_pdfDetectColumns').checked,
+                        headingDetection: document.getElementById('cfg_pdfHeadingDetection').value,
+                        mergeHyphenatedWords: document.getElementById('cfg_pdfMergeHyphenatedWords').checked,
+                        pageRange: document.getElementById('cfg_pdfPageRange').value,
+                        normalizeText: document.getElementById('cfg_pdfNormalizeText').checked,
+                        extractTextColor: document.getElementById('cfg_pdfExtractTextColor').checked
+                    },
+                    htmlParserConfig: {
+                        preserveAttributes: document.getElementById('cfg_preserveAttributes').checked,
+                        preserveIframes: document.getElementById('cfg_preserveIframes').checked,
+                        preserveComments: document.getElementById('cfg_preserveComments').checked,
+                        embedFolkForms: document.getElementById('cfg_embedFolkForms').checked
+                    },
+                    texParserConfig: { today: document.getElementById('cfg_texToday').value },
+                    csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
+                    pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value,
+                    decompressionLimits: {
+                        maxUncompressedBytes: parseInt(document.getElementById('cfg_maxUncompressedBytes').value, 10) * 1024 * 1024,
+                        maxZipEntries: parseInt(document.getElementById('cfg_maxZipEntries').value, 10),
+                        maxTableCells: parseInt(document.getElementById('cfg_maxTableCells').value, 10),
+                        maxXmlElements: parseInt(document.getElementById('cfg_maxXmlElements').value, 10),
+                        maxRepeatedContent: parseInt(document.getElementById('cfg_maxRepeatedContent').value, 10)
+                    },
+                    ocrConfig: {
+                        language: document.getElementById('cfg_ocrLanguage').value || undefined,
+                        preserveLayout: document.getElementById('cfg_ocrPreserveLayout').checked,
+                        timeout: {
+                            autoTerminate: parseInt(document.getElementById('cfg_ocrAutoTerminate').value, 10) * 1000,
+                            workerLoad: parseInt(document.getElementById('cfg_ocrWorkerLoad').value, 10) * 1000,
+                            recognition: parseInt(document.getElementById('cfg_ocrRecognition').value, 10) * 1000
+                        }
+                    },
+                };
+            }
 
             function updateReparseButtonState() {
                 if (!lastFileBuffer) {
                     reparseBtn.disabled = true;
                     return;
                 }
-                const currentConfig = {
-                    fileType: document.getElementById('cfg_fileType').value,
-                    extractAttachments: document.getElementById('cfg_extractAttachments').checked,
-                    ocr: document.getElementById('cfg_ocr').checked,
-                    ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_parser').checked,
-                    ignorePageGeometry: document.getElementById('cfg_ignorePageGeometry').checked,
-                    password: document.getElementById('cfg_password').value,
-                    pdfParserConfig: {
-                        useTags: document.getElementById('cfg_pdfUseTags').checked,
-                        detectColumns: document.getElementById('cfg_pdfDetectColumns').checked,
-                        pageRange: document.getElementById('cfg_pdfPageRange').value,
-                        extractTextColor: document.getElementById('cfg_pdfExtractTextColor').checked
-                    },
-                    ocrPreserveLayout: document.getElementById('cfg_ocrPreserveLayout').checked,
-                    includeRawContent: document.getElementById('cfg_includeRawContent').checked,
-                    serializeRawContent: document.getElementById('cfg_serializeRawContent').checked,
-                    preserveXmlWhitespace: document.getElementById('cfg_preserveXmlWhitespace').checked,
-                    ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
-                    includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
-                    htmlParserConfig: { preserveAttributes: document.getElementById('cfg_preserveAttributes').checked, preserveIframes: document.getElementById('cfg_preserveIframes').checked },
-                    csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
-                    ocrAutoTerminate: document.getElementById('cfg_ocrAutoTerminate').value,
-                    ocrWorkerLoad: document.getElementById('cfg_ocrWorkerLoad').value,
-                    ocrRecognition: document.getElementById('cfg_ocrRecognition').value,
-                    maxUncompressedBytes: document.getElementById('cfg_maxUncompressedBytes').value,
-                    maxZipEntries: document.getElementById('cfg_maxZipEntries').value,
-                    pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value
-                };
+                const currentConfig = readParserConfigInputs();
                 const currentJson = JSON.stringify(currentConfig);
                 reparseBtn.disabled = (currentJson === lastConfigJson);
                 reparseBtn.style.display = 'flex';
@@ -5025,16 +5778,87 @@
             if (fileTypeHintEl) {
                 fileTypeHintEl.addEventListener('change', () => applyParserFormatFilter());
             }
+            function toggleParserConfigExpansion() {
+                const container = document.getElementById('parser-config-container');
+                if (!container) return;
+                const wasCollapsed = container.classList.contains('is-collapsed');
+                container.classList.toggle('is-collapsed');
+                updateParserAdvancedToggle();
+                if (!wasCollapsed) {
+                    const header = container.closest('.config-group')?.querySelector('.config-group-header');
+                    if (header && header.getBoundingClientRect().top < 0) {
+                        header.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }
+                }
+            }
+
+            const advancedToggleBtn = document.getElementById('parser-advanced-toggle');
+            if (advancedToggleBtn) {
+                advancedToggleBtn.addEventListener('click', toggleParserConfigExpansion);
+            }
+
+            let parserResizeTimer = null;
+            const handleParserResize = () => {
+                if (parserResizeTimer) cancelAnimationFrame(parserResizeTimer);
+                parserResizeTimer = requestAnimationFrame(() => {
+                    updateParserAdvancedToggle();
+                });
+            };
+            window.addEventListener('resize', handleParserResize);
+            if (window.ResizeObserver) {
+                const pContainer = document.getElementById('parser-config-container');
+                if (pContainer) {
+                    new ResizeObserver(handleParserResize).observe(pContainer);
+                }
+            }
+
             applyParserFormatFilter();
 
+            // Toggle for Custom Style Map & Metadata Overrides card
+            function toggleOverridesCard() {
+                const card = document.getElementById('overrides-card');
+                const btn = document.getElementById('overrides-toggle-btn');
+                if (!card || !btn) return;
+                const wasCollapsed = card.classList.contains('is-collapsed');
+                card.classList.toggle('is-collapsed');
+                const isCollapsed = card.classList.contains('is-collapsed');
+
+                btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+                btn.querySelector('.toggle-text').textContent = isCollapsed ? 'Show Overrides' : 'Hide Overrides';
+
+                if (!wasCollapsed) {
+                    if (card.getBoundingClientRect().top < 0) {
+                        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }
+                }
+            }
+
+            const overridesToggleBtn = document.getElementById('overrides-toggle-btn');
+            if (overridesToggleBtn) {
+                overridesToggleBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleOverridesCard();
+                });
+            }
+            const overridesHeader = document.getElementById('overrides-card-header');
+            if (overridesHeader) {
+                overridesHeader.addEventListener('click', () => {
+                    toggleOverridesCard();
+                });
+            }
+            const overridesBottomBtn = document.getElementById('overrides-bottom-toggle-btn');
+            if (overridesBottomBtn) {
+                overridesBottomBtn.addEventListener('click', toggleOverridesCard);
+            }
+
             // Instant re-render for generator and format-specific settings
-            ['generator', 'html', 'md', 'chunks', 'csv', 'text'].forEach(key => {
+            ['generator', 'html', 'md', 'chunks', 'csv', 'tex', 'text'].forEach(key => {
                 window.CONFIG_SCHEMAS[key].forEach(item => {
                     const el = document.getElementById(item.id);
                     if (el) {
                         el.addEventListener('change', async () => {
                             if (window.currentAst) {
-                                const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                                const formats = window.FORMAT_WINDOWS;
                                 await Promise.all(formats.map(f => window.renderFormatWindow(f)));
                             }
                         });
@@ -5045,7 +5869,7 @@
             // Special handling for styleMap (which triggers re-render via hidden textarea)
             document.getElementById('cfg_styleMap').addEventListener('change', async () => {
                 if (window.currentAst) {
-                    const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                    const formats = window.FORMAT_WINDOWS;
                     await Promise.all(formats.map(f => window.renderFormatWindow(f)));
                 }
             });
@@ -5281,6 +6105,80 @@
             // Initial sync
             syncStyleMapFromRawToVisual();
 
+            // --- Warnings banner: every warning, grouped by where it came from ---
+            const WARNING_GROUP_LABELS = {
+                parse: 'Parsing', html: 'HTML output', md: 'Markdown output', chunks: 'RAG chunks output',
+                csv: 'CSV output', rtf: 'RTF output', tex: 'LaTeX output', text: 'Plain text output', ast: 'AST download',
+                docx: 'DOCX download', odt: 'ODT download', epub: 'EPUB download', pdf: 'PDF export', texbundle: 'LaTeX + images download'
+            };
+            const warningGroups = new Map();
+            /** Messages on screen when the banner was dismissed; the banner returns only for a new one. */
+            let dismissedWarnings = new Set();
+            /** The group a generation that inherits the parse callback reports to (set by withWarningGroup). */
+            window.activeWarningGroup = null;
+
+            function renderWarningBanner() {
+                const banner = document.getElementById('warning-banner');
+                const list = document.getElementById('warning-list');
+                list.replaceChildren();
+                let total = 0;
+                let unseen = false;
+                // Parsing first, then outputs in the order they were produced.
+                const order = [...warningGroups.keys()].sort((a, b) => (a === 'parse' ? -1 : b === 'parse' ? 1 : 0));
+                for (const group of order) {
+                    const messages = warningGroups.get(group);
+                    if (!messages.length) continue;
+                    const section = document.createElement('div');
+                    section.className = 'warning-group';
+                    const label = document.createElement('div');
+                    label.className = 'warning-group-label';
+                    label.textContent = WARNING_GROUP_LABELS[group] || group;
+                    const ul = document.createElement('ul');
+                    for (const message of messages) {
+                        const li = document.createElement('li');
+                        li.textContent = message;
+                        ul.appendChild(li);
+                        total++;
+                        if (!dismissedWarnings.has(message)) unseen = true;
+                    }
+                    section.append(label, ul);
+                    list.appendChild(section);
+                }
+                document.getElementById('warning-title').textContent = total === 1 ? '1 warning' : `${total} warnings`;
+                if (!total) banner.style.display = 'none';
+                else if (unseen) banner.style.display = 'flex';
+            }
+
+            window.recordWarning = (group, issue) => {
+                console.warn(`officeParser warning (${group}):`, issue);
+                const message = (issue && issue.message) || String(issue);
+                const messages = warningGroups.get(group) || [];
+                if (messages.includes(message)) return;
+                messages.push(message);
+                warningGroups.set(group, messages);
+                renderWarningBanner();
+            };
+
+            /** Clears one group (before it is produced again), or every group and the dismissals. */
+            window.resetWarnings = (group) => {
+                if (group === undefined) { warningGroups.clear(); dismissedWarnings = new Set(); }
+                else warningGroups.delete(group);
+                renderWarningBanner();
+            };
+
+            window.dismissWarnings = () => {
+                for (const messages of warningGroups.values()) messages.forEach(m => dismissedWarnings.add(m));
+                document.getElementById('warning-banner').style.display = 'none';
+            };
+
+            /** Runs a download, reporting its generation warnings under `group`. */
+            window.withWarningGroup = async (group, fn) => {
+                const previous = window.activeWarningGroup;
+                window.resetWarnings(group);
+                window.activeWarningGroup = group;
+                try { return await fn(); } finally { window.activeWarningGroup = previous; }
+            };
+
             async function handleFile(file) {
                 const buffer = await file.arrayBuffer();
                 lastFileBuffer = buffer;
@@ -5294,8 +6192,9 @@
                 // A file (upload, drag-drop, or sample) is now loaded: scope the parser knobs to it.
                 applyParserFormatFilter();
 
-                processFileBuffer(buffer, file.name);
+                await processFileBuffer(buffer, file.name);
             }
+            window.loadFileIntoVisualizer = handleFile;
 
             async function processFileBuffer(buffer, filename) {
                 if (!window.officeParser) {
@@ -5304,68 +6203,51 @@
                 }
 
                 statusMsg.textContent = `Parsing ${filename}...`;
-                const formats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+                const formats = window.FORMAT_WINDOWS;
                 formats.forEach(f => {
                     document.getElementById(`visual-${f}`).innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">Parsing document structure...</div>';
                 });
 
                 try {
                     const config = {
-                        fileType: document.getElementById('cfg_fileType').value || null,
-                        extractAttachments: document.getElementById('cfg_extractAttachments').checked,
-                        ocr: document.getElementById('cfg_ocr').checked,
-                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_parser').checked,
-                        ignorePageGeometry: document.getElementById('cfg_ignorePageGeometry').checked,
-                        password: document.getElementById('cfg_password').value,
-                        pdfParserConfig: {
-                            useTags: document.getElementById('cfg_pdfUseTags').checked,
-                            detectColumns: document.getElementById('cfg_pdfDetectColumns').checked,
-                            pageRange: document.getElementById('cfg_pdfPageRange').value,
-                            extractTextColor: document.getElementById('cfg_pdfExtractTextColor').checked
-                        },
-                        includeRawContent: document.getElementById('cfg_includeRawContent').checked,
-                        serializeRawContent: document.getElementById('cfg_serializeRawContent').checked,
-                        preserveXmlWhitespace: document.getElementById('cfg_preserveXmlWhitespace').checked,
-                        ignoreNotes: document.getElementById('cfg_ignoreNotes').checked,
-                        includeBreakNodes: document.getElementById('cfg_includeBreakNodes').checked,
-                    htmlParserConfig: { preserveAttributes: document.getElementById('cfg_preserveAttributes').checked, preserveIframes: document.getElementById('cfg_preserveIframes').checked },
-                        csvDelimiter: document.getElementById('cfg_csvDelimiter').value,
-                        pdfWorkerSrc: document.getElementById('cfg_pdfWorkerSrc').value,
-                        decompressionLimits: {
-                            maxUncompressedBytes: parseInt(document.getElementById('cfg_maxUncompressedBytes').value, 10) * 1024 * 1024,
-                            maxZipEntries: parseInt(document.getElementById('cfg_maxZipEntries').value, 10)
-                        },
-                        ocrConfig: {
-                            preserveLayout: document.getElementById('cfg_ocrPreserveLayout').checked,
-                            timeout: {
-                                autoTerminate: parseInt(document.getElementById('cfg_ocrAutoTerminate').value, 10) * 1000,
-                                workerLoad: parseInt(document.getElementById('cfg_ocrWorkerLoad').value, 10) * 1000,
-                                recognition: parseInt(document.getElementById('cfg_ocrRecognition').value, 10) * 1000
-                            }
-                        },
+                        ...readParserConfigInputs(),
+                        // Parse warnings, and later any generation that inherits this callback from the
+                        // AST (downloads, which name their group via withWarningGroup).
                         onWarning: (issue) => {
-                            console.warn("Parser Warning:", issue);
-                            const banner = document.getElementById('warning-banner');
-                            const text = document.getElementById('warning-text');
-                            text.textContent = issue.message || String(issue);
-                            banner.style.display = 'flex';
+                            if (window.activeWarningGroup) window.recordWarning(window.activeWarningGroup, issue);
+                            else if (parsing) window.recordWarning('parse', issue);
+                            else console.warn('officeParser warning:', issue);
                         }
                     };
 
-                    document.getElementById('warning-banner').style.display = 'none';
+                    window.resetWarnings();
+                    let parsing = true;
 
                     if (config.ocr) ocrWasUsedInCurrentPreview = true;
                     updateOcrCleanupState();
 
-                    lastConfigJson = JSON.stringify(config);
+                    lastConfigJson = JSON.stringify(readParserConfigInputs());
                     updateReparseButtonState();
 
                     const startTime = performance.now();
-                    const ast = await window.officeParser.parseOffice(buffer, config);
+                    // Pass the bytes as a named File when the extension names a format the library reads, so
+                    // text formats (Markdown, HTML, CSV, LaTeX) with no magic bytes route by it. Any other
+                    // name (`report.bin`, no extension) passes the bare bytes, detected from their content.
+                    const nameExt = filename && filename.includes('.') ? filename.split('.').pop().toLowerCase() : '';
+                    const routable = normalizeParserFormat(nameExt) !== null || nameExt === 'zip';
+                    const input = routable ? new File([buffer], filename) : buffer;
+                    let ast;
+                    try { ast = await window.officeParser.parseOffice(input, config); } finally { parsing = false; }
                     const endTime = performance.now();
                     const duration = ((endTime - startTime) / 1000).toFixed(2);
 
                     window.currentAst = ast;
+                    window.updateExportPanel();
+                    // A `.zip` is known only after parsing: show the icon and parser options of what it held.
+                    if (nameExt === 'zip') {
+                        displayFileIcon.innerHTML = BRAND_ICONS[ast.type] || BRAND_ICONS.default;
+                        applyParserFormatFilter();
+                    }
                     statusMsg.textContent = `Successfully parsed ${filename} in ${duration}s. Generating views...`;
 
                     await Promise.all(formats.map(f => window.renderFormatWindow(f)));
@@ -5481,12 +6363,82 @@
                     document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('csv'));
                 }
             });
-            ['cfg_text_preserveLayout', 'cfg_text_renderNotes', 'cfg_text_newlineDelimiter'].forEach(id => {
+            ['cfg_text_preserveLayout', 'cfg_text_renderNotes', 'cfg_text_newlineDelimiter', 'cfg_text_pageSeparator'].forEach(id => {
                 document.getElementById(id).addEventListener('change', () => window.renderFormatWindow('text'));
                 if (document.getElementById(id).type === 'text') {
                     document.getElementById(id).addEventListener('input', () => window.renderFormatWindow('text'));
                 }
             });
+
+            /**
+             * Parse generated source (RTF or LaTeX) back into an AST and render that AST as HTML in an
+             * iframe inside `container`. Used by the windows whose output has no browser renderer.
+             */
+            async function renderReparsedPreview(source, fileType, container) {
+                // A string is the generated source; bytes are a LaTeX bundle (main.tex plus its images).
+                const bytes = typeof source === 'string' ? new TextEncoder().encode(source) : source;
+                const reparsed = await window.officeParser.parseOffice(bytes, { fileType, extractAttachments: true });
+                const htmlResult = await reparsed.to('html');
+
+                const contentFrame = document.createElement('iframe');
+                contentFrame.className = 'html-iframe';
+                contentFrame.style.width = '100%';
+                contentFrame.style.border = 'none';
+                container.style.padding = '2rem';
+                container.appendChild(contentFrame);
+                const doc = contentFrame.contentDocument || contentFrame.contentWindow.document;
+                doc.open();
+
+                const isModal = container.closest('.preview-modal-body') !== null;
+                let widthVal = document.getElementById('cfg_html_containerWidth').value.trim() || 'auto';
+                if (widthVal === 'auto') {
+                    widthVal = '900px';
+                } else if (/^\d+$/.test(widthVal)) {
+                    widthVal = widthVal + 'px';
+                }
+                const maxWidth = isModal ? '100%' : widthVal;
+
+                const styledHtml = /<body/i.test(htmlResult.value)
+                    ? htmlResult.value.replace(/<body[^>]*>/i, `<body style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
+                    : `<div style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${htmlResult.value}</div>`;
+                doc.write(styledHtml);
+                doc.close();
+
+                contentFrame.style.height = '100%';
+                contentFrame.style.display = 'block';
+
+                setupIframeScrollForwarding(contentFrame, container);
+
+                // Dynamically resize iframe to content height using ResizeObserver to allow native container scrollbar
+                if (!isModal) {
+                    setTimeout(() => {
+                        try {
+                            const win = contentFrame.contentWindow;
+                            const doc = win.document;
+                            if (win && doc && doc.body) {
+                                const observer = new win.ResizeObserver(() => {
+                                    const height = doc.body.scrollHeight || doc.documentElement.scrollHeight;
+                                    contentFrame.style.height = (height + 40) + 'px';
+                                    container.style.overflow = 'auto';
+                                });
+                                observer.observe(doc.body);
+                            }
+                        } catch (e) {
+                            console.error('Failed to setup ResizeObserver:', e);
+                        }
+                    }, 50);
+                }
+            }
+
+            /** The LaTeX window's generator options, as a texConfig. */
+            function readTexPanelConfig() {
+                return {
+                    documentClass: document.getElementById('cfg_tex_documentClass').value,
+                    standalone: document.getElementById('cfg_tex_standalone').checked,
+                    embedImages: document.getElementById('cfg_tex_embedImages').checked,
+                    numberSections: document.getElementById('cfg_tex_numberSections').checked
+                };
+            }
 
             window.renderFormatWindow = async function (format) {
                 if (!window.currentAst) return;
@@ -5500,8 +6452,12 @@
                     } else {
                         let genConfig = {
                             ...getGeneratorConfig(),
-                            ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked
+                            ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                            // The LaTeX window previews the source; whether images ship beside a .tex file only
+                            // matters for a download, which reports it under its own group.
+                            onWarning: (issue) => { if (!(format === 'tex' && issue && issue.code === 'IMAGES_NOT_BUNDLED')) window.recordWarning(format, issue); }
                         };
+                        window.resetWarnings(format);
                         if (format === 'html') {
                             genConfig.htmlConfig = readHtmlPanelConfigInputs();
                         } else if (format === 'md') {
@@ -5524,8 +6480,11 @@
                             genConfig.textConfig = {
                                 preserveLayout: document.getElementById('cfg_text_preserveLayout').checked,
                                 renderNotes: document.getElementById('cfg_text_renderNotes').checked,
-                                newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n')
+                                newlineDelimiter: document.getElementById('cfg_text_newlineDelimiter').value.replace(/\\n/g, '\n'),
+                                pageSeparator: document.getElementById('cfg_text_pageSeparator').value.replace(/\\n/g, '\n')
                             };
+                        } else if (format === 'tex') {
+                            genConfig.texConfig = readTexPanelConfig();
                         }
                         result = await window.officeParser.OfficeGenerator.generate(window.currentAst, format, genConfig);
                     }
@@ -5658,70 +6617,33 @@
                         }
                     }
                 }
-                else if (format === 'rtf') {
-                    if (window.viewerStates['rtf'] === 'preview') {
+                else if (format === 'rtf' || format === 'tex') {
+                    // Both are source formats with no native browser renderer: the preview parses the
+                    // generated source back with officeParser and shows the result as HTML, which also
+                    // shows how faithfully the format round-trips.
+                    if (window.viewerStates[format] === 'preview') {
                         try {
-                            // Parse the generated RTF string back into an AST
-                            // Use TextEncoder to pass content as a Uint8Array
-                            const rtfContent = new TextEncoder().encode(result.value);
-                            const rtfAst = await window.officeParser.parseOffice(rtfContent, { fileType: 'rtf' });
-                            // Generate HTML from that AST using the helper method on the AST
-                            const htmlResult = await rtfAst.to('html');
-
-                            const contentFrame = document.createElement('iframe');
-                            contentFrame.className = 'html-iframe';
-                            contentFrame.style.width = '100%';
-                            contentFrame.style.border = 'none';
-                            container.style.padding = '2rem';
-                            container.appendChild(contentFrame);
-                            const doc = contentFrame.contentDocument || contentFrame.contentWindow.document;
-                            doc.open();
-
-                            const isModal = container.closest('.preview-modal-body') !== null;
-                            let widthVal = document.getElementById('cfg_html_containerWidth').value.trim() || 'auto';
-                            if (widthVal === 'auto') {
-                                widthVal = '900px';
-                            } else if (/^\d+$/.test(widthVal)) {
-                                widthVal = widthVal + 'px';
-                            }
-                            const maxWidth = isModal ? '100%' : widthVal;
-
-                            const styledHtml = /<body/i.test(htmlResult.value)
-                                ? htmlResult.value.replace(/<body[^>]*>/i, `<body style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">`)
-                                : `<div style="padding: 3rem; max-width: ${maxWidth}; margin: 0 auto; font-family: sans-serif; line-height: 1.6;">${htmlResult.value}</div>`;
-                            doc.write(styledHtml);
-                            doc.close();
-
-                            contentFrame.style.height = '100%';
-                            contentFrame.style.display = 'block';
-
-                            setupIframeScrollForwarding(contentFrame, container);
-
-                            // Dynamically resize iframe to content height using ResizeObserver to allow native container scrollbar
-                            if (!isModal) {
-                                setTimeout(() => {
-                                    try {
-                                        const win = contentFrame.contentWindow;
-                                        const doc = win.document;
-                                        if (win && doc && doc.body) {
-                                            const observer = new win.ResizeObserver(() => {
-                                                const height = doc.body.scrollHeight || doc.documentElement.scrollHeight;
-                                                contentFrame.style.height = (height + 40) + 'px';
-                                                container.style.overflow = 'auto';
-                                            });
-                                            observer.observe(doc.body);
-                                        }
-                                    } catch (e) {
-                                        console.error('Failed to setup ResizeObserver:', e);
-                                    }
-                                }, 50);
-                            }
+                            // The LaTeX preview parses back the .tex itself when it carries its images, and
+                            // otherwise the bundle (main.tex plus images/), the way the document compiles.
+                            const source = format === 'tex' && !readTexPanelConfig().embedImages
+                                ? (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'tex', {
+                                    ...getGeneratorConfig(),
+                                    ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                                    texConfig: { ...readTexPanelConfig(), bundle: true },
+                                    onWarning: () => { }
+                                })).value
+                                : result.value;
+                            await renderReparsedPreview(source, format, container);
                         } catch (e) {
-                            container.innerHTML = `<div style="color: #ef4444; padding: 2rem;">Error generating RTF preview: ${e.message}</div>`;
+                            container.innerHTML = '';
+                            const err = document.createElement('div');
+                            err.style.cssText = 'color: #ef4444; padding: 2rem;';
+                            err.textContent = `Error generating ${format === 'tex' ? 'LaTeX' : 'RTF'} preview: ${e.message}`;
+                            container.appendChild(err);
                         }
                     } else {
                         container.style.padding = '0';
-                        renderRawCode(result.value, 'language-plaintext', container);
+                        renderRawCode(result.value, format === 'tex' ? 'language-latex' : 'language-plaintext', container);
                     }
                 }
                 else if (format === 'chunks') {
@@ -5737,11 +6659,19 @@
                                 card.className = 'chunk-card';
                                 const metaDiv = document.createElement('div');
                                 metaDiv.className = 'chunk-meta';
-                                metaDiv.innerHTML = `<span class="meta-chip">#${idx + 1}</span>`;
+                                // Chips are built as text: a heading is document content and must never become markup.
+                                const chip = (label, heading) => {
+                                    const el = document.createElement('span');
+                                    el.className = 'meta-chip';
+                                    if (heading) { el.style.background = 'rgba(14, 165, 233, 0.1)'; el.style.color = '#0ea5e9'; }
+                                    el.textContent = label;
+                                    metaDiv.appendChild(el);
+                                };
+                                chip(`#${idx + 1}`);
                                 if (chunk.metadata) {
-                                    if (chunk.metadata.pageNumber) metaDiv.innerHTML += `<span class="meta-chip">Page ${chunk.metadata.pageNumber}</span>`;
-                                    if (chunk.metadata.slideNumber) metaDiv.innerHTML += `<span class="meta-chip">Slide ${chunk.metadata.slideNumber}</span>`;
-                                    if (chunk.metadata.closestHeading) metaDiv.innerHTML += `<span class="meta-chip" style="background: rgba(14, 165, 233, 0.1); color: #0ea5e9;">H: ${chunk.metadata.closestHeading}</span>`;
+                                    if (chunk.metadata.pageNumber) chip(`Page ${chunk.metadata.pageNumber}`);
+                                    if (chunk.metadata.slideNumber) chip(`Slide ${chunk.metadata.slideNumber}`);
+                                    if (chunk.metadata.closestHeading) chip(`H: ${chunk.metadata.closestHeading}`, true);
                                 }
                                 const textDiv = document.createElement('div');
                                 textDiv.className = 'chunk-text';
@@ -6077,10 +7007,18 @@
                     };
                     return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'rtf', genConfig)).value;
                 },
+                'tex': async () => {
+                    const genConfig = {
+                        ...getGeneratorConfig(),
+                        ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                        texConfig: readTexPanelConfig()
+                    };
+                    return (await window.officeParser.OfficeGenerator.generate(window.currentAst, 'tex', genConfig)).value;
+                },
                 'ast': async () => JSON.stringify(window.currentAst, null, 2)
             };
 
-            ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].forEach(fmt => {
+            window.FORMAT_WINDOWS.forEach(fmt => {
                 document.getElementById(`copy-${fmt}-btn`).addEventListener('click', async (e) => {
                     if (!window.currentAst) return;
                     const btn = e.target;
@@ -6097,9 +7035,9 @@
                     }
                 });
 
-                // The HTML panel's download button is a "Download ▾" dropdown trigger (HTML/PDF/EPUB),
-                // wired separately below alongside its menu items - not a direct single-format download.
-                if (fmt === 'html') return;
+                // A panel with a "Download ▾" dropdown (one that also offers DERIVED_EXPORTS) has no direct
+                // single-format download; its menu items are wired separately below.
+                if (document.getElementById(`download-${fmt}-popover`)) return;
 
                 document.getElementById(`download-${fmt}-btn`).addEventListener('click', async (e) => {
                     if (!window.currentAst) return;
@@ -6107,7 +7045,7 @@
                     try {
                         const orig = btn.textContent;
                         btn.textContent = '⌛...';
-                        await downloadHandlers[fmt]();
+                        await window.withWarningGroup(fmt, () => downloadHandlers[fmt]());
                         btn.textContent = 'Done!';
                         setTimeout(() => btn.textContent = orig, 2000);
                     } catch (err) {
@@ -6174,6 +7112,12 @@
                     const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.txt';
                     downloadFile(content, name, 'text/plain');
                 },
+                'tex': async () => {
+                    // Images are referenced as images/<name>; the "LaTeX + images" export packages them.
+                    const content = await copyHandlers['tex']();
+                    const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '.tex';
+                    downloadFile(content, name, 'application/x-tex');
+                },
                 'ast': async () => {
                     const content = await copyHandlers['ast']();
                     const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '_ast.json';
@@ -6181,11 +7125,20 @@
                 }
             };
 
-            // Binary/whole-file exports that are just packagings of a preview panel's own output
-            // (e.g. PDF and EPUB are both the HTML panel's generated HTML, repackaged) - these have
-            // no preview of their own, so they hang off their basis panel's "Download ▾" dropdown
-            // instead of a standalone action button. Add an entry here (keyed by basis panel) once
-            // a new binary generator (DOCX/XLSX/PPTX/ODT/ODS/ODP, ...) actually exists.
+            /** Download a window's own format (used where its Download button is a dropdown trigger). */
+            window.downloadPanelFormat = async (format) => {
+                if (!window.currentAst) return;
+                try {
+                    await window.withWarningGroup(format, () => downloadHandlers[format]());
+                } catch (err) {
+                    console.error(`${format} download failed`, err);
+                    statusMsg.textContent = `Error: ${err.message}`;
+                }
+            };
+
+            // Exports with no preview window of their own, keyed by the panel whose options they use and
+            // whose "Download ▾" dropdown lists them (PDF, EPUB, DOCX and ODT take the HTML panel's
+            // options; the LaTeX + images zip takes the LaTeX panel's). The Export panel lists them too.
             const DERIVED_EXPORTS = {
                 html: {
                     pdf: {
@@ -6237,6 +7190,22 @@
                             downloadFile(result.value, name, 'application/vnd.oasis.opendocument.text');
                         }
                     }
+                },
+                tex: {
+                    texbundle: {
+                        kind: 'binary',
+                        run: async () => {
+                            // texConfig.bundle returns a zip of main.tex plus every referenced image.
+                            const genConfig = {
+                                ...getGeneratorConfig(),
+                                ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
+                                texConfig: { ...readTexPanelConfig(), bundle: true }
+                            };
+                            const result = await window.officeParser.OfficeGenerator.generate(window.currentAst, 'tex', genConfig);
+                            const name = (lastFileName || 'output').replace(/\.[^/.]+$/, "") + '-latex.zip';
+                            downloadFile(result.value, name, 'application/zip');
+                        }
+                    }
                 }
             };
 
@@ -6252,11 +7221,7 @@
                         const orig = item.textContent;
                         try {
                             item.textContent = '⌛ Generating...';
-                            if (fmt === panel) {
-                                await downloadHandlers[panel]();
-                            } else {
-                                await DERIVED_EXPORTS[panel][fmt].run();
-                            }
+                            await window.withWarningGroup(fmt, () => fmt === panel ? downloadHandlers[panel]() : DERIVED_EXPORTS[panel][fmt].run());
                             item.textContent = orig;
                         } catch (err) {
                             console.error(`${fmt} export failed`, err);
@@ -6264,10 +7229,64 @@
                             statusMsg.textContent = `Error: ${err.message}`;
                             setTimeout(() => item.textContent = orig, 2000);
                         }
-                        popover.style.display = 'none';
+                        window.closeConfigPopovers();
                     });
                 });
             });
+
+            // --- Export panel: one download button per generator, including formats with no window ---
+            const EXPORT_TARGETS = [
+                { name: 'Word', group: 'docx', ext: '.docx', run: () => DERIVED_EXPORTS.html.docx.run() },
+                { name: 'OpenDocument Text', group: 'odt', ext: '.odt', run: () => DERIVED_EXPORTS.html.odt.run() },
+                { name: 'LaTeX', group: 'tex', ext: '.tex', run: () => downloadHandlers.tex() },
+                { name: 'LaTeX + images', group: 'texbundle', ext: '.zip', run: () => DERIVED_EXPORTS.tex.texbundle.run() },
+                { name: 'EPUB', group: 'epub', ext: '.epub', run: () => DERIVED_EXPORTS.html.epub.run() },
+                { name: 'PDF', group: 'pdf', ext: 'print', run: () => DERIVED_EXPORTS.html.pdf.run() },
+                { name: 'HTML', group: 'html', ext: '.html', run: () => downloadHandlers.html() },
+                { name: 'Markdown', group: 'md', ext: '.md', run: () => downloadHandlers.md() },
+                { name: 'Rich Text', group: 'rtf', ext: '.rtf', run: () => downloadHandlers.rtf() },
+                { name: 'Plain text', group: 'text', ext: '.txt', run: () => downloadHandlers.text() },
+                { name: 'CSV', group: 'csv', ext: '.csv / .zip', run: () => downloadHandlers.csv() },
+                { name: 'RAG chunks', group: 'chunks', ext: '.json', run: () => downloadHandlers.chunks() },
+                { name: 'AST', group: 'ast', ext: '.json', run: () => downloadHandlers.ast() }
+            ];
+
+            const exportGrid = document.getElementById('export-grid');
+            const exportButtons = EXPORT_TARGETS.map(target => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'export-btn';
+                btn.disabled = true;
+                const nameEl = document.createElement('span');
+                nameEl.className = 'export-name';
+                nameEl.textContent = target.name;
+                const extEl = document.createElement('span');
+                extEl.className = 'export-ext';
+                extEl.textContent = target.ext;
+                btn.append(nameEl, extEl);
+                btn.addEventListener('click', async () => {
+                    if (!window.currentAst) return;
+                    btn.disabled = true;
+                    extEl.textContent = 'Generating...';
+                    try {
+                        await window.withWarningGroup(target.group, () => target.run());
+                        extEl.textContent = target.ext;
+                    } catch (err) {
+                        console.error(`${target.name} export failed`, err);
+                        extEl.textContent = 'Failed';
+                        statusMsg.textContent = `Error: ${err.message}`;
+                        setTimeout(() => extEl.textContent = target.ext, 2000);
+                    }
+                    btn.disabled = !window.currentAst;
+                });
+                exportGrid.appendChild(btn);
+                return btn;
+            });
+
+            /** Enable the Export panel's buttons once a document is loaded (they need an AST to generate from). */
+            window.updateExportPanel = function () {
+                exportButtons.forEach(btn => { btn.disabled = !window.currentAst; });
+            };
 
             // --- Live Download Stats ---
             async function updateDownloadStats() {
@@ -6344,7 +7363,7 @@
 
 
             // Initialize windows with placeholder
-            const initialFormats = ['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'];
+            const initialFormats = window.FORMAT_WINDOWS;
             initialFormats.forEach(f => {
                 document.getElementById(`visual-${f}`).innerHTML = '<div style="text-align:center; padding: 5rem; color: var(--text-dim);">Waiting for file upload...</div>';
             });
@@ -6357,7 +7376,7 @@
                 const filenameEl = document.getElementById('modal-filename');
                 const bodyContent = document.getElementById('modal-body-content');
 
-                if (titleEl) titleEl.textContent = format.toUpperCase() + (format === 'ast' ? ' (JSON)' : ' PREVIEW');
+                if (titleEl) titleEl.textContent = (format === 'tex' ? 'LATEX' : format.toUpperCase()) + (format === 'ast' ? ' (JSON)' : ' PREVIEW');
                 if (filenameEl) filenameEl.textContent = lastFileName || 'No file selected';
 
                 if (bodyContent) {
@@ -6407,7 +7426,13 @@
                         if (origCopyBtn) origCopyBtn.click();
                     });
                     newDownloadBtn.addEventListener('click', () => {
-                        if (origDownloadBtn) origDownloadBtn.click();
+                        // A dropdown trigger would open its menu behind the modal: download the
+                        // window's own format directly instead.
+                        if (origDownloadBtn && origDownloadBtn.closest('.download-dropdown')) {
+                            window.downloadPanelFormat(format);
+                        } else if (origDownloadBtn) {
+                            origDownloadBtn.click();
+                        }
                     });
                 }
 
@@ -6530,7 +7555,7 @@
             // ---- helpers ----
             // Parse once and return everything the studio needs: body HTML (preview), body text (for
             // placeholder detection) and header/footer text. Headers/footers live in ast.auxiliary, not
-            // the body, so they are otherwise invisible in both the preview and the summary — yet the
+            // the body, so they are otherwise invisible in both the preview and the summary, yet the
             // template feature fills placeholders there too, so we surface them explicitly.
             async function inspect(bytes) {
                 const ast = await window.officeParser.parseOffice(bytes, { onWarning: () => { } });
@@ -6605,7 +7630,7 @@
                     const hasData = dataKeys.includes(k);
                     let status, val;
                     if (inTemplate && hasData) { status = '<span class="ts-ok">✓ filled</span>'; val = '<code>' + escapeHtml(valStr(row0[k])) + '</code>'; }
-                    else if (inTemplate && !hasData) { status = '<span class="ts-warn">no data → ' + missingBehavior + '</span>'; val = '—'; }
+                    else if (inTemplate && !hasData) { status = '<span class="ts-warn">no data → ' + missingBehavior + '</span>'; val = '(none)'; }
                     else { status = '<span class="ts-warn">unused (not in template)</span>'; val = '<code>' + escapeHtml(valStr(row0[k])) + '</code>'; }
                     return '<tr><td><code>' + escapeHtml(start + k + end) + '</code></td><td>' + val + '</td><td>' + (inTemplate ? 'yes' : 'no') + '</td><td>' + status + '</td></tr>';
                 }).join('');
@@ -6635,7 +7660,7 @@
 
             // ---- main action ----
             els.render.addEventListener('click', async () => {
-                if (!window.officeParser || !window.officeParser.OfficeTemplate) { setStatus('Library not loaded yet — try again in a moment.', true); return; }
+                if (!window.officeParser || !window.officeParser.OfficeTemplate) { setStatus('Library not loaded yet. Try again in a moment.', true); return; }
                 if (!state.buffer) { setStatus('Load a .docx template first (upload or the sample).', true); return; }
 
                 let data;
@@ -6669,11 +7694,11 @@
                     renderAfter(after0.html, after0.auxText, rows[0]);
                     els.download.classList.remove('hidden');
                     els.toVisualizer.classList.remove('hidden');
-                    setStatus('Done — ' + state.outputs.length + ' document' + (state.outputs.length === 1 ? '' : 's') + ' rendered. Compare below.', false);
+                    setStatus('Done: ' + state.outputs.length + ' document' + (state.outputs.length === 1 ? '' : 's') + ' rendered. Compare below.', false);
                 } catch (err) {
                     const code = err && err.officeIssue && err.officeIssue.code;
                     els.after.innerHTML = '<div style="color:#ef4444;">' + escapeHtml((code ? code + ': ' : '') + (err.message || String(err))) + '</div>';
-                    setStatus((code || 'Error') + ' — ' + (err.message || String(err)), true);
+                    setStatus((code || 'Error') + ': ' + (err.message || String(err)), true);
                 }
             });
 
@@ -6694,14 +7719,11 @@
                 // Drive the main Visualizer the way its own pipeline does: set window.currentAst from the
                 // rendered document and re-render each format window (processFileBuffer is module-scoped,
                 // but renderFormatWindow and currentAst are exposed on window).
+                // Load it exactly as an upload would, so its name, Reparse, the parser options and every
+                // download refer to this document rather than whatever was loaded before.
                 try {
-                    const dn = $('display-filename'); if (dn) dn.textContent = name;
-                    const fi = $('file-selected-info'); if (fi) fi.classList.remove('hidden');
-                    const dp = $('drop-zone-prompt'); if (dp) dp.classList.add('hidden');
-                    const sm = $('status-msg'); if (sm) sm.textContent = 'Loaded the rendered document from Template Studio: ' + name;
-                    window.currentAst = await window.officeParser.parseOffice(bytes, { onWarning: () => { } });
-                    if (typeof window.renderFormatWindow === 'function') {
-                        await Promise.all(['html', 'md', 'chunks', 'csv', 'rtf', 'text', 'ast'].map(f => window.renderFormatWindow(f)));
+                    if (typeof window.loadFileIntoVisualizer === 'function') {
+                        await window.loadFileIntoVisualizer(new File([bytes], name, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
                     }
                 } catch (e) { /* best effort; still scroll so the user sees the visualizer */ }
                 location.hash = '#visualizer';

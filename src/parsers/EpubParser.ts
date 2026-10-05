@@ -1,11 +1,13 @@
-import { EmbedMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST } from '../types.js';
+import { EmbedMetadata, FullOfficeParserConfig, ImageMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
 import { parseOfficeDate } from '../utils/dateUtils.js';
-import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
+import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
-import { getAttribute, getElementsByTagName, getFirstElementByTagName, parseXmlString } from '../utils/xmlUtils.js';
+import { getAttribute, getElementsByTagName, getFirstElementByTagName, parseXmlString, takeXmlElements } from '../utils/xmlUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 import { parseHtml } from './HtmlParser.js';
+import { setOwn } from '../utils/lookupUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
  * Resolves a manifest-relative href against the OPF file's directory, collapsing
@@ -23,6 +25,25 @@ const resolveOpfPath = (opfDir: string, href: string): string => {
 };
 
 /**
+ * An href (a URL, as a manifest's and a chapter's are) as the path of a file in the archive: its
+ * percent-escapes decoded (`chapter%201.xhtml` is `chapter 1.xhtml`), and as written when they do not
+ * decode. Read as written, a chapter or picture whose name held a space was not found.
+ */
+const hrefPath = (href: string): string => {
+    try {
+        return decodeURIComponent(href);
+    } catch {
+        return href;
+    }
+};
+
+/**
+ * Encryption methods that obfuscate fonts only (IDPF's and Adobe's): a book listing its fonts under them
+ * is readable. Any other method a book lists a file under is encryption (DRM) that file cannot be read through.
+ */
+const FONT_OBFUSCATION = new Set(['http://www.idpf.org/2008/embedding', 'http://ns.adobe.com/pdf/enc#RC']);
+
+/**
  * Parses an EPUB file (a ZIP archive of XHTML content plus an OPF manifest) into the
  * unified OfficeParserAST. Each spine item is parsed via the existing `HtmlParser` and
  * the resulting content/attachments are concatenated in reading order - EPUB is
@@ -31,11 +52,13 @@ const resolveOpfPath = (opfDir: string, href: string): string => {
 export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
     checkAbortSignal(config.abortSignal);
 
+    // Chapters by the extensions books give them (`.xml` too); a chapter the spine lists under another
+    // is reported as not read (see below), not skipped silently.
     const files = await extractFiles(
         buffer,
-        (path) => /META-INF\/container\.xml$/i.test(path)
+        (path) => /META-INF\/(?:container|encryption)\.xml$/i.test(path)
             || /\.opf$/i.test(path)
-            || /\.(xhtml|html|htm)$/i.test(path)
+            || /\.(xhtml|html|htm|xht|xml)$/i.test(path)
             || (!!config.extractAttachments && /\.(png|jpe?g|gif|svg|webp)$/i.test(path)),
         config.decompressionLimits,
         config
@@ -46,7 +69,7 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
     let opfPath: string | undefined;
     const containerFile = files.find(f => /META-INF\/container\.xml$/i.test(f.path));
     if (containerFile) {
-        const containerXml = parseXmlString(containerFile.content.toString('utf-8'));
+        const containerXml = parseXmlString(containerFile.content.toString('utf-8'), { config });
         const rootfile = getFirstElementByTagName(containerXml, 'rootfile');
         opfPath = rootfile ? getAttribute(rootfile, 'full-path') : undefined;
     }
@@ -57,7 +80,7 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
     }
 
     const opfDir = opfFile.path.includes('/') ? opfFile.path.substring(0, opfFile.path.lastIndexOf('/') + 1) : '';
-    const opfXml = parseXmlString(opfFile.content.toString('utf-8'));
+    const opfXml = parseXmlString(opfFile.content.toString('utf-8'), { config });
 
     // ─── Metadata (Dublin Core) ─────────────────────────────────────────────
     const metadata: OfficeMetadata = {};
@@ -82,7 +105,8 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
         const publisher = dcText('dc:publisher');
         if (publisher) nativeProps.publisher = publisher;
         const language = dcText('dc:language');
-        if (language) nativeProps.language = language;
+        // `metadata.language` is where every parser puts the language; the native field stays too.
+        if (language) { nativeProps.language = language; metadata.language = language; }
         const identifier = dcText('dc:identifier');
         if (identifier) nativeProps.identifier = identifier;
 
@@ -90,20 +114,21 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
         for (const metaTag of getElementsByTagName(metadataEl, 'meta')) {
             const name = getAttribute(metaTag, 'name');
             const content = getAttribute(metaTag, 'content');
-            if (name && content) nativeProps[name] = content;
+            if (name && content) setOwn(nativeProps, name, content);
         }
 
         if (Object.keys(nativeProps).length > 0) metadata.nativeProperties = nativeProps;
     }
 
     // ─── Manifest: id -> {href, mediaType} ──────────────────────────────────
-    const manifest = new Map<string, { href: string; mediaType: string }>();
+    // Each item's file: its href (a URL, relative to the package document) as a path in the archive.
+    const manifest = new Map<string, { href: string; path: string; mediaType: string }>();
     let coverImageId: string | undefined;
     for (const item of getElementsByTagName(opfXml, 'item')) {
         const id = getAttribute(item, 'id');
         const href = getAttribute(item, 'href');
         const mediaType = getAttribute(item, 'media-type') || '';
-        if (id && href) manifest.set(id, { href, mediaType });
+        if (id && href) manifest.set(id, { href, path: resolveOpfPath(opfDir, hrefPath(href.split('#')[0])), mediaType });
         if ((getAttribute(item, 'properties') || '').split(/\s+/).includes('cover-image')) coverImageId = id;
     }
     if (!coverImageId) {
@@ -113,15 +138,44 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
     }
 
     // ─── Spine: ordered reading order of XHTML documents ────────────────────
-    const spineHrefs: string[] = [];
+    const spine: { href: string; path: string }[] = [];
     for (const itemref of getElementsByTagName(opfXml, 'itemref')) {
         const idref = getAttribute(itemref, 'idref');
         const item = idref ? manifest.get(idref) : undefined;
-        if (item && /html/i.test(item.mediaType)) spineHrefs.push(item.href);
+        if (item && /html/i.test(item.mediaType)) spine.push(item);
+    }
+
+    // ─── Encryption: the files a book's DRM encrypts (META-INF/encryption.xml) ──
+    // Read as they are, an encrypted chapter was its ciphertext decoded as text, with no word of why.
+    const encrypted = new Set<string>();
+    const encryptionFile = files.find(f => /^META-INF\/encryption\.xml$/i.test(f.path));
+    if (encryptionFile) {
+        const encryptionXml = parseXmlString(encryptionFile.content.toString('utf-8'), { config });
+        // Each EncryptedData names its method and the file it encrypts (by local name, whatever prefix
+        // the XML Encryption namespace is given).
+        let method: string | undefined;
+        for (const element of Array.from(encryptionXml.getElementsByTagName('*')) as Element[]) {
+            if (element.localName === 'EncryptedData') method = undefined;
+            else if (element.localName === 'EncryptionMethod') method = getAttribute(element, 'Algorithm');
+            else if (element.localName === 'CipherReference') {
+                const uri = getAttribute(element, 'URI');
+                if (uri && !FONT_OBFUSCATION.has(method ?? '')) encrypted.add(resolveOpfPath('', hrefPath(uri)));
+            }
+        }
+    }
+    const readable = spine.filter(item => !encrypted.has(item.path));
+    if (spine.length && !readable.length) {
+        throw getOfficeError(OfficeErrorType.DOCUMENT_DECRYPTION_FAILED, config,
+            'the EPUB\'s content is encrypted (DRM, listed in META-INF/encryption.xml); it can only be read by the reading system it is licensed to');
     }
 
     const content: OfficeContentNode[] = [];
     const attachments: OfficeAttachment[] = [];
+
+    // The package's files by path: each image the manifest lists and each chapter the spine lists is
+    // found through it (a scan of every file per item took items x files).
+    const fileByPath = new Map<string, (typeof files)[number]>();
+    for (const f of files) if (!fileByPath.has(f.path)) fileByPath.set(f.path, f);
 
     // Map each in-zip image resource by its resolved path, so inline <img> references can
     // be resolved to real bytes (EPUB images are separate files referenced by relative
@@ -129,39 +183,76 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
     const imageByPath = new Map<string, { content: Buffer; mediaType: string }>();
     if (config.extractAttachments) {
         for (const [, item] of manifest) {
-            if (!item.mediaType.startsWith('image/')) continue;
-            const p = resolveOpfPath(opfDir, item.href);
-            const f = files.find(ff => ff.path === p);
-            if (f) imageByPath.set(p, { content: f.content, mediaType: item.mediaType });
+            if (!item.mediaType.startsWith('image/') || encrypted.has(item.path)) continue;
+            const f = fileByPath.get(item.path);
+            if (f) imageByPath.set(item.path, { content: f.content, mediaType: item.mediaType });
         }
     }
-    const referencedImagePaths = new Set<string>();
+    // Attachment names, each used once in the book: a file's own name, else that name numbered. The
+    // numbering resumes where it left off for each name: tried from 2 each time, the pictures every
+    // chapter names image_1.png, image_2.png, ... took chapters squared (1.5 MB, seven minutes).
+    const usedNames = new Set<string>();
+    const nextNumber = new Map<string, number>();
+    const uniqueName = (name: string): string => {
+        if (!usedNames.has(name)) { usedNames.add(name); return name; }
+        const dot = name.lastIndexOf('.');
+        const [stem, extension] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
+        let n = nextNumber.get(name) ?? 2;
+        let candidate = `${stem}-${n}${extension}`;
+        while (usedNames.has(candidate)) candidate = `${stem}-${++n}${extension}`;
+        nextNumber.set(name, n + 1);
+        usedNames.add(candidate);
+        return candidate;
+    };
+    // The attachment each of the book's images is, made the first time a chapter shows the image.
+    const imageAttachmentNames = new Map<string, string>();
 
-    for (const href of spineHrefs) {
+    // Each chapter once, in the order the spine first lists it: a spine listing one chapter many
+    // times (which EPUB does not allow) read it, and wrote its content, again for each.
+    const readChapters = new Set<string>();
+    for (const { href, path: xhtmlPath } of spine) {
         checkAbortSignal(config.abortSignal);
-        const xhtmlPath = resolveOpfPath(opfDir, href.split('#')[0]);
-        const xhtmlFile = files.find(f => f.path === xhtmlPath);
-        if (!xhtmlFile) continue;
-
-        let xhtml = xhtmlFile.content.toString('utf-8');
-        if (config.extractAttachments && imageByPath.size > 0) {
-            // Inline each referenced image as a data URI so HtmlParser extracts it as an
-            // attachment (with a real image node linked by name) - the same treatment
-            // DOCX images get, and what makes the image survive conversion to any format.
-            const xhtmlDir = xhtmlPath.includes('/') ? xhtmlPath.substring(0, xhtmlPath.lastIndexOf('/') + 1) : '';
-            xhtml = xhtml.replace(/(<img\b[^>]*\bsrc=")([^"]+)(")/gi, (full, pre, src, post) => {
-                if (/^(data:|https?:|\/\/)/i.test(src)) return full;
-                const resolved = resolveOpfPath(xhtmlDir, src.split('#')[0].split('?')[0]);
-                const img = imageByPath.get(resolved);
-                if (!img) return full;
-                referencedImagePaths.add(resolved);
-                return `${pre}data:${img.mediaType};base64,${img.content.toString('base64')}${post}`;
-            });
+        if (readChapters.has(xhtmlPath)) continue;
+        readChapters.add(xhtmlPath);
+        // A chapter that cannot be read is reported, not left out without a word.
+        if (encrypted.has(xhtmlPath)) {
+            logWarning(OfficeWarningType.CONTENT_PART_NOT_READ, config, { part: href, reason: 'the chapter is encrypted (DRM, listed in META-INF/encryption.xml)' });
+            continue;
+        }
+        const xhtmlFile = fileByPath.get(xhtmlPath);
+        if (!xhtmlFile) {
+            logWarning(OfficeWarningType.CONTENT_PART_NOT_READ, config, { part: href, reason: 'the book lists the chapter, but its file is not in the archive (or has an extension other than .xhtml, .html, .htm, .xht or .xml)' });
+            continue;
         }
 
-        const chapterAst = await parseHtml(Buffer.from(xhtml, 'utf-8'), config);
-        content.push(...chapterAst.content);
-        attachments.push(...chapterAst.attachments);
+        // A picture showing one of the book's images is linked to that image's attachment (made
+        // once), so the image survives conversion to any format, as a DOCX image does.
+        const xhtmlDir = xhtmlPath.includes('/') ? xhtmlPath.substring(0, xhtmlPath.lastIndexOf('/') + 1) : '';
+        const imageAttachment = (src: string): string | undefined => {
+            if (!config.extractAttachments || /^(data:|https?:|\/\/)/i.test(src)) return undefined;
+            const resolved = resolveOpfPath(xhtmlDir, hrefPath(src.split('#')[0].split('?')[0]));
+            const img = imageByPath.get(resolved);
+            if (!img) return undefined;
+            let name = imageAttachmentNames.get(resolved);
+            if (!name) {
+                const attachment = createAttachment(uniqueName(resolved.split('/').pop() || resolved), img.content);
+                attachments.push(attachment);
+                name = attachment.name;
+                imageAttachmentNames.set(resolved, name);
+            }
+            return name;
+        };
+
+        // A chapter's elements count against the document's budget, as its package XML does (see
+        // maxXmlElements): read by the HTML parser, they were not counted, and a chapter of 10 million
+        // empty elements (118 KB of EPUB) ran the process out of memory.
+        takeXmlElements(xhtmlFile.content.toString('utf8'), config);
+        // A chapter's own inline pictures (data URIs) are numbered from 1 in each chapter: each is named
+        // as it is read, so no two of the book's attachments share a name. (Named again afterwards, by
+        // name, a picture of the book's own named `image_1.png` was renamed with the chapter's first.)
+        const chapterAst = await parseHtml(xhtmlFile.content, config, { imageAttachment, attachmentName: uniqueName });
+        appendAll(attachments, chapterAst.attachments);
+        appendAll(content, chapterAst.content);
     }
 
     // Keep manifest images that were NOT referenced inline (e.g. cover art, or images used
@@ -171,10 +262,14 @@ export const parseEpub = async (buffer: Buffer, config: FullOfficeParserConfig):
         const customProperties: Record<string, string> = {};
         for (const [id, item] of manifest) {
             if (!item.mediaType.startsWith('image/')) continue;
-            const p = resolveOpfPath(opfDir, item.href);
-            const img = imageByPath.get(p);
-            if (!img || referencedImagePaths.has(p)) continue;
-            const attachment = createAttachment(item.href.split('/').pop() || item.href, img.content);
+            const img = imageByPath.get(item.path);
+            if (!img) continue;
+            const shown = imageAttachmentNames.get(item.path);
+            if (shown !== undefined) {
+                if (id === coverImageId) customProperties.coverImageName = shown;
+                continue;
+            }
+            const attachment = createAttachment(uniqueName(item.path.split('/').pop() || item.path), img.content);
             attachments.push(attachment);
             if (id === coverImageId) customProperties.coverImageName = attachment.name;
         }

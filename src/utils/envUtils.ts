@@ -12,7 +12,7 @@ export const isBrowser = typeof window !== 'undefined' && typeof window.document
  */
 export type NodeFeature = 'fs' | 'path-parsing' | 'pdf-worker-auto-resolution';
 
-import { OfficeErrorType } from '../types.js';
+import { OfficeErrorType, OfficeParserConfig } from '../types.js';
 import { getOfficeError } from './errorUtils.js';
 
 /**
@@ -30,9 +30,9 @@ const readableFeatures: Record<NodeFeature, string> = {
  * @param feature - The Node.js feature being accessed
  * @throws {Error} Clear error message directing browser users to use Buffers
  */
-export function assertNode(feature: NodeFeature): void {
+export function assertNode(feature: NodeFeature, config?: OfficeParserConfig): void {
     if (isBrowser) {
-        throw getOfficeError(OfficeErrorType.FEATURE_NOT_SUPPORTED_IN_BROWSER, undefined, readableFeatures[feature]);
+        throw getOfficeError(OfficeErrorType.FEATURE_NOT_SUPPORTED_IN_BROWSER, config, readableFeatures[feature]);
     }
 }
 

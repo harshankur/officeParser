@@ -49,14 +49,14 @@
     }
   },
   {
-    "text": "Here is some bold, italic, *bold-italic, *underlined and struck out  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.",
+    "text": "Here is some bold, italic, bold-italic, underlined and struck out  text. Then, we have a superscript and a subscript. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.",
     "metadata": {
       "sourceType": "md",
       "closestHeading": "Inline formatting"
     }
   },
   {
-    "text": "A paragraph with styled text: subtle emphasis  followed by strong text and *intense emphasis*. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.",
+    "text": "A paragraph with styled text: subtle emphasis  followed by strong text and intense emphasis. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.",
     "metadata": {
       "sourceType": "md",
       "closestHeading": "Inline formatting"
@@ -164,7 +164,7 @@
     }
   },
   {
-    "text": "| OneThree | Two |\n| Four |",
+    "text": "| One Three Two Four | To the left is a table inside a table, with some cells merged. |",
     "metadata": {
       "sourceType": "md",
       "closestHeading": "Tables",
@@ -405,6 +405,13 @@
   },
   {
     "text": "Centered images like this are useful for large pictures that should be a focus of attention.",
+    "metadata": {
+      "sourceType": "md",
+      "closestHeading": "Images"
+    }
+  },
+  {
+    "text": "[Image: 165 Inspirational Quotes To Keep You Motivated In Life]",
     "metadata": {
       "sourceType": "md",
       "closestHeading": "Images"

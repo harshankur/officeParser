@@ -1,0 +1,174 @@
+% Exhaustive LaTeX fixture: every construct the LaTeX parser interprets, written the way
+% people write LaTeX by hand (not the way officeParser's generator writes it).
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,graphicx,booktabs,multirow,longtable,listings,xcolor,hyperref,ulem,soul,fancyhdr,endnotes}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\product}{officeParser}
+\newcommand{\term}[1]{\textbf{#1}}
+\newcommand{\greet}[2][Hello]{#1, #2!}
+\def\version{8.1}
+\definecolor{brand}{HTML}{1F6FEB}
+\colorlet{softbrand}{brand!50}
+\newenvironment{callout}[1]{\begin{quote}\textit{#1:} }{\end{quote}}
+
+\title{Exhaustive \LaTeX{} Test\thanks{With thanks.}}
+\author{Ada Lovelace \and Alan Turing}
+\date{2024-03-15}
+\hypersetup{pdfsubject={Parser coverage}, pdfkeywords={latex, parser}, pdflang={en-GB}, pdfinfo={Reviewer={Grace Hopper}}}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{Running Title}
+\fancyhead[R]{Draft}
+\fancyfoot[C]{\thepage}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document exercises the \product{} \LaTeX{} parser, version \version.
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction}\label{sec:intro}
+Plain paragraph with \textbf{bold}, \textit{italic}, \emph{emphasis}, \underline{underline},
+\sout{strikeout}, \texttt{typewriter}, \textsc{small caps}, \textsuperscript{super} and
+\textsubscript{sub} text. Declarations work too: {\bfseries bold group} and {\itshape italic group}.
+Colours: \textcolor{red}{red}, \textcolor{brand}{brand}, \textcolor[HTML]{00AA00}{html green},
+{\color{softbrand}soft brand} and \colorbox{yellow}{boxed}, \hl{highlighted}.
+Sizes: {\large large} and {\small small} and {\fontsize{20pt}{24pt}\selectfont twenty}.
+
+Ligatures and quotes: ``double'', `single', en--dash, em---dash, and don't.
+Accents: caf\'e, na\"ive, \c{c}a, \v{s}, \'{\i}, \aa, \ss, \O. Symbols: \S 3, \textcopyright, 50\%,
+\$5, \& more, \# tag, a\_b, \textbackslash, \ldots{} and a non~breaking space.
+Macros: \term{defined term}, \greet{World}, \greet[Hi]{there}. Verbatim inline: \verb|\raw{x}|.
+A soft hy\-phen, a thin\,space and a forced\\line break.
+
+\subsection{Links and references}\label{sec:links}
+Visit \href{https://example.com/a_b?x=1\&y=2}{the example site} or \url{https://example.org}.
+See Section~\ref{sec:intro} and \nameref{sec:links}, or jump \hyperref[sec:intro]{back to the start}.
+Cited as \cite{knuth1984} and \citep[p.~5]{lamport1994,mittelbach2004}.
+A footnote here\footnote{The footnote \textbf{body}.} and an endnote\endnote{The endnote body.}.
+% Comment (Reviewer, 2024-02-02): Please expand this section.
+% It needs more detail.
+Commented paragraph.
+
+\subsubsection{Deep heading}
+\paragraph{Paragraph heading} Run-in heading text follows.
+
+\section{Lists}
+\begin{itemize}
+  \item First bullet
+  \item Second bullet with a nested list:
+  \begin{enumerate}
+    \item Nested one
+    \item Nested two
+  \end{enumerate}
+  \item[$\square$] Open task
+  \item[$\boxtimes$] Done task
+\end{itemize}
+
+\begin{enumerate}
+  \setcounter{enumi}{4}
+  \item Fifth item
+  \item Sixth item
+\end{enumerate}
+
+\begin{description}
+  \item[Term A] Description A.
+  \item[{Term [B]}] Description B.
+\end{description}
+
+\section{Tables and figures}
+\begin{table}[htbp]
+  \centering
+  \caption{A booktabs table}\label{tab:main}
+  \begin{tabular}{l c r}
+    \toprule
+    Name & Count & Price \\
+    \midrule
+    \multicolumn{2}{c}{Merged} & 3.00 \\
+    \multirow{2}{*}{Tall} & 1 & 1.50 \\
+     & 2 & \cellcolor{yellow}2.50 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{longtable}{|p{3cm}|p{3cm}|}
+\hline
+Head A & Head B \\
+\hline
+\endhead
+Row 1 & Value 1 \\
+Row 2 & Value 2 \\
+\hline
+\end{longtable}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.5\textwidth]{figures/diagram}
+  \caption{A diagram.}\label{fig:diagram}
+\end{figure}
+
+Table~\ref{tab:main} and Figure~\ref{fig:diagram} are referenced.
+
+\section{Code and math}
+\begin{lstlisting}[language=Python, caption=Example]
+def greet(name):
+    return f"Hello, {name}"
+\end{lstlisting}
+
+\begin{verbatim}
+raw \text{is} kept & literal
+\end{verbatim}
+
+Inline math $E = mc^2$ and \(a^2 + b^2\) and $x \in \R$.
+\[
+  \int_0^1 x\,dx = \frac{1}{2}
+\]
+\begin{equation}\label{eq:euler}
+  e^{i\pi} + 1 = 0
+\end{equation}
+\begin{align*}
+  a &= b + c \\
+  d &= e
+\end{align*}
+
+\section{Blocks}
+\begin{quote}
+A quoted paragraph.
+\end{quote}
+
+\begin{center}
+Centered text.
+\end{center}
+
+\begin{flushright}
+Right text.
+\end{flushright}
+
+\begin{callout}{Tip}
+Custom environment body.
+\end{callout}
+
+\begin{tikzpicture}
+  \draw (0,0) -- (1,1);
+\end{tikzpicture}
+
+\input{chapters/missing}
+
+\noindent\rule{\linewidth}{0.4pt}
+
+\begin{thebibliography}{9}
+\bibitem{knuth1984} D. Knuth, \emph{The \TeX book}, 1984.
+\bibitem{lamport1994} L. Lamport, \emph{\LaTeX: A Document Preparation System}, 1994.
+\end{thebibliography}
+
+\theendnotes
+\end{document}
+
+Text after the document end is ignored.

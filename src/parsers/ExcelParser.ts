@@ -27,57 +27,121 @@ import { createAST } from '../utils/astUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { createAttachment } from '../utils/imageUtils.js';
-import { performOcr } from '../utils/ocrUtils.js';
-import { decodeXmlEntities, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString } from '../utils/xmlUtils.js';
+import { ocrDuringParse } from '../utils/ocrUtils.js';
+import { attachmentLookup, repeatPreview, takeRepeats, valuesLength } from '../utils/repeatUtils.js';
+import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
+import { chargeRawContent, decodeXmlEntities, getChildElements, getElementsByTagName, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
 
-/** How a number format shows a cell value that it treats as a date or a time. */
-type DateFormatKind = 'date' | 'time' | 'datetime' | 'elapsed';
+/** Whether the character at `at` of `xml` can continue a tag name (so `<c` there opens `<col`, not `<c`). */
+const continuesName = (xml: string, at: number): boolean => /[\w:.-]/.test(xml[at] ?? '');
 
-/** Built-in number formats that show a date or a time (ECMA-376 Part 1, 18.8.30). */
-const BUILTIN_DATE_FORMATS = new Map<string, DateFormatKind>([
-    ['14', 'date'], ['15', 'date'], ['16', 'date'], ['17', 'date'], ['18', 'time'], ['19', 'time'],
-    ['20', 'time'], ['21', 'time'], ['22', 'datetime'], ['45', 'time'], ['46', 'elapsed'], ['47', 'time'],
-]);
-
-/** Serials past 9999-12-31, the last date a workbook can hold, are shown as plain numbers. */
-const MAX_DATE_SERIAL = 2958466;
+/** Where the next `<tag` element starts in `xml`, from `from` on; -1 when none does. */
+function nextElement(xml: string, tag: string, from: number): number {
+    for (let at = xml.indexOf(`<${tag}`, from); at !== -1; at = xml.indexOf(`<${tag}`, at + tag.length + 1)) {
+        if (!continuesName(xml, at + tag.length + 1)) return at;
+    }
+    return -1;
+}
 
 /**
- * Classifies a number format code by the date and time parts it shows. Quoted text, escaped
- * characters and `[...]` sections (colours, locales, conditions) are not tokens, except `[h]`,
- * `[m]` and `[s]`, which show elapsed time.
+ * Each `<tag>` element of `xml`, in order: its attributes, whether it closes itself, its content, and
+ * the whole of it. The content runs to its closing tag or, left unclosed, to where the next element of
+ * its kind starts (else the end), so an unclosed row keeps its cells. Linear in the length of `xml`:
+ * the closing tag last found is kept while it lies ahead, where a pattern looking for one from each
+ * start (`<row>([\s\S]*?)</row>`) read the rest of the sheet again for every unclosed row, which took
+ * a minute for a few megabytes of them.
  */
-const getDateFormatKind = (code: string): DateFormatKind | undefined => {
-    if (/\[(?:h+|m+|s+)\]/i.test(code)) return 'elapsed';
-    const tokens = code.replace(/"[^"]*"|\\.|\[[^\]]*\]/g, '').toLowerCase();
-    const hasDate = tokens.includes('y') || tokens.includes('d');
-    const hasTime = tokens.includes('h') || tokens.includes('s');
-    if (hasDate) return hasTime ? 'datetime' : 'date';
-    return hasTime ? 'time' : undefined;
+function* xmlElements(xml: string, tag: string): Generator<{ attrs: string; selfClosing: boolean; content: string; whole: string }> {
+    const close = `</${tag}>`;
+    let closeAt = -2;
+    let at = nextElement(xml, tag, 0);
+    while (at !== -1) {
+        const gt = xml.indexOf('>', at);
+        if (gt === -1) return;
+        const selfClosing = xml[gt - 1] === '/';
+        const next = nextElement(xml, tag, gt + 1);
+        if (selfClosing) {
+            yield { attrs: xml.slice(at + tag.length + 1, gt - 1), selfClosing, content: '', whole: xml.slice(at, gt + 1) };
+        } else {
+            if (closeAt !== -1 && closeAt <= gt) closeAt = xml.indexOf(close, gt + 1);
+            const closed = closeAt !== -1 && (next === -1 || closeAt < next);
+            const end = closed ? closeAt : next === -1 ? xml.length : next;
+            yield { attrs: xml.slice(at + tag.length + 1, gt), selfClosing, content: xml.slice(gt + 1, end), whole: xml.slice(at, closed ? end + close.length : end) };
+        }
+        at = next;
+    }
+}
+
+/** The content of the first `<tag>` element of `xml` (see xmlElements), or undefined when there is none. */
+function firstElementContent(xml: string, tag: string): string | undefined {
+    for (const element of xmlElements(xml, tag)) return element.content;
+    return undefined;
+}
+
+/** An attribute's value in the attributes of an element (see xmlElements), its references decoded. */
+const attributeOf = (attrs: string, name: 'val' | 'rgb'): string | undefined => {
+    const match = (name === 'val' ? /(?:^|\s)val\s*=\s*(?:"([^"]*)"|'([^']*)')/ : /(?:^|\s)rgb\s*=\s*(?:"([^"]*)"|'([^']*)')/).exec(attrs);
+    return match ? decodeXmlEntities(match[1] ?? match[2]) : undefined;
 };
 
 /**
- * Writes a date/time serial as ISO text in the form its number format shows: `2024-09-30`,
- * `14:05:00`, `2024-09-30 14:05:00`, or `36:00:00` for an elapsed duration. Returns `undefined`
- * for a value that is not a serial a workbook can hold, which then stays as stored.
+ * The text an element's XML content holds, as an XML reader gives it: references decoded, line breaks
+ * normalized, CDATA sections as written, and markup inside it left out.
  */
-const formatDateSerial = (value: string, kind: DateFormatKind, date1904: boolean): string | undefined => {
-    const serial = Number(value);
-    if (value === '' || !Number.isFinite(serial) || serial < 0 || serial >= MAX_DATE_SERIAL) return undefined;
-    const pad = (n: number) => String(n).padStart(2, '0');
-    // Rounded to the second, as Excel shows it: a NOW() stamp of 14:04:59.9 reads 14:05:00
-    const seconds = Math.round(serial * 86400);
-    const clock = (total: number) => `${pad(Math.floor(total / 60) % 60)}:${pad(total % 60)}`;
-    if (kind === 'elapsed') return `${Math.floor(seconds / 3600)}:${clock(seconds)}`;
-    const time = `${pad(Math.floor(seconds / 3600) % 24)}:${clock(seconds)}`;
-    if (kind === 'time') return time;
-    // The 1904 system counts from 1904-01-01. The 1900 system counts from 1899-12-31 and includes a
-    // 1900-02-29 that never existed, as serial 60, so serials from 60 on count from 1899-12-30.
-    const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, serial < 60 ? 31 : 30);
-    const date = new Date(epoch + Math.floor(seconds / 86400) * 86400000).toISOString().slice(0, 10);
-    return kind === 'date' ? date : `${date} ${time}`;
+const xmlText = (content: string): string => {
+    const decode = (raw: string) => decodeXmlEntities(raw.includes('\r') ? raw.replace(/\r\n?/g, '\n') : raw);
+    if (!content.includes('<')) return decode(content);
+    const parts: string[] = [];
+    let at = 0;
+    while (at < content.length) {
+        const lt = content.indexOf('<', at);
+        if (lt === -1) { parts.push(decode(content.slice(at))); break; }
+        parts.push(decode(content.slice(at, lt)));
+        if (content.startsWith('<![CDATA[', lt)) {
+            const end = content.indexOf(']]>', lt + 9);
+            parts.push(content.slice(lt + 9, end === -1 ? content.length : end));
+            at = end === -1 ? content.length : end + 3;
+        } else {
+            const gt = content.indexOf('>', lt + 1);
+            at = gt === -1 ? content.length : gt + 1;
+        }
+    }
+    return parts.join('');
 };
+
+/**
+ * A rich text run's formatting from its `rPr` content. A toggle (`b`, `i`, `strike`) is on unless its
+ * `val` turns it off (`<b val="0"/>`), and `u` unless it is `none`.
+ */
+function runFormatting(rPr: string): TextFormatting {
+    const formatting: TextFormatting = {};
+    const first = (tag: string) => { for (const element of xmlElements(rPr, tag)) return element; return undefined; };
+    const on = (tag: string, off: RegExp): boolean => {
+        const element = first(tag);
+        if (!element) return false;
+        const val = attributeOf(element.attrs, 'val');
+        return val === undefined || !off.test(val);
+    };
+    if (on('b', /^(0|false|off)$/i)) formatting.bold = true;
+    if (on('i', /^(0|false|off)$/i)) formatting.italic = true;
+    if (on('u', /^none$/i)) formatting.underline = true;
+    if (on('strike', /^(0|false|off)$/i)) formatting.strikethrough = true;
+    const size = first('sz') && attributeOf(first('sz')!.attrs, 'val');
+    if (size) formatting.size = size + 'pt';
+    const color = first('color');
+    const rgb = color && attributeOf(color.attrs, 'rgb');
+    // ARGB (as Excel writes it), or RGB.
+    if (rgb && /^[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$/.test(rgb)) formatting.color = '#' + (rgb.length === 8 ? rgb.slice(2) : rgb);
+    const font = first('rFont');
+    const fontName = font && attributeOf(font.attrs, 'val');
+    if (fontName) formatting.font = fontName;
+    const vertAlign = first('vertAlign');
+    const position = vertAlign && attributeOf(vertAlign.attrs, 'val');
+    if (position === 'subscript') formatting.subscript = true;
+    if (position === 'superscript') formatting.superscript = true;
+    return formatting;
+}
 
 /**
  * Parses an Excel spreadsheet (.xlsx) and extracts sheets, rows, and cells.
@@ -87,7 +151,7 @@ const formatDateSerial = (value: string, kind: DateFormatKind, date1904: boolean
  * @returns A promise resolving to the parsed AST
  */
 export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
-    // Honour cancellation requests immediately — before extracting the ZIP archive.
+    // Honour cancellation requests immediately, before extracting the ZIP archive.
     // XLSX parsing involves decompressing multiple XML sheets and potentially running OCR
     // on embedded chart images, so short-circuiting here saves significant work.
     checkAbortSignal(config.abortSignal);
@@ -130,8 +194,6 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     // work below, and read again further down for the sheet-name map.
     const workbookFile = findRequiredPart(files, path => path === 'xl/workbook.xml', config,
         { fileType: 'xlsx', part: 'xl/workbook.xml' });
-    // Date serials count from 1900 unless the workbook uses the 1904 date system
-    const date1904 = /<(?:\w+:)?workbookPr\b[^>]*\bdate1904="(?:1|true)"/.test(workbookFile.content.toString());
 
     // Worksheets, by contrast, are not guaranteed: a workbook holding only chartsheets is
     // valid and simply has no cell text to extract. Warn rather than fail, so the caller can
@@ -142,62 +204,50 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const sharedStringsFile = files.find(f => f.path === stringsFilePath);
     // Updated to store structured content (rich text runs) or simple string
     const sharedStrings: (string | OfficeContentNode[])[] = [];
+    // Cells the document's sheets may still yield (see the sheet loop).
+    // One cell more for each byte of the document (see budgetUtils), so a large workbook is not cut short.
+    const cellLimit = (config.decompressionLimits?.maxTableCells ?? 1000000) + TABLE_CELLS_PER_BYTE * documentBytesOf(config);
+    let cellsLeft = cellLimit;
+    let cellLimitWarned = false;
+    // The text of each rich shared string, joined once: joined per cell, a large string many cells
+    // show was copied for each, and a small file filled the heap.
+    const richStringText = new Map<number, string>();
+    // How many cells have shown each shared string so far.
+    const sharedStringUses = new Map<number, number>();
+    // What each rich shared string's runs weigh beyond their text: 16 a run, and its formatting values.
+    // Cells showing the string share its runs, and every writer writes a run's font or colour again in
+    // each cell: counted by run alone, one run of a 64 KB font shown in 7,500 cells (1.8 KB of XLSX)
+    // made 492 MB of HTML.
+    const richStringRunWeight = new Map<number, number>();
 
     if (sharedStringsFile) {
-        const xml = parseXmlString(sharedStringsFile.content.toString());
-        const siNodes = getElementsByTagName(xml, "si");
-        for (const si of siNodes) {
-            const runNodes = getElementsByTagName(si, "r");
-            if (runNodes.length > 0) {
-                // Rich text with runs
-                const runs: OfficeContentNode[] = [];
-                for (const run of runNodes) {
-                    const tNode = getElementsByTagName(run, "t")[0];
-                    if (tNode) {
-                        const text = tNode.textContent || '';
-                        // Extract run formatting 
-                        const rPr = getElementsByTagName(run, "rPr")[0];
-                        const formatting: TextFormatting = {};
-                        if (rPr) {
-                            if (getElementsByTagName(rPr, "b").length > 0) formatting.bold = true;
-                            if (getElementsByTagName(rPr, "i").length > 0) formatting.italic = true;
-                            if (getElementsByTagName(rPr, "u").length > 0) formatting.underline = true;
-                            if (getElementsByTagName(rPr, "strike").length > 0) formatting.strikethrough = true;
-
-                            const sz = getElementsByTagName(rPr, "sz")[0];
-                            if (sz) formatting.size = sz.getAttribute("val") + 'pt';
-
-                            const color = getElementsByTagName(rPr, "color")[0];
-                            if (color) {
-                                const rgb = color.getAttribute("rgb");
-                                if (rgb) formatting.color = '#' + rgb.substring(2);
-                            }
-
-                            const rFont = getElementsByTagName(rPr, "rFont")[0];
-                            if (rFont) formatting.font = rFont.getAttribute("val") || undefined;
-
-                            const vertAlign = getElementsByTagName(rPr, "vertAlign")[0];
-                            if (vertAlign) {
-                                const val = vertAlign.getAttribute("val");
-                                if (val === "subscript") formatting.subscript = true;
-                                if (val === "superscript") formatting.superscript = true;
-                            }
-                        }
-                        runs.push({
-                            type: 'text',
-                            text: text,
-                            formatting: Object.keys(formatting).length > 0 ? formatting : undefined
-                        });
-                    }
-                }
+        // Read as the sheets are, without building XML elements: a workbook of a million distinct
+        // strings (5.5 MB) made two million elements, a gigabyte of heap, and was refused by the element
+        // budget, where each string is only its text. A rich string's runs become nodes, so they are
+        // charged to the element budget as elements are; a plain string costs an array entry, and eight
+        // of them are charged as one element (an empty `<si/>` is five bytes of a zip's XML).
+        let plainStrings = 0;
+        for (const si of xmlElements(sharedStringsFile.content.toString(), 'si')) {
+            // A string's text and runs come before its phonetic readings (`rPh`), which are not its text.
+            const phonetic = nextElement(si.content, 'rPh', 0);
+            const body = phonetic === -1 ? si.content : si.content.slice(0, phonetic);
+            const runs: OfficeContentNode[] = [];
+            let runCount = 0;
+            for (const run of xmlElements(body, 'r')) {
+                runCount++;
+                const t = firstElementContent(run.content, 't');
+                if (t === undefined) continue;
+                const rPr = firstElementContent(run.content, 'rPr');
+                const formatting = rPr === undefined ? {} : runFormatting(rPr);
+                runs.push({ type: 'text', text: xmlText(t), formatting: Object.keys(formatting).length > 0 ? formatting : undefined });
+            }
+            if (runCount > 0) {
+                takeNodes(runCount, config);
                 sharedStrings.push(runs);
             } else {
-                // Simple text case
-                const tNodes = getElementsByTagName(si, "t");
+                if (++plainStrings % 8 === 0) takeNodes(1, config);
                 let text = '';
-                for (const t of tNodes) {
-                    text += t.textContent || '';
-                }
+                for (const t of xmlElements(body, 't')) text += xmlText(t.content);
                 sharedStrings.push(text);
             }
         }
@@ -206,54 +256,42 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     // Parse styles to build formatting map
     const stylesFile = files.find(f => f.path === 'xl/styles.xml');
     const cellFormatMap: Record<number, TextFormatting> = {};
-    // A date or a time is stored as a day count and shown through its style's number format
-    const cellDateFormatMap: Record<number, DateFormatKind> = {};
 
     if (stylesFile) {
-        const xml = parseXmlString(stylesFile.content.toString());
-
-        // Parse custom number formats (numFmtId -> format code)
-        const numFmtCodes: Record<string, string> = Object.create(null);
-        const numFmtsNode = getElementsByTagName(xml, "numFmts")[0];
-        if (numFmtsNode) {
-            for (const numFmt of getElementsByTagName(numFmtsNode, "numFmt")) {
-                const id = numFmt.getAttribute("numFmtId");
-                const code = numFmt.getAttribute("formatCode");
-                if (id && code !== null) numFmtCodes[id] = code;
-            }
-        }
+        const xml = parseXmlString(stylesFile.content.toString(), { config });
 
         // Parse fonts
         const fontsNode = getElementsByTagName(xml, "fonts")[0];
         const fonts: TextFormatting[] = [];
         if (fontsNode) {
-            const fontNodes = getElementsByTagName(fontsNode, "font");
+            // Each font, fill and format read from its own children (see getChildElements).
+            const fontNodes = getChildElements(fontsNode, "font");
             for (const font of fontNodes) {
                 const formatting: TextFormatting = {};
-                if (getElementsByTagName(font, "b").length > 0) formatting.bold = true;
-                if (getElementsByTagName(font, "i").length > 0) formatting.italic = true;
-                if (getElementsByTagName(font, "u").length > 0) formatting.underline = true;
-                if (getElementsByTagName(font, "strike").length > 0) formatting.strikethrough = true;
+                if (getChildElements(font, "b").length > 0) formatting.bold = true;
+                if (getChildElements(font, "i").length > 0) formatting.italic = true;
+                if (getChildElements(font, "u").length > 0) formatting.underline = true;
+                if (getChildElements(font, "strike").length > 0) formatting.strikethrough = true;
 
-                const szNode = getElementsByTagName(font, "sz")[0];
+                const szNode = getChildElements(font, "sz")[0];
                 if (szNode) {
                     const val = szNode.getAttribute("val");
                     if (val) formatting.size = val + 'pt';
                 }
 
-                const colorNode = getElementsByTagName(font, "color")[0];
+                const colorNode = getChildElements(font, "color")[0];
                 if (colorNode) {
                     const rgb = colorNode.getAttribute("rgb");
                     if (rgb) formatting.color = '#' + rgb.substring(2); // Remove alpha channel
                 }
 
-                const nameNode = getElementsByTagName(font, "name")[0];
+                const nameNode = getChildElements(font, "name")[0];
                 if (nameNode) {
                     const val = nameNode.getAttribute("val");
                     if (val) formatting.font = val;
                 }
 
-                const vertAlignNode = getElementsByTagName(font, "vertAlign")[0];
+                const vertAlignNode = getChildElements(font, "vertAlign")[0];
                 if (vertAlignNode) {
                     const val = vertAlignNode.getAttribute("val");
                     if (val === "subscript") formatting.subscript = true;
@@ -268,12 +306,12 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         const fillsNode = getElementsByTagName(xml, "fills")[0];
         const fills: TextFormatting[] = [];
         if (fillsNode) {
-            const fillNodes = getElementsByTagName(fillsNode, "fill");
+            const fillNodes = getChildElements(fillsNode, "fill");
             for (const fill of fillNodes) {
                 const formatting: TextFormatting = {};
-                const patternFill = getElementsByTagName(fill, "patternFill")[0];
+                const patternFill = getChildElements(fill, "patternFill")[0];
                 if (patternFill) {
-                    const fgColor = getElementsByTagName(patternFill, "fgColor")[0];
+                    const fgColor = getChildElements(patternFill, "fgColor")[0];
                     if (fgColor) {
                         const rgb = fgColor.getAttribute("rgb");
                         const theme = fgColor.getAttribute("theme");
@@ -298,16 +336,10 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         // Parse cellXfs (cell format definitions)
         const cellXfsNode = getElementsByTagName(xml, "cellXfs")[0];
         if (cellXfsNode) {
-            const xfNodes = getElementsByTagName(cellXfsNode, "xf");
+            const xfNodes = getChildElements(cellXfsNode, "xf");
             for (let i = 0; i < xfNodes.length; i++) {
                 const xf = xfNodes[i];
                 const formatting: TextFormatting = {};
-
-                const numFmtId = xf.getAttribute("numFmtId") || '0';
-                const dateFormatKind = numFmtId in numFmtCodes
-                    ? getDateFormatKind(numFmtCodes[numFmtId])
-                    : BUILTIN_DATE_FORMATS.get(numFmtId);
-                if (dateFormatKind) cellDateFormatMap[i] = dateFormatKind;
 
                 const fontId = xf.getAttribute("fontId");
                 if (fontId) {
@@ -325,7 +357,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     }
                 }
 
-                const alignmentNode = getElementsByTagName(xf, "alignment")[0];
+                const alignmentNode = getChildElements(xf, "alignment")[0];
                 if (alignmentNode) {
                     const horizontal = alignmentNode.getAttribute("horizontal");
                     if (horizontal === 'center' || horizontal === 'right' || horizontal === 'justify' || horizontal === 'left') {
@@ -339,6 +371,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     }
 
     const attachments: OfficeAttachment[] = [];
+    const attachmentsByName = attachmentLookup(attachments);
+    // Drawings already placed on a sheet (see the sheet loop).
+    const drawingsPlaced = new Set<string>();
     const mediaFiles = files.filter(f => f.path.match(/xl\/media\/.*/));
     const chartFiles = files.filter(f => f.path.match(chartsRegex));
 
@@ -354,7 +389,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const drawingFilename = relFile.path.split('/').pop()?.replace('.rels', '') || '';
             const drawingPath = `xl/drawings/${drawingFilename}`;
 
-            const relsXml = parseXmlString(relFile.content.toString());
+            const relsXml = parseXmlString(relFile.content.toString(), { config });
             const relationships = getElementsByTagName(relsXml, "Relationship");
 
             if (!drawingImageMap[drawingPath]) {
@@ -375,10 +410,12 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         // 2. Parse Drawings to get Alt Text and link to Rels
         const drawingFiles = files.filter(f => f.path.match(drawingsRegex));
         for (const drawingFile of drawingFiles) {
-            const xml = parseXmlString(drawingFile.content.toString());
+            const xml = parseXmlString(drawingFile.content.toString(), { config });
             const pics = getElementsByTagName(xml, "xdr:pic"); // SpreadsheetML drawing
 
-            const rels = drawingImageMap[drawingFile.path] || {};
+            // Null-prototype, as the map is: a plain `{}` answered an `r:embed` of `__proto__` with
+            // Object.prototype, and the alt text was written onto every object in the process.
+            const rels: Record<string, { path: string, altText?: string }> = drawingImageMap[drawingFile.path] || Object.create(null);
 
             for (const pic of pics) {
                 const blipFill = getElementsByTagName(pic, "xdr:blipFill")[0];
@@ -396,35 +433,30 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         }
 
         // 3. Process Media Files
+        // Each picture's alt text, by its media path: the first drawing showing it with one (each
+        // drawing by its first relationship to it). Looked up per media file through every drawing's
+        // relationships, 2,000 media files beside 200,000 relationships took 90 seconds.
+        const altTextByMedia = new Map<string, string>();
+        for (const drawingPath in drawingImageMap) {
+            const seenInDrawing = new Set<string>();
+            for (const rId in drawingImageMap[drawingPath]) {
+                const image = drawingImageMap[drawingPath][rId];
+                if (seenInDrawing.has(image.path)) continue;
+                seenInDrawing.add(image.path);
+                if (image.altText && !altTextByMedia.has(image.path)) altTextByMedia.set(image.path, image.altText);
+            }
+        }
         for (const media of mediaFiles) {
             const attachment = createAttachment(media.path.split('/').pop() || 'image', media.content);
 
-            // Try to find alt text for this media
-            let altText = '';
-            for (const drawingPath in drawingImageMap) {
-                for (const rId in drawingImageMap[drawingPath]) {
-                    if (drawingImageMap[drawingPath][rId].path === media.path) {
-                        altText = drawingImageMap[drawingPath][rId].altText || '';
-                        break;
-                    }
-                }
-                if (altText) break;
-            }
+            const altText = altTextByMedia.get(media.path);
             if (altText) attachment.altText = altText;
 
             attachments.push(attachment);
 
-            if (config.ocr) {
-                if (attachment.mimeType.startsWith('image/')) {
-                    try {
-                        const ocrText = (await performOcr(media.content, { ...config.ocrConfig })).trim();
-                        if (ocrText) {
-                            attachment.ocrText = ocrText;
-                        }
-                    } catch (e) {
-                        logWarning(OfficeWarningType.OCR_FAILED, config, attachment.name, e);
-                    }
-                }
+            if (config.ocr && attachment.mimeType.startsWith('image/')) {
+                const ocrText = await ocrDuringParse(media.content, config, attachment.name);
+                if (ocrText) attachment.ocrText = ocrText;
             }
         }
 
@@ -439,7 +471,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             // Extract structured chart data
             try {
-                const chartData = extractChartData(chart.content);
+                const chartData = extractChartData(chart.content, config);
                 attachment.chartData = chartData;
             } catch (e) {
                 logWarning(OfficeWarningType.CHART_DATA_EXTRACTION_FAILED, config, chart.path, e);
@@ -458,7 +490,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
             const drawingFilename = relFile.path.split('/').pop()?.replace('.rels', '') || '';
             const drawingPath = `xl/drawings/${drawingFilename}`;
 
-            const relsXml = parseXmlString(relFile.content.toString());
+            const relsXml = parseXmlString(relFile.content.toString(), { config });
             const relationships = getElementsByTagName(relsXml, "Relationship");
 
             if (!drawingChartMap[drawingPath]) {
@@ -479,14 +511,15 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     }
 
     // Parse workbook.xml to get sheet names and map them to sheet files
-    const sheetNameMap: Record<string, string> = {};
+    // Null-prototype, as every map keyed by the document's own names and ids is here.
+    const sheetNameMap: Record<string, string> = Object.create(null);
     const workbookRelsFile = files.find(f => f.path === 'xl/_rels/workbook.xml.rels');
 
     if (workbookRelsFile) {
         // Parse rels to get rId -> file mapping
-        const relsXml = parseXmlString(workbookRelsFile.content.toString());
+        const relsXml = parseXmlString(workbookRelsFile.content.toString(), { config });
         const relationships = getElementsByTagName(relsXml, "Relationship");
-        const rIdToFile: Record<string, string> = {};
+        const rIdToFile: Record<string, string> = Object.create(null);
 
         for (const rel of relationships) {
             const rId = rel.getAttribute("Id");
@@ -499,7 +532,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         }
 
         // Parse workbook.xml to get sheet name -> rId mapping
-        const workbookXml = parseXmlString(workbookFile.content.toString());
+        const workbookXml = parseXmlString(workbookFile.content.toString(), { config });
         const sheets = getElementsByTagName(workbookXml, "sheet");
 
         for (const sheet of sheets) {
@@ -513,6 +546,13 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     }
 
     const content: OfficeContentNode[] = [];
+    // The package's parts by path (a scan of all of them per sheet and per relationship took sheets x
+    // parts), and the comments parts already attached: each is read, and its comments attached, once
+    // (to the first sheet naming it). Read again for each relationship naming it, one comments part of
+    // 1 MB named 2,000 times (3.7 KB of XLSX) ended the process out of memory.
+    const fileByPath = new Map<string, (typeof files)[number]>();
+    for (const f of files) if (!fileByPath.has(f.path)) fileByPath.set(f.path, f);
+    const attachedCommentParts = new Set<string>();
 
     for (const file of files) {
         if (file.path.match(mediaFileRegex)) continue;
@@ -526,15 +566,15 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         if (file.path.match(sheetsRegex)) {
             const sheetFilename = file.path.split('/').pop() || '';
             const relsFilename = `xl/worksheets/_rels/${sheetFilename}.rels`;
-            const relsFile = files.find(f => f.path === relsFilename);
+            const relsFile = fileByPath.get(relsFilename);
 
-            const drawingMap: Record<string, string> = {}; // rId -> drawingPath
+            const drawingMap: Record<string, string> = Object.create(null); // rId -> drawingPath
             // Null-prototype: keyed by the document-derived cell ref, so a crafted ref of `__proto__`
             // creates an own entry instead of throwing on `Object.prototype.push`.
             const sheetCommentsMap: Record<string, OfficeContentNode[]> = Object.create(null);
 
             if (relsFile) {
-                const relsXml = parseXmlString(relsFile.content.toString());
+                const relsXml = parseXmlString(relsFile.content.toString(), { config });
                 const relationships = getElementsByTagName(relsXml, "Relationship");
                 for (const rel of relationships) {
                     const id = rel.getAttribute("Id");
@@ -546,9 +586,10 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             drawingMap[id] = 'xl/drawings/' + target.replace('../drawings/', '');
                         } else if (!config.ignoreComments && type.includes('comments')) {
                             const commentsPath = 'xl/' + target.replace('../', '');
-                            const cFile = files.find(f => f.path === commentsPath);
+                            const cFile = attachedCommentParts.has(commentsPath) ? undefined : fileByPath.get(commentsPath);
                             if (cFile) {
-                                const cXml = parseXmlString(cFile.content.toString());
+                                attachedCommentParts.add(commentsPath);
+                                const cXml = parseXmlString(cFile.content.toString(), { config });
                                 const commentNodes = getElementsByTagName(cXml, "comment");
                                 const authorsList = getElementsByTagName(cXml, "author");
                                 const authors = authorsList.map(a => a.textContent || '');
@@ -579,14 +620,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             const rows: OfficeContentNode[] = [];
             const sheetXml = file.content.toString();
-            // regex to match <row> elements, capturing:
-            // 1. attributes (e.g., r="1")
-            // 2. whether it's self-closing (/>)
-            // 3. inner content (for non-self-closing rows)
-            const rowRegex = /<row\b([^>]*?)(?:(\/>)|(>([\s\S]*?)<\/row>))/g;
-            // matchAll provides an iterator over all matches, which is much more efficient than 
-            // iterating over a massive sparse row range declared in spreadsheet dimensions.
-            const rowMatches = sheetXml.matchAll(rowRegex);
+            // The <row> elements as they stand, rather than a walk over the (possibly vast, sparse)
+            // row range the sheet's dimensions declare.
+            const rowElements = xmlElements(sheetXml, 'row');
 
             /** Helper to convert Excel column string (A, B, AA, etc.) to 0-based index */
             const colToNumber = (col: string): number => {
@@ -599,22 +635,23 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             let lastRowIndex = -1;
 
-            for (const rowMatch of rowMatches) {
+            for (const rowElement of rowElements) {
                 checkAbortSignal(config.abortSignal);
-                const rowXml = rowMatch[0];
-                const rowAttrs = rowMatch[1];
-                const isSelfClosing = !!rowMatch[2];
-                const rowContent = rowMatch[4] || "";
+                if (cellsLeft <= 0) {
+                    // Spent exactly at the row before: this row's cells are the ones not read.
+                    if (!cellLimitWarned && /<(?:\w+:)?c[\s/>]/.test(rowElement.whole)) { cellLimitWarned = true; logWarning(OfficeWarningType.TABLE_CELL_LIMIT_EXCEEDED, config, cellLimit); }
+                    break;
+                }
+                const rowXml = rowElement.whole;
+                const rowAttrs = rowElement.attrs;
+                const isSelfClosing = rowElement.selfClosing;
+                const rowContent = rowElement.content;
 
                 if (!isSelfClosing && !rowContent.includes('<c')) continue;
 
                 const cells: OfficeContentNode[] = [];
-                // regex to match <c> (cell) elements within a row, capturing:
-                // 1. cell attributes (e.g., r="A1", t="s")
-                // 2. whether it's self-closing (/>)
-                // 3. inner content (e.g., <v> value)
-                const cRegex = /<c\b([^>]*?)(?:(\/>)|(>([\s\S]*?)<\/c>))/g;
-                const cMatches = rowContent.matchAll(cRegex);
+                // The row's <c> (cell) elements: attributes (r="A1", t="s") and content (<v>, <is>).
+                const cellElements = xmlElements(rowContent, 'c');
 
                 const rMatch = rowAttrs.match(/r="(\d+)"/);
                 const rowIndex = rMatch ? parseInt(rMatch[1]) - 1 : lastRowIndex + 1;
@@ -622,49 +659,68 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
                 let lastColIndex = -1;
 
-                for (const cMatch of cMatches) {
-                    const cXml = cMatch[0];
-                    const cAttrs = cMatch[1];
-                    const cContent = cMatch[4] || "";
+                for (const cellElement of cellElements) {
+                    // The document's cells within maxTableCells, as ODF's are: a sheet is read without
+                    // building XML elements, so the element budget does not bound it, and 16 million
+                    // cells (854 KB of zip) ran the process out of memory.
+                    if (--cellsLeft < 0) {
+                        if (!cellLimitWarned) { cellLimitWarned = true; logWarning(OfficeWarningType.TABLE_CELL_LIMIT_EXCEEDED, config, cellLimit); }
+                        break;
+                    }
+                    const cXml = cellElement.whole;
+                    const cAttrs = cellElement.attrs;
+                    const cContent = cellElement.content;
 
                     // Extract cell value
                     const typeMatch = cAttrs.match(/t="([a-zA-Z]+)"/);
                     const type = typeMatch ? typeMatch[1] : 'n'; // n = number (default)
 
-                    // Extract cell style index
-                    const styleMatch = cAttrs.match(/s="(\d+)"/);
-                    const styleIdx = styleMatch ? parseInt(styleMatch[1]) : undefined;
-
-                    const vMatch = cContent.match(/<v>([\s\S]*?)<\/v>/);
-                    const tMatch = cContent.match(/<t\b[^>]*>([\s\S]*?)<\/t>/);
+                    const vContent = firstElementContent(cContent, 'v');
+                    const isContent = type === 'inlineStr' ? firstElementContent(cContent, 'is') : undefined;
 
                     let text = '';
                     let cellNodes: OfficeContentNode[] = [];
 
-                    if (type === 's' && vMatch) {
-                        const idx = parseInt(vMatch[1]);
+                    // Shared rich-text runs, merged with this cell's style below (the runs themselves are shared).
+                    let sharedRuns: OfficeContentNode[] | undefined;
+                    if (type === 's' && vContent !== undefined) {
+                        const idx = parseInt(vContent);
                         const content = sharedStrings[idx];
-                        if (Array.isArray(content)) {
-                            // Rich text runs. Share the (read-only) run nodes across every cell that
-                            // references this shared string via a shallow array copy, rather than
-                            // deep-copying them per cell: XLSX has no cell budget, so a large rich-text
-                            // shared string referenced by many cells would otherwise amplify to N x its
-                            // size in the AST. The run nodes are never mutated in place downstream.
-                            cellNodes = content.slice();
-                            text = cellNodes.map(n => n.text).join('');
+                        let joined = typeof content === 'string' ? content : richStringText.get(idx);
+                        if (joined === undefined && Array.isArray(content)) richStringText.set(idx, joined = content.map(n => n.text).join(''));
+                        // Each cell after the first showing a string writes it again, so those are charged
+                        // to the document's repeated-content budget (see repeatUtils): 2.7 KB showing one
+                        // 1 MB string in 400 cells made 400 MB of CSV. Past it a cell shows the string's start.
+                        const shown = sharedStringUses.get(idx) ?? 0;
+                        sharedStringUses.set(idx, shown + 1);
+                        let runWeight = Array.isArray(content) ? richStringRunWeight.get(idx) : 0;
+                        if (runWeight === undefined && Array.isArray(content)) {
+                            runWeight = 0;
+                            for (const run of content) runWeight += 16 + valuesLength(run.formatting) + valuesLength(run.metadata);
+                            richStringRunWeight.set(idx, runWeight);
+                        }
+                        const weight = (joined?.length ?? 0) + (runWeight ?? 0);
+                        if (shown > 0 && takeRepeats(config, 1, weight) === 0) {
+                            text = repeatPreview(joined ?? '');
+                        } else if (Array.isArray(content)) {
+                            sharedRuns = content;
+                            text = joined ?? '';
                         } else {
                             text = content || '';
                         }
-                    } else if (type === 'inlineStr' && tMatch) {
-                        text = decodeXmlEntities(tMatch[1].trim());
-                    } else if (type === 'b' && vMatch) {
-                        // A boolean is stored as 1 or 0 and shown as TRUE or FALSE
-                        text = vMatch[1].trim() === '1' ? 'TRUE' : 'FALSE';
-                    } else if (vMatch) {
-                        text = vMatch[1].trim();
-                        // A number in a date or time style is a day count: show the date or time instead
-                        const dateFormatKind = type === 'n' && styleIdx !== undefined ? cellDateFormatMap[styleIdx] : undefined;
-                        if (dateFormatKind) text = formatDateSerial(text, dateFormatKind, date1904) ?? text;
+                    } else if (isContent !== undefined) {
+                        // Its text and each rich run's, in order (the first alone dropped every later
+                        // run), up to its phonetic readings (`rPh`, which follow the runs).
+                        const phonetic = nextElement(isContent, 'rPh', 0);
+                        const body = phonetic === -1 ? isContent : isContent.slice(0, phonetic);
+                        let joined = '';
+                        for (const t of xmlElements(body, 't')) joined += t.content;
+                        text = decodeXmlEntities(joined.trim());
+                    } else if (type === 'b' && vContent !== undefined) {
+                        // A boolean is stored as 1 or 0 and shown as TRUE or FALSE.
+                        text = vContent.trim() === '1' ? 'TRUE' : vContent.trim() === '0' ? 'FALSE' : vContent.trim();
+                    } else if (vContent !== undefined) {
+                        text = vContent.trim();
                     }
 
                     // Parse cell coordinate
@@ -680,23 +736,30 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     }
                     lastColIndex = colIndex;
 
-                    if (text || cellNodes.length > 0) {
+                    if (text || sharedRuns?.length) {
+                        // Extract cell style index
+                        const styleMatch = cAttrs.match(/s="(\d+)"/);
+                        const styleIdx = styleMatch ? parseInt(styleMatch[1]) : undefined;
                         const cellFormatting = (styleIdx !== undefined && cellFormatMap[styleIdx]) ? cellFormatMap[styleIdx] : {};
 
-                        if (cellNodes.length > 0) {
-                            // If we have specific runs, merge cell styles into them if run style is missing
-                            // But usually run style overrides cell style (except maybe background)
-                            for (const node of cellNodes) {
-                                if (!node.formatting) node.formatting = {};
-                                // Cell background always applies
-                                if (cellFormatting.backgroundColor) node.formatting.backgroundColor = cellFormatting.backgroundColor;
-                                // Cell alignment always applies
-                                if (cellFormatting.alignment) node.formatting.alignment = cellFormatting.alignment;
-
-                                // Font defaults from cell style if not in run
-                                if (!node.formatting.font && cellFormatting.font) node.formatting.font = cellFormatting.font;
-                                if (!node.formatting.size && cellFormatting.size) node.formatting.size = cellFormatting.size;
-                            }
+                        if (sharedRuns?.length) {
+                            // The cell's style under each run's own: its background and alignment always
+                            // apply, its font and size where a run has none. On copies of the runs, which
+                            // every cell showing the string shares: merged into them in place, the last
+                            // cell's style was every cell's.
+                            const { backgroundColor, alignment, font, size } = cellFormatting;
+                            cellNodes = backgroundColor || alignment || font || size
+                                ? sharedRuns.map(run => ({
+                                    ...run,
+                                    formatting: {
+                                        ...run.formatting,
+                                        ...(backgroundColor ? { backgroundColor } : {}),
+                                        ...(alignment ? { alignment } : {}),
+                                        ...(font && !run.formatting?.font ? { font } : {}),
+                                        ...(size && !run.formatting?.size ? { size } : {}),
+                                    },
+                                }))
+                                : sharedRuns.slice();
                         } else {
                             // Simple text node
                             cellNodes.push({
@@ -716,7 +779,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             metadata: { row: rowIndex, col: colIndex }
                         };
                         if (config.includeRawContent) {
-                            cellNode.rawContent = cXml;
+                            cellNode.rawContent = chargeRawContent(cXml, config);
                         }
                         cells.push(cellNode);
                     }
@@ -729,7 +792,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                         metadata: undefined
                     };
                     if (config.includeRawContent) {
-                        rowNode.rawContent = rowXml;
+                        rowNode.rawContent = chargeRawContent(rowXml, config);
                     }
                     rows.push(rowNode);
                 }
@@ -737,21 +800,25 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
 
             // Handle Drawings in Sheet (images and charts)
             if (config.extractAttachments) {
-                const drawingMatches = file.content.toString().match(/<drawing r:id="(.*?)"/g);
-                if (drawingMatches) {
-                    for (const match of drawingMatches) {
-                        const rIdMatch = match.match(/r:id="(.*?)"/);
-                        const rId = rIdMatch ? rIdMatch[1] : null;
+                // Each <drawing r:id="..."> the sheet holds (scanned as its rows are: a pattern looking
+                // for the closing quote from each start read the rest of the line again for each).
+                {
+                    for (const drawing of xmlElements(sheetXml, 'drawing')) {
+                        const rId = /(?:^|\s)r:id="([^"]*)"/.exec(drawing.attrs)?.[1] ?? null;
 
-                        if (rId && drawingMap[rId]) {
+                        // Each drawing's pictures and charts once, on the first sheet naming it: placed at
+                        // every reference, 4.5 KB naming one drawing of 1,000 pictures 1,000 times made a
+                        // million picture nodes, and 20 KB ran the process out of memory.
+                        if (rId && drawingMap[rId] && !drawingsPlaced.has(drawingMap[rId])) {
                             const drawingPath = drawingMap[rId];
+                            drawingsPlaced.add(drawingPath);
 
                             // Find all images in this drawing
                             const images = drawingImageMap[drawingPath];
                             if (images) {
                                 for (const imgId in images) {
                                     const imgInfo = images[imgId];
-                                    const attachment = attachments.find(a => a.name === imgInfo.path.split('/').pop());
+                                    const attachment = attachmentsByName.get(imgInfo.path.split('/').pop());
                                     if (attachment) {
                                         const imageNode: OfficeContentNode = {
                                             type: 'image',
@@ -772,7 +839,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                             if (charts) {
                                 for (const chartRId in charts) {
                                     const chartName = charts[chartRId];
-                                    const attachment = attachments.find(a => a.name === chartName);
+                                    const attachment = attachmentsByName.get(chartName);
                                     if (attachment) {
                                         const chartNode: OfficeContentNode = {
                                             type: 'chart',
@@ -799,21 +866,21 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 type: 'sheet',
                 children: rows,
                 metadata: { sheetName },
-                rawContent: config.includeRawContent ? file.content.toString() : undefined
+                rawContent: config.includeRawContent ? chargeRawContent(file.content.toString(), config) : undefined
             });
         }
     }
 
     const corePropsFile = files.find(f => f.path.match(corePropsFileRegex));
-    const metadata = corePropsFile ? parseOfficeMetadata(corePropsFile.content.toString()) : {};
+    const metadata = corePropsFile ? parseOfficeMetadata(corePropsFile.content.toString(), config) : {};
     const customPropsFile = files.find(f => f.path.match(customPropsFileRegex));
     if (customPropsFile) {
-        const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString());
+        const customProperties = parseOOXMLCustomProperties(customPropsFile.content.toString(), config);
         if (Object.keys(customProperties).length > 0) metadata.customProperties = customProperties;
     }
     const appPropsFile = files.find(f => f.path.match(appPropsFileRegex));
     if (appPropsFile) {
-        const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString());
+        const appProperties = parseOOXMLAppProperties(appPropsFile.content.toString(), config);
         if (Object.keys(appProperties).length > 0) metadata.nativeProperties = appProperties;
     }
 
@@ -822,7 +889,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
         for (const node of nodes) {
             if ('attachmentName' in (node.metadata || {})) {
                 const meta = node.metadata as ImageMetadata | ChartMetadata;
-                const attachment = attachments.find(a => a.name === meta.attachmentName);
+                const attachment = attachmentsByName.get(meta.attachmentName);
                 if (attachment) {
                     if (node.type === 'image') {
                         // Link OCR text to image node
@@ -837,7 +904,7 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                     if (node.type === 'chart') {
                         // Link chart data text to chart node
                         if (attachment.chartData) {
-                            node.text = attachment.chartData.rawTexts.join(config.newlineDelimiter);
+                            node.text = attachmentsByName.chartText(attachment, config.newlineDelimiter);
                         }
                     }
                 }
