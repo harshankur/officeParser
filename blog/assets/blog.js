@@ -14,7 +14,10 @@
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     root.setAttribute('data-theme', saved === 'auto' ? (prefersDark ? 'dark' : 'light') : saved);
 
-    /** One view of the page, counted by the self-hosted view counter on the published site only. */
+    /**
+     * One view of the page, counted by the self-hosted view counter on the published site only. The
+     * blog's pages are counted as the blog (`officeparserblog`), apart from the home page's views.
+     */
     const registerPageView = () => {
         if (location.hostname !== 'officeparser.harshankur.com') return;
         let sessionId;
@@ -23,7 +26,7 @@
             sessionStorage.setItem('vc-session', sessionId);
         } catch { sessionId = crypto.randomUUID(); }
         fetch('https://views.harshankur.com/registerView?' + new URLSearchParams({
-            appId: 'officeparser',
+            appId: 'officeparserblog',
             deviceSize: innerWidth < 768 ? 'small' : innerWidth < 1200 ? 'medium' : 'large',
             page: location.pathname,
             title: document.title.slice(0, 200),
