@@ -7,32 +7,14 @@
     <title>officeParser | The Most Versatile Office Parser & Generator for Node.js & Browser</title>
     <link rel="icon" type="image/png" href="./favicon.png">
 
-    <!-- Page views, counted by the self-hosted viewcounter (views.harshankur.com). Fire-and-forget:
-         it never blocks rendering, sends no cookies or personal data, and runs only on the production
-         site, so dev servers and preview deploys never count. -->
-    <script>
-        (() => {
-            if (location.hostname !== 'officeparser.harshankur.com') return;
-            /** One view of the current page; a spec document (#spec/<name>) counts as its own page. */
-            window.registerPageView = () => {
-                let sessionId;
-                try {
-                    sessionId = sessionStorage.getItem('vc-session') || crypto.randomUUID();
-                    sessionStorage.setItem('vc-session', sessionId);
-                } catch { sessionId = crypto.randomUUID(); }
-                const route = location.hash.startsWith('#spec/') ? location.hash : '';
-                fetch('https://views.harshankur.com/registerView?' + new URLSearchParams({
-                    appId: 'officeparser',
-                    deviceSize: innerWidth < 768 ? 'small' : innerWidth < 1200 ? 'medium' : 'large',
-                    page: location.pathname + route,
-                    title: document.title.slice(0, 200),
-                    referrer: document.referrer,
-                    sessionId,
-                }), { keepalive: true }).catch(() => {});
-            };
-            try { window.registerPageView(); } catch { /* never break the page */ }
-        })();
-    </script>
+    <!-- Page views, counted by the self-hosted viewcounter (views.harshankur.com) with its tracker
+         script: each view, how long the page was visible and how far it was scrolled, and clicks on
+         links out and downloads. It is deferred, so it never blocks rendering; it stores nothing on
+         the device and sends nothing personal. data-hosts keeps it to the production site, so dev
+         servers and preview deploys never count. data-hash makes a spec document (#spec/<name>) its
+         own page, counted when it is opened. -->
+    <script defer src="https://views.harshankur.com/tracker.js" data-app="officeparser"
+        data-hosts="officeparser.harshankur.com" data-hash="#spec/"></script>
 
     <meta name="description"
         content="The industry's first dual-purpose Office Parser & Generator. Extract structured AST from 14 formats (including EPUB and LaTeX) and generate DOCX, ODT, LaTeX, RAG-ready Markdown, HTML, EPUB, and high-fidelity PDF with native document awareness.">
@@ -5478,14 +5460,9 @@
                 document.getElementById('specs').scrollIntoView({ behavior: 'smooth' });
             };
 
-            window.addEventListener('hashchange', () => {
-                handleHash();
-                // Opening a spec document is a client-side route change: count it as a page view.
-                // (The initial load is counted by the page-view script in <head>.)
-                if (location.hash.startsWith('#spec/') && window.registerPageView) {
-                    try { window.registerPageView(); } catch { /* never break the page */ }
-                }
-            });
+            // Opening a spec document is a client-side route change. The tracker script in <head>
+            // counts it as a page view on its own (data-hash="#spec/").
+            window.addEventListener('hashchange', handleHash);
             window.addEventListener('load', handleHash);
 
             // --- Visualizer Handlers ---

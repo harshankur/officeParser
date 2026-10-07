@@ -1,8 +1,8 @@
 /**
- * What the blog's pages do once they are loaded: keep the reader's theme, filter the list by topic
- * and by the words searched for, and count a view. The pages themselves are built
- * (scripts/build-blog.js) and are complete without this script: every post is in its page, and the
- * list shows every post.
+ * What the blog's pages do once they are loaded: keep the reader's theme, and filter the list by
+ * topic and by the words searched for. The pages themselves are built (scripts/build-blog.js) and
+ * are complete without this script: every post is in its page, and the list shows every post.
+ * Views are counted by the viewcounter's tracker script, which the layout loads.
  */
 (() => {
     'use strict';
@@ -13,27 +13,6 @@
     const saved = storedTheme() || 'auto';
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     root.setAttribute('data-theme', saved === 'auto' ? (prefersDark ? 'dark' : 'light') : saved);
-
-    /**
-     * One view of the page, counted by the self-hosted view counter on the published site only. The
-     * blog's pages are counted as the blog (`officeparserblog`), apart from the home page's views.
-     */
-    const registerPageView = () => {
-        if (location.hostname !== 'officeparser.harshankur.com') return;
-        let sessionId;
-        try {
-            sessionId = sessionStorage.getItem('vc-session') || crypto.randomUUID();
-            sessionStorage.setItem('vc-session', sessionId);
-        } catch { sessionId = crypto.randomUUID(); }
-        fetch('https://views.harshankur.com/registerView?' + new URLSearchParams({
-            appId: 'officeparserblog',
-            deviceSize: innerWidth < 768 ? 'small' : innerWidth < 1200 ? 'medium' : 'large',
-            page: location.pathname,
-            title: document.title.slice(0, 200),
-            referrer: document.referrer,
-            sessionId,
-        }), { keepalive: true }).catch(() => { });
-    };
 
     const wireThemeToggle = () => {
         const icon = document.getElementById('theme-icon');
@@ -191,7 +170,6 @@
     const start = () => {
         wireThemeToggle();
         wireListFilter();
-        registerPageView();
     };
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
