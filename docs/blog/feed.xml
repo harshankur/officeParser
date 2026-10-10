@@ -1,0 +1,1719 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Engineering Blog | officeParser</title>
+    <link>https://officeparser.harshankur.com/blog/</link>
+    <description>How document formats work inside, how officeParser reads and writes them, where it falls short, and how to chunk documents for retrieval. Written by Harsh Ankur, author of officeParser.</description>
+    <language>en</language>
+    <lastBuildDate>Sun, 04 Oct 2026 00:00:00 GMT</lastBuildDate>
+    <atom:link href="https://officeparser.harshankur.com/blog/feed.xml" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>What is Actually Inside a .docx File? An Architectural Deep Dive</title>
+      <link>https://officeparser.harshankur.com/blog/what-is-actually-inside-a-docx.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/what-is-actually-inside-a-docx.html</guid>
+      <pubDate>Sun, 04 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>A tour of the .docx package: parts and relationships, runs that Word splits mid-word, lists stored in another file, merged cells, text boxes, and field codes, and what officeParser makes of them.</description>
+      <content:encoded><![CDATA[<p>
+    If you rename any <code>.docx</code> file to <code>.zip</code> and unpack it, you do not find a simple
+    text document. You find a small filesystem governed by ECMA-376 and ISO/IEC 29500, together known as
+    Office Open XML (OOXML).
+</p>
+<p>
+    To read or write these files reliably, you have to look past what the editor shows and understand the
+    data model underneath. Here is a tour of what is actually inside that archive, followed by what
+    officeParser makes of it.
+</p>
+
+<h2>1. The Outer Shell: Open Packaging Conventions (OPC)</h2>
+<p>
+    A <code>.docx</code> file is an <strong>Open Packaging Conventions (OPC)</strong> package: a ZIP archive
+    holding data streams called <strong>parts</strong>, plus XML files called
+    <strong>relationships</strong> that say how the parts refer to each other.
+</p>
+<p>
+    A minimal unpacked Word document looks roughly like this:
+</p>
+
+<pre><code>my-document.docx/
+├── [Content_Types].xml        # Content type of every part
+├── _rels/
+│   └── .rels                  # Package-level relationships
+├── docProps/
+│   ├── core.xml               # Title, author, created, modified
+│   └── app.xml                # Application, page and word counts
+└── word/
+    ├── document.xml           # The main content
+    ├── styles.xml             # Style hierarchy and defaults
+    ├── numbering.xml          # List definitions
+    ├── settings.xml           # Compatibility and editing settings
+    ├── fontTable.xml          # Fonts the document uses
+    ├── theme/
+    │   └── theme1.xml         # Theme fonts and colours
+    └── _rels/
+        └── document.xml.rels  # Images, hyperlinks, headers, footers</code></pre>
+
+<p>
+    Two structural patterns matter here:
+</p>
+<ul>
+    <li><strong>Parts are found by relationship, not by path.</strong> The specification does not say the
+        main text lives in <code>word/document.xml</code>. A strict consumer reads <code>_rels/.rels</code>
+        and follows the relationship whose <code>Type</code> ends in
+        <code>/relationships/officeDocument</code>. In practice Word and LibreOffice both write the main
+        part at <code>word/document.xml</code>, and that is where officeParser looks for it.</li>
+    <li><strong>Content types are declared.</strong> <code>[Content_Types].xml</code> gives the type of
+        every part, by extension or by part name. Leave a part out and Word will usually report the file
+        as corrupt.</li>
+</ul>
+
+<h2>2. The Content Core: WordprocessingML</h2>
+<p>
+    The body of the document lives in <code>word/document.xml</code>. The root element is
+    <code>&lt;w:document&gt;</code>, which holds one <code>&lt;w:body&gt;</code>. Inside the body, content
+    is a sequence of block-level elements, mainly paragraphs (<code>&lt;w:p&gt;</code>) and tables
+    (<code>&lt;w:tbl&gt;</code>).
+</p>
+
+<div class="callout">
+    <div class="callout-title">The Fundamental Primitive: Runs (&lt;w:r&gt;)</div>
+    <p>
+        A paragraph in Word is not a string with markup tags in it. It is a container of
+        <strong>runs</strong> (<code>&lt;w:r&gt;</code>). A run is a stretch of text that shares one set
+        of formatting properties.
+    </p>
+</div>
+
+<p>
+    Consider a sentence as simple as: <em>"The <strong>quick</strong> brown fox."</em> You might expect:
+</p>
+
+<pre><code>&lt;w:p&gt;
+  &lt;w:r&gt;&lt;w:t xml:space="preserve"&gt;The &lt;/w:t&gt;&lt;/w:r&gt;
+  &lt;w:r&gt;
+    &lt;w:rPr&gt;&lt;w:b/&gt;&lt;/w:rPr&gt;
+    &lt;w:t&gt;quick&lt;/w:t&gt;
+  &lt;/w:r&gt;
+  &lt;w:r&gt;&lt;w:t xml:space="preserve"&gt; brown fox.&lt;/w:t&gt;&lt;/w:r&gt;
+&lt;/w:p&gt;</code></pre>
+
+<h3>Run Fragmentation</h3>
+<p>
+    Word often does not produce runs that clean. If the user paused, fixed a typo, ran the spell checker,
+    or moved the cursor away and back, the same sentence can come out in more pieces, with markers
+    between them:
+</p>
+
+<pre><code>&lt;w:p&gt;
+  &lt;w:r&gt;&lt;w:t xml:space="preserve"&gt;The &lt;/w:t&gt;&lt;/w:r&gt;
+  &lt;w:proofErr w:type="spellStart"/&gt;
+  &lt;w:r&gt;&lt;w:rPr&gt;&lt;w:b/&gt;&lt;/w:rPr&gt;&lt;w:t&gt;qui&lt;/w:t&gt;&lt;/w:r&gt;
+  &lt;w:bookmarkStart w:id="0" w:name="_GoBack"/&gt;
+  &lt;w:r&gt;&lt;w:rPr&gt;&lt;w:b/&gt;&lt;/w:rPr&gt;&lt;w:t&gt;ck&lt;/w:t&gt;&lt;/w:r&gt;
+  &lt;w:proofErr w:type="spellEnd"/&gt;
+  &lt;w:r&gt;&lt;w:t xml:space="preserve"&gt; brown &lt;/w:t&gt;&lt;/w:r&gt;
+  &lt;w:r&gt;&lt;w:t&gt;fox.&lt;/w:t&gt;&lt;/w:r&gt;
+&lt;/w:p&gt;</code></pre>
+
+<p>
+    The word "quick" is now two runs. Anything that searches one <code>&lt;w:t&gt;</code> at a time will
+    miss it. This is also why a template placeholder such as <code>{{customer_name}}</code> so often
+    fails to match: Word has stored it as <code>{{cust</code>, <code>omer_</code>, and
+    <code>name}}</code> in three separate runs.
+</p>
+
+<h2>3. Numbering and Lists: The Disconnected Graph</h2>
+<p>
+    Engineers coming from HTML or Markdown are usually surprised by how Word stores lists. In HTML a list
+    is an explicit, self-contained element: <code>&lt;ol&gt;&lt;li&gt;First&lt;/li&gt;&lt;/ol&gt;</code>.
+</p>
+<p>
+    In WordprocessingML, <strong>there is no list element</strong>. Every list item is an ordinary
+    paragraph whose properties (<code>&lt;w:pPr&gt;</code>) point into a separate file,
+    <code>word/numbering.xml</code>.
+</p>
+
+<pre><code>&lt;!-- Inside word/document.xml --&gt;
+&lt;w:p&gt;
+  &lt;w:pPr&gt;
+    &lt;w:numPr&gt;
+      &lt;w:ilvl w:val="0"/&gt;   &lt;!-- Indent level 0 --&gt;
+      &lt;w:numId w:val="2"/&gt;  &lt;!-- Numbering instance 2 --&gt;
+    &lt;/w:numPr&gt;
+  &lt;/w:pPr&gt;
+  &lt;w:r&gt;&lt;w:t&gt;First bullet item&lt;/w:t&gt;&lt;/w:r&gt;
+&lt;/w:p&gt;</code></pre>
+
+<p>
+    To learn what bullet or number goes in front of that paragraph, a reader follows a three-step chain:
+</p>
+<ol>
+    <li>Find <code>&lt;w:num w:numId="2"&gt;</code> in <code>word/numbering.xml</code>.</li>
+    <li>Read its <code>&lt;w:abstractNumId w:val="4"/&gt;</code> pointer.</li>
+    <li>Look up <code>&lt;w:abstractNum w:abstractNumId="4"&gt;</code>, find the level
+        <code>&lt;w:lvl w:ilvl="0"&gt;</code>, and read its <code>&lt;w:numFmt&gt;</code> (for example
+        <code>bullet</code> or <code>decimal</code>) and its <code>&lt;w:lvlText w:val="%1."/&gt;</code>
+        template.</li>
+</ol>
+<p>
+    The file never says "this item is number 3". Items of one list can be separated by other paragraphs
+    or tables, so a reader has to keep its own counters as it walks the document.
+</p>
+
+<h2>4. Tables: Grids, Merges, and Nesting</h2>
+<p>
+    A Word table (<code>&lt;w:tbl&gt;</code>) declares a column grid (<code>&lt;w:tblGrid&gt;</code>),
+    then rows (<code>&lt;w:tr&gt;</code>) of cells (<code>&lt;w:tc&gt;</code>).
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row">
+            <th role="columnheader">Concept</th>
+            <th role="columnheader">OOXML markup</th>
+            <th role="columnheader">What it means</th>
+        </tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row">
+            <td role="cell">Column spans</td>
+            <td role="cell" data-label="OOXML markup"><code>&lt;w:gridSpan w:val="N"/&gt;</code></td>
+            <td role="cell" data-label="What it means">The cell covers N grid columns, like HTML
+                <code>colspan</code>.</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Vertical merges</td>
+            <td role="cell" data-label="OOXML markup"><code>&lt;w:vMerge w:val="restart"/&gt;</code>, then
+                <code>&lt;w:vMerge/&gt;</code></td>
+            <td role="cell" data-label="What it means">There is no <code>rowspan="N"</code>. The first
+                row marks <code>restart</code>, and every row below repeats the cell with an empty
+                <code>&lt;w:vMerge/&gt;</code>.</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Unsplittable rows</td>
+            <td role="cell" data-label="OOXML markup"><code>&lt;w:cantSplit/&gt;</code></td>
+            <td role="cell" data-label="What it means">The row may not break across pages.</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Nested tables</td>
+            <td role="cell" data-label="OOXML markup"><code>&lt;w:tc&gt;&lt;w:tbl&gt;...&lt;/w:tbl&gt;&lt;/w:tc&gt;</code>
+            </td>
+            <td role="cell" data-label="What it means">A cell can hold a whole table.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>5. Text Boxes and Drawings: The Detached Canvas</h2>
+<p>
+    Floating shapes and text boxes are one of the most common sources of missing text in simple
+    extractors. A text box does not sit in the paragraph stream as text.
+</p>
+<p>
+    Word anchors a DrawingML element (<code>&lt;w:drawing&gt;</code>) or a legacy VML element
+    (<code>&lt;w:pict&gt;</code>) inside a run, and the text sits deep inside it:
+</p>
+<pre><code>&lt;w:p&gt;
+  &lt;w:r&gt;
+    &lt;w:drawing&gt;
+      &lt;wp:anchor&gt;
+        &lt;a:graphic&gt;
+          &lt;a:graphicData uri=".../word/2010/wordprocessingShape"&gt;
+            &lt;wps:wsp&gt;
+              &lt;wps:txbx&gt;
+                &lt;w:txbxContent&gt;
+                  &lt;w:p&gt;
+                    &lt;w:r&gt;&lt;w:t&gt;Text inside a floating box&lt;/w:t&gt;&lt;/w:r&gt;
+                  &lt;/w:p&gt;
+                &lt;/w:txbxContent&gt;
+              &lt;/wps:txbx&gt;
+            &lt;/wps:wsp&gt;
+          &lt;/a:graphicData&gt;
+        &lt;/a:graphic&gt;
+      &lt;/wp:anchor&gt;
+    &lt;/w:drawing&gt;
+  &lt;/w:r&gt;
+&lt;/w:p&gt;</code></pre>
+<p>
+    (The full namespace is
+    <code>http://schemas.microsoft.com/office/word/2010/wordprocessingShape</code>.)
+    <code>&lt;w:txbxContent&gt;</code> is a nested document body with its own paragraphs, runs, and
+    tables. An extractor that only walks the paragraphs directly under <code>&lt;w:body&gt;</code> misses
+    every sidebar, callout, and caption drawn this way.
+</p>
+<p>
+    There is a second trap. For older readers, Word usually writes the same text box twice inside an
+    <code>&lt;mc:AlternateContent&gt;</code> element: once as the modern shape, once as a VML fallback.
+    An extractor that reads both branches returns the text twice.
+</p>
+
+<h2>6. Field Codes: The Inline State Machine</h2>
+<p>
+    Page numbers, dates, cross-references, tables of contents, and some hyperlinks are
+    <strong>fields</strong>. Word has two ways to write one:
+</p>
+<ul>
+    <li><strong>Simple fields:</strong> <code>&lt;w:fldSimple w:instr="PAGE"&gt;</code> wraps the cached
+        result in one element.</li>
+    <li><strong>Complex fields:</strong> a sequence of runs marked by <code>&lt;w:fldChar&gt;</code>:
+        <ol>
+            <li><code>&lt;w:fldChar w:fldCharType="begin"/&gt;</code></li>
+            <li><code>&lt;w:instrText&gt;HYPERLINK "https://example.com"&lt;/w:instrText&gt;</code></li>
+            <li><code>&lt;w:fldChar w:fldCharType="separate"/&gt;</code></li>
+            <li>Runs holding the cached visible text:
+                <code>&lt;w:r&gt;&lt;w:t&gt;Visit site&lt;/w:t&gt;&lt;/w:r&gt;</code></li>
+            <li><code>&lt;w:fldChar w:fldCharType="end"/&gt;</code></li>
+        </ol>
+    </li>
+</ul>
+<p>
+    Fields can nest (an <code>IF</code> field can contain a <code>DATE</code> field), so a reader has to
+    track where each one begins and ends. An extractor that simply takes every text node in the XML
+    returns the instruction (<code>HYPERLINK "https://..."</code>) as if it were prose.
+</p>
+
+<hr>
+
+<h2>What officeParser Makes of All This</h2>
+<p>
+    <code>parseOffice</code> reads the package and returns a typed tree, the same shape for every format
+    the library supports:
+</p>
+
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('quarterly-report.docx');
+
+ast.content;   // paragraphs, headings, lists, tables, ...
+ast.metadata;  // title, author, created, modified, ...
+
+const { value: markdown } = await ast.to('markdown');
+const { value: chunks } = await ast.to('chunks');</code></pre>
+
+<p>
+    Here is what the fragmented paragraph from section 2 becomes. This is real output:
+</p>
+
+<pre><code>{
+  "type": "paragraph",
+  "text": "The quick brown fox.",
+  "children": [
+    { "type": "text", "text": "The ", "formatting": {} },
+    { "type": "text", "text": "qui", "formatting": { "bold": true } },
+    { "type": "text", "text": "ck", "formatting": { "bold": true } },
+    { "type": "text", "text": " brown ", "formatting": {} },
+    { "type": "text", "text": "fox.", "formatting": {} }
+  ],
+  "metadata": {}
+}</code></pre>
+
+<p>
+    I keep every run as its own <code>text</code> node, with its formatting, so nothing Word recorded is
+    thrown away. The paragraph's own <code>text</code> is the joined string, so search and extraction
+    never see the fragmentation. And the generators merge neighbours that share formatting:
+    <code>ast.to('markdown')</code> writes that paragraph as <code>The **quick** brown fox.</code>
+</p>
+<p>
+    For the rest of the tour:
+</p>
+<ul>
+    <li><strong>Lists</strong> become <code>list</code> nodes carrying <code>listId</code>,
+        <code>listType</code>, <code>indentation</code>, and <code>itemIndex</code>. The index keeps
+        counting when a list is interrupted by an ordinary paragraph, so numbering stays correct.</li>
+    <li><strong>Tables</strong> follow <code>table</code>, <code>row</code>, <code>cell</code>, with
+        <code>rowSpan</code> and <code>colSpan</code> worked out from <code>vMerge</code> and
+        <code>gridSpan</code>. A cell can hold another table.</li>
+    <li><strong>Text boxes, content controls, and SmartArt</strong> are read where they stand, after the
+        paragraph that draws them. Of the two copies in an <code>AlternateContent</code>, one is read.</li>
+    <li><strong>Headings</strong> come from the paragraph style (<code>Heading1</code>,
+        <code>Title</code>, and so on).</li>
+    <li><strong>Tracked changes:</strong> inserted text is read, text deleted or moved away is not.</li>
+    <li><strong>Templates:</strong> <code>OfficeTemplate.render</code> fills
+        <code>{{placeholders}}</code> even when Word has split one across several runs.</li>
+</ul>
+<p>
+    It does not cover every corner of a specification that runs to more than 6,000 pages. The
+    <a href="https://github.com/harshankur/officeParser#per-format-capability-matrix" target="_blank"
+        rel="noopener">capability matrix in the README</a> lists what each format gives you, and
+    <a href="https://officeparser.harshankur.com/blog/where-officeparser-is-the-wrong-tool.html">a separate article</a> covers the jobs
+    officeParser is the wrong tool for.
+</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>How PowerPoint Really Stores a Slide: Coordinate Systems, Master Trees, and DrawingML</title>
+      <link>https://officeparser.harshankur.com/blog/how-pptx-stores-a-slide.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/how-pptx-stores-a-slide.html</guid>
+      <pubDate>Sun, 04 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>Why a slide is a canvas and not a text flow: English Metric Units, the theme, master and layout chain, the shape tree, speaker notes, and why reading order is hard.</description>
+      <content:encoded><![CDATA[<p>
+    Developers building document pipelines often treat PowerPoint (<code>.pptx</code>) as "Word with page
+    breaks". That assumption is where broken text extraction, scrambled reading order, and lost speaker
+    notes come from.
+</p>
+<p>
+    PresentationML describes a layout, not a flow. Text does not exist on its own as prose. It exists
+    inside shapes that are placed on a canvas.
+</p>
+
+<h2>1. The Four-Tier Inheritance Tree</h2>
+<p>
+    Open the XML of a slide, say <code>ppt/slides/slide1.xml</code>, and you will often find text with
+    <strong>no font size, no font family, no bold flag, and no colour</strong>.
+</p>
+<p>
+    PowerPoint knows how to draw it because each slide sits at the bottom of a four-level chain:
+</p>
+
+<pre><code>Theme (theme1.xml)
+└── Slide Master (slideMaster1.xml)
+    └── Slide Layout (slideLayout2.xml)
+        └── Slide (slide1.xml)</code></pre>
+
+<p>
+    A shape marked <code>&lt;p:ph type="title"/&gt;</code> is a placeholder. It takes its position and
+    text formatting from the matching placeholder in its layout. The layout takes its defaults from the
+    master. The master takes its colours (<code>accent1</code>, <code>tx1</code>) and fonts
+    (<code>majorFont</code>, <code>minorFont</code>) from the theme.
+</p>
+
+<div class="callout">
+    <div class="callout-title">What this means for a parser</div>
+    <p>
+        A reader that looks only at <code>slide1.xml</code> cannot tell whether a title is 32pt bold or
+        14pt italic. To know how the text looks, it has to follow the relationships back through the
+        layout, the master, and the theme.
+    </p>
+</div>
+
+<h2>2. The EMU: Why 914,400?</h2>
+<p>
+    Open any shape in a slide's XML and the coordinates look absurdly large:
+</p>
+
+<pre><code>&lt;a:xfrm&gt;
+  &lt;a:off x="1524000" y="914400"/&gt;    &lt;!-- X and Y offsets --&gt;
+  &lt;a:ext cx="6096000" cy="1828800"/&gt; &lt;!-- Width and height --&gt;
+&lt;/a:xfrm&gt;</code></pre>
+
+<p>
+    These are <strong>EMUs (English Metric Units)</strong>. OOXML did not invent the unit. Office's older
+    binary drawing format already measured in EMUs, and OOXML kept it.
+</p>
+<p>
+    The number was chosen so that the units people actually design in all come out as whole numbers:
+</p>
+<ul>
+    <li><code>1 inch = 914,400 EMUs</code></li>
+    <li><code>1 cm = 360,000 EMUs</code></li>
+    <li><code>1 mm = 36,000 EMUs</code></li>
+    <li><code>1 point = 12,700 EMUs</code></li>
+    <li><code>1 pixel at 96 DPI = 9,525 EMUs</code></li>
+</ul>
+<p>
+    One EMU is about 28 nanometres. Because an inch, a centimetre, a point, and a pixel are each a whole
+    number of EMUs, a layout can be stored in integers and converted between units without rounding
+    drift.
+</p>
+
+<h2>3. The Shape Tree (p:spTree)</h2>
+<p>
+    Everything on a slide sits in its <code>&lt;p:spTree&gt;</code> (shape tree):
+</p>
+
+<pre><code>&lt;p:sld&gt;
+  &lt;p:cSld&gt;
+    &lt;p:spTree&gt;
+      &lt;p:sp&gt;...&lt;/p:sp&gt;            &lt;!-- Shape or text box --&gt;
+      &lt;p:grpSp&gt;...&lt;/p:grpSp&gt;      &lt;!-- Group of shapes --&gt;
+      &lt;p:graphicFrame&gt;...&lt;/p:graphicFrame&gt; &lt;!-- Table or chart --&gt;
+      &lt;p:pic&gt;...&lt;/p:pic&gt;          &lt;!-- Picture --&gt;
+    &lt;/p:spTree&gt;
+  &lt;/p:cSld&gt;
+&lt;/p:sld&gt;</code></pre>
+
+<h3>DrawingML: The Shared Graphics Language</h3>
+<p>
+    In Word, text is <strong>WordprocessingML</strong> (<code>w:p</code>, <code>w:r</code>,
+    <code>w:t</code>). In PowerPoint, text is <strong>DrawingML</strong> (<code>a:p</code>,
+    <code>a:r</code>, <code>a:t</code>), held in a shape's text body:
+</p>
+
+<pre><code>&lt;p:sp&gt;
+  &lt;p:spPr&gt;
+    &lt;a:xfrm&gt;
+      &lt;a:off x="457200" y="457200"/&gt;
+      &lt;a:ext cx="8229600" cy="1143000"/&gt;
+    &lt;/a:xfrm&gt;
+    &lt;a:prstGeom prst="rect"&gt;&lt;a:avLst/&gt;&lt;/a:prstGeom&gt;
+  &lt;/p:spPr&gt;
+  &lt;p:txBody&gt;
+    &lt;a:bodyPr anchor="t"/&gt;
+    &lt;a:p&gt;
+      &lt;a:r&gt;
+        &lt;a:rPr sz="2800" b="1"/&gt; &lt;!-- 28pt bold --&gt;
+        &lt;a:t&gt;Slide Title Text&lt;/a:t&gt;
+      &lt;/a:r&gt;
+    &lt;/a:p&gt;
+  &lt;/p:txBody&gt;
+&lt;/p:sp&gt;</code></pre>
+
+<p>
+    Font size (<code>sz</code>) is in hundredths of a point, so <code>2800</code> is 28pt. A table lives
+    in a <code>&lt;p:graphicFrame&gt;</code> as an <code>&lt;a:tbl&gt;</code>, and each of its cells has
+    its own text body.
+</p>
+
+<h2>4. Reconstructing Reading Order from a 2D Canvas</h2>
+<p>
+    This is the hardest problem in reading presentations: <strong>reading order</strong>.
+</p>
+<p>
+    If a slide has a title, a left column, and a right column, in what order do they appear in the XML?
+</p>
+<p>
+    The order of the shape tree is the stacking order, back to front. That usually follows the order in
+    which the shapes were created, changed by any "Send to Back" or "Bring to Front". A title that was
+    deleted and added again late can easily be the <em>last</em> element in
+    <code>&lt;p:spTree&gt;</code>.
+</p>
+<p>
+    There are three common strategies, and none is free:
+</p>
+
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row">
+            <th role="columnheader">Strategy</th>
+            <th role="columnheader">How it works</th>
+            <th role="columnheader">Where it fails</th>
+        </tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row">
+            <td role="cell">Document order</td>
+            <td role="cell" data-label="How it works">Read shapes in the order the XML lists them.</td>
+            <td role="cell" data-label="Where it fails">A title or caption can come out after the text
+                it belongs with.</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Placeholder priority</td>
+            <td role="cell" data-label="How it works">Put <code>type="title"</code> first, then
+                <code>type="body"</code>.</td>
+            <td role="cell" data-label="Where it fails">Does nothing for plain text boxes, which are not
+                placeholders.</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Spatial sorting</td>
+            <td role="cell" data-label="How it works">Group shapes into horizontal bands by their Y
+                position, then sort each band left to right.</td>
+            <td role="cell" data-label="Where it fails">Overlapping shapes, diagrams, and columns of
+                unequal height have no single right answer.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>5. Speaker Notes: The Detached Stream</h2>
+<p>
+    Often the most useful text in a presentation is not on the slide at all. It is in the
+    <strong>speaker notes</strong>.
+</p>
+<p>
+    PowerPoint does not store notes inside the slide. Instead,
+    <code>ppt/slides/_rels/slide1.xml.rels</code> holds a relationship pointing to
+    <code>../notesSlides/notesSlide1.xml</code>.
+</p>
+<p>
+    A notes slide is a small slide of its own. It has one shape that shows a thumbnail of the slide it
+    belongs to, and another (a placeholder of <code>type="body"</code>) holding the notes text.
+</p>
+
+<hr>
+
+<h2>How officeParser Reads a Presentation</h2>
+<p>
+    Here is what the library does as of version 8.1.1, and what it does not.
+</p>
+<ol>
+    <li>Each slide becomes a <code>slide</code> node, in the order the presentation's slide list shows
+        them. A slide's <code>slideNumber</code> is its place in the deck, not the number in its file
+        name.</li>
+    <li>A title placeholder (<code>title</code> or <code>ctrTitle</code>) becomes a level-1
+        <code>heading</code>. Other text becomes paragraphs and lists.</li>
+    <li>Tables, charts (with their data), pictures, SmartArt text, and comments are read.</li>
+    <li>Speaker notes are attached to the slide that names them, as <code>slide.notes</code>. Set
+        <code>ignoreNotes: true</code> to leave them out.</li>
+    <li>Slide masters are kept apart in <code>ast.auxiliary.slideMasters</code>, so their boilerplate
+        does not mix into the slides.</li>
+</ol>
+
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('pitch-deck.pptx');
+
+for (const slide of ast.content) {
+    const title = slide.children?.find(n =&gt; n.type === 'heading');
+    console.log(title?.text, '| notes:', slide.notes?.length ?? 0);
+}
+
+const { value: markdown } = await ast.to('markdown');</code></pre>
+
+<p>
+    In the Markdown, slides are separated by <code>---</code>, the title is a <code>#</code> heading, and
+    each speaker note is a block quote that starts with <code>&gt; **Note:**</code>.
+</p>
+
+<div class="callout">
+    <div class="callout-title">Two honest limits</div>
+    <p>
+        <strong>Reading order is document order.</strong> officeParser reads shapes in the order the
+        file lists them and marks titles as headings. It does not re-sort shapes by position, so a slide
+        whose shape tree is out of visual order comes out in that order.
+    </p>
+    <p>
+        <strong>Inherited formatting is not resolved.</strong> Formatting comes from the slide's own XML.
+        A font size or colour that a slide inherits from its layout, master, or theme is not filled in.
+    </p>
+</div>]]></content:encoded>
+    </item>
+    <item>
+      <title>Why PDF Text Extraction is Unforgivingly Hard</title>
+      <link>https://officeparser.harshankur.com/blog/why-pdf-text-extraction-is-hard.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/why-pdf-text-extraction-is-hard.html</guid>
+      <pubDate>Sun, 04 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>A PDF has no words, paragraphs, or reading order. Positioned glyphs, missing spaces, font encodings, ligatures, multi-column pages, and the XY-cut that rebuilds reading order.</description>
+      <content:encoded><![CDATA[<p>
+    Every engineer who sets out to pull text from a PDF starts with optimism: <em>"How hard can it be?
+    It's just text and images on a page."</em>
+</p>
+<p>
+    Two weeks later they are deep in transformation matrices, font encoding tables, kerning adjustments,
+    and scrambled multi-column layouts.
+</p>
+<p>
+    Adobe introduced PDF in 1993 with one goal: <strong>a page should look the same on every screen and
+    every printer</strong>. It was not designed to be reflowed, searched, or read by a machine. Here is
+    what is actually going on inside a PDF content stream.
+</p>
+
+<h2>1. PDF Has No Words, Lines, or Paragraphs</h2>
+<p>
+    In HTML, Word, or Markdown, text sits in containers that say what it is:
+</p>
+<pre><code>&lt;p&gt;The quick brown fox jumps over the lazy dog.&lt;/p&gt;</code></pre>
+<p>
+    In PDF, <strong>none of these concepts exist</strong>. A content stream is a list of drawing
+    commands, in a notation that comes from PostScript:
+</p>
+
+<pre><code>BT                  % Begin a text object
+/F1 12 Tf           % Select font F1 at 12pt
+1 0 0 1 72 710 Tm   % Text matrix: position at x=72, y=710
+(The) Tj            % Show the glyphs "The"
+30 0 Td             % Move 30 units to the right
+(quick) Tj          % Show the glyphs "quick"
+ET                  % End the text object</code></pre>
+
+<p>
+    Notice what is missing:
+</p>
+<ul>
+    <li>Nothing says <code>(The)</code> and <code>(quick)</code> are in the same paragraph.</li>
+    <li>Nothing says they are on the same line.</li>
+    <li>Nothing says what order they should be read in.</li>
+</ul>
+
+<h2>2. The Missing Spaces</h2>
+<p>
+    In a text file, words are separated by space characters. In a PDF, <strong>the space is often not
+    stored at all</strong>.
+</p>
+<p>
+    Typesetting software positions glyphs precisely with the <code>TJ</code> operator, which mixes
+    strings with numeric adjustments:
+</p>
+
+<pre><code>[(T) 12 (h) -5 (i) 2 (s) -250 (i) 4 (s) -250 (P) 10 (D) -3 (F)] TJ</code></pre>
+
+<p>
+    The numbers are in thousandths of the font size, and a positive number moves the next glyph
+    <em>back</em>. So <code>-250</code> means "move forward by a quarter of the font size before the
+    next letter".
+</p>
+<p>
+    To a human, that gap is a space between words. To a naive extractor there is no space character
+    anywhere, and the result is <code>ThisisPDF</code>.
+</p>
+
+<div class="callout">
+    <div class="callout-title">A threshold, not a fact</div>
+    <p>
+        Every PDF extractor has to guess where the spaces are. The usual rule is a threshold: if the gap
+        between two fragments is wider than some fraction of the font size, insert a space. Set it too
+        high and words run together. Set it too low and kerning splits single words apart. In
+        officeParser that fraction is <code>pdfParserConfig.spaceToleranceFactor</code>, and it defaults
+        to <code>0.25</code>.
+    </p>
+</div>
+
+<h2>3. Font Encodings: Why Copied Text Comes Out as Gibberish</h2>
+<p>
+    Have you ever copied text out of a PDF and pasted nonsense?
+</p>
+<p>
+    A PDF does not have to store Unicode. To save space, PDF producers <strong>subset fonts</strong>:
+    they embed only the glyphs the document uses, and they are free to number those glyphs however they
+    like:
+</p>
+<ul>
+    <li>Code <code>0x01</code> &rarr; the glyph for <strong>"E"</strong></li>
+    <li>Code <code>0x02</code> &rarr; the glyph for <strong>"T"</strong></li>
+    <li>Code <code>0x03</code> &rarr; the glyph for <strong>"O"</strong></li>
+</ul>
+<p>
+    On screen the page shows "ETO". The bytes in the file are 1, 2, and 3.
+</p>
+
+<h3>The ToUnicode CMap</h3>
+<p>
+    For such a font to be searchable, the producer embeds a <strong>ToUnicode CMap</strong> that maps
+    each code back to Unicode:
+</p>
+
+<pre><code>/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+1 begincodespacerange
+&lt;0000&gt; &lt;FFFF&gt;
+endcodespacerange
+1 beginbfrange
+&lt;0001&gt; &lt;0001&gt; &lt;0045&gt;   % Code 0x0001 is U+0045 ("E")
+endbfrange
+endcmap</code></pre>
+
+<p>
+    A font that uses a standard encoding can still be decoded without one. But when a subset font has
+    neither a usable encoding nor a ToUnicode map, or the map is wrong, the text layer cannot be
+    recovered. The only way to get the words back is to render the page and run OCR on it.
+</p>
+
+<h2>4. Ligatures: When Two Letters Become One Glyph</h2>
+<p>
+    Good typography joins certain letter pairs into one shape: "ff", "fi", "fl", "ffi", and "ffl".
+</p>
+<p>
+    In a PDF a ligature is drawn as a single glyph. Unicode has code points for these five
+    (<code>U+FB00</code> to <code>U+FB04</code>, in the Alphabetic Presentation Forms block), and a PDF
+    may map the glyph to one of them. So the word "financial" can arrive as
+    <code>&#xFB01;nancial</code>, with the single character <code>U+FB01</code> at the front.
+</p>
+<p>
+    Unless the extractor expands those back to plain letters, a search for "financial" will not match
+    the document.
+</p>
+
+<h2>5. The 2D Layout Problem: The Multi-Column Trap</h2>
+<p>
+    Take an ordinary two-column page:
+</p>
+
+<pre><code>+------------------+------------------+
+| (1) The quarter's| (3) Next year's  |
+| (2) revenue grew.| (4) plans hold.  |
++------------------+------------------+</code></pre>
+
+<p>
+    A parser that sorts text by vertical position reads straight across the gutter:
+</p>
+<ol>
+    <li>y = 700: <em>(1) The quarter's</em> (left column)</li>
+    <li>y = 700: <em>(3) Next year's</em> (right column)</li>
+    <li>y = 680: <em>(2) revenue grew.</em> (left column)</li>
+    <li>y = 680: <em>(4) plans hold.</em> (right column)</li>
+</ol>
+<p>
+    The result reads: <em>"The quarter's Next year's revenue grew. plans hold."</em>
+</p>
+
+<h3>The Fix: Recursive XY-Cut</h3>
+<p>
+    The classic way to recover reading order is the <strong>XY-cut</strong>:
+</p>
+<ol>
+    <li>Project every text box onto the horizontal axis.</li>
+    <li>Look for a vertical band where no text falls (a gutter).</li>
+    <li>If there is a clear one, cut the page into a left part and a right part.</li>
+    <li>Do the same on the vertical axis to cut each part into horizontal bands.</li>
+    <li>Repeat inside every piece until nothing more can be cut. Then read the pieces in order.</li>
+</ol>
+<p>
+    The hard part is deciding what counts as a gutter. Cut too eagerly and a wide gap between two words
+    reorders a sentence. In officeParser a vertical cut needs a gap that runs the full height of the
+    block.
+</p>
+
+<hr>
+
+<h2>What officeParser Does with a PDF</h2>
+<p>
+    officeParser does not decode PDFs from scratch. It uses Mozilla's <strong>pdf.js</strong> to read
+    content streams, fonts, and CMaps, and builds the layout reconstruction on top:
+</p>
+<ul>
+    <li><strong>Lines and spaces.</strong> Fragments are grouped into lines and spaces are inserted from
+        the gaps between them (<code>lineToleranceFactor</code>, <code>spaceToleranceFactor</code>).</li>
+    <li><strong>Reading order.</strong> Multi-column pages are read with a recursive XY-cut
+        (<code>detectColumns</code>, on by default).</li>
+    <li><strong>Words.</strong> Words hyphenated across a line break are joined
+        (<code>mergeHyphenatedWords</code>), and ligatures are expanded (<code>normalizeText</code>).</li>
+    <li><strong>Structure.</strong> When a PDF is tagged, headings, tables, lists, and footnotes come
+        from its tag tree (<code>useTags</code>). When it is not, they are recovered from geometry.</li>
+    <li><strong>OCR.</strong> Scanned pages have no text layer. OCR (Tesseract) is opt-in, and runs over
+        the images extracted from the pages.</li>
+</ul>
+
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('research-paper.pdf', {
+    pdfParserConfig: {
+        detectColumns: true,         // recursive XY-cut (default)
+        mergeHyphenatedWords: true,  // default
+        spaceToleranceFactor: 0.25,  // default
+    },
+    // For scanned documents, OCR the page images:
+    extractAttachments: true,
+    ocr: true,
+    onWarning: issue =&gt; console.warn(issue.code, issue.message),
+});
+
+const { value: markdown } = await ast.to('markdown');</code></pre>
+
+<div class="callout">
+    <div class="callout-title">Where it is best-effort</div>
+    <p>
+        Structure recovered from geometry is a guess. In an untagged PDF, a table, or text floated
+        beside a figure, may not separate perfectly. Underline and strikethrough are not extracted,
+        because a PDF draws them as separate lines.
+    </p>
+    <p>
+        The parser tells you when it suspects trouble: <code>PDF_NO_TEXT_EXTRACTED</code> when a document
+        yields almost no text and OCR is off, and <code>PDF_TEXT_ENCODING_SUSPECT</code> when a fifth or
+        more of the characters it read (out of at least 50) could not be mapped to Unicode.
+    </p>
+</div>]]></content:encoded>
+    </item>
+    <item>
+      <title>Security War Stories: Decompression Bombs, SSRF, and Hardening an Office Parser</title>
+      <link>https://officeparser.harshankur.com/blog/security-war-stories-zip-bombs-and-ssrf.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/security-war-stories-zip-bombs-and-ssrf.html</guid>
+      <pubDate>Sun, 04 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Security &amp; War Stories</category>
+      <description>Four holes found and fixed in officeParser: a ZIP header that lies about its size, SSRF through PDF rendering, spreadsheet repeat attributes, and nesting that runs the stack out.</description>
+      <content:encoded><![CDATA[<p>
+    When your application accepts uploaded Word documents, spreadsheets, or PDFs, it is not just reading
+    text. It is running an interpreter over files that someone else built, and that someone may be an
+    adversary.
+</p>
+<p>
+    These are four problems I found and fixed in <code>officeParser</code>. For each one: how the attack
+    works, what the library used to do, and what it does now. All four are in the changelog.
+</p>
+
+<h2>War Story 1: The ZIP Header That Lies</h2>
+<p>
+    Every modern office document (<code>.docx</code>, <code>.pptx</code>, <code>.xlsx</code>,
+    <code>.odt</code>) is a ZIP archive, so decompression is the first code an upload reaches.
+</p>
+<p>
+    The classic threat is the <strong>decompression bomb</strong>. The well-known <code>42.zip</code> is
+    42 kilobytes and unpacks, through layers of nested archives, to 4.5 petabytes. Nesting is not even
+    needed: in 2019 David Fifield showed that a single non-recursive archive can reach a ratio above 28
+    million to one by making its files overlap.
+</p>
+
+<h3>Why Checking the Header Fails</h3>
+<p>
+    The obvious defence is to read the uncompressed size from the ZIP header and refuse anything too
+    big:
+</p>
+
+<pre><code>// Looks safe. Is not.
+if (entry.uncompressedSize &gt; 50 * 1024 * 1024) {
+    throw new Error('File too big');
+}</code></pre>
+
+<p>
+    That field is written by whoever made the archive. An attacker declares 1,024 bytes and ships a
+    DEFLATE stream that inflates to gigabytes. The parser trusts the header, starts inflating into
+    memory, and the process dies.
+</p>
+<p>
+    officeParser used to make exactly this mistake: its size limit was checked against the declared
+    size.
+</p>
+
+<h3>What officeParser Does Now</h3>
+<p>
+    Archives are inflated as a stream, and the limit is applied to the bytes that actually come out. The
+    moment the running total crosses the limit, extraction stops with
+    <code>ZIP_SIZE_LIMIT_EXCEEDED</code>. The number of entries is capped too
+    (<code>ZIP_ENTRY_COUNT_LIMIT_EXCEEDED</code>). Both limits are yours to tighten:
+</p>
+
+<pre><code>const ast = await parseOffice(upload, {
+    decompressionLimits: {
+        maxUncompressedBytes: 64 * 1024 * 1024, // default: 512 MB
+        maxZipEntries: 2000,                    // default: 10,000
+    },
+});</code></pre>
+
+<p>
+    Entries are held in memory and never written to disk by the library, so a path-traversal name such
+    as <code>../../etc/passwd</code> has nowhere to go.
+</p>
+
+<h2>War Story 2: SSRF Through PDF Rendering</h2>
+<p>
+    <strong>Server-Side Request Forgery (SSRF)</strong> means tricking a server into making a request
+    the attacker could not make directly. The usual target is something only the server can reach, such
+    as an internal service or the cloud metadata address <code>169.254.169.254</code>, which on a
+    carelessly configured instance hands out credentials.
+</p>
+
+<h3>How a Document Carries the Request</h3>
+<p>
+    Documents are full of URLs. A Word file can point an image at an external address:
+</p>
+
+<pre><code>&lt;!-- Inside word/_rels/document.xml.rels --&gt;
+&lt;Relationship Id="rId9"
+    Type=".../relationships/image"
+    Target="http://169.254.169.254/latest/meta-data/"
+    TargetMode="External"/&gt;</code></pre>
+
+<p>
+    HTML does the same with <code>&lt;img src="..."&gt;</code>. None of this matters while the URL stays
+    a string. It matters the moment something fetches it.
+</p>
+<p>
+    officeParser's parsers never fetch a URL found in a document. A remote image stays a URL in the AST.
+    The hole was on the output side. The default PDF engine builds HTML from the document and renders
+    it in headless Chromium through Puppeteer. Chromium did what browsers do: it loaded every image and
+    stylesheet the HTML referenced, from the server it was running on.
+</p>
+
+<h3>What officeParser Does Now</h3>
+<p>
+    The PDF generator intercepts every request the page makes. Inline <code>data:</code> and
+    <code>blob:</code> URIs are allowed, and so is the one host configured for the chart library.
+    Everything else is aborted, and a warning reports that a remote resource was blocked. It blocks all
+    remote loads and does not try to filter by address. A filter for "internal" addresses is easy to
+    get wrong, and a converted PDF has no need to reach the network.
+</p>
+<p>
+    Links are handled separately. On output, a document's link targets pass through a scheme allowlist
+    (<code>http</code>, <code>https</code>, <code>mailto</code>, <code>tel</code>, and relative links),
+    so a <code>javascript:</code> link in an uploaded file does not survive into generated HTML.
+</p>
+
+<h2>War Story 3: A Few Hundred Bytes, Millions of Cells</h2>
+<p>
+    OpenDocument has an attribute for compressing runs of identical cells:
+</p>
+
+<pre><code>&lt;table:table-row&gt;
+  &lt;table:table-cell&gt;&lt;text:p&gt;Start&lt;/text:p&gt;&lt;/table:table-cell&gt;
+  &lt;table:table-cell table:number-columns-repeated="1048576"/&gt;
+&lt;/table:table-row&gt;</code></pre>
+
+<p>
+    It exists for a good reason. LibreOffice routinely writes
+    <code>table:number-rows-repeated="1048566"</code> to say "the rest of the sheet is empty". But a
+    parser that takes the number at its word runs this:
+</p>
+<pre><code>for (let i = 0; i &lt; repeated; i++) {
+    row.cells.push(new Cell());
+}</code></pre>
+<p>
+    Rows repeat too, and the two multiply. The ZIP limits cannot help, because the XML is tiny and the
+    expansion happens later, while the tree is being built. officeParser expanded these attributes
+    without a bound, so a few hundred bytes could ask for millions of nodes. After I fixed that for
+    sheets, the same attribute turned up in a chart's embedded table: a 1.3 KB document that repeated
+    one cell 100,000,000 times ended the process out of memory.
+</p>
+<p>
+    The fix could not be "cap the attribute", because that breaks real spreadsheets. What is bounded
+    instead is what gets <em>built</em>:
+</p>
+<ul>
+    <li>A document may materialize at most <code>maxTableCells</code> cells (default 1,000,000, plus
+        one for each byte of the file, so a large real spreadsheet is not cut short). Past that the
+        parser clamps and warns once.</li>
+    <li>A repeated <em>empty</em> cell builds nothing and is skipped in one step. Looping over it was a
+        CPU attack of its own.</li>
+    <li>Repeated rows and columns share their child nodes; they are not deep copies.</li>
+    <li><code>maxRepeatedContent</code> (default 16,777,216 characters, plus 16 for each byte of the
+        file) bounds the total content a document may repeat by reference.</li>
+</ul>
+
+<h2>War Story 4: Nesting That Runs the Stack Out</h2>
+<p>
+    XML lets elements nest, and an attacker can nest the same element thousands deep:
+</p>
+
+<pre><code>&lt;w:p&gt;
+  &lt;w:hyperlink&gt;
+    &lt;w:hyperlink&gt;
+      &lt;w:hyperlink&gt;
+        ... thousands of levels ...
+      &lt;/w:hyperlink&gt;
+    &lt;/w:hyperlink&gt;
+  &lt;/w:hyperlink&gt;
+&lt;/w:p&gt;</code></pre>
+
+<p>
+    This one bit twice. The first problem was time. Every level of nested hyperlink applied its link to
+    every run inside it, so the work grew with depth times runs. A 23 KB file with 1,000 levels around
+    400,000 runs took 17 seconds. Now the outermost hyperlink applies its link once.
+</p>
+<p>
+    The second problem was the call stack. A recursive reader that goes deep enough throws
+    <code>RangeError: Maximum call stack size exceeded</code>, and until 8.1.0 that surfaced as a
+    generic "file corrupted" error. How deep is "deep enough" is not a constant. It depends on the
+    engine, the stack size, and even on whether the code has been optimized yet. On Node 25 I measured
+    this traversal running out somewhere between 900 and 1,000 levels in a fresh process.
+</p>
+
+<div class="callout">
+    <div class="callout-title">The 512-level guard</div>
+    <p>
+        Since 8.1.1 the Word parser counts depth inside a paragraph and stops at 512 levels, well before
+        the stack is at risk. HTML has had a 256-level cap since 7.4.0, and RTF since 8.1.0. Other deep
+        nesting, such as tables inside table cells, still relies on catching the stack overflow. Either
+        way the caller gets the same typed error:
+    </p>
+    <pre><code>try {
+    await parseOffice(upload);
+} catch (err) {
+    if (err.officeIssue?.code === 'MAX_NESTING_DEPTH_EXCEEDED') {
+        // The input was built to be deep. Reject it.
+    }
+}</code></pre>
+</div>
+
+<hr>
+
+<h2>The Baseline, and Its Limits</h2>
+<p>
+    Beyond those four stories, this is what the library does as a matter of course:
+</p>
+<ul>
+    <li><strong>Every generator escapes what it writes.</strong> Document text is attacker-controlled,
+        so each output has its own escaping: HTML and CSS, URLs, RTF control words, LaTeX commands,
+        Markdown, and CSV formulas.</li>
+    <li><strong>Limits apply to real work, not declared sizes:</strong> inflated bytes, ZIP entries,
+        table cells, XML elements, and repeated content.</li>
+    <li><strong>Prototype pollution is closed.</strong> A list id of <code>__proto__</code> in a crafted
+        document once reached <code>Object.prototype</code> through a counter map. Those maps now have
+        no prototype, and the keys <code>__proto__</code>, <code>constructor</code>, and
+        <code>prototype</code> are never copied from a caller's config.</li>
+    <li><strong>The security suite has more than 1,200 checks</strong> in
+        <code>test/security/testSanitization.ts</code>. It is part of <code>npm test</code>, which CI
+        runs on every push to master and on every pull request against it.</li>
+</ul>
+<p>
+    None of that is a guarantee. I am the sole maintainer, and a parser this size has attack surface I
+    have not found yet. If you process untrusted files, run the parse somewhere you can afford to lose:
+    a worker or container with memory and time limits and low privileges. Use
+    <code>decompressionLimits</code> and <code>abortSignal</code>. Do not rely on any one library's
+    hardening as your whole defence.
+</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>From String Scraping to AST: The Architectural Evolution of officeParser</title>
+      <link>https://officeparser.harshankur.com/blog/from-text-extraction-to-ast-and-round-trip.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/from-text-extraction-to-ast-and-round-trip.html</guid>
+      <pubDate>Sun, 04 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Build Notes</category>
+      <description>Why returning one flat string hit a ceiling, and how a typed AST made conversion between Office, Markdown, HTML, and LaTeX possible.</description>
+      <content:encoded><![CDATA[<p>
+    Every library starts with a narrow problem. I wrote the first version of <code>officeParser</code>
+    in 2019 to do one thing: get the text out of Word and PowerPoint files in Node.js, with no
+    LibreOffice to install, no Python to spawn, and no Java bridge.
+</p>
+<p>
+    That first version did exactly that and nothing more. It unzipped the file, parsed
+    <code>document.xml</code>, collected every piece of text it found, and joined the pieces with
+    spaces. You got one flat string.
+</p>
+<p>
+    It was small and it solved the immediate need. Excel and OpenDocument support followed within a
+    week. For years, a flat string was the whole product. Then documents started feeding search
+    indexes and language models, and the flat string became a dead end.
+</p>
+
+<h2>What a Flat String Loses</h2>
+<p>
+    Consider what happens when you reduce a financial report or a contract to one string:
+</p>
+<ul>
+    <li><strong>Tables collapse.</strong> The cells of a five-column balance sheet become a run of
+        numbers, and which number belonged to which row and column is gone.</li>
+    <li><strong>The outline disappears.</strong> A chapter title looks the same as a bullet point three
+        levels down.</li>
+    <li><strong>Links and references vanish.</strong> A hyperlink keeps its words and loses its target.
+        A footnote lands wherever the file happened to store it.</li>
+    <li><strong>Code and math lose their edges.</strong> Nothing marks where a formula starts or
+        stops.</li>
+</ul>
+
+<div class="callout">
+    <div class="callout-title">Why this matters more with LLMs</div>
+    <p>
+        A language model leans on structure: headings, lists, and tables tell it what belongs together.
+        Hand it a table flattened into a line of numbers and it has to guess which figure answers the
+        question. The information was in the document. The extraction threw it away.
+    </p>
+</div>
+
+<h2>The Pivot: Documents as Compilers See Them</h2>
+<p>
+    The way out was to stop treating this as a string problem and treat it as a compiler problem.
+</p>
+<p>
+    A compiler does not translate source code to machine code with search and replace. It parses the
+    source into an <strong>Abstract Syntax Tree (AST)</strong> that captures what the program means,
+    independent of how it was written down.
+</p>
+<p>
+    Documents work the same way. A table may be written as WordprocessingML
+    (<code>&lt;w:tbl&gt;</code>), OpenDocument (<code>&lt;table:table&gt;</code>), HTML
+    (<code>&lt;table&gt;</code>), Markdown (<code>| col |</code>), or LaTeX
+    (<code>\begin{tabular}</code>). The thing being described is the same every time: rows of cells.
+</p>
+
+<h2>The Shape of the Tree</h2>
+<p>
+    Version 6 (January 2026) replaced the string with a tree. Every parser returns the same
+    structure:
+</p>
+
+<pre><code>OfficeParserAST
+├── type         'docx' | 'pptx' | 'pdf' | 'md' | ... (14 formats)
+├── metadata     title, author, created, modified, ...
+├── content      OfficeContentNode[]
+├── auxiliary    headers, footers, slide masters, PDF outline
+├── attachments  images and charts (with extractAttachments)
+├── warnings     non-fatal issues found while parsing
+└── to(format)   generate another format from this tree</code></pre>
+
+<p>
+    Each content node has a <code>type</code>, its <code>text</code>, its <code>children</code>, and
+    optional <code>formatting</code> and <code>metadata</code>. The node types are a closed set:
+</p>
+
+<pre><code>type OfficeContentNodeType =
+    | 'paragraph' | 'heading' | 'list' | 'text' | 'break' | 'code'
+    | 'table' | 'row' | 'cell'
+    | 'image' | 'chart' | 'drawing' | 'embed'
+    | 'slide' | 'sheet' | 'page' | 'slideMaster'
+    | 'note' | 'comment' | 'header' | 'footer'
+    | 'admonition'
+    | 'definitionList' | 'definitionTerm' | 'definitionDescription';</code></pre>
+
+<p>
+    A table is always <code>table</code>, then <code>row</code>, then <code>cell</code>, whichever
+    format it came from. Footnotes and speaker notes hang off the node that refers to them
+    (<code>node.notes</code>), and so do comments (<code>node.comments</code>).
+</p>
+
+<h2>Hub and Spoke: Why Generation Came Next</h2>
+<p>
+    Once every format parses into one tree, conversion stops being a matrix. Without a shared tree,
+    converting between formats means writing a translator for every pair:
+</p>
+
+<pre><code>DOCX -&gt; Markdown     PPTX -&gt; Markdown
+DOCX -&gt; HTML         PDF  -&gt; HTML
+ODT  -&gt; DOCX         ... one per pair</code></pre>
+
+<p>
+    With the tree in the middle, each format needs at most two pieces: a parser that produces the tree
+    and a generator that consumes it.
+</p>
+
+<pre><code>DOCX   PPTX   PDF   Markdown   LaTeX
+   \     |     |      |        /
+    v    v     v      v       v
+        [ OfficeParserAST ]
+    /    |     |      |       \
+   v     v     v      v        v
+DOCX   HTML   PDF   Markdown   chunks</code></pre>
+
+<p>
+    Version 7.0 (May 2026) added the generators, the chunker for retrieval pipelines, and parsers for
+    Markdown, HTML, and CSV. Version 8.0 added native DOCX and ODT output and a PDF engine that needs no
+    browser. Version 8.1 added LaTeX in both directions.
+</p>
+<p>
+    Today that is 14 input formats and 11 outputs. Pair by pair, it would be 154 converters. With the
+    tree, it is 14 parsers and 11 generators, and a new parser can be written to every existing output
+    on the day it lands.
+</p>
+
+<h2>The Round-Trip Rule</h2>
+<p>
+    Generation brought a rule I now hold every feature to:
+</p>
+
+<div class="callout">
+    <div class="callout-title">A feature is not done until it round-trips</div>
+    <p>
+        What a parser captures, the matching generator must be able to write back. The test suite checks
+        it directly: parse a sample, generate the same format from the tree, parse the result, and
+        compare what the two trees hold.
+    </p>
+</div>
+
+<p>
+    That rule is about one format at a time. Across formats, conversion is only as lossless as the
+    target allows. Markdown has no merged cells, so a table with spans is written as an HTML table
+    inside the Markdown. Plain text has no links. Where a target cannot say something, the generator
+    falls back to the closest thing it can say.
+</p>
+<p>
+    Holding to the rule surfaced a long list of details that a text extractor never has to care about:
+</p>
+<ul>
+    <li>Merged cells (<code>rowSpan</code>, <code>colSpan</code>) surviving between Word, OpenDocument,
+        and HTML tables.</li>
+    <li>List numbering that keeps counting when a list is interrupted by an ordinary paragraph.</li>
+    <li>Bookmarks and heading anchors (<code>anchorIds</code>), so internal links still land.</li>
+    <li>Guarding formula characters in CSV output without corrupting cells that are just negative
+        numbers.</li>
+</ul>
+
+<h2>No Office Suite Required</h2>
+<p>
+    One constraint from 2019 is still in place: parsing needs nothing but the <code>npm</code> package.
+    There is no LibreOffice, no Java, and no Python behind it.
+</p>
+<p>
+    Parsing is JavaScript all the way down. PDF reading uses pdf.js, and OCR uses Tesseract compiled to
+    WebAssembly. That is also why the same code runs in a browser, from a bundle of about 5.5 MB, so a
+    file can be parsed without leaving the user's machine.
+</p>
+<p>
+    There is one place where I traded that purity for fidelity, and it is opt-out. The default PDF
+    <em>output</em> engine renders through headless Chromium (Puppeteer, an optional peer dependency),
+    because a browser's layout engine gives the most faithful page. If you do not want a browser, the
+    <code>native</code> engine writes PDF directly with <code>pdf-lib</code>, with simpler layout and
+    the standard PDF fonts.
+</p>
+
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row">
+            <th role="columnheader">Trade-off</th>
+            <th role="columnheader">Wrapping an office suite</th>
+            <th role="columnheader">officeParser</th>
+        </tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row">
+            <td role="cell">Install</td>
+            <td role="cell" data-label="Wrapping an office suite">System packages, fonts, and a process
+                to manage</td>
+            <td role="cell" data-label="officeParser">One npm package</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Runs in the browser</td>
+            <td role="cell" data-label="Wrapping an office suite">No</td>
+            <td role="cell" data-label="officeParser">Yes</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Page layout fidelity</td>
+            <td role="cell" data-label="Wrapping an office suite">High: it runs a real layout
+                engine</td>
+            <td role="cell" data-label="officeParser">Structure, not pixels</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">What you get back</td>
+            <td role="cell" data-label="Wrapping an office suite">A converted file</td>
+            <td role="cell" data-label="officeParser">A typed tree you can inspect, filter, and
+                convert</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>
+    The third row is a real cost. <a href="https://officeparser.harshankur.com/blog/where-officeparser-is-the-wrong-tool.html">Where
+        officeParser is the wrong tool</a> covers it and the other jobs this design does not do.
+</p>
+
+<hr>
+
+<h2>Looking Back</h2>
+<p>
+    Moving from a string to a tree was not a refactor. It changed what the library is for. Reading a
+    <code>.docx</code>, turning Markdown into a Word report, and chunking a PDF for retrieval look like
+    three features. They are one tree with different things attached to each end.
+</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Where officeParser is the Wrong Tool: An Honest Engineering Guide</title>
+      <link>https://officeparser.harshankur.com/blog/where-officeparser-is-the-wrong-tool.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/where-officeparser-is-the-wrong-tool.html</guid>
+      <pubDate>Sun, 04 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Honest Comparisons</category>
+      <description>The jobs officeParser does not do: PDFs that match Word exactly, formula recalculation, legacy .doc files, writing spreadsheets and slides, macros, and TeX typesetting, and what to use instead.</description>
+      <content:encoded><![CDATA[<p>
+    Every architecture is a set of trade-offs. When I designed <code>officeParser</code>, I made three
+    on purpose:
+</p>
+<ul>
+    <li>I chose <strong>an npm package with no office suite behind it</strong> over wrapping a desktop
+        application.</li>
+    <li>I chose <strong>structure and meaning</strong> over reproducing how a page looks in print.</li>
+    <li>I chose <strong>running in both Node.js and the browser</strong> over features that would need
+        a native rendering engine.</li>
+</ul>
+<p>
+    Those choices make officeParser a good fit for document ingestion, format conversion, and
+    client-side processing. They also mean there are jobs it <strong>cannot do</strong>, and it is
+    better that you hear that from me than discover it in production.
+</p>
+<p>
+    If your project needs any of the following, use something else.
+</p>
+
+<h2>1. You Need a PDF That Matches Word Exactly</h2>
+<p>
+    Suppose the requirement is:
+    <em>"I have a contract in Word. I need a PDF with the same line breaks and the same page breaks that
+    Word would produce."</em>
+</p>
+<p>
+    <strong>officeParser cannot do this.</strong>
+</p>
+<p>
+    Where Word breaks a line or a page is not written in the file. It is computed by Word's layout
+    engine from font metrics, kerning, and its own rules. officeParser models what a document
+    <em>says</em>: headings, paragraphs, tables, lists, formatting. Its PDF output lays that structure
+    out again, through a browser engine or its own simpler one. The content will be right. The page
+    breaks will not be Word's.
+</p>
+
+<div class="callout">
+    <div class="callout-title">What to use instead</div>
+    <ul>
+        <li><strong>Word itself</strong>, or Microsoft's own conversion through the Graph API. Only
+            Word's engine reproduces Word.</li>
+        <li><strong>LibreOffice in headless mode:</strong>
+            <code>soffice --headless --convert-to pdf document.docx</code>. Close to Word, though not
+            identical, and it needs the document's fonts installed.</li>
+        <li><strong>Gotenberg:</strong> a Docker service that wraps LibreOffice and Chromium behind an
+            HTTP API.</li>
+    </ul>
+</div>
+
+<h2>2. You Need a Spreadsheet That Recalculates</h2>
+<p>
+    Suppose the requirement is:
+    <em>"Load a workbook, change cell B4, and have every formula that depends on it update."</em>
+</p>
+<p>
+    <strong>officeParser is not a calculation engine.</strong>
+</p>
+<p>
+    When it reads an <code>.xlsx</code> file, it reads the <strong>values</strong>: for a formula cell,
+    the result Excel computed and saved the last time the file was written. It does not read the formula
+    text, it does not evaluate anything, and it cannot write an <code>.xlsx</code> back out (see
+    section 4).
+</p>
+
+<div class="callout">
+    <div class="callout-title">What to use instead</div>
+    <ul>
+        <li><strong>HyperFormula:</strong> a headless spreadsheet engine in TypeScript, from the
+            Handsontable team, with a dependency graph and several hundred built-in functions.</li>
+        <li><strong>ExcelJS:</strong> reads and writes workbooks, including formulas and styling. It
+            does not calculate either.</li>
+        <li><strong>Apache POI (Java):</strong> workbook manipulation with a formula evaluator.</li>
+    </ul>
+</div>
+
+<h2>3. You Have Legacy Binary Files (.doc, .xls, .ppt)</h2>
+<p>
+    The pre-2007 Office formats are a different family: binary records inside a compound file, not XML
+    in a ZIP. officeParser reads the modern formats (<code>.docx</code>, <code>.xlsx</code>,
+    <code>.pptx</code>), OpenDocument, PDF, RTF, and the text formats. It does <strong>not</strong>
+    read <code>.doc</code>, <code>.xls</code>, or <code>.ppt</code>.
+</p>
+<p>
+    If you have an archive of old files, convert them first. LibreOffice does this well:
+    <code>soffice --headless --convert-to docx old-file.doc</code>. Then parse the result.
+</p>
+
+<h2>4. You Need to Write Spreadsheets or Slides</h2>
+<p>
+    officeParser reads fourteen formats but writes fewer. It generates DOCX, ODT, PDF, HTML, Markdown,
+    LaTeX, RTF, EPUB, CSV, plain text, and chunks for retrieval. It does <strong>not</strong> generate
+    <code>.xlsx</code>, <code>.pptx</code>, <code>.ods</code>, or <code>.odp</code>.
+</p>
+<p>
+    A spreadsheet can go out as CSV, and a deck can go out as a document, but if the deliverable has to
+    open in Excel or PowerPoint as a native file, use a library built for writing them, such as ExcelJS
+    or PptxGenJS.
+</p>
+
+<h2>5. You Need to Run Macros</h2>
+<p>
+    Macro-enabled files carry VBA code. officeParser has no VBA runtime. It never executes macro code,
+    and it does not read it or carry it into anything it generates. If your workflow depends on a macro
+    running, you need Office itself.
+</p>
+
+<h2>6. You Need a TeX Engine</h2>
+<p>
+    officeParser reads LaTeX and writes LaTeX, but it <strong>interprets</strong> LaTeX. It does not
+    compile it.
+</p>
+<p>
+    Reading a <code>.tex</code> file, it follows the structure the way a converter does: sections,
+    lists, tables, math, footnotes, citations, and the macros you define yourself
+    (<code>\newcommand</code>, <code>\def</code>), which it expands within fixed limits. It does not
+    load packages, so a command from a package it does not know keeps its text. Drawings (TikZ,
+    pgfplots, <code>picture</code>) are left out. And it never typesets, so there are no line breaks,
+    page numbers, or floats placed on a page.
+</p>
+<p>
+    Going the other way, <code>ast.to('tex')</code> gives you source that compiles with pdfLaTeX,
+    XeLaTeX, or LuaLaTeX. To turn that source into a camera-ready PDF, you still run a real TeX
+    distribution.
+</p>
+
+<h2>Smaller Limits Worth Knowing</h2>
+<ul>
+    <li><strong>Slide reading order.</strong> Shapes on a slide are read in the order the file lists
+        them, not sorted by position.
+        <a href="https://officeparser.harshankur.com/blog/how-pptx-stores-a-slide.html">The PPTX article</a> explains why that is hard.</li>
+    <li><strong>Untagged PDFs.</strong> Without a tag tree, tables and headings are recovered from
+        geometry, which is best-effort.
+        <a href="https://officeparser.harshankur.com/blog/why-pdf-text-extraction-is-hard.html">The PDF article</a> has the details.</li>
+    <li><strong>Runtime.</strong> The npm package needs Node.js 22.13 or newer.</li>
+</ul>
+
+<hr>
+
+<h2>The Decision Matrix</h2>
+<p>
+    A summary of how officeParser compares with three tools people often reach for:
+</p>
+
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row">
+            <th role="columnheader">Capability</th>
+            <th role="columnheader">officeParser</th>
+            <th role="columnheader">Pandoc</th>
+            <th role="columnheader">LibreOffice (headless)</th>
+            <th role="columnheader">python-docx / openpyxl</th>
+        </tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row">
+            <td role="cell">What you install</td>
+            <td role="cell" data-label="officeParser">An npm package</td>
+            <td role="cell" data-label="Pandoc">A native binary</td>
+            <td role="cell" data-label="LibreOffice (headless)">A full office suite</td>
+            <td role="cell" data-label="python-docx / openpyxl">Python packages</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Runs in the browser</td>
+            <td role="cell" data-label="officeParser">Yes</td>
+            <td role="cell" data-label="Pandoc">Not as shipped</td>
+            <td role="cell" data-label="LibreOffice (headless)">Not as shipped</td>
+            <td role="cell" data-label="python-docx / openpyxl">Not as shipped</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">One document model across formats</td>
+            <td role="cell" data-label="officeParser">Yes (typed AST)</td>
+            <td role="cell" data-label="Pandoc">Yes (Pandoc AST)</td>
+            <td role="cell" data-label="LibreOffice (headless)">Only through its UNO API</td>
+            <td role="cell" data-label="python-docx / openpyxl">No, one model per library</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Chunks for retrieval</td>
+            <td role="cell" data-label="officeParser">Built in</td>
+            <td role="cell" data-label="Pandoc">No</td>
+            <td role="cell" data-label="LibreOffice (headless)">No</td>
+            <td role="cell" data-label="python-docx / openpyxl">No</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Legacy .doc / .xls / .ppt</td>
+            <td role="cell" data-label="officeParser">No</td>
+            <td role="cell" data-label="Pandoc">No</td>
+            <td role="cell" data-label="LibreOffice (headless)">Yes</td>
+            <td role="cell" data-label="python-docx / openpyxl">No</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Formula recalculation</td>
+            <td role="cell" data-label="officeParser">No</td>
+            <td role="cell" data-label="Pandoc">No</td>
+            <td role="cell" data-label="LibreOffice (headless)">Yes</td>
+            <td role="cell" data-label="python-docx / openpyxl">No</td>
+        </tr>
+        <tr role="row">
+            <td role="cell">Print layout close to Word</td>
+            <td role="cell" data-label="officeParser">No</td>
+            <td role="cell" data-label="Pandoc">No</td>
+            <td role="cell" data-label="LibreOffice (headless)">Closest of the four</td>
+            <td role="cell" data-label="python-docx / openpyxl">No</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>When officeParser is the Right Tool</h2>
+<p>
+    Reach for it when the job is:
+</p>
+<ul>
+    <li>Getting documents into a search index, a retrieval pipeline, or an LLM prompt with their
+        structure intact.</li>
+    <li>Converting between Office formats, Markdown, HTML, LaTeX, and PDF from one typed tree.</li>
+    <li>Processing documents in the browser, so a confidential file never leaves the user's machine.</li>
+    <li>Running in a plain Node.js service where you would rather not install and supervise an office
+        suite.</li>
+</ul>
+<p>
+    That is the job it was built for. For everything above the line, use the tool built for that job.
+    Knowing where the boundary sits is part of using any library well.
+</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Document Chunking for Retrieval Done Right: Beyond Naive Token Windows</title>
+      <link>https://officeparser.harshankur.com/blog/rag-document-chunking-done-right.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/rag-document-chunking-done-right.html</guid>
+      <pubDate>Sun, 04 Oct 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>RAG &amp; AI</category>
+      <description>Why a sliding token window shreds tables and orphans headings, what chunking on document structure fixes, and what officeParser&#39;s chunker does and does not do.</description>
+      <content:encoded><![CDATA[<p>
+    In Retrieval-Augmented Generation (RAG), the quality of the answer is bounded by the quality of what
+    was retrieved. If the relevant passage never reaches the context window, no amount of prompt
+    engineering will produce it.
+</p>
+<p>
+    Yet a great many pipelines still ingest documents with some variation of this:
+</p>
+
+<pre><code>// The usual first attempt:
+const text = extractRawText(file);
+const chunks = recursiveTextSplitter(text, {
+    chunkSize: 500,
+    chunkOverlap: 50,
+});</code></pre>
+
+<p>
+    For prose this is tolerable. For office documents, with their tables and nested headings, it loses
+    exactly the parts that matter. Here is why.
+</p>
+
+<h2>The Anatomy of Chunking Failure</h2>
+<p>
+    A window of fixed size sliding over a string is blind to structure. It cuts wherever the count runs
+    out:
+</p>
+
+<h3>1. The Table Shredder</h3>
+<p>
+    Take a financial table with a header row and a row per quarter. The window fills up partway through,
+    and the splitter cuts there:
+</p>
+<ul>
+    <li><strong>Chunk 1</strong> holds the header row and the first three quarters.</li>
+    <li><strong>Chunk 2</strong> starts with: <code>| Q4 | 47,310 | 19.0% |</code>.</li>
+</ul>
+<p>
+    Chunk 2 has lost its column names. When someone asks <em>"What was the operating margin in
+    Q4?"</em>, the words "operating margin" appear only in chunk 1, so chunk 2 is a poor match for the
+    query. And if it is retrieved anyway, the model has no way to know what <code>19.0%</code> measures.
+</p>
+
+<h3>2. The Orphaned Heading</h3>
+<p>
+    A heading is the context for everything under it. A fixed window often leaves the heading at the end
+    of one chunk and its content at the start of the next:
+</p>
+
+<pre><code>[End of chunk 24]
+... in accordance with regional regulations.
+4.2 Data Retention Exceptions
+
+[Start of chunk 25]
+Medical records must be archived for a minimum of 7 years.
+All audit trails must be immutable.</code></pre>
+
+<p>
+    Retrieve chunk 25 alone and nothing says that "7 years" is about <em>data retention exceptions</em>
+    and not about, say, ordinary log storage.
+</p>
+
+<h2>The Fix: Chunk the Structure, Not the String</h2>
+<p>
+    Both failures come from the same place: by the time the splitter runs, the structure is already
+    gone. The fix is to chunk before flattening, while a table is still a table and a heading is still
+    a heading.
+</p>
+
+<div class="callout">
+    <div class="callout-title">Three rules for structural chunking</div>
+    <ol>
+        <li><strong>Cut at structural boundaries.</strong> Between paragraphs, sections, pages, or
+            slides. Never in the middle of a table row.</li>
+        <li><strong>Carry the heading.</strong> Every chunk should know which heading it sits under,
+            ideally the whole path of headings above it.</li>
+        <li><strong>Repeat table headers.</strong> When a table is too big for one chunk, every piece
+            should start with the header row.</li>
+    </ol>
+</div>
+
+<h2>What officeParser's Chunker Does</h2>
+<p>
+    officeParser parses every format into one tree, so its chunker works on nodes, not characters. You
+    reach it with <code>ast.to('chunks')</code>:
+</p>
+
+<pre><code>import { parseOffice } from 'officeparser';
+
+const ast = await parseOffice('service-agreement.docx');
+
+const { value: chunks } = await ast.to('chunks', {
+    chunksConfig: {
+        strategy: 'document-structure',  // the default
+        splitBy: 'heading',  // or 'paragraph', 'page', 'slide', 'sheet'
+        maxChunkSize: 1500,
+        tableSplitStrategy: 'row',       // repeat the header row
+    },
+});</code></pre>
+
+<p>
+    Here is real output for a short Markdown document: a paragraph under the heading "3.2 Uptime
+    Credits", followed by a four-row table that I forced to split by setting a small
+    <code>maxChunkSize</code>. The chunks for the headings themselves are left out:
+</p>
+
+<pre><code>[
+  {
+    "text": "If monthly uptime falls below 99.9%, the customer is
+             entitled to a 10% credit. Below 99.0%, a 25% credit
+             applies.",
+    "metadata": {
+      "sourceType": "md",
+      "closestHeading": "3.2 Uptime Credits"
+    }
+  },
+  {
+    "text": "| Quarter | Revenue | Operating margin |
+             | Q1 | 41,900 | 16.2% |
+             | Q2 | 43,750 | 17.1% |
+             | Q3 | 45,200 | 18.4% |",
+    "metadata": {
+      "sourceType": "md",
+      "closestHeading": "3.2 Uptime Credits",
+      "isTableChunk": true
+    }
+  },
+  {
+    "text": "| Quarter | Revenue | Operating margin |
+             | Q4 | 47,310 | 19.0% |",
+    "metadata": {
+      "sourceType": "md",
+      "closestHeading": "3.2 Uptime Credits",
+      "isTableChunk": true
+    }
+  }
+]</code></pre>
+
+<p>
+    (The long strings are wrapped here to fit the page.) Measured against the three rules:
+</p>
+<ul>
+    <li><strong>Rule 1, boundaries:</strong> done, with one exception. Chunks follow the tree, and a
+        table is cut between rows. A single row longer than <code>maxChunkSize</code> is cut inside,
+        because no chunk could hold it whole.</li>
+    <li><strong>Rule 3, table headers:</strong> done. The second table chunk begins with the header row,
+        so the Q4 figures still have their column names. <code>isTableChunk</code> marks both
+        pieces.</li>
+    <li><strong>Rule 2, headings:</strong> partly. Each chunk records its <code>closestHeading</code>,
+        along with <code>pageNumber</code>, <code>slideNumber</code>, or <code>sheetName</code> where the
+        format has them. But it is the <em>nearest</em> heading only, not the full path above it, and it
+        lives in the metadata, not in the text that gets embedded.</li>
+</ul>
+
+<h3>Putting the Heading Where the Embedding Can See It</h3>
+<p>
+    If the heading is only in metadata, the embedding model never sees it. Prepend it yourself. A
+    heading is also emitted as a chunk of its own, so skip the case where a chunk <em>is</em> its
+    heading:
+</p>
+
+<pre><code>for (const chunk of chunks) {
+    const heading = chunk.metadata.closestHeading;
+    const textToEmbed = heading &amp;&amp; heading !== chunk.text
+        ? `${heading}\n\n${chunk.text}`
+        : chunk.text;
+
+    // Embed textToEmbed. Store chunk.metadata next to the vector,
+    // for filtering and for citations.
+}</code></pre>
+
+<h3>Sizes in Tokens, and Other Strategies</h3>
+<p>
+    Sizes are counted in characters by default. To count tokens, pass a <code>lengthFunction</code>:
+    your tokenizer's counter goes in, and <code>maxChunkSize</code> becomes a token budget.
+</p>
+<p>
+    Two more strategies are there when structure is not what you want. <code>fixed-size</code> is the
+    familiar recursive splitter with overlap. <code>semantic</code> cuts where the topic shifts, using
+    an embedding function that you supply.
+</p>
+
+<h2>Measure It on Your Own Documents</h2>
+<p>
+    I am not going to quote a benchmark here. Retrieval numbers do not travel well between corpora, and
+    the only result that matters is the one on your documents. What I can offer is the experiment worth
+    running on your own files:
+</p>
+<ol>
+    <li>Collect a few dozen real questions, and make sure some can only be answered from a table.</li>
+    <li>For each question, note which passage of which document holds the answer.</li>
+    <li>Index the documents twice: once with a fixed-size splitter, once with structural chunks.</li>
+    <li>For each index, count how often the right passage shows up in the top results.</li>
+</ol>
+<p>
+    Pay attention to the table questions. That is where the two approaches differ most, and where a
+    wrong answer is hardest to notice.
+</p>
+
+<hr>
+
+<h2>Summary</h2>
+<p>
+    Stop treating documents as strings of characters. The structure an author put into a document is
+    information, and a retrieval pipeline that flattens it first is working with less than it was
+    given.
+</p>
+<p>
+    Cut at boundaries, keep tables whole or repeat their headers, and make sure every chunk knows where
+    in the document it came from.
+</p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>

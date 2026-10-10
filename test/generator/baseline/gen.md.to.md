@@ -16,7 +16,7 @@ This document demonstrates the ability of the calibre DOCX Input plugin to conve
 
 There is support for images, tables, lists, footnotes, endnotes, links, dropcaps and various types of text and paragraph level formatting.
 
-To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books” **button and then click “**Convert”. ** Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**.
+To see the DOCX conversion in action, simply add this file to calibre using the **“Add Books”** button and then click “**Convert”.**  Set the output format in the top right corner of the conversion dialog to EPUB or AZW3 and click **“OK”**.
 
 <a name="toc2054249818"></a>
 <div style="text-align: center">
@@ -30,16 +30,16 @@ To see the DOCX conversion in action, simply add this file to calibre using the 
 
 Here, we demonstrate various types of inline text formatting and the use of embedded fonts.
 
-Here is some **bold, ***italic, ****bold-italic, ***<u>underlined </u>and ~~struck out ~~ text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
+Here is some **bold,** *italic,* ***bold-italic,*** <u>underlined </u>and ~~struck out~~  text. Then, we have a super<sup>script</sup> and a sub<sub>script</sub>. Now we see some red, green and blue text. Some text with a yellow highlight. Some text in a box. Some text in inverse video.
 
-A paragraph with styled text: *subtle emphasis  *followed by **strong text **and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
+A paragraph with styled text: *subtle emphasis*  followed by **strong text** and ***intense emphasis***. This paragraph uses document wide styles for styling rather than inline text properties as demonstrated in the previous paragraph — calibre can handle both with equal ease.
 
 <a name="toc1074133965"></a>
 ## Fun with fonts {#fun-with-fonts}
 
 This document has embedded the Ubuntu font family. The body text is in the Ubuntu typeface, here is some text in the Ubuntu Mono typeface, notice how every letter has the same width, even i and m. Every embedded font will automatically be embedded in the output ebook during conversion.
 
-<a name="paragraph-level-formatting"></a><a name="toc2022725662"></a>
+<a name="toc2022725662"></a>
 ## Paragraph level formatting {#paragraph-level-formatting}
 
 <div style="text-align: right">You can do crazy things with paragraphs, if the urge strikes you. For instance this paragraph is right aligned and has a right border. It has also been given a light gray background.</div>
@@ -53,7 +53,6 @@ For the lovers of poetry amongst you, paragraphs with hanging indents, like this
 
 </div>
 
-
 | ITEM | NEEDED |
 | --- | --- |
 | Books | 1 |
@@ -66,7 +65,6 @@ Tables in Word can vary from the extremely simple to the extremely complex. cali
 
 Now let’s look at a fancier table—one with alternating row colors and partial borders. This table is stretched out to take 100% of the available width.
 
-
 | City or Town | <div style="text-align: center">Point A</div> | <div style="text-align: center">Point B</div> | <div style="text-align: center">Point C</div> | <div style="text-align: center">Point D</div> | <div style="text-align: center">Point E</div> |
 | --- | --- | --- | --- | --- | --- |
 | Point A | <div style="text-align: center">—</div> |  |  |  |  |
@@ -76,7 +74,6 @@ Now let’s look at a fancier table—one with alternating row colors and partia
 | Point E | <div style="text-align: center">93</div> | <div style="text-align: center">35</div> | <div style="text-align: center">54</div> | <div style="text-align: center">43</div> | <div style="text-align: center">—</div> |
 
 Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved.
-
 
 | College | New students | Graduating students | Change |
 | --- | --- | --- | --- |
@@ -92,197 +89,207 @@ Next, we see a table with special formatting in various locations. Notice how th
 
 Next, we have something a little more complex, a nested table, i.e. a table inside another table. Additionally, the inner table has some of its cells merged. The table is displayed horizontally centered.
 
-
-| OneThree | Two |
-| --- | --- |
-| Four |   |
+<table>
+  <tr>
+    <td><table>
+  <tr>
+    <td rowspan="2"><p>One</p><p>Three</p><p></p></td>
+    <td><p>Two</p></td>
+  </tr>
+  <tr>
+    <td><p>Four</p></td>
+  </tr>
+</table>
+<p></p></td>
+    <td><p>To the left is a table inside a table, with some cells merged.</p></td>
+  </tr>
+</table>
 
 We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks.
 
-
 <table>
   <tr>
-    <td colspan="13">December 2007</td>
+    <td colspan="13"><p>December 2007</p></td>
   </tr>
   <tr>
-    <td>Sun</td>
-    <td></td>
-    <td>Mon</td>
-    <td></td>
-    <td>Tue</td>
-    <td></td>
-    <td>Wed</td>
-    <td></td>
-    <td>Thu</td>
-    <td></td>
-    <td>Fri</td>
-    <td></td>
-    <td colspan="2">Sat</td>
+    <td><p>Sun</p></td>
+    <td><p></p></td>
+    <td><p>Mon</p></td>
+    <td><p></p></td>
+    <td><p>Tue</p></td>
+    <td><p></p></td>
+    <td><p>Wed</p></td>
+    <td><p></p></td>
+    <td><p>Thu</p></td>
+    <td><p></p></td>
+    <td><p>Fri</p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>Sat</p></td>
   </tr>
   <tr>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td colspan="2">1</td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>1</p></td>
   </tr>
   <tr>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td colspan="2"></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
   <tr>
-    <td>2</td>
-    <td></td>
-    <td>3</td>
-    <td></td>
-    <td>4</td>
-    <td></td>
-    <td>5</td>
-    <td></td>
-    <td>6</td>
-    <td></td>
-    <td>7</td>
-    <td></td>
-    <td colspan="2">8</td>
+    <td><p>2</p></td>
+    <td><p></p></td>
+    <td><p>3</p></td>
+    <td><p></p></td>
+    <td><p>4</p></td>
+    <td><p></p></td>
+    <td><p>5</p></td>
+    <td><p></p></td>
+    <td><p>6</p></td>
+    <td><p></p></td>
+    <td><p>7</p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>8</p></td>
   </tr>
   <tr>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td colspan="2"></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
   <tr>
-    <td>9</td>
-    <td></td>
-    <td>10</td>
-    <td></td>
-    <td>11</td>
-    <td></td>
-    <td>12</td>
-    <td></td>
-    <td>13</td>
-    <td></td>
-    <td>14</td>
-    <td></td>
-    <td colspan="2">15</td>
+    <td><p>9</p></td>
+    <td><p></p></td>
+    <td><p>10</p></td>
+    <td><p></p></td>
+    <td><p>11</p></td>
+    <td><p></p></td>
+    <td><p>12</p></td>
+    <td><p></p></td>
+    <td><p>13</p></td>
+    <td><p></p></td>
+    <td><p>14</p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>15</p></td>
   </tr>
   <tr>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td colspan="2"></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
   <tr>
-    <td>16</td>
-    <td></td>
-    <td>17</td>
-    <td></td>
-    <td>18</td>
-    <td></td>
-    <td>19</td>
-    <td></td>
-    <td>20</td>
-    <td></td>
-    <td>21</td>
-    <td></td>
-    <td colspan="2">22</td>
+    <td><p>16</p></td>
+    <td><p></p></td>
+    <td><p>17</p></td>
+    <td><p></p></td>
+    <td><p>18</p></td>
+    <td><p></p></td>
+    <td><p>19</p></td>
+    <td><p></p></td>
+    <td><p>20</p></td>
+    <td><p></p></td>
+    <td><p>21</p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>22</p></td>
   </tr>
   <tr>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td colspan="2"></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
   <tr>
-    <td>23</td>
-    <td></td>
-    <td>24</td>
-    <td></td>
-    <td>25</td>
-    <td></td>
-    <td>26</td>
-    <td></td>
-    <td>27</td>
-    <td></td>
-    <td>28</td>
-    <td></td>
-    <td colspan="2">29</td>
+    <td><p>23</p></td>
+    <td><p></p></td>
+    <td><p>24</p></td>
+    <td><p></p></td>
+    <td><p>25</p></td>
+    <td><p></p></td>
+    <td><p>26</p></td>
+    <td><p></p></td>
+    <td><p>27</p></td>
+    <td><p></p></td>
+    <td><p>28</p></td>
+    <td><p></p></td>
+    <td colspan="2"><p>29</p></td>
   </tr>
   <tr>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td colspan="2"></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
   <tr>
-    <td>30</td>
-    <td></td>
-    <td>31</td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td></td>
-    <td colspan="2"></td>
+    <td><p>30</p></td>
+    <td><p></p></td>
+    <td><p>31</p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td><p></p></td>
+    <td colspan="2"><p></p></td>
   </tr>
 </table>
 
@@ -314,46 +321,46 @@ rop caps are used to emphasize the leading paragraph at the start of a section. 
 <a name="toc1233048813"></a>
 ## Links {#links}
 
-Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the [<u>calibre download page</u>](http://calibre-ebook.com/download). Then we have a link that points back to the section on [<u>paragraph level formatting</u>](#_Paragraph_level_formatting) in this document.
+Two kinds of links are possible, those that refer to an external website and those that refer to locations inside the document itself. Both are supported by calibre. For example, here is a link pointing to the [<u>calibre download page</u>](http://calibre-ebook.com/download). Then we have a link that points back to the section on [<u>paragraph level formatting</u>](#paragraph-level-formatting) in this document.
 
 <a name="toc64145348"></a>
 ## Table of Contents {#table-of-contents}
 
 You can see the Table of Contents created by calibre by clicking the Table of Contents button in whatever viewer you are using to view the converted ebook.
 
-[<u>Demonstration of DOCX support in calibre1</u>](#_Toc581531977)
+[<u>Demonstration of DOCX support in calibre1</u>](#toc581531977)
 
-[<u>Text Formatting1</u>](#_Toc2054249818)
+[<u>Text Formatting1</u>](#toc2054249818)
 
-[<u>Inline formatting2</u>](#_Toc2137712100)
+[<u>Inline formatting2</u>](#toc2137712100)
 
-[<u>Fun with fonts2</u>](#_Toc1074133965)
+[<u>Fun with fonts2</u>](#toc1074133965)
 
-[<u>Paragraph level formatting2</u>](#_Toc2022725662)
+[<u>Paragraph level formatting2</u>](#toc2022725662)
 
-[<u>Tables2</u>](#_Toc28114276)
+[<u>Tables2</u>](#toc28114276)
 
-[<u>Structural Elements4</u>](#_Toc54889875)
+[<u>Structural Elements4</u>](#toc54889875)
 
-[<u>Footnotes & Endnotes5</u>](#_Toc201580556)
+[<u>Footnotes & Endnotes5</u>](#toc201580556)
 
-[<u>Dropcaps5</u>](#_Toc1977424358)
+[<u>Dropcaps5</u>](#toc1977424358)
 
-[<u>Links5</u>](#_Toc1233048813)
+[<u>Links5</u>](#toc1233048813)
 
-[<u>Table of Contents5</u>](#_Toc64145348)
+[<u>Table of Contents5</u>](#toc64145348)
 
-[<u>Images6</u>](#_Toc484565143)
+[<u>Images6</u>](#toc484565143)
 
-[<u>Lists7</u>](#_Toc1359965655)
+[<u>Lists7</u>](#toc1359965655)
 
-[<u>Bulleted List8</u>](#_Toc1958162433)
+[<u>Bulleted List8</u>](#toc1958162433)
 
-[<u>Numbered List8</u>](#_Toc415190676)
+[<u>Numbered List8</u>](#toc415190676)
 
-[<u>Multi-level Lists8</u>](#_Toc1093260318)
+[<u>Multi-level Lists8</u>](#toc1093260318)
 
-[<u>Continued Lists8</u>](#_Toc1471533984)
+[<u>Continued Lists8</u>](#toc1471533984)
 
 <a name="toc484565143"></a>
 <div style="text-align: center">

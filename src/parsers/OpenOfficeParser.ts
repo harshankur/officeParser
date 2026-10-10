@@ -23,10 +23,12 @@
 
 import { BreakMetadata, CellMetadata, ChartData, ChartMetadata, CodeMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeAuxiliaryContent, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, SupportedFileType, TextFormatting, TextMetadata } from '../types.js';
 import { createAST } from '../utils/astUtils.js';
-import { extractChartData } from '../utils/chartUtils.js';
+import { chartRawTexts, extractChartData, MAX_CHART_VALUES } from '../utils/chartUtils.js';
 import { checkAbortSignal, logWarning } from '../utils/errorUtils.js';
 import { mathmlToLatex } from '../utils/mathUtils.js';
-import { clampRepeat } from '../utils/numberUtils.js';
+import { cellSpan, clampRepeat, MAX_COL_SPAN, MAX_ROW_SPAN } from '../utils/numberUtils.js';
+import { TextBuilder } from '../utils/textUtils.js';
+import { lookupTable, plainRecord } from '../utils/lookupUtils.js';
 
 /**
  * Tracks how many table cells a single document has been allowed to materialize.
@@ -47,8 +49,48 @@ import { clampRepeat } from '../utils/numberUtils.js';
 class CellBudget {
     private remaining: number;
     private warned = false;
+    private readonly weights = new WeakMap<object, number>();
     constructor(private limit: number, private config: OfficeParserConfig) {
         this.remaining = limit;
+    }
+    /**
+     * How many of `repeats` further copies of content weighing `weight` (see `weighCell`) may be
+     * made. A repeat shares its content with the first copy, so building it is cheap, but everything
+     * after the parse (each pass over the AST, each generator) meets that content once per copy: a
+     * 700-byte spreadsheet repeating a 2,000-span cell 100,000 times made 200 MB of text and ran the
+     * HTML and CSV generators out of memory. The cell count alone does not bound it, so the content
+     * copied is charged to the document's repeated-content budget (see repeatUtils).
+     */
+    takeRepeats(repeats: number, weight: number): number {
+        return takeRepeats(this.config, repeats, weight);
+    }
+    /**
+     * What one copy of a cell writes: its text, and for each node it holds the node's text, formatting
+     * and metadata values (a style's 64 KB font is written with every copy) plus 16 for the node itself
+     * (a generator spends on a node what it spends on a dozen or two characters of text).
+     */
+    weighCell(text: string, children: OfficeContentNode[] | undefined, comments: OfficeContentNode[] | undefined): number {
+        return text.length + this.weigh(children) + this.weigh(comments);
+    }
+    /**
+     * Counted along every path, as a generator writes a shared node each time it meets it (a nested
+     * table's repeated cells share their content), and memoized so a shared subtree is summed once.
+     */
+    private weigh(nodes: OfficeContentNode[] | undefined): number {
+        if (!nodes || nodes.length === 0) return 0;
+        let total = this.weights.get(nodes);
+        if (total !== undefined) return total;
+        total = 0;
+        for (const node of nodes) {
+            let weight = this.weights.get(node);
+            if (weight === undefined) {
+                weight = 16 + (node.text?.length ?? 0) + valuesLength(node.formatting) + valuesLength(node.metadata) + this.weigh(node.children) + this.weigh(node.comments) + this.weigh(node.notes);
+                this.weights.set(node, weight);
+            }
+            total += weight;
+        }
+        this.weights.set(nodes, total);
+        return total;
     }
     /** How many of `wanted` may be created; 0 once exhausted. */
     take(wanted: number): number {
@@ -71,9 +113,23 @@ class CellBudget {
     }
 }
 
-/** Resolves the configured cell budget, falling back to the documented default. */
+/**
+ * A repeated row's copy of a cell: its own object and metadata (for the row index), sharing the
+ * read-only children, comments and text. Deep copies serialized every cell's content per row, a
+ * multi-hundred-MB string from a small row the cell-count budget did not bound. The shared rawContent
+ * is charged again, as every node that carries it is.
+ */
+const repeatCell = (c: OfficeContentNode, config: OfficeParserConfig): OfficeContentNode => ({
+    ...c,
+    metadata: c.metadata ? { ...c.metadata } : c.metadata,
+    children: c.children ? c.children.slice() : c.children,
+    comments: c.comments ? c.comments.slice() : c.comments,
+    ...(c.rawContent !== undefined ? { rawContent: chargeRawContent(c.rawContent, config) } : {}),
+}) as OfficeContentNode;
+
+/** Resolves the configured cell budget (the documented default when not set), plus one cell for each byte of the document (see budgetUtils). */
 const createCellBudget = (config: OfficeParserConfig): CellBudget =>
-    new CellBudget(config.decompressionLimits?.maxTableCells ?? 1000000, config);
+    new CellBudget((config.decompressionLimits?.maxTableCells ?? 1000000) + TABLE_CELLS_PER_BYTE * documentBytesOf(config), config);
 
 /**
  * Coerces a `table:number-*-repeated` attribute to a usable repeat count. A missing, zero,
@@ -99,7 +155,7 @@ interface ParagraphStyleInfo {
  * attached separately, or dropped under `ignoreComments`/`ignoreNotes` - never leaks into the
  * paragraph's own text the way raw `node.textContent` would.
  */
-function textContentSkipping(node: Node, skipTags: Set<string>): string {
+function textContentSkipping(node: Node, skipTags: ReadonlySet<string>): string {
     let out = '';
     const walk = (n: Node) => {
         if (isElement(n) && skipTags.has((n as Element).tagName)) return;
@@ -126,6 +182,45 @@ type ParseParaFn = (
  * attached at any of the three ODF placements is built identically. `parsePara` is the caller's
  * `parseParagraphContent` closure.
  */
+/** A note body's or annotation's own paragraphs (see getOutermostElements): a nested note's or annotation's are read by its own reader, and taking them too doubled per level of notes in notes (528 bytes of ODT ended the process out of memory). */
+const NESTED_NOTES = new Set(['text:note', 'office:annotation']);
+const ownParagraphs = (container: Element): Element[] => getOutermostElements(container, 'text:p', NESTED_NOTES);
+/**
+ * Text elements in a paragraph that show nothing where they stand: a note (read by its own branch, or
+ * ignored), hidden text, a script, the list number the writers number lists with themselves, and blocks
+ * that a paragraph cannot hold.
+ */
+const INLINE_NOT_SHOWN: ReadonlySet<string> = new Set(['text:note', 'text:hidden-text', 'text:hidden-paragraph', 'text:script', 'text:number', 'text:p', 'text:h', 'text:list', 'text:section', 'text:tracked-changes']);
+/**
+ * What a paragraph's text, read whole when its content made no runs, leaves out: what shows nothing
+ * (a comment and a note are read on their own, hidden text, a script, tracked changes) and a note's
+ * citation read as the note. The paragraph read as its whole text showed a hidden-text field's or a
+ * script's content.
+ */
+const FALLBACK_NOT_SHOWN: ReadonlySet<string> = new Set(['office:annotation', 'text:note', 'text:note-ref', 'text:hidden-text', 'text:hidden-paragraph', 'text:script', 'text:tracked-changes']);
+/**
+ * A frame's own text box, image, table, object, title or description (children of it, as the schema
+ * has them): looked up through the frame's whole subtree, frames nested in text boxes took time in
+ * the product of their depth and content (4.5 KB of ODT took 30 seconds), and a nested frame's image
+ * was taken for the outer one's.
+ */
+const frameChild = (frame: Element, tag: string): Element | undefined => getDirectChildren(frame, tag)[0];
+
+/**
+ * A row's cells in order, those a merge covers (`table:covered-table-cell`) included, so a reader
+ * counts their columns: skipped, the cells after a merge took its columns (shifted left).
+ */
+const rowCells = (row: Element): Element[] => {
+    const cells: Element[] = [];
+    for (let i = 0; i < (row.childNodes?.length ?? 0); i++) {
+        const child = row.childNodes[i];
+        if (isElement(child) && (child.tagName === 'table:table-cell' || child.tagName === 'table:covered-table-cell')) cells.push(child);
+    }
+    return cells;
+};
+/** A cell's comment is its own node (its body is not the cell's text). */
+const CELL_SKIP = new Set(['office:annotation']);
+
 function buildAnnotationComment(
     element: Element,
     parsePara: ParseParaFn,
@@ -134,11 +229,13 @@ function buildAnnotationComment(
     config: OfficeParserConfig,
     sourceXml: string,
 ): OfficeContentNode {
-    const author = getFirstElementByTagName(element, "dc:creator")?.textContent || undefined;
-    const date = getFirstElementByTagName(element, "dc:date")?.textContent || undefined;
+    // The annotation's own author and date (children of it): looked up through its subtree, an
+    // annotation in a paragraph of an annotation, and so on, took minutes.
+    const author = getDirectChildren(element, "dc:creator")[0]?.textContent || undefined;
+    const date = getDirectChildren(element, "dc:date")[0]?.textContent || undefined;
     const children: OfficeContentNode[] = [];
     let text = '';
-    for (const cp of getElementsByTagName(element, "text:p")) {
+    for (const cp of ownParagraphs(element)) {
         const c = parsePara(cp, paraStyleMap, styleMap, config, sourceXml);
         text += (text ? ' ' : '') + c.text;
         children.push({ type: 'paragraph', text: c.text, children: c.children, metadata: {} });
@@ -172,9 +269,12 @@ const toRepeatCount = (attr: string | null): number => {
     return Number.isFinite(n) && n > 0 ? n : 1;
 };
 import { createAttachment } from '../utils/imageUtils.js';
-import { performOcr } from '../utils/ocrUtils.js';
-import { getDirectChildren, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
+import { ocrDuringParse } from '../utils/ocrUtils.js';
+import { takeRepeats, valuesLength } from '../utils/repeatUtils.js';
+import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
+import { chargeRawContent, getAllElementsByTagName, getDirectChildren, getOutermostElements, getElementsByTagName, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseXmlString } from '../utils/xmlUtils.js';
 import { extractFiles, findRequiredPart } from '../utils/zipUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
  * Helper to clean and extract attachment name from xlink:href or paths.
@@ -197,7 +297,7 @@ const ODF_FILE_TYPES: SupportedFileType[] = ['odt', 'odp', 'ods', 'odg'];
  * @returns A promise resolving to the parsed AST
  */
 export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserConfig): Promise<OfficeParserAST> => {
-    // Honour cancellation requests immediately — before extracting the ZIP archive.
+    // Honour cancellation requests immediately, before extracting the ZIP archive.
     // ODF containers (ODT/ODS/ODP) bundle content.xml, styles.xml, and media files;
     // aborting early avoids needlessly inflating and parsing all of those resources.
     checkAbortSignal(config.abortSignal);
@@ -221,6 +321,92 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         config.decompressionLimits,
         config
     );
+
+    // Each embedded object (a formula or chart in `Object N/content.xml`) read once, whatever refers
+    // to it: read again for each frame naming it, a 10 KB document naming one object 20,000 times
+    // took a minute and a gigabyte. Its text is written at every reference, so references after the
+    // first repeat at most REPEATED_OBJECT_TEXT characters of it in all; past that, a reference to a
+    // chart is the chart without its text (its data stays in chartData), and to a formula, the
+    // formula's first reference is its only copy.
+    const REPEATED_OBJECT_TEXT = 16 * 1024 * 1024;
+    // Spaces `text:s` elements may make in all (see its reader).
+    let spaceBudget = 16 * 1024 * 1024;
+    let repeatedObjectText = REPEATED_OBJECT_TEXT;
+    const embeddedObjects = new Map<string, { formula?: string; chartData?: ChartData; chartText?: string; uses: number } | null>();
+    // The package's files by path, and by each tail of their path one of its last 16 folders starts
+    // (`Object 1/content.xml` of `Pictures/Object 1/content.xml`), the first of each: a scan of every
+    // file per object took objects x files, and a tail at every folder of a long path read the rest of
+    // the path again at each.
+    let filesByPath: Map<string, (typeof files)[number]> | undefined;
+    const fileAt = (path: string) => {
+        if (!filesByPath) {
+            filesByPath = new Map();
+            for (const f of files) if (!filesByPath.has(f.path)) filesByPath.set(f.path, f);
+            for (const f of files) {
+                let at = f.path.length;
+                for (let depth = 0; depth < 16 && at > 0; depth++) {
+                    at = f.path.lastIndexOf('/', at - 1);
+                    if (at === -1) break;
+                    const tail = f.path.slice(at + 1);
+                    if (tail && !filesByPath.has(tail)) filesByPath.set(tail, f);
+                }
+            }
+        }
+        return filesByPath.get(path);
+    };
+    const readEmbeddedObject = (attachmentName: string): { formula?: string; chartData?: ChartData; chartText?: string } | null => {
+        let entry = embeddedObjects.get(attachmentName);
+        if (entry === undefined) {
+            const objectPath = `${attachmentName}/content.xml`;
+            const objectFile = fileAt(objectPath);
+            entry = null;
+            if (objectFile) {
+                const mathNode = getFirstElementByTagName(parseXmlString(objectFile.content.toString(), { config }), "math");
+                if (mathNode) entry = { formula: mathmlToLatex(mathNode).trim(), uses: 0 };
+                else {
+                    const chartData = extractChartData(objectFile.content, config);
+                    entry = { chartData, chartText: chartData.rawTexts.join(" "), uses: 0 };
+                }
+            }
+            embeddedObjects.set(attachmentName, entry);
+        }
+        if (!entry) return null;
+        if (entry.uses++ === 0) return entry;
+        const size = (entry.formula ?? entry.chartText ?? '').length;
+        if (size <= repeatedObjectText) { repeatedObjectText -= size; return entry; }
+        return { chartData: entry.chartData, chartText: entry.chartData ? '' : undefined, formula: entry.formula === undefined ? undefined : '' };
+    };
+
+    // What a list style makes a list (ordered or not, and whether its marks show), from each styles
+    // element's list styles indexed by name once: looked up by scanning every list style for each
+    // list, a 5 KB document of many lists and list styles took two minutes. (`withImages`: a picture
+    // bullet counts, as the automatic styles read it.)
+    const listStyleIndex = new Map<Element, Map<string, Element>>();
+    const listStyleKinds = new Map<Element, { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined>();
+    let officeStylesElement: Element | null | undefined;
+    const listStyleKind = (styles: Element, name: string, withImages: boolean): { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined => {
+        let index = listStyleIndex.get(styles);
+        if (!index) {
+            index = new Map();
+            for (const listStyle of getElementsByTagName(styles, "text:list-style")) {
+                const styleName = listStyle.getAttribute("style:name");
+                if (styleName && !index.has(styleName)) index.set(styleName, listStyle);
+            }
+            listStyleIndex.set(styles, index);
+        }
+        const listStyle = index.get(name);
+        if (!listStyle) return undefined;
+        // (A style is read by one of the two lookups only: automatic styles with pictures, office styles without.)
+        if (listStyleKinds.has(listStyle)) return listStyleKinds.get(listStyle);
+        const bulletLevels = getElementsByTagName(listStyle, "text:list-level-style-bullet");
+        const numberLevels = getElementsByTagName(listStyle, "text:list-level-style-number");
+        let kind: { listType: 'ordered' | 'unordered'; isVisible: boolean } | undefined;
+        if (numberLevels.length > 0) kind = { listType: 'ordered', isVisible: numberLevels.some(l => !!l.getAttribute("style:num-format")) };
+        else if (bulletLevels.length > 0) kind = { listType: 'unordered', isVisible: bulletLevels.some(l => !!l.getAttribute("text:bullet-char")) };
+        else if (withImages && getElementsByTagName(listStyle, "text:list-level-style-image").length > 0) kind = { listType: 'unordered', isVisible: true };
+        listStyleKinds.set(listStyle, kind);
+        return kind;
+    };
 
     // 1. Determine File Type
     const mimetypeFile = files.find(f => f.path === 'mimetype');
@@ -249,14 +435,31 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             path => /(^|\/)content\.xml$/.test(path) && !objectContentFileRegex.test(path),
             config, { fileType, part: 'content.xml' });
     const stylesFile = files.find(f => f.path === 'styles.xml');
-    const stylesDom = stylesFile ? parseXmlString(stylesFile.content.toString()) : undefined;
+    const stylesDom = stylesFile ? parseXmlString(stylesFile.content.toString(), { config }) : undefined;
     const content: OfficeContentNode[] = [];
     const notes: OfficeContentNode[] = [];
 
+    // Notes by their `text:id`, for a reference to one (`text:note-ref`, a note cited again): the ids
+    // the document gives its notes (found first, so a reference before its note is known for one), the
+    // notes read so far, the runs waiting for a note read later, and how many note bodies are being read
+    // (a reference inside one stays its citation, so no note can come to hold itself).
+    const documentNoteIds = new Set<string>();
+    const collectNoteIds = (dom: Document) => {
+        for (const note of getAllElementsByTagName(dom, 'text:note')) {
+            const id = note.getAttribute('text:id');
+            if (id) documentNoteIds.add(id);
+        }
+    };
+    if (stylesDom) collectNoteIds(stylesDom);
+    const notesById = new Map<string, OfficeContentNode>();
+    const runsAwaitingNote = new Map<string, OfficeContentNode[]>();
+    let noteBodyDepth = 0;
+
     // Style Map: styleName -> TextFormatting
     // Inline style parsing (from content.xml automatic styles)
-    const styleMap: { [key: string]: TextFormatting } = {};
-    const paragraphStyleMap: { [key: string]: ParagraphStyleInfo } = {};
+    // Null-prototype, keyed by the document's own style names (see listCounters below).
+    const styleMap: { [key: string]: TextFormatting } = Object.create(null);
+    const paragraphStyleMap: { [key: string]: ParagraphStyleInfo } = Object.create(null);
     // Null-prototype: `listId` is the raw document `text:style-name`/`xml:id`, so a plain `{}` lets a
     // `listId="__proto__"` write onto `Object.prototype` two levels down (global pollution from one
     // crafted ODF). With no prototype the `__proto__` key is an ordinary own property.
@@ -280,25 +483,27 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             const styleInfo: ParagraphStyleInfo = {};
 
             // Parse paragraph properties for alignment and drop caps
-            const paraProps = getFirstElementByTagName(style, "style:paragraph-properties");
+            // A style's own properties (children of it, as the schema has them): looked up through the
+            // whole subtree, styles nested in styles took time in the product of their depth and content.
+            const paraProps = getDirectChildren(style, "style:paragraph-properties")[0];
             if (paraProps) {
                 const textAlign = paraProps.getAttribute("fo:text-align");
                 if (textAlign) {
-                    const alignMap: Record<string, 'left' | 'center' | 'right' | 'justify'> = {
+                    const alignMap: Record<string, 'left' | 'center' | 'right' | 'justify'> = lookupTable({
                         'start': 'left',
                         'left': 'left',
                         'center': 'center',
                         'end': 'right',
                         'right': 'right',
                         'justify': 'justify'
-                    };
+                    });
                     if (alignMap[textAlign]) {
                         styleInfo.alignment = alignMap[textAlign];
                     }
                 }
 
                 // Detect Drop Caps
-                const dropCap = getFirstElementByTagName(paraProps, "style:drop-cap");
+                const dropCap = getDirectChildren(paraProps, "style:drop-cap")[0];
                 if (dropCap) {
                     styleInfo.dropCap = true;
                 }
@@ -319,9 +524,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
 
             // Parse text properties
-            const textProps = getFirstElementByTagName(style, "style:text-properties");
+            const textProps = getDirectChildren(style, "style:text-properties")[0];
             // Parse table cell properties (for ODS background)
-            const cellProps = getFirstElementByTagName(style, "style:table-cell-properties");
+            const cellProps = getDirectChildren(style, "style:table-cell-properties")[0];
 
             const formatting: TextFormatting = {};
 
@@ -394,6 +599,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
      * @param paragraphStyleMap - Map of style names to alignments and props (needed for notes)
      * @param parentFormatting - Formatting inherited from parent (e.g. span inside span)
      * @param linkMetadata - Metadata inherited from parent link
+     * @param withFrames - Whether frames' pictures and objects are read: a spreadsheet cell reads those itself (a text box's text is read either way)
      * @returns Object containing text and children
      */
     const parseInlineContent = (
@@ -404,13 +610,19 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         paragraphStyleMap: Record<string, ParagraphStyleInfo>,
         parentFormatting: TextFormatting = {},
         linkMetadata?: { link?: string; linkType?: 'internal' | 'external' },
-        sourceXml: string = ''
+        sourceXml: string = '',
+        withFrames = true,
+        into?: { children: OfficeContentNode[]; anchorIds: string[] }
     ): { text: string; children: OfficeContentNode[]; anchorIds: string[] } => {
-        const children: OfficeContentNode[] = [];
-        const anchorIds: string[] = [];
+        // An element's content goes straight into the paragraph's lists (`into`, for the elements
+        // nested in it): returned and copied up, each level of spans, links or fields copied everything
+        // inside it again (250 spans around 600,000 runs took four times as long as none).
+        const children: OfficeContentNode[] = into?.children ?? [];
+        const anchorIds: string[] = into?.anchorIds ?? [];
+        const sink = { children, anchorIds };
         let fullText = '';
 
-        if (!node.childNodes) return { text: '', children: [], anchorIds: [] };
+        if (!node.childNodes) return { text: '', children, anchorIds };
 
         for (let i = 0; i < node.childNodes.length; i++) {
             const child = node.childNodes[i];
@@ -437,8 +649,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     // Space. `text:c` is attacker-controlled: clamp it so a tiny `<text:s text:c="5e8"/>`
                     // cannot allocate a multi-GB string (a memory DoS the zip cap does not stop, since the
                     // blow-up is in repeat, after inflation).
-                    const count = parseInt(element.getAttribute('text:c') || '1');
-                    const spaces = ' '.repeat(clampRepeat(count));
+                    // The document's runs of spaces are bounded in all too: each clamped run is 10,000 at
+                    // most, and 50,000 of them (4 KB of ODT) made 500 million characters. Past the
+                    // budget a run is one space (the spacing, never text, is what is lost).
+                    const count = Math.min(clampRepeat(parseInt(element.getAttribute('text:c') || '1')), Math.max(1, spaceBudget));
+                    spaceBudget -= count;
+                    const spaces = ' '.repeat(count);
                     fullText += spaces;
                     children.push({
                         type: 'text',
@@ -463,25 +679,24 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         children.push({ type: 'break', metadata: { breakType: 'lastRenderedPage' } as BreakMetadata });
                     }
                 } else if (tagName === 'text:line-break') {
-                    // Line break
+                    // A line break: a `break` node, as a DOCX `w:br` and an HTML `<br>` are, whatever
+                    // includeBreakNodes says (a typed line break is content). As a "\n" text run, only
+                    // the text, ODT and LaTeX writers showed it: Markdown and HTML wrote a space, and
+                    // RTF and DOCX joined the words.
                     fullText += '\n';
                     children.push({
-                        type: 'text',
-                        text: '\n',
+                        type: 'break',
                         formatting: parentFormatting,
-                        metadata: { ...(linkMetadata || {}), isLineBreak: true } as any
+                        metadata: { breakType: 'textWrapping', ...(linkMetadata || {}) } as BreakMetadata
                     });
                 } else if (tagName === 'text:span') {
                     // Formatted text span
                     const styleName = element.getAttribute("text:style-name");
                     const formatting = styleName ? mergeFormatting(parentFormatting, styleMap[styleName]) : parentFormatting;
 
-                    const spanContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, formatting, linkMetadata, sourceXml);
-                    fullText += spanContent.text;
-                    children.push(...spanContent.children);
-                    anchorIds.push(...spanContent.anchorIds);
-                } else if (tagName === 'text:a') {
-                    // Hyperlink
+                    fullText += parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, formatting, linkMetadata, sourceXml, withFrames, sink).text;
+                } else if (tagName === 'text:a' || tagName === 'draw:a') {
+                    // Hyperlink: around text (text:a), or around a frame, a picture that is a link (draw:a)
                     let href = element.getAttribute('xlink:href') || '';
                     const isInternal = href.startsWith('#');
                     const linkType = isInternal ? 'internal' : 'external';
@@ -504,10 +719,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         newLinkMetadata = { link: href, linkType: linkType as 'internal' | 'external' };
                     }
 
-                    const linkContent = parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, newLinkMetadata, sourceXml);
-                    fullText += linkContent.text;
-                    children.push(...linkContent.children);
-                    anchorIds.push(...linkContent.anchorIds);
+                    fullText += parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, newLinkMetadata, sourceXml, withFrames, sink).text;
                 } else if (tagName === 'text:note' && !config.ignoreNotes) {
                     // Footnote or endnote
                     const noteClass = (element.getAttribute('text:note-class') || 'footnote') as 'footnote' | 'endnote';
@@ -516,10 +728,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                     if (noteBody) {
                         // Extract note content recursively
-                        const notePs = getElementsByTagName(noteBody, "text:p");
+                        const notePs = ownParagraphs(noteBody);
                         const noteChildren: OfficeContentNode[] = [];
                         let noteText = '';
 
+                        noteBodyDepth++;
                         for (const np of notePs) {
                             const npContent = parseParagraphContent(np, paragraphStyleMap, styleMap, config, sourceXml);
                             noteText += (noteText ? ' ' : '') + npContent.text;
@@ -535,6 +748,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             };
                             noteChildren.push(npNode);
                         }
+                        noteBodyDepth--;
 
                         const noteNode: OfficeContentNode = {
                             type: 'note',
@@ -557,6 +771,34 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             emptyTextNode.notes = [noteNode];
                             children.push(emptyTextNode);
                         }
+                        // The note for references to it: those read before it hold it now.
+                        if (noteId && !notesById.has(noteId)) {
+                            notesById.set(noteId, noteNode);
+                            for (const run of runsAwaitingNote.get(noteId) ?? []) (run.notes ??= []).push(noteNode);
+                            runsAwaitingNote.delete(noteId);
+                        }
+                    }
+                } else if (tagName === 'text:note-ref' && documentNoteIds.has(element.getAttribute('text:ref-name') || '')
+                    && (element.getAttribute('text:reference-format') || 'text') === 'text' && (config.ignoreNotes || noteBodyDepth === 0)) {
+                    // A note cited again (LibreOffice's cross-reference to a footnote, and how the ODT
+                    // writer refers to a note it has written): the run before it holds that note, as the
+                    // first citation's does (a parser shares one note node among its references). It
+                    // was read as a field, its number as literal text. With notes left out it shows
+                    // nothing, as a note's own citation does; inside a note it stays its number.
+                    if (!config.ignoreNotes) {
+                        const name = element.getAttribute('text:ref-name') || '';
+                        let run = children[children.length - 1];
+                        if (!run || run.type !== 'text') {
+                            run = { type: 'text', text: '' };
+                            children.push(run);
+                        }
+                        const note = notesById.get(name);
+                        if (note) (run.notes ??= []).push(note);
+                        else {
+                            const waiting = runsAwaitingNote.get(name);
+                            if (waiting) waiting.push(run);
+                            else runsAwaitingNote.set(name, [run]);
+                        }
                     }
                 } else if (tagName === 'office:annotation' && !config.ignoreComments) {
                     // A point comment. Mirrors the note branch and WordParser's attachment convention:
@@ -571,15 +813,52 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         emptyTextNode.comments = [commentNode];
                         children.push(emptyTextNode);
                     }
+                } else if (tagName === 'text:ruby') {
+                    // Ruby: the base text, then its annotation (a reading) in parentheses, as plain text
+                    // writes ruby.
+                    const base = getDirectChildren(element, 'text:ruby-base')[0];
+                    const annotation = getDirectChildren(element, 'text:ruby-text')[0];
+                    for (const part of [base, annotation]) {
+                        if (!part) continue;
+                        // The reading's parenthesis goes before its content: kept only when there is some.
+                        const openAt = children.length;
+                        if (part === annotation) children.push({ type: 'text', text: '(', formatting: parentFormatting, metadata: linkMetadata ? { ...linkMetadata } : undefined });
+                        const partText = parseInlineContent(part, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, withFrames, sink).text;
+                        if (part === annotation) {
+                            // No reading: its parenthesis goes, and a note or picture placed in it stays.
+                            if (!partText) { children.splice(openAt, 1); continue; }
+                            fullText += '(';
+                        }
+                        fullText += partText;
+                        if (part === annotation) {
+                            fullText += ')';
+                            children.push({ type: 'text', text: ')', formatting: parentFormatting, metadata: linkMetadata ? { ...linkMetadata } : undefined });
+                        }
+                    }
+                } else if (tagName.startsWith('text:') && !INLINE_NOT_SHOWN.has(tagName)) {
+                    // A field (a date, a page or sequence number, a cross-reference, an author's name, a
+                    // placeholder), `text:meta`, and any other text element: the text it shows, where it
+                    // stands. Each was dropped, so "Figure 3" read as "Figure " and a reference to a
+                    // heading as nothing.
+                    fullText += parseInlineContent(element, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, withFrames, sink).text;
+                } else if (tagName === 'draw:frame' && !withFrames) {
+                    // A spreadsheet cell reads its frames' pictures and objects itself; here, the text of
+                    // a frame's text box only (its own frames, nested, are the cell's too).
+                    const drawTextBox = frameChild(element, "draw:text-box");
+                    if (drawTextBox) {
+                        for (const boxParagraph of ownParagraphs(drawTextBox)) {
+                            fullText += parseInlineContent(boxParagraph, styleMap, config, notes, paragraphStyleMap, parentFormatting, linkMetadata, sourceXml, false, sink).text;
+                        }
+                    }
                 } else if (tagName === 'draw:frame') {
                     const frame = element;
-                    const drawTextBox = getFirstElementByTagName(frame, "draw:text-box");
-                    const drawObject = getFirstElementByTagName(frame, "draw:object");
+                    const drawTextBox = frameChild(frame, "draw:text-box");
+                    const drawObject = frameChild(frame, "draw:object");
 
                     if (drawTextBox) {
                         const textBoxChildren: OfficeContentNode[] = [];
                         traverse(drawTextBox, textBoxChildren, false, sourceXml);
-                        children.push(...textBoxChildren);
+                        appendAll(children, textBoxChildren);
                         const textBoxText = textBoxChildren.map(c => c.text || '').join('\n');
                         fullText += textBoxText;
                     } else if (drawObject) {
@@ -589,15 +868,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         let attachmentName = '';
                         if (href) {
                             attachmentName = cleanAttachmentName(href);
-                            const objectPath = `${attachmentName}/content.xml`;
-                            const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
-                            if (objectFile) {
-                                const objXml = parseXmlString(objectFile.content.toString());
-                                const mathNode = getFirstElementByTagName(objXml, "math");
-                                if (mathNode) {
-                                    isFormula = true;
-                                    formulaText = mathmlToLatex(mathNode).trim();
-                                }
+                            const object = readEmbeddedObject(attachmentName);
+                            if (object?.formula !== undefined) {
+                                isFormula = true;
+                                formulaText = object.formula;
                             }
                         }
 
@@ -619,8 +893,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         } else {
                             // Standard inline image extraction fallback if object is not a formula
                             let altText = '';
-                            const svgTitle = getFirstElementByTagName(frame, "svg:title");
-                            const svgDesc = getFirstElementByTagName(frame, "svg:desc");
+                            const svgTitle = frameChild(frame, "svg:title");
+                            const svgDesc = frameChild(frame, "svg:desc");
                             if (svgTitle && svgTitle.textContent) {
                                 altText = svgTitle.textContent;
                             } else if (svgDesc && svgDesc.textContent) {
@@ -628,7 +902,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             }
 
                             let imageHref = '';
-                            const drawImages = getElementsByTagName(frame, "draw:image");
+                            const drawImages = getDirectChildren(frame, "draw:image");
                             if (drawImages.length > 0) {
                                 imageHref = drawImages[0].getAttribute("xlink:href") || '';
                                 if (imageHref) {
@@ -642,7 +916,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 children: [],
                                 metadata: {
                                     attachmentName: imageHref || attachmentName,
-                                    ...(altText ? { altText } : {})
+                                    ...(altText ? { altText } : {}),
+                                    ...(linkMetadata?.link ? { link: linkMetadata.link, linkType: linkMetadata.linkType } : {})
                                 }
                             };
                             if (config.includeRawContent) {
@@ -653,8 +928,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     } else {
                         // Standard inline image extraction fallback
                         let altText = '';
-                        const svgTitle = getFirstElementByTagName(frame, "svg:title");
-                        const svgDesc = getFirstElementByTagName(frame, "svg:desc");
+                        const svgTitle = frameChild(frame, "svg:title");
+                        const svgDesc = frameChild(frame, "svg:desc");
                         if (svgTitle && svgTitle.textContent) {
                             altText = svgTitle.textContent;
                         } else if (svgDesc && svgDesc.textContent) {
@@ -662,7 +937,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         }
 
                         let imageHref = '';
-                        const drawImages = getElementsByTagName(frame, "draw:image");
+                        const drawImages = getDirectChildren(frame, "draw:image");
                         if (drawImages.length > 0) {
                             imageHref = drawImages[0].getAttribute("xlink:href") || '';
                             if (imageHref) {
@@ -676,7 +951,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             children: [],
                             metadata: {
                                 attachmentName: imageHref,
-                                ...(altText ? { altText } : {})
+                                ...(altText ? { altText } : {}),
+                                // A picture inside a link (draw:a or text:a) is that link.
+                                ...(linkMetadata?.link ? { link: linkMetadata.link, linkType: linkMetadata.linkType } : {})
                             }
                         };
                         if (config.includeRawContent) {
@@ -735,7 +1012,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         // so an annotation-only or note-only paragraph does not leak the comment/note body into the
         // paragraph text (e.g. when ignoreComments/ignoreNotes skipped building the child node).
         if (content.children.length === 0) {
-            const fullText = textContentSkipping(node, new Set(['office:annotation', 'text:note']));
+            const fullText = textContentSkipping(node, FALLBACK_NOT_SHOWN);
             if (fullText.trim()) {
                 content.text = fullText;
                 content.children.push({
@@ -789,7 +1066,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         let currentChildren: OfficeContentNode[] = [];
 
         for (const child of pContent.children) {
-            if (child.type === "text" && (child.metadata as any)?.isLineBreak) {
+            if (child.type === "break" && (child.metadata as BreakMetadata | undefined)?.breakType === 'textWrapping') {
                 segments.push({ text: currentText, children: currentChildren });
                 currentText = "";
                 currentChildren = [];
@@ -822,38 +1099,51 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         cellBudget: CellBudget
     ): OfficeContentNode => {
         const rows: OfficeContentNode[] = [];
-        // Rows sit directly under <table:table>, but a repeating header block is wrapped in
-        // <table:table-header-rows> - written by LibreOffice and by this library's own ODT generator.
-        // Reading only the direct <table:table-row> children dropped every header row on the floor, so
-        // walk the direct children in document order and descend into the wrapper, flagging its rows.
-        // (Nested tables are still excluded: only direct children are considered at each level.)
+        // Rows sit directly under <table:table> or in a wrapper: a repeating header block
+        // (<table:table-header-rows>, written by LibreOffice and by this library's own ODT generator),
+        // <table:table-rows>, or a group of rows (<table:table-row-group>, nested to any depth).
+        // Reading only the direct <table:table-row> children dropped every wrapped row, so walk the
+        // children in document order and descend into the wrappers, flagging header rows. (Nested
+        // tables are still excluded: a cell is never descended into.)
         const tableRows: { row: Element; isHeader: boolean }[] = [];
-        for (let i = 0; i < (tableNode.childNodes?.length || 0); i++) {
-            const child = tableNode.childNodes[i];
+        const pendingRows: { node: Node; isHeader: boolean }[] = [];
+        const pushRowChildren = (element: Element, isHeader: boolean) => {
+            for (let i = (element.childNodes?.length || 0) - 1; i >= 0; i--) pendingRows.push({ node: element.childNodes[i], isHeader });
+        };
+        pushRowChildren(tableNode, false);
+        while (pendingRows.length) {
+            const { node: child, isHeader } = pendingRows.pop()!;
             if (!isElement(child)) continue;
             const element = child as Element;
-            if (element.tagName === "table:table-row") tableRows.push({ row: element, isHeader: false });
-            else if (element.tagName === "table:table-header-rows") {
-                for (const headerRow of getDirectChildren(element, "table:table-row")) tableRows.push({ row: headerRow, isHeader: true });
-            }
+            if (element.tagName === "table:table-row") tableRows.push({ row: element, isHeader });
+            else if (element.tagName === "table:table-header-rows") pushRowChildren(element, true);
+            else if (element.tagName === "table:table-rows" || element.tagName === "table:table-row-group") pushRowChildren(element, isHeader);
         }
         let rowIndex = 0;
 
         for (const { row, isHeader } of tableRows) {
             checkAbortSignal(config.abortSignal);
             const cells: OfficeContentNode[] = [];
-            // Use getDirectChildren to avoid nested table cells
-            const tableCells = getDirectChildren(row, "table:table-cell");
+            // The row's own cells (not nested tables'), covered ones included (see rowCells)
+            const tableCells = rowCells(row);
             const rowsRepeated = toRepeatCount(row.getAttribute("table:number-rows-repeated"));
 
             let colIndex = 0;
+            // What one copy of this row writes, for its row repeats (see CellBudget.takeRepeats).
+            let rowWeight = 0;
 
             for (const cell of tableCells) {
-                const cellChildren: OfficeContentNode[] = [];
-                let cellTextRef = { value: '' };
                 const colsRepeated = toRepeatCount(cell.getAttribute("table:number-columns-repeated"));
-                const colSpan = parseInt(cell.getAttribute("table:number-columns-spanned") || "1");
-                const rowSpan = parseInt(cell.getAttribute("table:number-rows-spanned") || "1");
+                // A cell a merge covers holds its column: the next cell's is after it.
+                if (cell.tagName === "table:covered-table-cell") {
+                    colIndex += colsRepeated;
+                    continue;
+                }
+                const cellChildren: OfficeContentNode[] = [];
+                // Built without reading back what it holds, which would copy all of it per paragraph.
+                const cellTextParts = new TextBuilder();
+                const colSpan = cellSpan(cell.getAttribute("table:number-columns-spanned"), MAX_COL_SPAN);
+                const rowSpan = cellSpan(cell.getAttribute("table:number-rows-spanned"), MAX_ROW_SPAN);
 
                 // Helper to recursively process cell children (handles frames, text-boxes, etc. in ODP)
                 const processChildren = (node: Element) => {
@@ -900,10 +1190,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 }
 
                                 cellChildren.push(pNode);
-                                cellTextRef.value += pContent.text;
+                                cellTextParts.append(pContent.text);
                                 // Add newline if there are multiple paragraphs/headings
-                                if (cellTextRef.value && !cellTextRef.value.endsWith('\n')) {
-                                    cellTextRef.value += '\n';
+                                if (!cellTextParts.isEmpty() && !cellTextParts.endsWith('\n')) {
+                                    cellTextParts.append('\n');
                                 }
                             } else if (element.tagName === "table:table") {
                                 // Recursive call for nested table
@@ -919,7 +1209,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                 processChildren(cell);
 
-                let cellText = cellTextRef.value;
+                let cellText = cellTextParts.toString();
                 // Trim trailing newline from cellText
                 if (cellText.endsWith('\n')) {
                     cellText = cellText.slice(0, -1);
@@ -935,7 +1225,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 // Add cell(s) for repeated columns
                 // Bounded by the document's cell budget, not by the attribute: the repeat count
                 // is attacker-influenced and this path materializes a node per iteration.
-                const allowedCols = cellBudget.take(colsRepeated);
+                const cellWeight = cellBudget.weighCell(cellText, cellChildren, cellComments);
+                const wantedCols = colsRepeated > 1 ? 1 + cellBudget.takeRepeats(colsRepeated - 1, cellWeight) : colsRepeated;
+                const allowedCols = cellBudget.take(wantedCols);
+                rowWeight += cellWeight * allowedCols;
+                // Serialized once for all the repeats, which share it.
+                const cellRaw = config.includeRawContent && allowedCols > 0 ? getRawContent(cell, sourceXml, config) : undefined;
                 for (let k = 0; k < allowedCols; k++) {
                     // Repeat expansion is the one place a small document produces a long loop,
                     // so it is also the one place a caller most needs to be able to cancel.
@@ -968,7 +1263,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     if (isHeader) cellMetadata.style = 'header';
 
                     if (config.includeRawContent) {
-                        cellNode.rawContent = getRawContent(cell, sourceXml, config);
+                        cellNode.rawContent = k === 0 ? cellRaw : chargeRawContent(cellRaw, config);
                     }
 
                     // Share the (read-only) comment nodes across repeated columns via a shallow array
@@ -982,6 +1277,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     cells.push(cellNode);
                     colIndex++;
                 }
+                // Repeats past the content budget keep their columns, so later cells keep theirs.
+                colIndex += colsRepeated - wantedCols;
             }
 
             // Add row(s) for repeated rows. rows x cols cells are materialized (charged against the
@@ -989,15 +1286,18 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             // row-index fix below) and SHARES the read-only children/comments/text by reference; JSON
             // deep-copying instead serialized every cell's full content per row, so a row of content-
             // bearing cells built a multi-hundred-MB string (a RangeError / OOM the count budget missed).
+            // A row repeat copies every cell's content too (see CellBudget.takeRepeats).
+            const wantedRows = rowsRepeated > 1 ? 1 + cellBudget.takeRepeats(rowsRepeated - 1, rowWeight) : rowsRepeated;
             const allowedRows = cells.length === 0
-                ? (rowsRepeated > 0 ? 1 + cellBudget.take(rowsRepeated - 1) : 0)
-                : Math.min(rowsRepeated,
-                    1 + Math.floor(cellBudget.take(Math.max(0, (rowsRepeated - 1) * cells.length)) / cells.length));
+                ? (wantedRows > 0 ? 1 + cellBudget.take(wantedRows - 1) : 0)
+                : Math.min(wantedRows,
+                    1 + Math.floor(cellBudget.take(Math.max(0, (wantedRows - 1) * cells.length)) / cells.length));
+            const rowRaw = config.includeRawContent && allowedRows > 0 ? getRawContent(row, sourceXml, config) : undefined;
             for (let k = 0; k < allowedRows; k++) {
                 if ((k & 255) === 0) checkAbortSignal(config.abortSignal);
                 const rowNode: OfficeContentNode = {
                     type: 'row',
-                    children: k === 0 ? cells : cells.map(c => ({ ...c, metadata: c.metadata ? { ...c.metadata } : c.metadata, children: c.children ? c.children.slice() : c.children, comments: c.comments ? c.comments.slice() : c.comments }) as OfficeContentNode)
+                    children: k === 0 ? cells : cells.map(c => repeatCell(c, config))
                 };
 
                 // Fix row indices for repeated rows
@@ -1010,12 +1310,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 }
 
                 if (config.includeRawContent) {
-                    rowNode.rawContent = getRawContent(row, sourceXml, config);
+                    rowNode.rawContent = k === 0 ? rowRaw : chargeRawContent(rowRaw, config);
                 }
 
                 rows.push(rowNode);
                 rowIndex++;
             }
+            rowIndex += rowsRepeated - wantedRows;
         }
 
         return {
@@ -1026,9 +1327,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
 
     const parseContentXml = (xmlString: string) => {
-        const xml = parseXmlString(xmlString, { locator: config.includeRawContent });
+        const xml = parseXmlString(xmlString, { config, locator: config.includeRawContent });
         const body = getFirstElementByTagName(xml, "office:body");
         if (!body) return;
+        collectNoteIds(xml);
         // One budget for the entire document. It has to span every table - spreadsheet sheets,
         // ODT/ODP body tables, and nested tables alike - or a file sidesteps the cap simply by
         // splitting a huge repeat expansion across many small tables. `traverse` and the
@@ -1177,8 +1479,9 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 targetArray.push(tableNode);
                 lastWasList = false;
             } else if (node.tagName === "text:list") {
-                // Parse list structure with proper listId tracking
-                const listItems = getDirectChildren(node, "text:list-item");
+                // Parse list structure with proper listId tracking. A list header (`text:list-header`)
+                // is a list entry without a number: its paragraphs are read as paragraphs, in place.
+                const listItems = Array.from(node.childNodes).filter(isElement).filter(e => e.tagName === "text:list-item" || e.tagName === "text:list-header");
 
                 // Determine list type by checking the list style definition
                 let listType: 'ordered' | 'unordered' = 'unordered';
@@ -1200,49 +1503,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                 // Try to find list style in automatic styles or styles.xml to determine type and visibility
                 if (styleNameToCheck) {
-                    if (automaticStyles) {
-                        const listStyles = getElementsByTagName(automaticStyles, "text:list-style");
-                        for (const listStyle of listStyles) {
-                            if (listStyle.getAttribute("style:name") === styleNameToCheck) {
-                                // Check if it has bullet or number level styles
-                                const bulletLevels = getElementsByTagName(listStyle, "text:list-level-style-bullet");
-                                const numberLevels = getElementsByTagName(listStyle, "text:list-level-style-number");
-                                const imageLevels = getElementsByTagName(listStyle, "text:list-level-style-image");
-
-                                if (numberLevels.length > 0) {
-                                    listType = 'ordered';
-                                    isVisible = numberLevels.some(l => !!l.getAttribute("style:num-format"));
-                                } else if (bulletLevels.length > 0) {
-                                    listType = 'unordered';
-                                    isVisible = bulletLevels.some(l => !!l.getAttribute("text:bullet-char"));
-                                } else if (imageLevels.length > 0) {
-                                    listType = 'unordered';
-                                    isVisible = true;
-                                }
-                                break;
-                            }
-                        }
-                    }
+                    const automatic = automaticStyles ? listStyleKind(automaticStyles, styleNameToCheck, true) : undefined;
+                    if (automatic) ({ listType, isVisible } = automatic);
 
                     if (!isVisible && stylesDom) {
-                        const officeStyles = getFirstElementByTagName(stylesDom, "office:styles");
-                        if (officeStyles) {
-                            const listStyles = getElementsByTagName(officeStyles, "text:list-style");
-                            for (const listStyle of listStyles) {
-                                if (listStyle.getAttribute("style:name") === styleNameToCheck) {
-                                    const bulletLevels = getElementsByTagName(listStyle, "text:list-level-style-bullet");
-                                    const numberLevels = getElementsByTagName(listStyle, "text:list-level-style-number");
-                                    if (numberLevels.length > 0) {
-                                        listType = 'ordered';
-                                        isVisible = numberLevels.some(l => !!l.getAttribute("style:num-format"));
-                                    } else if (bulletLevels.length > 0) {
-                                        listType = 'unordered';
-                                        isVisible = bulletLevels.some(l => !!l.getAttribute("text:bullet-char"));
-                                    }
-                                    break;
-                                }
-                            }
-                        }
+                        officeStylesElement ??= getFirstElementByTagName(stylesDom, "office:styles") ?? null;
+                        const office = officeStylesElement ? listStyleKind(officeStylesElement, styleNameToCheck, false) : undefined;
+                        if (office) ({ listType, isVisible } = office);
                     }
                 }
 
@@ -1295,7 +1562,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                 // Track list counters for this listId (similar to WordParser)
                 if (!listCounters[listId]) {
-                    listCounters[listId] = {};
+                    listCounters[listId] = Object.create(null);
                 }
                 const indentKey = indentation.toString();
                 if (listCounters[listId][indentKey] === undefined) {
@@ -1305,6 +1572,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 // Process each list item
                 for (let i = 0; i < listItems.length; i++) {
                     const item = listItems[i];
+                    if (item.tagName === "text:list-header") {
+                        for (const child of Array.from(item.childNodes).filter(isElement)) traverse(child, targetArray, forceHeading, sourceXml);
+                        lastWasList = true;
+                        continue;
+                    }
 
                     let hasIndexedThisItem = false;
 
@@ -1375,10 +1647,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 const isHeading = presClass === "title" || presClass === "sub-title";
 
                 // In presentations, frames often contain text-boxes, images, tables, or objects
-                const textBox = getFirstElementByTagName(node, "draw:text-box");
-                const image = getFirstElementByTagName(node, "draw:image");
-                const table = getFirstElementByTagName(node, "table:table");
-                const object = getFirstElementByTagName(node, "draw:object");
+                const textBox = frameChild(node, "draw:text-box");
+                const image = frameChild(node, "draw:image");
+                const table = frameChild(node, "table:table");
+                const object = frameChild(node, "draw:object");
 
                 if (textBox) {
                     traverse(textBox, targetArray, isHeading || forceHeading, sourceXml);
@@ -1389,8 +1661,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 } else if (image) {
                     // Extract alt text from svg:title or svg:desc
                     let altText = '';
-                    const svgTitle = getFirstElementByTagName(node, "svg:title");
-                    const svgDesc = getFirstElementByTagName(node, "svg:desc");
+                    const svgTitle = frameChild(node, "svg:title");
+                    const svgDesc = frameChild(node, "svg:desc");
                     if (svgTitle && svgTitle.textContent) {
                         altText = svgTitle.textContent;
                     } else if (svgDesc && svgDesc.textContent) {
@@ -1428,18 +1700,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     const href = object.getAttribute("xlink:href");
                     if (href) {
                         const attachmentName = cleanAttachmentName(href);
-                        const objectPath = `${attachmentName}/content.xml`;
-                        const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
+                        const embedded = readEmbeddedObject(attachmentName);
 
-                        if (objectFile) {
-                            const objXml = parseXmlString(objectFile.content.toString());
-                            const mathNode = getFirstElementByTagName(objXml, "math");
-
-                            if (mathNode) {
+                        if (embedded) {
+                            if (embedded.formula !== undefined) {
                                 // Math formula object at block level - a display equation, so the
                                 // inner node is `math: 'block'` where the inline site above emits
                                 // `math: 'inline'`.
-                                const formulaText = mathmlToLatex(mathNode).trim();
+                                const formulaText = embedded.formula;
                                 const formulaNode: OfficeContentNode = {
                                     type: 'paragraph',
                                     text: formulaText,
@@ -1456,11 +1724,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 }
                                 targetArray.push(formulaNode);
                             } else {
-                                const chartData = extractChartData(objectFile.content);
+                                const chartData = embedded.chartData!;
 
                                 const chartNode: OfficeContentNode = {
                                     type: 'chart',
-                                    text: chartData.rawTexts.join(" "),
+                                    text: embedded.chartText ?? '',
                                     metadata: {
                                         attachmentName: attachmentName,
                                         chartData
@@ -1480,7 +1748,22 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         }
                     }
                 }
-            } else {
+            } else if (node.tagName === "draw:a") {
+                // A frame that is a link (a clickable picture on a slide or drawing): its pictures carry the link.
+                const href = node.getAttribute("xlink:href") || '';
+                const internal = href.startsWith('#');
+                const linked: OfficeContentNode[] = [];
+                for (const child of Array.from(node.childNodes)) {
+                    if (isElement(child)) traverse(child as Element, linked, forceHeading, sourceXml);
+                }
+                for (const child of linked) {
+                    if (child.type === 'image' && href && (!internal || !config.ignoreInternalLinks)) {
+                        child.metadata = { ...child.metadata, link: href, linkType: internal ? 'internal' : 'external' } as ImageMetadata;
+                    }
+                }
+                for (const child of linked) targetArray.push(child);
+            } else if (node.tagName !== "text:tracked-changes") {
+                // (Tracked changes hold what a deletion removed, which is not the document's text.)
                 if (node.childNodes) {
                     for (let i = 0; i < node.childNodes.length; i++) {
                         const child = node.childNodes[i];
@@ -1496,27 +1779,39 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         if (fileType === 'ods') {
             const spreadsheet = getFirstElementByTagName(body, "office:spreadsheet");
             if (spreadsheet) {
-                const tables = getElementsByTagName(spreadsheet, "table:table");
+                // The sheets, rows, cells and paragraphs each level holds itself (see getOutermostElements):
+                // taken as descendants, a table nested in a cell was read again at each level (586
+                // bytes took 7 seconds), and became a sheet of its own.
+                const tables = getDirectChildren(spreadsheet, "table:table");
                 for (let i = 0; i < tables.length; i++) {
                     const table = tables[i];
                     const sheetName = table.getAttribute("table:name") || `Sheet${i + 1}`;
                     const rows: OfficeContentNode[] = [];
 
-                    const tableRows = getElementsByTagName(table, "table:table-row");
+                    const tableRows = getOutermostElements(table, "table:table-row");
                     let rowIndex = 0;
 
                     for (let r = 0; r < tableRows.length; r++) {
                         checkAbortSignal(config.abortSignal);
                         const row = tableRows[r];
                         const cells: OfficeContentNode[] = [];
-                        const tableCells = getElementsByTagName(row, "table:table-cell");
+                        const tableCells = rowCells(row);
 
                         let colIndex = 0;
                         const rowsRepeated = toRepeatCount(row.getAttribute("table:number-rows-repeated"));
+                        // What one copy of this row writes, for its row repeats (see CellBudget.takeRepeats).
+                        let rowWeight = 0;
 
                         for (let c = 0; c < tableCells.length; c++) {
                             const cell = tableCells[c];
                             const colsRepeated = toRepeatCount(cell.getAttribute("table:number-columns-repeated"));
+                            // A cell a merge covers holds its column (see rowCells).
+                            if (cell.tagName === "table:covered-table-cell") {
+                                colIndex += colsRepeated;
+                                continue;
+                            }
+                            const colSpan = cellSpan(cell.getAttribute("table:number-columns-spanned"), MAX_COL_SPAN);
+                            const rowSpan = cellSpan(cell.getAttribute("table:number-rows-spanned"), MAX_ROW_SPAN);
 
                             // ODS cell notes are `<office:annotation>` children of the cell; extract them
                             // as comments. Their inner text:p must be kept out of the cell's own text
@@ -1526,66 +1821,37 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 ? []
                                 : getDirectChildren(cell, "office:annotation").map(a =>
                                     buildAnnotationComment(a, parseParagraphContent, paragraphStyleMap, styleMap, config, xmlString));
-                            const insideAnnotation = (el: Element): boolean => {
-                                let p: Node | null = el.parentNode;
-                                while (p && p !== cell) {
-                                    if (isElement(p) && (p as Element).tagName === 'office:annotation') return true;
-                                    p = p.parentNode;
-                                }
-                                return false;
-                            };
-
                             // Extract text from cell (paragraphs inside cell, excluding a comment's body)
                             let cellText = "";
                             const children: OfficeContentNode[] = [];
-                            const ps = getElementsByTagName(cell, "text:p").filter(p => !insideAnnotation(p));
+                            const ps = getOutermostElements(cell, "text:p", CELL_SKIP);
                             for (let p = 0; p < ps.length; p++) {
                                 const para = ps[p];
 
-                                // Parse text:span elements for formatted text
-                                const spans = getElementsByTagName(para, "text:span");
-                                if (spans.length > 0) {
-                                    for (const span of spans) {
-                                        const styleName = span.getAttribute("text:style-name");
-                                        // Through `mergeFormatting` like every other span site, so
-                                        // an explicit `false` is dropped rather than written onto
-                                        // the node - and so the node gets its own object instead of
-                                        // aliasing the shared style-table entry.
-                                        const formatting = mergeFormatting({}, styleName ? styleMap[styleName] : undefined);
-                                        const text = span.textContent || '';
-                                        cellText += text;
-
-                                        const textNode: OfficeContentNode = {
-                                            type: 'text',
-                                            text: text,
-                                            formatting: formatting
-                                        };
-                                        children.push(textNode);
-                                    }
-                                } else {
-                                    // No spans - just direct text content
-                                    const text = para.textContent || '';
-                                    cellText += text;
-                                    if (text.trim()) {
-                                        const textNode: OfficeContentNode = {
-                                            type: 'text',
-                                            text: text,
-                                            formatting: {}
-                                        };
-                                        children.push(textNode);
-                                    }
-                                }
+                                // The paragraph's inline content as any paragraph's: text around a formatted
+                                // span, spaces, tabs, line breaks, links and fields. Taking only the spans'
+                                // text when there were any dropped the rest ("Total: " before a bold "5").
+                                // (Its frames are read with the cell's, below.)
+                                const inline = parseInlineContent(para, styleMap, config, notes, paragraphStyleMap, {}, undefined, xmlString, false);
+                                cellText += inline.text;
+                                const shown = inline.text.trim() !== '';
+                                // A paragraph after another is a line of its own: its runs followed the
+                                // last one's, so a cell of "Line one" and "Line two" read "Line oneLine two".
+                                const kept = inline.children.filter(child => shown || child.notes || child.comments);
+                                if (kept.length > 0 && children.length > 0) children.push({ type: 'break', metadata: { breakType: 'textWrapping' } as BreakMetadata });
+                                for (const child of kept) children.push(child);
 
                                 if (p < ps.length - 1) cellText += "\n";
                             }
 
                             // Check for embedded draw:frame (images) in cell
-                            const drawFrames = getElementsByTagName(cell, "draw:frame");
+                            // Each frame on its own (nested ones too), none reading another: all of them.
+                            const drawFrames = getAllElementsByTagName(cell, "draw:frame");
                             for (const frame of drawFrames) {
                                 // Extract alt text from svg:title or svg:desc
                                 let altText = '';
-                                const svgTitle = getFirstElementByTagName(frame, "svg:title");
-                                const svgDesc = getFirstElementByTagName(frame, "svg:desc");
+                                const svgTitle = frameChild(frame, "svg:title");
+                                const svgDesc = frameChild(frame, "svg:desc");
                                 if (svgTitle && svgTitle.textContent) {
                                     altText = svgTitle.textContent;
                                 } else if (svgDesc && svgDesc.textContent) {
@@ -1594,7 +1860,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
                                 // Extract image href
                                 let imageHref = '';
-                                const drawImages = getElementsByTagName(frame, "draw:image");
+                                const drawImages = getDirectChildren(frame, "draw:image");
                                 if (drawImages.length > 0) {
                                     const rawHref = drawImages[0].getAttribute("xlink:href");
                                     if (rawHref) {
@@ -1606,20 +1872,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 let chartHref = '';
                                 let isFormula = false;
                                 let formulaText = '';
-                                const drawObjects = getElementsByTagName(frame, "draw:object");
+                                const drawObjects = getDirectChildren(frame, "draw:object");
                                 if (drawObjects.length > 0) {
                                     const href = drawObjects[0].getAttribute("xlink:href");
                                     if (href) {
                                         chartHref = cleanAttachmentName(href);
-                                        const objectPath = `${chartHref}/content.xml`;
-                                        const objectFile = files.find(f => f.path === objectPath || f.path.endsWith(objectPath));
-                                        if (objectFile) {
-                                            const objXml = parseXmlString(objectFile.content.toString());
-                                            const mathNode = getFirstElementByTagName(objXml, "math");
-                                            if (mathNode) {
-                                                isFormula = true;
-                                                formulaText = mathmlToLatex(mathNode).trim();
-                                            }
+                                        const embedded = readEmbeddedObject(chartHref);
+                                        if (embedded?.formula !== undefined) {
+                                            isFormula = true;
+                                            formulaText = embedded.formula;
                                         }
                                     }
                                 }
@@ -1681,17 +1942,28 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             if (!willMaterialize) {
                                 colIndex += colsRepeated;
                             } else {
-                                const allowedCols = cellBudget.take(colsRepeated);
+                                const cellWeight = cellBudget.weighCell(cellText, children, cellComments);
+                                const wantedCols = colsRepeated > 1 ? 1 + cellBudget.takeRepeats(colsRepeated - 1, cellWeight) : colsRepeated;
+                                const allowedCols = cellBudget.take(wantedCols);
+                                rowWeight += cellWeight * allowedCols;
+                                // Serialized once for all the repeats, which share it.
+                                const cellRaw = config.includeRawContent && allowedCols > 0 ? getRawContent(cell, xmlString, config) : undefined;
                                 for (let k = 0; k < allowedCols; k++) {
                                     if ((k & 1023) === 0) checkAbortSignal(config.abortSignal);
                                     const cellNode: OfficeContentNode = {
                                         type: 'cell',
                                         text: cellText,
                                         children: children,
-                                        metadata: { row: rowIndex, col: colIndex } as CellMetadata
+                                        metadata: {
+                                            row: rowIndex,
+                                            col: colIndex,
+                                            // Merged cells: the spans were not read, so the merge was lost.
+                                            ...(colSpan > 1 ? { colSpan } : {}),
+                                            ...(rowSpan > 1 ? { rowSpan } : {}),
+                                        } as CellMetadata
                                     };
                                     if (config.includeRawContent) {
-                                        cellNode.rawContent = getRawContent(cell, xmlString, config);
+                                        cellNode.rawContent = k === 0 ? cellRaw : chargeRawContent(cellRaw, config);
                                     }
                                     // Share the (read-only) comment nodes across repeated columns via a
                                     // shallow array copy, rather than deep-copying: a huge
@@ -1704,6 +1976,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                     cells.push(cellNode);
                                     colIndex++;
                                 }
+                                // Repeats past the content budget keep their columns, so later cells keep theirs.
+                                colIndex += colsRepeated - wantedCols;
                             }
                         }
 
@@ -1711,12 +1985,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         // deep-copies the whole cell array, so rows x cols is what actually
                         // exhausts memory. Charge the copies against the same budget.
                         if (cells.length > 0) {
+                            // A row repeat copies every cell's content too (see CellBudget.takeRepeats).
+                            const wantedRows = rowsRepeated > 1 ? 1 + cellBudget.takeRepeats(rowsRepeated - 1, rowWeight) : rowsRepeated;
                             const allowedRows = Math.min(
-                                rowsRepeated,
+                                wantedRows,
                                 // The first row reuses `cells` rather than copying, so only the
                                 // repeats beyond it cost budget.
-                                1 + Math.floor(cellBudget.take(Math.max(0, (rowsRepeated - 1) * cells.length)) / cells.length)
+                                1 + Math.floor(cellBudget.take(Math.max(0, (wantedRows - 1) * cells.length)) / cells.length)
                             );
+                            const rowRaw = config.includeRawContent && allowedRows > 0 ? getRawContent(row, xmlString, config) : undefined;
                             for (let k = 0; k < allowedRows; k++) {
                                 if ((k & 255) === 0) checkAbortSignal(config.abortSignal);
                                 // First row reuses `cells`; a repeated row shallow-clones each cell (its
@@ -1727,7 +2004,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 // RangeError / OOM the cell-count budget did not bound).
                                 const rowCells = k === 0
                                     ? cells
-                                    : cells.map(c => ({ ...c, metadata: c.metadata ? { ...c.metadata } : c.metadata, children: c.children ? c.children.slice() : c.children, comments: c.comments ? c.comments.slice() : c.comments }) as OfficeContentNode);
+                                    : cells.map(c => repeatCell(c, config));
                                 const rowNode: OfficeContentNode = {
                                     type: 'row',
                                     children: rowCells,
@@ -1742,11 +2019,12 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                     });
                                 }
                                 if (config.includeRawContent) {
-                                    rowNode.rawContent = getRawContent(row, xmlString, config);
+                                    rowNode.rawContent = k === 0 ? rowRaw : chargeRawContent(rowRaw, config);
                                 }
                                 rows.push(rowNode);
                                 rowIndex++;
                             }
+                            rowIndex += rowsRepeated - wantedRows;
                         } else {
                             rowIndex += rowsRepeated;
                         }
@@ -1827,7 +2105,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 }
 
                 if (odpNotes.length > 0) {
-                    content.push(...odpNotes);
+                    appendAll(content, odpNotes);
                 }
             }
         }
@@ -1896,7 +2174,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     if (config.extractAttachments) {
         const objectFiles = files.filter(f => f.path.match(/Object \d+\/content\.xml/));
         for (const objFile of objectFiles) {
-            const objXml = parseXmlString(objFile.content.toString());
+            const objXml = parseXmlString(objFile.content.toString(), { config });
             const isChart = getElementsByTagName(objXml, "chart:chart").length > 0;
 
             if (isChart) {
@@ -1910,7 +2188,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 };
 
                 // Extract data from chart XML
-                const chartData = extractChartData(objFile.content);
+                const chartData = extractChartData(objFile.content, config);
 
                 if (chartData.rawTexts.length > 0) {
                     attachment.chartData = chartData;
@@ -1926,25 +2204,63 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             const attachment = createAttachment(media.path.split('/').pop() || 'image', media.content);
             attachments.push(attachment);
 
-            if (config.ocr) {
-                if (attachment.mimeType.startsWith('image/')) {
-                    try {
-                        attachment.ocrText = (await performOcr(media.content, { ...config.ocrConfig })).trim();
-                    } catch (e) {
-                        logWarning(OfficeWarningType.OCR_FAILED, config, attachment.name, e);
-                    }
-                }
+            if (config.ocr && attachment.mimeType.startsWith('image/')) {
+                const ocrText = await ocrDuringParse(media.content, config, attachment.name);
+                if (ocrText !== undefined) attachment.ocrText = ocrText;
             }
         }
     }
 
     const metaFile = files.find(f => f.path.match(metaFileRegex));
-    const metadata = metaFile ? parseOfficeMetadata(metaFile.content.toString()) : {};
+    const metadata = metaFile ? parseOfficeMetadata(metaFile.content.toString(), config) : {};
 
     // Helper: Resolve ODS chart cell references to actual values
     // ODS charts often link to cell ranges (e.g., [Sheet1.$A$1:.$A$5]) instead of embedding values
+    // Each sheet's cells by row (built once), the references already resolved, and a budget of cells
+    // read and values made for all the document's charts: every series scanned the whole sheet and
+    // copied what it matched, so a chart of many series over one range (1.8 KB of ODS) took gigabytes.
+    // Past the budget, a reference stays its `[range]` text, as one that resolves to nothing does.
+    const sheetRows = new Map<OfficeContentNode, { rows: number[]; cells: Map<number, OfficeContentNode[]> }>();
+    const resolvedReferences = new Map<string, string[]>();
+    let resolutionBudget = 5 * MAX_CHART_VALUES;
+    // The sheets by name (the first of a name), found once: a scan of the document per reference took
+    // references x sheets (315 KB, three and a half minutes).
+    let sheetsByName: Map<string, OfficeContentNode> | undefined;
+    const sheetNamed = (nodes: OfficeContentNode[], name: string): OfficeContentNode | undefined => {
+        if (!sheetsByName) {
+            sheetsByName = new Map();
+            for (const n of nodes) {
+                const sheetName = n.type === 'sheet' ? (n.metadata as SheetMetadata)?.sheetName : undefined;
+                if (typeof sheetName === 'string' && !sheetsByName.has(sheetName)) sheetsByName.set(sheetName, n);
+            }
+        }
+        return sheetsByName.get(name);
+    };
+    const rowsOf = (sheet: OfficeContentNode) => {
+        let index = sheetRows.get(sheet);
+        if (!index) {
+            const cells = new Map<number, OfficeContentNode[]>();
+            for (const row of sheet.children ?? []) for (const cell of row.children ?? []) {
+                const r = (cell.metadata as CellMetadata | undefined)?.row;
+                if (typeof r !== 'number') continue;
+                let list = cells.get(r);
+                if (!list) cells.set(r, list = []);
+                list.push(cell);
+            }
+            index = { rows: [...cells.keys()].sort((a, b) => a - b), cells };
+            sheetRows.set(sheet, index);
+        }
+        return index;
+    };
     const resolveChartReferences = (chartData: ChartData, nodes: OfficeContentNode[]) => {
         const getValuesFromReference = (ref: string): string[] => {
+            const known = resolvedReferences.get(ref);
+            if (known) return known;
+            const values = resolveReference(ref);
+            resolvedReferences.set(ref, values);
+            return values;
+        };
+        const resolveReference = (ref: string): string[] => {
             // Remove brackets: [Sheet.$A$1:.$A$5] -> Sheet.$A$1:.$A$5
             const cleanRef = ref.replace(/^\[|\]$/g, '');
             const [startPart, endPart] = cleanRef.split(':');
@@ -1985,50 +2301,39 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
 
             if (!start || !end) return [ref];
 
-            const sheet = nodes.find(n => n.type === 'sheet' && (n.metadata as SheetMetadata)?.sheetName === sheetName);
+            // Every reference is charged, found or not.
+            if (--resolutionBudget < 0) return [ref];
+            const sheet = sheetNamed(nodes, sheetName);
             if (!sheet || !sheet.children) return [ref];
 
             const values: string[] = [];
-            // Collect all matching cells
-            for (const row of sheet.children) {
-                if (row.children) {
-                    for (const cell of row.children) {
-                        const meta = cell.metadata as CellMetadata;
-                        if (meta && meta.row >= start.r && meta.row <= end.r && meta.col >= start.c && meta.col <= end.c) {
-                            values.push(cell.text || '');
-                        }
-                    }
+            // The cells of the rows in range, found through the sheet's row index.
+            const { rows, cells } = rowsOf(sheet);
+            let lo = 0, hi = rows.length;
+            while (lo < hi) { const mid = (lo + hi) >> 1; if (rows[mid] < start.r) lo = mid + 1; else hi = mid; }
+            for (let i = lo; i < rows.length && rows[i] <= end.r; i++) {
+                for (const cell of cells.get(rows[i])!) {
+                    if (--resolutionBudget < 0) return [ref];
+                    const col = (cell.metadata as CellMetadata).col;
+                    if (col >= start.c && col <= end.c) values.push(cell.text || '');
                 }
             }
-            return values.length > 0 ? values : [];
+            return values;
         };
 
-        // Resolve DataSets
-        for (const ds of chartData.dataSets) {
-            const newValues: string[] = [];
-            for (const val of ds.values) {
-                if (val.startsWith('[')) newValues.push(...getValuesFromReference(val));
-                else newValues.push(val);
+        // Resolve DataSets and labels: a resolved range is shared, and each value counts against the budget.
+        const resolve = (list: string[]): string[] => {
+            const out: string[] = [];
+            for (const val of list) {
+                const values = val.startsWith('[') ? getValuesFromReference(val) : [val];
+                if (values.length > 1 && (resolutionBudget -= values.length) < 0) { out.push(val); continue; }
+                for (const v of values) out.push(v);
             }
-            ds.values = newValues;
-        }
-
-        // Resolve Labels
-        const newLabels: string[] = [];
-        for (const label of chartData.labels) {
-            if (label.startsWith('[')) newLabels.push(...getValuesFromReference(label));
-            else newLabels.push(label);
-        }
-        chartData.labels = newLabels;
-
-        // Rebuild rawTexts
-        chartData.rawTexts = [];
-        if (chartData.title) chartData.rawTexts.push(chartData.title);
-        for (const ds of chartData.dataSets) {
-            if (ds.name) chartData.rawTexts.push(ds.name);
-            chartData.rawTexts.push(...chartData.labels);
-            chartData.rawTexts.push(...ds.values);
-        }
+            return out;
+        };
+        for (const ds of chartData.dataSets) ds.values = resolve(ds.values);
+        chartData.labels = resolve(chartData.labels);
+        chartData.rawTexts = chartRawTexts(chartData.title, chartData.dataSets, chartData.labels);
     };
 
     // Apply resolution to all chart attachments
@@ -2041,10 +2346,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     // Link OCR and Chart text to content nodes
     // Link OCR and Chart text to content nodes (with heuristic for unlinked images)
     const assignAttachmentData = (nodes: OfficeContentNode[]) => {
+        // Both walks visit a node once: repeated cells share their content nodes, so walking every
+        // path to them took repeats x content steps (a few hundred KB held minutes of CPU).
         // Step 1: Identify unused image attachments globally
         const usedAttachmentNames = new Set<string>();
+        const named = new Set<OfficeContentNode>();
         const traverseForNames = (ns: OfficeContentNode[]) => {
             for (const n of ns) {
+                if (named.has(n)) continue;
+                named.add(n);
                 if (n.metadata && 'attachmentName' in n.metadata) {
                     const name = (n.metadata as ImageMetadata).attachmentName;
                     if (name) usedAttachmentNames.add(name);
@@ -2053,11 +2363,23 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             }
         };
         traverseForNames(nodes);
+        const attachmentsByName = new Map<string, OfficeAttachment>();
+        for (const a of attachments) if (a.name && !attachmentsByName.has(a.name)) attachmentsByName.set(a.name, a);
+        // A chart's text, joined once for every node showing it.
+        const chartTexts = new Map<OfficeAttachment, string>();
+        const chartTextOf = (attachment: OfficeAttachment): string => {
+            let text = chartTexts.get(attachment);
+            if (text === undefined) chartTexts.set(attachment, text = attachment.chartData!.rawTexts.join(config.newlineDelimiter));
+            return text;
+        };
 
         const unusedImages = attachments.filter(a => a.type === 'image' && a.name && !usedAttachmentNames.has(a.name));
         let unusedImageIndex = 0;
 
+        const processed = new Set<OfficeContentNode>();
         const processNode = (node: OfficeContentNode) => {
+            if (processed.has(node)) return;
+            processed.add(node);
             if ((node.type === 'image' || node.type === 'chart') && node.metadata && 'attachmentName' in node.metadata) {
                 let attachmentName = (node.metadata as ImageMetadata).attachmentName;
 
@@ -2069,14 +2391,14 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                 }
 
                 if (attachmentName) {
-                    const attachment = attachments.find(a => a.name === attachmentName);
+                    const attachment = attachmentsByName.get(attachmentName);
 
                     if (attachment) {
                         if (attachment.ocrText) {
                             node.text = attachment.ocrText;
                         }
                         if (attachment.chartData && node.type === 'chart') {
-                            node.text = attachment.chartData.rawTexts.join(config.newlineDelimiter);
+                            node.text = chartTextOf(attachment);
                         }
                     }
                 }
@@ -2092,7 +2414,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     assignAttachmentData(content);
 
     // Create combined styleMap for metadata (matches DOCX format)
-    const combinedStyleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify' } } = {};
+    const combinedStyleMap: { [key: string]: { formatting: TextFormatting, alignment?: 'left' | 'center' | 'right' | 'justify' } } = Object.create(null);
     for (const styleName in styleMap) {
         combinedStyleMap[styleName] = {
             formatting: styleMap[styleName],
@@ -2147,7 +2469,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         fileType,
         {
             ...metadata,
-            styleMap: combinedStyleMap
+            styleMap: plainRecord(combinedStyleMap)
         },
         content,
         attachments,

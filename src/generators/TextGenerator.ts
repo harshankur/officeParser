@@ -1,9 +1,9 @@
-import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNodeType, OfficeParserAST } from '../types.js';
+import { CodeMetadata, ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNodeType, OfficeParserAST, OfficeWarningType } from '../types.js';
+import { documentBytesOf, LAYOUT_SPACES_PER_BYTE } from '../utils/budgetUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { clampRepeat, median } from '../utils/numberUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
-
-const escapeRegExpChars = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+import { trimRepeated } from '../utils/textUtils.js';
 
 /**
  * Separator between table/sheet cells on the paths that don't render an aligned grid (a `table`
@@ -21,12 +21,25 @@ const CELL_SEPARATOR = '\t';
  */
 const TEXT_NODE_CLASS: Readonly<Record<OfficeContentNodeType, 'block' | 'inline'>> = {
     paragraph: 'block', heading: 'block', row: 'block', sheet: 'block', slide: 'block', note: 'block',
+    // A code node is a block, unless it is math in a line of text (see isInlineMath).
     list: 'block', table: 'block', code: 'block',
+    // A definition's term and description are lines of their own, and an admonition's text ends its
+    // line (they ran into each other and into the paragraph after them).
+    admonition: 'block', definitionList: 'block', definitionTerm: 'block', definitionDescription: 'block',
     text: 'inline', image: 'inline', chart: 'inline', drawing: 'inline', cell: 'inline', page: 'inline',
     break: 'inline', comment: 'inline', header: 'inline', footer: 'inline', slideMaster: 'inline',
-    embed: 'inline', admonition: 'inline', definitionList: 'inline', definitionTerm: 'inline',
-    definitionDescription: 'inline',
+    embed: 'inline',
 };
+
+/** Math in a line of text (`$x^2$`): a `code` node, but not a block (it broke its line before it). */
+const isInlineMath = (node: OfficeContentNode): boolean => node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math === 'inline';
+
+/** The widest a laid-out table's column is padded to (see TextGenerator.renderTable). */
+const LAYOUT_COLUMN_WIDTH = 256;
+/** The spaces one document's laid-out tables may add in all to line their columns up. */
+const MAX_LAYOUT_PADDING = 16 * 1024 * 1024;
+/** The widest a page's layout is set, in characters (a page is some hundred wide). */
+const MAX_LAYOUT_COLUMNS = 1000;
 
 /**
  * Generates plain text from an AST.
@@ -70,9 +83,15 @@ export class TextGenerator extends BaseGenerator<'text'> {
             // chart's data series (it lives in `node.text`); this drops it when charts are turned off.
             if (node.type === 'chart' && this.config.includeCharts === false) return '';
 
-            // Return raw text for text nodes
-            if (node.type === 'text' || node.type === 'code') {
+            // Return raw text for text nodes, and for math in a line of text
+            if (node.type === 'text' || (node.type === 'code' && isInlineMath(node))) {
                 return node.text || '';
+            }
+            // A code block or display equation is a block: it ends its line (it ran into the paragraph
+            // after it: `code onePara after`).
+            if (node.type === 'code') {
+                const code = node.text || '';
+                return code === '' || code.endsWith(newline) ? code : code + newline;
             }
 
             // Handle explicit breaks
@@ -202,13 +221,21 @@ export class TextGenerator extends BaseGenerator<'text'> {
         // thing safe to strip. Nothing else is: not leading/trailing spaces or tabs (e.g. an
         // intentionally-indented opening line, or trailing spaces on the last line - both real
         // content), and not any whitespace that isn't composed of this exact repeated delimiter. A
-        // blanket trim()/trimEnd() would silently destroy all of those.
-        const d = escapeRegExpChars(newline);
-        const leadingOrTrailingArtifact = new RegExp(`^(?:${d})+|(?:${d})+$`, 'g');
+        // blanket trim()/trimEnd() would silently destroy all of those. (Scanned from each end: a
+        // pattern anchored to the end retries every newline of a long run inside the text.)
         return {
-            value: output.replace(leadingOrTrailingArtifact, ''),
+            value: trimRepeated(output, newline),
             messages: this.messages
         };
+    }
+
+    /**
+     * A block starts a line of its own: a list item's text followed by a nested definition list or
+     * table ran into the block's first line (`- itemT`).
+     */
+    protected override childSeparator(previous: string, child: OfficeContentNode): string {
+        const newline = this.config.textConfig.newlineDelimiter;
+        return TEXT_NODE_CLASS[child.type] === 'block' && !isInlineMath(child) && previous && !previous.endsWith(newline) ? newline : '';
     }
 
     /**
@@ -260,15 +287,25 @@ export class TextGenerator extends BaseGenerator<'text'> {
 
         interface Atom { text: string; x: number; y: number; w: number; h: number; }
         const atoms: Atom[] = [];
-        const collect = async (n: OfficeContentNode): Promise<void> => {
+        // Of two placed atoms (by index, -1 for none), the one read first: the higher line, or on one
+        // line the one further left.
+        const firstRead = (a: number, b: number): number =>
+            a < 0 ? b : b < 0 ? a : (atoms[b].y < atoms[a].y - 0.5 || (Math.abs(atoms[b].y - atoms[a].y) < 1 && atoms[b].x < atoms[a].x)) ? b : a;
+        const place = (atom: Atom): number => atoms.push(atom) - 1;
+        // Places the atoms of `n`, and returns the one read first (-1 for none): a list folds its marker
+        // into its own, found from its children's, where scanning every atom under each list took time
+        // in the depth of the lists times the atoms.
+        const collect = async (n: OfficeContentNode): Promise<number> => {
             const ov = await this.handleOnNode(n);
-            if (ov === false) return;
+            if (ov === false) return -1;
             if (typeof ov === 'string') {
-                if (n.bounds && ov) atoms.push({ text: ov, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
-                return;
+                return n.bounds && ov ? place({ text: ov, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height }) : -1;
             }
             if (n.type === 'text' && n.bounds && (n.text || '').length) {
-                atoms.push({ text: n.text!, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
+                const own = place({ text: n.text!, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
+                let first = own;
+                for (const c of n.children || []) first = firstRead(first, await collect(c));
+                return first;
             } else if (n.type === 'image') {
                 const mode = this.imageMode();
                 if (mode !== 'none' && n.bounds) {
@@ -278,31 +315,28 @@ export class TextGenerator extends BaseGenerator<'text'> {
                     // output renders its recognized text rather than a placeholder that loses it.
                     const useOcr = !!ocr && (mode === 'ocr-text-only' || (mode === 'image-only' && this.overInlineCap(m?.attachmentName)));
                     const text = useOcr ? ocr : (mode === 'ocr-text-only' ? '' : `[Image: ${m?.altText || m?.attachmentName || 'Untitled'}]`);
-                    if (text) atoms.push({ text, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
+                    if (text) return place({ text, x: n.bounds.x, y: n.bounds.y, w: n.bounds.width, h: n.bounds.height });
                 }
-                return;
+                return -1;
             } else if (n.type === 'list') {
                 // The parser strips the item's marker into metadata; re-synthesize it (as flow mode does)
                 // and fold it into the item's first placed atom so bullets/numbers survive layout mode.
-                const before = atoms.length;
-                for (const c of n.children || []) await collect(c);
-                if (atoms.length > before) {
+                let first = -1;
+                for (const c of n.children || []) first = firstRead(first, await collect(c));
+                if (first >= 0) {
                     const meta = n.metadata as any;
                     const marker = meta?.listType === 'ordered' ? `${(meta.itemIndex ?? 0) + 1}. ` : '- ';
-                    let firstIdx = before;
-                    for (let k = before + 1; k < atoms.length; k++) {
-                        const f = atoms[firstIdx];
-                        if (atoms[k].y < f.y - 0.5 || (Math.abs(atoms[k].y - f.y) < 1 && atoms[k].x < f.x)) firstIdx = k;
-                    }
-                    const f = atoms[firstIdx];
+                    const f = atoms[first];
                     const perChar = f.text.length ? f.w / f.text.length : 6;
                     f.text = marker + f.text;
                     f.x = Math.max(0, f.x - marker.length * perChar);
                     f.w = f.w + marker.length * perChar;
                 }
-                return;
+                return first;
             }
-            for (const c of n.children || []) await collect(c);
+            let first = -1;
+            for (const c of n.children || []) first = firstRead(first, await collect(c));
+            return first;
         };
         for (const c of page.children || []) await collect(c);
 
@@ -321,7 +355,9 @@ export class TextGenerator extends BaseGenerator<'text'> {
         const sortedX = atoms.map(a => a.x).sort((p, q) => p - q);
         const marginX = sortedX[Math.floor(0.02 * sortedX.length)] ?? sortedX[0];
         const pageWidth = (page.metadata as any).pageWidth as number;
-        const maxCols = Math.ceil(pageWidth / charW) * 2;
+        // At most MAX_LAYOUT_COLUMNS: a page's width is the document's own (a MediaBox 200 million points
+        // wide, 2 KB of PDF, padded each line to its runs' positions, 389 MB of text).
+        const maxCols = Math.min(Math.ceil(pageWidth / charW) * 2, MAX_LAYOUT_COLUMNS);
 
         // Cluster atoms into rows by vertical band overlap.
         atoms.sort((a, b) => a.y - b.y || a.x - b.x);
@@ -345,8 +381,13 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 let col = Math.round((a.x - marginX) / charW);
                 if (col < 0) col = 0;
                 if (col > maxCols) col = maxCols;
-                if (col > line.length) {
-                    line += ' '.repeat(col - line.length);
+                // The padding comes out of the document's layout budget (as a table's does); past it, a
+                // run is set off by one space.
+                const pad = col - line.length;
+                if (pad > 0 && this.takeLayoutPadding(pad)) {
+                    line += ' '.repeat(pad);
+                } else if (pad > 0) {
+                    line += ' ';
                 } else if (line.length > 0) {
                     // The column is at or before the current line end. Only insert a space when this
                     // atom is separated from the previous one by a real horizontal gap; adjacent runs
@@ -357,7 +398,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
                 line += a.text;
                 prevRight = a.x + a.w;
             }
-            return line.replace(/\s+$/, '');
+            return line.trimEnd();
         });
 
         const centers = rows.map(r => r[0].y + r[0].h / 2);
@@ -376,6 +417,28 @@ export class TextGenerator extends BaseGenerator<'text'> {
         return out + newline;
     }
 
+
+    /**
+     * Spaces laid-out tables and pages may still add to line their columns up (see renderTable):
+     * MAX_LAYOUT_PADDING plus LAYOUT_SPACES_PER_BYTE for each byte of the document parsed.
+     */
+    private layoutPaddingLeft = MAX_LAYOUT_PADDING + LAYOUT_SPACES_PER_BYTE * documentBytesOf(this.ast);
+    private layoutPaddingWarned = false;
+
+    /** Whether `pad` more spaces fit the layout budget (and takes them); past it, reported once. */
+    private takeLayoutPadding(pad: number): boolean {
+        if (this.layoutPaddingLeft >= pad) { this.layoutPaddingLeft -= pad; return true; }
+        if (!this.layoutPaddingWarned) {
+            this.layoutPaddingWarned = true;
+            this.warn(OfficeWarningType.TABLE_GRID_LIMIT_EXCEEDED, { unaligned: true, limit: MAX_LAYOUT_PADDING + LAYOUT_SPACES_PER_BYTE * documentBytesOf(this.ast) });
+        }
+        return false;
+    }
+
+    /** A laid-out table renders its own cells (see renderTable). */
+    protected override walkedByProcessor(node: OfficeContentNode): boolean {
+        return node.type === 'table' && this.config.textConfig.preserveLayout;
+    }
 
     private async renderTable(node: OfficeContentNode, processor: any, newline: string): Promise<string> {
         if (!node.children || node.children.length === 0) return '';
@@ -410,7 +473,13 @@ export class TextGenerator extends BaseGenerator<'text'> {
         for (const row of rows) {
             tableOutput += '| ';
             for (let i = 0; i < row.length; i++) {
-                tableOutput += (row[i] || '').padEnd(colWidths[i] || 0) + ' | ';
+                const cell = row[i] || '';
+                // Padded to its column's width, at most LAYOUT_COLUMN_WIDTH and within the document's
+                // budget of padding: padded to the widest cell, one 100 KB cell over 2,000 rows made
+                // 200 MB of spaces from 1.6 KB. A cell wider than that is written as it is.
+                const pad = Math.min(colWidths[i] || 0, LAYOUT_COLUMN_WIDTH) - cell.length;
+                const padding = pad > 0 && this.takeLayoutPadding(pad) ? pad : 0;
+                tableOutput += cell + ' '.repeat(padding) + ' | ';
             }
             tableOutput += newline;
         }

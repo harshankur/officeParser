@@ -4,7 +4,7 @@ import * as fsPath from 'path';
 import * as child_process from 'child_process';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
-import { unzipSync, strFromU8 } from 'fflate';
+import { unzipSync, strFromU8, strToU8, zipSync } from 'fflate';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = fsPath.dirname(__filename);
@@ -780,6 +780,94 @@ async function runTests() {
     } else {
         results.push({ name: 'CLI: --includeImages accepts a mode in both forms', status: 'FAIL', details: `space exit ${res45sp.status}, forms equal: ${res45sp.stdout === res45eq.stdout}, mode had effect: ${res45eq.stdout !== res45default.stdout}`, duration: d45 });
     }
+
+    // 46. LaTeX generation: `--to tex` prints a complete document, `latex` is an alias for it, a
+    //     texConfig flag reaches the generator, and a bare `--texConfig.bundle` (a known boolean, so
+    //     it must not swallow the output path) writes a zip holding main.tex and its images.
+    console.log('Test 46: LaTeX generation --to tex / --to latex / --texConfig.*');
+    const t46 = Date.now();
+    const res46 = runCli(['--to', 'tex', '--texConfig.numberSections']);
+    const res46alias = runCli(['--to=latex']);
+    const texBundleOut = fsPath.join(RESULTS_DIR, 'output_test.zip');
+    if (fs.existsSync(texBundleOut)) fs.unlinkSync(texBundleOut);
+    const res46bundle = runCli(['--extractAttachments', '--to', 'tex', '--texConfig.bundle', `--output=${texBundleOut}`]);
+    const d46 = Date.now() - t46;
+    const texOk = res46.status === 0 && /^\\RequirePackage\{iftex\}\n[\s\S]*?\n\\documentclass\[[^\]]*\]\{article\}/.test(res46.stdout)
+        && res46.stdout.includes('\\begin{document}') && res46.stdout.includes('\\end{document}')
+        && res46.stdout.includes('\\section') && !res46.stdout.includes('secnumdepth');
+    results.push({ name: 'CLI: --to tex prints a LaTeX document (numberSections honored)', status: texOk ? 'PASS' : 'FAIL', details: texOk ? 'preamble, body, sections, numbering left on' : `exit ${res46.status}, head: ${res46.stdout.slice(0, 100)}`, duration: d46 });
+    const aliasOk = res46alias.status === 0 && res46alias.stdout.includes('\\documentclass');
+    results.push({ name: 'CLI: --to latex is an alias of tex', status: aliasOk ? 'PASS' : 'FAIL', details: aliasOk ? 'alias resolved' : `exit ${res46alias.status}, stderr: ${res46alias.stderr.slice(0, 120)}`, duration: 0 });
+    let bundleOk = false, bundleDetail = '';
+    if (res46bundle.status === 0 && fs.existsSync(texBundleOut)) {
+        try {
+            const files = unzipSync(new Uint8Array(fs.readFileSync(texBundleOut)));
+            const main = files['main.tex'] ? strFromU8(files['main.tex']) : '';
+            const images = Object.keys(files).filter(n => n.startsWith('images/'));
+            bundleOk = main.includes('\\includegraphics') && images.length > 0 && images.every(p => main.includes(p));
+            bundleDetail = bundleOk ? `main.tex + ${images.length} image(s), all referenced` : `main.tex: ${!!main}, images: ${images.join(',')}`;
+        } catch (e: any) { bundleDetail = `output is not a valid zip: ${e.message}`; }
+    } else {
+        bundleDetail = `exit ${res46bundle.status}, file exists: ${fs.existsSync(texBundleOut)}. stderr: ${res46bundle.stderr.slice(0, 120)}`;
+    }
+    results.push({ name: 'CLI: --texConfig.bundle writes main.tex plus its images', status: bundleOk ? 'PASS' : 'FAIL', details: bundleDetail, duration: 0 });
+
+    // 47. LaTeX input: a .tex file parses and converts (here to DOCX), and a LaTeX project zip
+    //     named .zip is routed by what it holds.
+    console.log('Test 47: LaTeX input --to docx / project .zip');
+    const t47 = Date.now();
+    const texIn = fsPath.join(ROOT, 'test', 'files', 'test.tex');
+    const texDocx = fsPath.join(RESULTS_DIR, 'from_tex.docx');
+    if (fs.existsSync(texDocx)) fs.unlinkSync(texDocx);
+    const res47 = runCliRaw([texIn, '--to=docx', `--output=${texDocx}`]);
+    let docxOk = false;
+    if (res47.status === 0 && fs.existsSync(texDocx)) {
+        const doc = strFromU8(unzipSync(new Uint8Array(fs.readFileSync(texDocx)))['word/document.xml'] ?? new Uint8Array());
+        docxOk = doc.includes('Demonstration of DOCX support in calibre') && /w:val="Heading1"/.test(doc);
+    }
+    results.push({ name: 'CLI: a .tex file converts to DOCX', status: docxOk ? 'PASS' : 'FAIL', details: docxOk ? 'headings and text carried over' : `exit ${res47.status}, stderr: ${res47.stderr.slice(0, 160)}`, duration: Date.now() - t47 });
+    const res47zip = runCliRaw([texBundleOut, '--to=text']);
+    const zipOk = res47zip.status === 0 && res47zip.stdout.includes('Demonstration of DOCX support');
+    results.push({ name: 'CLI: a LaTeX project .zip is parsed as LaTeX', status: zipOk ? 'PASS' : 'FAIL', details: zipOk ? 'routed by archive contents' : `exit ${res47zip.status}, stderr: ${res47zip.stderr.slice(0, 160)}`, duration: 0 });
+
+    // 48. Options that were easy to get wrong: a bare `--htmlParserConfig.preserveComments` before the
+    //     file must not swallow it as its value; a value an option does not accept is printed without
+    //     --verbose, like an unrecognized option; `--texParserConfig.today` sets what \today prints.
+    console.log('Test 48: preserveComments before the file / INVALID_CONFIG_VALUE / texParserConfig.today');
+    const t48 = Date.now();
+    const commentHtml = fsPath.join(RESULTS_DIR, 'comment.html');
+    fs.writeFileSync(commentHtml, '<html><body><p>Before<!-- hidden note --> after</p></body></html>');
+    const res48a = runCliRaw(['--htmlParserConfig.preserveComments', commentHtml, '--to', 'md']);
+    const commentsOk = res48a.status === 0 && res48a.stdout.includes('<!-- hidden note -->');
+    results.push({ name: 'CLI: a bare --htmlParserConfig.preserveComments before the file', status: commentsOk ? 'PASS' : 'FAIL', details: commentsOk ? 'file kept, comment preserved' : `exit ${res48a.status}, stdout: ${res48a.stdout.slice(0, 120)}, stderr: ${res48a.stderr.slice(0, 120)}`, duration: Date.now() - t48 });
+    const res48b = runCli(['--to', 'tex', '--texConfig.documentClass=reprot']);
+    const invalidOk = res48b.status === 0 && res48b.stderr.includes('[INVALID_CONFIG_VALUE]') && res48b.stderr.includes('texConfig.documentClass') && res48b.stdout.includes('{article}');
+    results.push({ name: 'CLI: an invalid option value is printed without --verbose', status: invalidOk ? 'PASS' : 'FAIL', details: invalidOk ? 'warning printed, default used' : `exit ${res48b.status}, stderr: ${res48b.stderr.slice(0, 200)}`, duration: 0 });
+    const todayTex = fsPath.join(RESULTS_DIR, 'today.tex');
+    fs.writeFileSync(todayTex, '\\documentclass{article}\\begin{document}Written on \\today.\\end{document}');
+    const res48c = runCliRaw([todayTex, '--texParserConfig.today=May 1, 2024', '--to=text']);
+    const todayOk = res48c.status === 0 && res48c.stdout.includes('Written on May 1, 2024.');
+    results.push({ name: 'CLI: --texParserConfig.today sets what \\today prints', status: todayOk ? 'PASS' : 'FAIL', details: todayOk ? 'fixed date printed' : `exit ${res48c.status}, stdout: ${res48c.stdout.slice(0, 120)}`, duration: 0 });
+
+    // 49. Option values are text on the command line: one whose default is a number is read as one (a
+    //     limit that adds an allowance to it joined the text, so --decompressionLimits.maxTableCells=10
+    //     read as 10 followed by the allowance's digits), and an option only generators have
+    //     (--maxInlineImageBytes) reaches the generator (sent to the parser, it was unrecognized).
+    console.log('Test 49: numeric option values / generator-only options');
+    const t49 = Date.now();
+    const repeatOds = fsPath.join(RESULTS_DIR, 'repeat.ods');
+    fs.writeFileSync(repeatOds, zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.spreadsheet'),
+        'content.xml': strToU8('<?xml version="1.0" encoding="UTF-8"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table table:name="S"><table:table-row><table:table-cell table:number-columns-repeated="100000"><text:p>X</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>'),
+    }));
+    const res49 = runCliRaw([repeatOds, '--decompressionLimits.maxTableCells=10', '--to=csv']);
+    // maxTableCells plus one cell per byte of the document.
+    const cells49 = res49.stdout.trim().split(',').length;
+    const numbersOk = res49.status === 0 && cells49 === 10 + fs.statSync(repeatOds).size;
+    results.push({ name: 'CLI: a numeric option value is a number', status: numbersOk ? 'PASS' : 'FAIL', details: numbersOk ? `${cells49} cells` : `exit ${res49.status}, ${cells49} cells, stderr: ${res49.stderr.slice(0, 160)}`, duration: Date.now() - t49 });
+    const res49b = runCliRaw([fsPath.join(ROOT, 'test', 'files', 'test.docx'), '--extractAttachments', '--maxInlineImageBytes=10', '--to=md']);
+    const inlineOk = res49b.status === 0 && !res49b.stdout.includes('data:image') && !res49b.stderr.includes('UNRECOGNIZED_CONFIG_OPTION');
+    results.push({ name: 'CLI: --maxInlineImageBytes reaches the generator', status: inlineOk ? 'PASS' : 'FAIL', details: inlineOk ? 'no picture inlined' : `exit ${res49b.status}, stderr: ${res49b.stderr.slice(0, 160)}`, duration: 0 });
 
     // Print summary report
     const logger = new DualLogger();

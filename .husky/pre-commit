@@ -1,2 +1,3 @@
 npm run build
-git add docs/dist
+git add docs/dist docs/blog docs/sitemap.xml docs/robots.txt
+node scripts/sync-site-version.js --stage

@@ -1,0 +1,18 @@
+{
+    "extends": "../tsconfig.json",
+    "compilerOptions": {
+        "module": "ES2022",
+        "moduleResolution": "Bundler",
+        "rootDir": "..",
+        "noEmit": true
+    },
+    "include": [
+        "**/*"
+    ],
+    "exclude": [
+        "node_modules",
+        "files/**/*",
+        "parser/baseline/**/*",
+        "generator/baseline/**/*"
+    ]
+}

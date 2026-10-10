@@ -59,6 +59,10 @@ import {
     PdfParserConfig,
     DocxGeneratorConfig,
     OdtGeneratorConfig,
+    TexGeneratorConfig,
+    TexDocumentClass,
+    TexParserConfig,
+    FileTypeAlias,
     PaperFormat,
     ImageMode,
     NodeBounds,
@@ -101,6 +105,8 @@ import {
     GeneratorConfig,
     SupportedDestination,
     UniversalGeneratorFormat,
+    GeneratorFormatAlias,
+    CanonicalFormat,
     ChunkingConfig,
     ChunkingStrategy,
     FixedSizeChunkingConfig,
@@ -143,6 +149,7 @@ import {
     HeaderFooterMetadata,
     IndentationMetadata,
     ParagraphMetadata,
+    DefinitionMetadata,
 } from './types.js';
 
 
@@ -178,6 +185,8 @@ export {
     GeneratorConfig,
     SupportedDestination,
     UniversalGeneratorFormat,
+    GeneratorFormatAlias,
+    CanonicalFormat,
     ChunkingConfig,
     ChunkingStrategy,
     FixedSizeChunkingConfig,
@@ -197,6 +206,10 @@ export {
     PdfParserConfig,
     DocxGeneratorConfig,
     OdtGeneratorConfig,
+    TexGeneratorConfig,
+    TexDocumentClass,
+    TexParserConfig,
+    FileTypeAlias,
     PaperFormat,
     ImageMode,
     NodeBounds,
@@ -244,6 +257,7 @@ export {
     HeaderFooterMetadata,
     IndentationMetadata,
     ParagraphMetadata,
+    DefinitionMetadata,
 };
 
 

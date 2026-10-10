@@ -14,6 +14,11 @@
 *.yml text
 *.html text
 *.css text
+*.tex text
+
+# RTF is text, but its fixtures are kept byte for byte: test/files/test.rtf was committed with CRLF line
+# endings before this file normalized them, and the docs copy the build syncs from it must match it.
+*.rtf -text
 
 # Mark binary files to prevent Git from attempting line-ending normalization
 # 'binary' is a macro representing -diff -merge -text, treating it as raw data
@@ -30,3 +35,4 @@
 *.odg binary
 *.pdf binary
 *.epub binary
+*.zip binary

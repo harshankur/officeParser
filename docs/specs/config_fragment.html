@@ -35,7 +35,7 @@
                 <td><code>abortSignal</code></td>
                 <td><code>AbortSignal | null</code></td>
                 <td><code>null</code></td>
-                <td><strong>Cancellation</strong>: An optional signal to abort the parsing operation. Interrupts heavy loops, PDF page parsing, zip decompression, and active OCR processes cleanly. Rejects with an <code>AbortError</code>.</td>
+                <td><strong>Cancellation</strong>: An optional signal to abort the parsing operation. Checked between steps: it stops PDF page parsing, zip decompression and active OCR cleanly. Rejects with an <code>AbortError</code>: once the signal fires the parse never resolves, even when it fires while OCR is recognizing an image. Reading a document's markup (XML, HTML, Markdown, LaTeX) is synchronous, so a timer cannot fire during it: to bound the time an untrusted document can take, parse it in a worker you can end.</td>
             </tr>
             <tr>
                 <td><code>newlineDelimiter</code></td>
@@ -50,8 +50,9 @@
                 <td><code>ignoreNotes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Note Filtering</strong>: Specifically targets PowerPoint (PPTX/ODP) speaker notes and
-                    document footnotes/endnotes (DOCX, RTF). If <code>true</code>, notes are entirely omitted from the
+                <td><strong>Note Filtering</strong>: Specifically targets PowerPoint (PPTX/ODP) and LaTeX
+                    <code>beamer</code> (<code>\note</code>) speaker notes and document footnotes/endnotes (DOCX, ODT, RTF, PDF,
+                    HTML, Markdown, EPUB, and LaTeX <code>\footnote</code>/<code>\endnote</code>). If <code>true</code>, notes are entirely omitted from the
                     AST output.
                 </td>
             </tr>
@@ -60,15 +61,18 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Comment Filtering</strong>: When <code>true</code>, inline comments and annotations are
-                    excluded from parsing. Affects DOCX, XLSX, PPTX and ODF (ODT/ODS/ODP). By default comments are attached to their
-                    target node via <code>node.comments[]</code>.</td>
+                    excluded from parsing. Affects DOCX, XLSX, PPTX, ODF (ODT/ODS/ODP), RTF (<code>\annotation</code>) and LaTeX (a
+                    <code>% Comment (Author, date): text</code> line, the shape the LaTeX generator writes; other
+                    <code>%</code> comments are always discarded). By default comments are attached to their
+                    target node via <code>node.comments[]</code>. Source-level comments (CSV <code>#</code> rows, Markdown/HTML
+                    <code>&lt;!-- --&gt;</code>, LaTeX <code>% &lt;!-- --&gt;</code> lines) are not governed by this flag.</td>
             </tr>
             <tr>
                 <td><code>ignoreHeadersAndFooters</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Layout Element Filtering</strong>: When <code>true</code>, headers and footers are
-                    not parsed. Applies to DOCX, PDF and ODF (ODT master pages only). When <code>false</code> (default), they are extracted into
+                    not parsed. Applies to DOCX, PDF, ODF (ODT master pages only), RTF (<code>\header</code>, <code>\footer</code> and their left, right and first-page forms) and LaTeX (<code>fancyhdr</code>). When <code>false</code> (default), they are extracted into
                     <code>ast.auxiliary.headers</code> and <code>ast.auxiliary.footers</code>.</td>
             </tr>
             <tr>
@@ -86,7 +90,9 @@
                 <td><strong>Resource Extraction</strong>: Enables the collection of images, charts, and embedded
                     objects.
                     Populates the root <code>attachments</code> array and ensures <code>image</code> nodes have
-                    <code>attachmentName</code> metadata.
+                    <code>attachmentName</code> metadata. For LaTeX, image bytes exist only when parsing a project
+                    <code>.zip</code>; images in a bare <code>.tex</code> stay references to their path
+                    (<code>metadata.url</code>).
                 </td>
             </tr>
             <tr>
@@ -94,7 +100,7 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Source Inspection</strong>: Adds a <code>rawContent</code> property to every node containing
-                    its original XML or RTF source. <em>Warning: Significantly increases AST memory footprint.</em></td>
+                    its original XML or RTF source, up to <code>decompressionLimits.maxRawContentLength</code> characters per document. <em>Warning: Significantly increases AST memory footprint.</em></td>
             </tr>
             <tr>
                 <td><code>serializeRawContent</code></td>
@@ -174,7 +180,7 @@
                 <td><code>ocrConfig.abortSignal</code></td>
                 <td><code>AbortSignal | null</code></td>
                 <td><code>null</code></td>
-                <td><strong>OCR Cancellation</strong>: Automatically propagated from the top-level <code>abortSignal</code>. Used to interrupt queued or executing OCR tasks.</td>
+                <td><strong>OCR Cancellation</strong>: Automatically propagated from the top-level <code>abortSignal</code>. Used to interrupt queued or executing OCR tasks; the parse then rejects with an <code>AbortError</code>, as for the top-level signal.</td>
             </tr>
             <tr>
                 <td><code>ocrConfig.workerPath</code> / <code>corePath</code> / <code>langPath</code></td>
@@ -187,8 +193,11 @@
                 <td><code>includeBreakNodes</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
-                <td><strong>Line/Page Break Parsing</strong>: Supported for Word (DOCX) and OpenDocument (ODT/ODP/ODS)
-                    files. ODF carries page and column breaks on the paragraph style
+                <td><strong>Layout Break Parsing</strong>: Page, column and last-rendered-page breaks. A line break the author
+                    typed (DOCX <code>w:br</code>/<code>w:cr</code>, LaTeX <code>\\</code>, HTML <code>&lt;br&gt;</code>) is
+                    always a <code>break</code> node, and a DOCX tab a <code>\t</code> in the text, whatever this says.
+                    Supported for Word (DOCX), OpenDocument (ODT/ODP/ODS)
+                    and LaTeX (<code>\newpage</code>/<code>\clearpage</code> as <code>page</code> breaks) files. ODF carries page and column breaks on the paragraph style
                     (<code>fo:break-before</code>/<code>fo:break-after</code>) rather than as an inline element, so
                     those surface as breaks emitted around the paragraph. When set to
                     true, <code>officeParser</code> will extract physical breaks into the AST as <code>break</code>
@@ -201,7 +210,9 @@
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td><strong>Link Filtering</strong>: When true, all bookmarks, cross-references, and internal document
-                    jumps are stripped from the AST. Only external URLs will be preserved. Honored for PDF as of v8.</td>
+                    jumps are stripped from the AST. Only external URLs will be preserved. Honored for PDF as of v8, and for LaTeX <code>\label</code>,
+                    <code>\ref</code>/<code>\eqref</code>/<code>\autoref</code> and <code>\hyperref</code> (a reference still reads as the
+                    number it refers to, without the link).</td>
             </tr>
             <tr>
                 <td><code>ignorePageGeometry</code></td>
@@ -242,15 +253,32 @@
                     <code>headingDetection</code> (<code>auto</code>/<code>font-size</code>/<code>off</code>),
                     <code>pageRange</code> (e.g. <code>1-3,7</code>), <code>normalizeText</code>, and
                     <code>extractTextColor</code> (per-run fill color into <code>formatting.color</code>; on by default,
-                    set <code>false</code> to skip the per-page operator-list fetch on a throughput-focused text path).</td>
+                    set <code>false</code> to skip the per-page operator-list fetch on a throughput-focused text path),
+                    <code>maxTextItems</code> (default <code>20000</code>; an item counts once more per 64 characters), <code>maxOperators</code>
+                    (default <code>250000</code>; only the operators kept count, not paths) and <code>maxTimeMs</code> (default <code>5000</code>): the bases of
+                    the text items, drawing operators and CPU time of the separate pdf.js process one PDF may take, each plus an allowance for the file's
+                    size (one item and four operators per byte, 20 ms per KB). Nested form XObjects can multiply a few KB into millions of items or minutes
+                    of work; past the text or time limit the rest of the document is not read, past the operator limit its images, text colours and font
+                    styles are not (its text is), and <code>PDF_CONTENT_LIMIT_EXCEEDED</code> names the limit. Being CPU time, the time limit is not
+                    spent by a busy host or machine; pdf.js in the host has none. <code>maxAnnotations</code> (default <code>10000</code>, plus one per
+                    32 bytes) bounds the links and highlights read. <code>Infinity</code> is no limit. <code>separateProcess</code> (default
+                    <code>true</code>) runs pdf.js in separate Node processes, at most one per CPU, under <code>processMemoryMb</code> (default
+                    <code>1024</code>), so a PDF that inflates into gigabytes inside pdf.js rejects with <code>PDF_PROCESS_FAILED</code> instead of ending
+                    the host, and <code>abortSignal</code> can stop it mid-stream; where one cannot start, pdf.js runs in the host with
+                    <code>PDF_SEPARATE_PROCESS_UNAVAILABLE</code>.</td>
             </tr>
             <tr>
                 <td><code>fileType</code></td>
-                <td><code>SupportedFileType | null</code></td>
+                <td><code>SupportedFileType | FileTypeAlias | null</code></td>
                 <td><code>null</code></td>
                 <td><strong>Authoritative Hint</strong>: Manually specify the source format. Essential when parsing
-                    <code>md</code>, <code>html</code>, or <code>csv</code> from a Buffer / ArrayBuffer / Uint8Array, as these lack magic byte
-                    markers.</td>
+                    <code>md</code>, <code>html</code>, <code>csv</code>, or <code>tex</code> from a Buffer / ArrayBuffer / Uint8Array, as these lack magic byte
+                    markers. <code>.latex</code>/<code>.ltx</code> files route to <code>tex</code>, and a file named
+                    <code>.zip</code> is routed by what the archive holds (an Overleaf project or
+                    <code>texConfig.bundle</code> zip parses as <code>tex</code>). The hint accepts those names too
+                    (<code>FileTypeAlias</code>): <code>'latex'</code> and <code>'ltx'</code> for <code>tex</code>, the ODF
+                    template names <code>'ott'</code>/<code>'ots'</code>/<code>'otp'</code>/<code>'otg'</code>, and
+                    <code>'zip'</code>.</td>
             </tr>
             <tr>
                 <td><code>csvDelimiter</code></td>
@@ -263,13 +291,13 @@
                 <td><code>decompressionLimits</code></td>
                 <td><code>object</code></td>
                 <td><code>{}</code></td>
-                <td><strong>Archive Limits</strong>: Settings to limit resources used during ZIP extraction to protect against excessive memory and resource usage.</td>
+                <td><strong>Archive Limits</strong>: Settings to limit resources used during ZIP extraction to protect against excessive memory and resource usage. Apply to every ZIP-backed input, LaTeX project zips included.</td>
             </tr>
             <tr>
                 <td><code>decompressionLimits.maxUncompressedBytes</code></td>
                 <td><code>number</code></td>
                 <td><code>536870912</code> (512MB)</td>
-                <td><strong>Decompression Limit</strong>: Maximum allowable uncompressed size in bytes for the ZIP archive contents. Any value <code>&gt;= 0</code> is taken literally, so <code>0</code> rejects all content; there is no unlimited/disable sentinel. Only a negative or non-finite value falls back to the 512MB default.</td>
+                <td><strong>Decompression Limit</strong>: Maximum allowable uncompressed size in bytes for the ZIP archive contents. Any value <code>&gt;= 0</code> is taken literally, so <code>0</code> rejects all content; there is no unlimited/disable sentinel. Only a negative or non-finite value falls back to the 512MB default. A DOCX embedded in a DOCX as an alternative-format chunk (<code>w:altChunk</code>) inflates within what the document around it left.</td>
             </tr>
             <tr>
                 <td><code>decompressionLimits.maxZipEntries</code></td>
@@ -281,7 +309,25 @@
                 <td><code>decompressionLimits.maxTableCells</code></td>
                 <td><code>number</code></td>
                 <td><code>1000000</code></td>
-                <td><strong>Cell Expansion Limit</strong>: Maximum number of table cells materialized from <code>table:number-columns-repeated</code>/<code>table:number-rows-repeated</code> in any ODF table (spreadsheet grids and embedded tables in ODT/ODP/ODG alike). Beyond it, expansion clamps and warns instead of allocating without bound.</td>
+                <td><strong>Cell Limit</strong>: Maximum number of table cells a document yields: those materialized from <code>table:number-columns-repeated</code>/<code>table:number-rows-repeated</code> in any ODF table (spreadsheet grids and embedded tables in ODT/ODP/ODG alike), and an XLSX workbook's cells, plus one cell per byte of the document (a large workbook is not cut short for its size). Beyond it, the parse stops adding cells and warns with <code>TABLE_CELL_LIMIT_EXCEEDED</code> instead of allocating without bound.</td>
+            </tr>
+            <tr>
+                <td><code>decompressionLimits.maxXmlElements</code></td>
+                <td><code>number</code></td>
+                <td><code>2000000</code></td>
+                <td><strong>XML Element Limit</strong>: Maximum number of XML elements read from one document's parts (DOCX, XLSX, PPTX and ODF parts, EPUB package XML and chapters, charts and metadata; XLSX sheets do not count, and an XLSX workbook's shared strings count one per rich run and one per eight plain strings). Comments, CDATA sections and processing instructions count as elements, and a DOCX's alternative-format chunks count their lines (plain text), groups and control words (RTF) or parts and header lines (MHT). Each element takes several hundred bytes of memory to read, so a small zip of empty elements could fill the heap long before <code>maxUncompressedBytes</code>. Past it, the parse rejects with <code>XML_ELEMENT_LIMIT_EXCEEDED</code>.</td>
+            </tr>
+            <tr>
+                <td><code>decompressionLimits.maxRepeatedContent</code></td>
+                <td><code>number</code></td>
+                <td><code>16777216</code></td>
+                <td><strong>Repeated Content Limit</strong>: Maximum amount of content one document repeats by reference: ODF repeated cells and rows (in sheets and chart tables), XLSX cells showing one shared string, the style values (fonts, colours) and link targets a definition gives every node using it, a chart's text at every frame showing it, and LaTeX titles repeated by <code>\nameref</code>, theorems and beamer's <code>\maketitle</code>. The AST shares the value, but every generator writes it at each use, so a few KB could ask for hundreds of MB of output. Each use after the first costs what it weighs (characters, plus 16 per node a repeated cell holds) past 64, so short values repeat freely, and the limit grows by 16 characters per byte of the document. Past it, <code>REPEATED_CONTENT_LIMIT_EXCEEDED</code> is raised: the remaining repeats of a content-bearing ODF cell are not made (later cells keep their row and column numbers), an XLSX cell, chart value, frame or reference shows the start of its text, and a node repeating a long style value or link goes without it.</td>
+            </tr>
+            <tr>
+                <td><code>decompressionLimits.maxRawContentLength</code></td>
+                <td><code>number</code></td>
+                <td><code>67108864</code></td>
+                <td><strong>Raw Content Limit</strong>: With <code>includeRawContent</code>, the maximum total length (in characters) of the <code>rawContent</code> one document's nodes carry. A node's raw content holds the markup of everything nested in it, so nested tables repeat it at every level. Past it, the remaining nodes carry no <code>rawContent</code> and <code>RAW_CONTENT_LIMIT_EXCEEDED</code> is raised; the content itself is unaffected.</td>
             </tr>
             <tr>
                 <td><code>htmlParserConfig</code></td>
@@ -302,10 +348,28 @@
                 <td>Preserve non-YouTube <code>&lt;iframe&gt;</code> embeds (otherwise dropped) as <code>embed</code> nodes. <code>true</code> preserves any; an array is a hostname allowlist (exact host or a <code>.</code>-suffix). The src is scheme-checked on generation, so a <code>javascript:</code>/<code>data:</code> src never survives. Also governs a raw <code>&lt;iframe&gt;</code> block in Markdown input.</td>
             </tr>
             <tr>
+                <td><code>htmlParserConfig.preserveComments</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td>Keep <code>&lt;!-- ... --&gt;</code> comments in HTML and EPUB input as <code>comment</code> nodes
+                    (<code>metadata.sourceSyntax: 'html'</code>, raw body in <code>text</code>) instead of dropping them.
+                    Conditional comments (<code>&lt;!--[if …]&gt;</code>) are always dropped. HTML and EPUB only: comments in
+                    Markdown are always kept. The <code>data-html-comment</code> shape <code>sourceAttributes</code> emits is always read.</td>
+            </tr>
+            <tr>
                 <td><code>htmlParserConfig.embedFolkForms</code></td>
                 <td><code>boolean</code></td>
                 <td><code>false</code></td>
                 <td>Import ambiguous "folk" embed forms in Markdown as (safe, id-rendered) YouTube embeds: a standalone Obsidian image whose URL is a YouTube link (<code>![](…watch?v=ID)</code>), and the clickable thumbnail-link (<code>[![](…/vi/ID/…)](watch)</code>). Off by default because auto-upgrading an image/link is a heuristic that could mangle a genuine image link; the unambiguous forms (<code>data-youtube-video</code>, a YouTube <code>&lt;iframe&gt;</code>, the <code>::youtube</code> directive) are always recognized regardless.</td>
+            </tr>
+            <tr>
+                <td><code>texParserConfig.today</code></td>
+                <td><code>string</code></td>
+                <td><code>''</code></td>
+                <td>What <code>\today</code> prints in LaTeX input. <code>''</code> prints the date of the parse, as LaTeX prints the
+                    date of the compile, written the way the document's language writes a date ("September 25, 2026" in English).
+                    Set a fixed date, so that the same file parses the same way every day, or a placeholder of your own to find
+                    and replace later. A value that is not a string raises <code>INVALID_CONFIG_VALUE</code> and is ignored.</td>
             </tr>
         </tbody>
     </table>

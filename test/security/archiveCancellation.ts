@@ -8,7 +8,7 @@ import { decryptOdf, isEncryptedOdf } from '../../src/crypto/odfCrypto';
 import { OfficeParser } from '../../src/OfficeParser';
 import { detectOfficeTypeFromZip, extractFiles } from '../../src/utils/zipUtils';
 
-const quiet = { outputErrorToConsole: false };
+const quiet = { onWarning: () => { } };
 
 // Stored entries make the compressed input span multiple feed chunks without
 // relying on random data, expensive compression, or a machine-speed deadline.

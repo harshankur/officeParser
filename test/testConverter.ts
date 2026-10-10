@@ -63,7 +63,7 @@ async function runTests() {
                 includeImages: false
             }
         });
-        const hasImages = docxNoImagesResult.value.includes('![image]');
+        const hasImages = /!\[[^\]]*\]\(/.test(docxNoImagesResult.value);
         console.log(`Success! Images present: ${hasImages} (expected: false)`);
         fs.writeFileSync(path.join(outputDir, 'test_docx_no_images.md'), docxNoImagesResult.value);
 
