@@ -14,9 +14,9 @@
  * @module zipUtils
  */
 
-import { Unzip, UnzipInflate } from 'fflate';
+import { Unzip, UnzipInflate, type UnzipFile } from 'fflate';
 import { DecompressionLimits, OfficeErrorType, OfficeParserConfig, SupportedFileType } from '../types.js';
-import { getOfficeError } from './errorUtils.js';
+import { checkAbortSignal, getAbortError, getOfficeError } from './errorUtils.js';
 import { lookupTable } from './lookupUtils.js';
 
 /**
@@ -119,6 +119,8 @@ export const extractFiles = (
         : 10000;
 
     return new Promise((resolve, reject) => {
+        const signal = config?.abortSignal;
+        checkAbortSignal(signal);
         // Decompress as a stream and cap on the ACTUAL inflated byte count rather than
         // the size declared in the ZIP header. The declared size is attacker-controlled,
         // so a "zip bomb" can understate it and still inflate to gigabytes; counting real
@@ -129,18 +131,36 @@ export const extractFiles = (
         let pendingFiles = 0;
         let pushComplete = false;
         let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const activeFiles = new Map<UnzipFile, Buffer[]>();
+
+        const cleanup = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
+            for (const [file, chunks] of activeFiles) {
+                chunks.length = 0;
+                file.terminate();
+            }
+            activeFiles.clear();
+        };
 
         const fail = (err: unknown) => {
             if (settled) return;
             settled = true;
+            cleanup();
+            results.length = 0;
             reject(err);
         };
         const maybeResolve = () => {
             if (!settled && pushComplete && pendingFiles === 0) {
                 settled = true;
+                cleanup();
                 resolve(results);
             }
         };
+
+        const onAbort = () => fail(getAbortError());
+        signal?.addEventListener('abort', onAbort, { once: true });
 
         const unzipper = new Unzip((file) => {
             if (settled) return;
@@ -149,10 +169,11 @@ export const extractFiles = (
                 fail(getOfficeError(OfficeErrorType.ZIP_ENTRY_COUNT_LIMIT_EXCEEDED, config, maxZipEntries));
                 return;
             }
-            if (!filterFn(file.name)) return;
+            if (!filterFn(file.name) || settled) return;
 
             const name = file.name;
             const chunks: Buffer[] = [];
+            activeFiles.set(file, chunks);
             pendingFiles++;
             file.ondata = (err, chunk, final) => {
                 if (settled) return;
@@ -167,6 +188,8 @@ export const extractFiles = (
                 }
                 if (final) {
                     results.push({ path: name, content: Buffer.concat(chunks) });
+                    chunks.length = 0;
+                    activeFiles.delete(file);
                     pendingFiles--;
                     maybeResolve();
                 }
@@ -183,48 +206,60 @@ export const extractFiles = (
         // Feed the compressed input in bounded chunks so the actual-size check can abort a
         // bomb early; the worst-case overshoot is one chunk's worth of inflation.
         const PUSH_CHUNK = 1 << 16; // 64 KiB
-        try {
-            let offset = 0;
-            while (offset < src.length && !settled) {
-                const end = Math.min(offset + PUSH_CHUNK, src.length);
-                unzipper.push(src.subarray(offset, end), end >= src.length);
-                offset = end;
+        let offset = 0;
+        const pushInput = () => {
+            if (settled) return;
+            try {
+                while (offset < src.length && !settled) {
+                    checkAbortSignal(signal);
+                    const end = Math.min(offset + PUSH_CHUNK, src.length);
+                    unzipper.push(src.subarray(offset, end), end >= src.length);
+                    offset = end;
+                    // A microtask yield would still starve timers. Only signal-enabled
+                    // parses pay for an event-loop turn between compressed chunks.
+                    if (signal && offset < src.length && !settled) {
+                        timer = setTimeout(pushInput, 0);
+                        return;
+                    }
+                }
+            } catch (e) {
+                fail(e);
+                return;
             }
-        } catch (e) {
-            fail(e);
-            return;
-        }
-        pushComplete = true;
-        // fflate's streaming Unzip emits nothing, and no error, when the input is not a
-        // ZIP archive, unlike the central-directory-based unzip() this replaced (which
-        // rejected with "invalid zip data"). Zero entries can never be a valid document
-        // here, since every ZIP-backed format requires at least one part, so treat it as
-        // corrupt input rather than resolving into an empty, successfully-parsed document.
-        //
-        // This is checked before the truncation check below because it produces the better
-        // message for input that is not an archive at all, and because garbage that happens
-        // to contain the EOCD signature would otherwise slip past.
-        if (totalEntryCount === 0) {
-            fail(getOfficeError(OfficeErrorType.ZIP_NO_ENTRIES_FOUND, config));
-            return;
-        }
-        // The streaming reader recovers entries from local file headers alone, so an archive
-        // cut short still yields whatever entries preceded the cut - silently, and possibly
-        // missing parts that came after it. The central-directory-based reader used before
-        // 7.3.0 rejected such input outright. Requiring the trailer that terminates every
-        // complete archive restores that: absent it, the data is truncated and the entries
-        // recovered cannot be trusted to be the whole document.
-        //
-        // Deliberately not gated on pendingFiles: when a cut lands inside an entry's
-        // compressed data that entry's final callback never fires, so this is also what
-        // settles the promise instead of leaving the caller waiting forever.
-        const tail = zipInput.subarray(Math.max(0, zipInput.length - EOCD_SEARCH_WINDOW_BYTES));
-        const eocdIndex = tail.lastIndexOf(EOCD_SIGNATURE);
-        if (eocdIndex === -1 || eocdIndex + EOCD_RECORD_MIN_BYTES > tail.length) {
-            fail(getOfficeError(OfficeErrorType.ZIP_TRUNCATED, config));
-            return;
-        }
-        maybeResolve();
+            if (settled) return;
+            pushComplete = true;
+            // fflate's streaming Unzip emits nothing, and no error, when the input is not a
+            // ZIP archive, unlike the central-directory-based unzip() this replaced (which
+            // rejected with "invalid zip data"). Zero entries can never be a valid document
+            // here, since every ZIP-backed format requires at least one part, so treat it as
+            // corrupt input rather than resolving into an empty, successfully-parsed document.
+            //
+            // This is checked before the truncation check below because it produces the better
+            // message for input that is not an archive at all, and because garbage that happens
+            // to contain the EOCD signature would otherwise slip past.
+            if (totalEntryCount === 0) {
+                fail(getOfficeError(OfficeErrorType.ZIP_NO_ENTRIES_FOUND, config));
+                return;
+            }
+            // The streaming reader recovers entries from local file headers alone, so an archive
+            // cut short still yields whatever entries preceded the cut - silently, and possibly
+            // missing parts that came after it. The central-directory-based reader used before
+            // 7.3.0 rejected such input outright. Requiring the trailer that terminates every
+            // complete archive restores that: absent it, the data is truncated and the entries
+            // recovered cannot be trusted to be the whole document.
+            //
+            // Deliberately not gated on pendingFiles: when a cut lands inside an entry's
+            // compressed data that entry's final callback never fires, so this is also what
+            // settles the promise instead of leaving the caller waiting forever.
+            const tail = zipInput.subarray(Math.max(0, zipInput.length - EOCD_SEARCH_WINDOW_BYTES));
+            const eocdIndex = tail.lastIndexOf(EOCD_SIGNATURE);
+            if (eocdIndex === -1 || eocdIndex + EOCD_RECORD_MIN_BYTES > tail.length) {
+                fail(getOfficeError(OfficeErrorType.ZIP_TRUNCATED, config));
+                return;
+            }
+            maybeResolve();
+        };
+        pushInput();
     });
 };
 
@@ -356,6 +391,7 @@ const MAX_DETECTION_INFLATED_BYTES = 4 * 1024 * 1024;
  *
  * @param zipInput - The candidate archive
  * @param limits - Decompression limits, so sniffing an untrusted file stays bounded
+ * @param abortSignal - Cancellation signal shared with the document parse
  * @returns The format the archive declares, or `undefined` if it declares none or cannot be read
  *
  * @example
@@ -366,8 +402,10 @@ const MAX_DETECTION_INFLATED_BYTES = 4 * 1024 * 1024;
  */
 export const detectOfficeTypeFromZip = async (
     zipInput: Buffer,
-    limits: DecompressionLimits
+    limits: DecompressionLimits,
+    abortSignal?: AbortSignal | null
 ): Promise<SupportedFileType | undefined> => {
+    checkAbortSignal(abortSignal);
     if (!looksLikeZip(zipInput)) return undefined;
 
     let files: ZipFileContent[];
@@ -384,9 +422,10 @@ export const detectOfficeTypeFromZip = async (
                     MAX_DETECTION_INFLATED_BYTES
                 ),
             },
-            SILENT_DETECTION_CONFIG
+            { ...SILENT_DETECTION_CONFIG, abortSignal }
         );
     } catch (error: any) {
+        if (typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError') throw error;
         // A limit the caller set was exceeded: parsing the archive would fail on it too, so that is
         // the error to report, not "unsupported format" for want of a detected type. (The sniff's
         // own, smaller size cap is not the caller's limit, and exceeding it is no failure.)

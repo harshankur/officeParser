@@ -18,6 +18,7 @@
 import { createDecipheriv, createHash, pbkdf2Sync } from 'crypto';
 import { Inflate, zipSync, Zippable } from 'fflate';
 import { DecompressionLimits, OfficeParserConfig } from '../types.js';
+import { checkAbortSignal } from '../utils/errorUtils.js';
 import { extractFiles } from '../utils/zipUtils.js';
 import { WRONG_PASSWORD, DecryptionError } from './wrongPassword.js';
 
@@ -150,7 +151,8 @@ async function readManifest(buf: Uint8Array, limits?: DecompressionLimits, confi
  * True when the buffer is a zip whose `META-INF/manifest.xml` marks at least one entry encrypted.
  * A plain ODF (or any other zip, e.g. a docx) has no `<manifest:encryption-data>` and returns false.
  */
-export async function isEncryptedOdf(buf: Uint8Array, limits?: DecompressionLimits, extHint?: string): Promise<boolean> {
+export async function isEncryptedOdf(buf: Uint8Array, limits?: DecompressionLimits, extHint?: string, abortSignal?: AbortSignal | null): Promise<boolean> {
+    checkAbortSignal(abortSignal);
     // Fast reject: every zip-backed format (docx/xlsx/pptx/epub) reaches this on every parse, but only
     // an ODF package can be an encrypted ODF. Decide from the first entry's `mimetype` (plus a deflated-
     // mimetype / ODF-extension fallback) instead of streaming the whole archive for a manifest only ODF
@@ -164,9 +166,10 @@ export async function isEncryptedOdf(buf: Uint8Array, limits?: DecompressionLimi
             ...limits,
             maxUncompressedBytes: Math.min(limits?.maxUncompressedBytes ?? MAX_SNIFF_BYTES, MAX_SNIFF_BYTES),
         };
-        const manifest = await readManifest(buf, sniffLimits, DETECTION_SILENT);
+        const manifest = await readManifest(buf, sniffLimits, { ...DETECTION_SILENT, abortSignal });
         return !!manifest && manifest.includes('encryption-data');
-    } catch {
+    } catch (error) {
+        if (typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError') throw error;
         return false;
     }
 }
@@ -315,6 +318,7 @@ async function pbkdf2Sha1(startKey: Uint8Array, salt: Uint8Array, iterations: nu
  * every retry. Omitted, each call gets its own.
  */
 export async function decryptOdf(buf: Uint8Array, password: string, limits?: DecompressionLimits, config?: OfficeParserConfig, budget?: KeyDerivationBudget): Promise<Uint8Array> {
+    checkAbortSignal(config?.abortSignal);
     const manifest = await readManifest(buf, limits, config);
     if (!manifest) throw new DecryptionError('encrypted ODF: missing META-INF/manifest.xml');
     if (manifest.length > MAX_MANIFEST_BYTES) throw new DecryptionError(`encrypted ODF: implausible META-INF/manifest.xml size ${manifest.length} bytes`);
@@ -335,6 +339,7 @@ export async function decryptOdf(buf: Uint8Array, password: string, limits?: Dec
     let verified = false;
 
     for (const [name, bytes] of Object.entries(all)) {
+        checkAbortSignal(config?.abortSignal);
         const enc = encMap.get(name);
         if (!enc) { out[name] = bytes; continue; } // mimetype, manifest.xml, directories: copy as-is
 
@@ -363,6 +368,9 @@ export async function decryptOdf(buf: Uint8Array, password: string, limits?: Dec
         const startAlgo = /sha256/i.test(enc.startKeyName) ? 'sha256' : 'sha1';
         const startKey = createHash(startAlgo).update(pwBytes).digest();
         const key = await pbkdf2Sha1(startKey, enc.salt, enc.iterationCount, bits);
+        // Native key derivation cannot be interrupted; do not start decryption
+        // if the caller cancelled while it was running.
+        checkAbortSignal(config?.abortSignal);
 
         // The encrypted length is a whole number of AES blocks; trim any trailing partial block.
         const aligned = bytes.subarray(0, bytes.length - (bytes.length % 16));
@@ -389,6 +397,7 @@ export async function decryptOdf(buf: Uint8Array, password: string, limits?: Dec
         out[name] = plain;
     }
 
+    checkAbortSignal(config?.abortSignal);
     // The rebuilt zip is fed straight back into the ODF parser, so there is no point recompressing it;
     // storing (level 0) skips the CPU. mimetype must still be first and stored for ODF recognition.
     if (out['mimetype']) {

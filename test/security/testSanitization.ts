@@ -21,6 +21,7 @@ import {
     escapeLatex, latexComment, sanitizeLatexUrl, sanitizeLatexMath, sanitizeLatexImagePath,
     sanitizeCommentText, latexSourceComment
 } from '../../src/utils/sanitize';
+import { archiveCancellationTests } from './archiveCancellation';
 import { extractFiles } from '../../src/utils/zipUtils';
 import { parseXmlString } from '../../src/utils/xmlUtils';
 import { getOfficeError, getWrappedError } from '../../src/utils/errorUtils';
@@ -4081,6 +4082,7 @@ async function main() {
     await latexParserTests();
     await odfRepeatExpansionTests();
     await abortSignalTests();
+    await archiveCancellationTests();
     await corruptArchiveTests();
     await truncatedArchiveTests();
     await missingMainPartTests();
